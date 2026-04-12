@@ -1,4 +1,4 @@
-package com.sharedinbox.desktop
+package de.sharedinbox.desktop
 
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application

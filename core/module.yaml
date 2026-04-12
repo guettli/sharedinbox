@@ -3,12 +3,11 @@ product:
   platforms: [jvm, android, iosArm64, iosSimulatorArm64, iosX64]
 
 dependencies:
-  - $libs.coroutines-core
-  - $libs.serialization-json
-  - $libs.datetime
+  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2
+  - org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0
 
 test-dependencies:
-  - $libs.kotlin-test
+  - org.jetbrains.kotlin:kotlin-test:2.3.20
 
 settings:
   kotlin:

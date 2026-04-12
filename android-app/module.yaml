@@ -5,8 +5,8 @@ dependencies:
 
 settings:
   android:
-    applicationId: com.sharedinbox.app
-    namespace: com.sharedinbox.app
+    applicationId: de.sharedinbox.app
+    namespace: de.sharedinbox.app
     compileSdk: 36
     targetSdk: 36
     minSdk: 26

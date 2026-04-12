@@ -60,15 +60,17 @@
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
             # Integration test credentials — used when Stalwart is running locally.
-            # Two accounts so multi-account sync can be tested.
+            # Stalwart 0.14.x internal-directory users require PHC-hashed secrets in DB.
+            # For Phase 2 we use the fallback admin (plaintext auth, no PHC needed).
+            # TODO (Phase 4): proper test-account setup with pre-hashed credentials.
             export STALWART_URL="http://localhost:8080"
-            export STALWART_USER_A="alice"
-            export STALWART_PASS_A="secret"
-            export STALWART_USER_B="bob"
-            export STALWART_PASS_B="secret"
+            export STALWART_USER_A="admin"
+            export STALWART_PASS_A="admin"
+            export STALWART_USER_B="admin"
+            export STALWART_PASS_B="admin"
 
             echo "SharedInbox dev environment ready."
-            echo "  Start Stalwart : stalwart-mail --config stalwart-dev/config.toml"
+            echo "  Start Stalwart : stalwart --config stalwart-dev/config.toml"
             echo "  Build          : amper build"
             echo "  Test           : amper test"
           '';

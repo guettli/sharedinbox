@@ -7,5 +7,5 @@ settings:
   compose:
     enabled: true
   jvm:
-    mainClass: com.sharedinbox.desktop.MainKt
+    mainClass: de.sharedinbox.desktop.MainKt
     release: 21

@@ -1,4 +1,4 @@
-package com.sharedinbox.ios
+package de.sharedinbox.ios
 
 import androidx.compose.ui.window.ComposeUIViewController
 

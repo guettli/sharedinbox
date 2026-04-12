@@ -1,4 +1,4 @@
-package com.sharedinbox.android
+package de.sharedinbox.android
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

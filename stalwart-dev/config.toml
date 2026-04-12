@@ -1,6 +1,6 @@
 # Minimal Stalwart Mail configuration for local development and integration tests.
 #
-# Start:  stalwart-mail --config stalwart-dev/config.toml
+# Start:  stalwart --config stalwart-dev/config.toml
 # Check:  curl http://localhost:8080/.well-known/jmap
 #
 # HTTP only — localhost testing, no TLS.
@@ -30,13 +30,13 @@ directory = "memory"
 type = "memory"
 
 [[directory."memory".principals]]
-type   = "individual"
+type   = "user"
 name   = "alice"
 secret = "secret"
 email  = ["alice@localhost"]
 
 [[directory."memory".principals]]
-type   = "individual"
+type   = "user"
 name   = "bob"
 secret = "secret"
 email  = ["bob@localhost"]

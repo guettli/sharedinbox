@@ -7,28 +7,29 @@ product:
 
 dependencies:
   - ../core
-  - $libs.ktor-client-core
-  - $libs.ktor-client-auth
-  - $libs.ktor-client-contentneg
-  - $libs.ktor-serialization-json
-  - $libs.ktor-client-logging
-  - $libs.koin-core
+  - org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0
+  - io.ktor:ktor-client-core:3.4.2
+  - io.ktor:ktor-client-auth:3.4.2
+  - io.ktor:ktor-client-content-negotiation:3.4.2
+  - io.ktor:ktor-serialization-kotlinx-json:3.4.2
+  - io.ktor:ktor-client-logging:3.4.2
+  - io.insert-koin:koin-core:4.1.1
 
 dependencies@android:
-  - $libs.ktor-client-okhttp
+  - io.ktor:ktor-client-okhttp:3.4.2
 
 dependencies@iosArm64:
-  - $libs.ktor-client-darwin
+  - io.ktor:ktor-client-darwin:3.4.2
 dependencies@iosSimulatorArm64:
-  - $libs.ktor-client-darwin
+  - io.ktor:ktor-client-darwin:3.4.2
 dependencies@iosX64:
-  - $libs.ktor-client-darwin
+  - io.ktor:ktor-client-darwin:3.4.2
 
 dependencies@jvm:
-  - $libs.ktor-client-cio
+  - io.ktor:ktor-client-cio:3.4.2
 
 test-dependencies:
-  - $libs.kotlin-test
+  - org.jetbrains.kotlin:kotlin-test:2.3.20
 
 settings:
   kotlin:

@@ -7,17 +7,17 @@ dependencies:
   - ../data: exported
   - $compose.foundation
   - $compose.material3
-  - $libs.lifecycle-viewmodel
-  - $libs.navigation-compose
-  - $libs.koin-compose
-  - $libs.koin-core
+  - org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0
+  - org.jetbrains.androidx.navigation:navigation-compose:2.10.0
+  - io.insert-koin:koin-compose:4.1.1
+  - io.insert-koin:koin-core:4.1.1
 
 dependencies@android:
-  - $libs.activity-compose
-  - $libs.koin-android
+  - androidx.activity:activity-compose:1.10.1
+  - io.insert-koin:koin-android:4.1.1
 
 test-dependencies:
-  - $libs.kotlin-test
+  - org.jetbrains.kotlin:kotlin-test:2.3.20
 
 settings:
   compose:
