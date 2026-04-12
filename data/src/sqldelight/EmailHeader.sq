@@ -1,0 +1,24 @@
+CREATE TABLE email_header (
+    id             TEXT NOT NULL,
+    account_id     TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    thread_id      TEXT NOT NULL,
+    mailbox_id     TEXT NOT NULL,
+    subject        TEXT,
+    from_address   TEXT,
+    received_at    INTEGER NOT NULL,
+    keywords       TEXT NOT NULL DEFAULT '',
+    has_attachment INTEGER NOT NULL DEFAULT 0,
+    preview        TEXT,
+    PRIMARY KEY (id, account_id)
+);
+
+upsertEmailHeader:
+INSERT OR REPLACE INTO email_header VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectEmailsByMailbox:
+SELECT * FROM email_header
+WHERE account_id = ? AND mailbox_id = ?
+ORDER BY received_at DESC;
+
+selectEmailById:
+SELECT * FROM email_header WHERE account_id = ? AND id = ?;

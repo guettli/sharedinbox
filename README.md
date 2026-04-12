@@ -38,6 +38,9 @@ Network (JMAP server)
 - [Nix flake](flake.nix) — reproducible dev environment (JDK 21, Android SDK)
 - [Stalwart Mail](stalwart-dev/config.toml) — local JMAP server for integration tests (via
   `pkgs.stalwart-mail` in Nix)
+- [Kotlin Multiplatform](https://kotlinlang.org/multiplatform/) /
+  [Compose Multiplatform](https://kotlinlang.org/compose-multiplatform/)
+- [SQLDelight](https://cashapp.github.io/sqldelight/) — local persistence
 
 ## Testing
 
@@ -51,22 +54,21 @@ Runs `JmapSerializationTest` — verifies JMAP wire-format serialization round-t
 
 ### Integration tests (requires Stalwart)
 
-Start the local Stalwart instance in one terminal:
+Inside `nix develop`, the shell hook picks a per-clone random port (written to
+`.env` on first run) and exports `STALWART_URL` automatically. Start Stalwart
+in one terminal:
 
 ```bash
-stalwart-mail --config stalwart-dev/config.toml
+stalwart-dev/start
 ```
 
-Then run the integration tests with the required environment variables:
+Then run the integration tests:
 
 ```bash
-STALWART_URL=http://localhost:8080 \
-STALWART_USER_A=admin \
-STALWART_PASS_A=admin \
 ./amper test :data
 ```
 
-Runs `SessionRepositoryIntegrationTest` — covers session discovery, redirect handling, bad
-credentials, and `TokenStore` round-trips.
-
-Inside `nix develop` all tools (`stalwart-mail`, `amper`, JDK 21) are available automatically.
+`STALWART_URL`, `STALWART_USER_A`, and `STALWART_PASS_A` are already exported by
+the shell hook — no manual env vars needed. Two clones on the same machine get
+different ports and different `/tmp/stalwart-dev-PORT` data directories, so their
+test runs never conflict.

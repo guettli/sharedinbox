@@ -59,18 +59,27 @@
             export JAVA_HOME="${pkgs.temurin-bin-21}"
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-            # Integration test credentials — used when Stalwart is running locally.
-            # Stalwart 0.14.x internal-directory users require PHC-hashed secrets in DB.
-            # For Phase 2 we use the fallback admin (plaintext auth, no PHC needed).
-            # TODO (Phase 4): proper test-account setup with pre-hashed credentials.
-            export STALWART_URL="http://localhost:8080"
+            # Assign a random Stalwart port the first time this repo is entered, and persist it
+            # in .env so it stays stable across sessions. Using a high port (50000-59999) avoids
+            # conflicts with system services. When the same repo is cloned twice, each clone gets
+            # its own port, so both can run Stalwart and the integration tests simultaneously.
+            # Assign a random Stalwart port the first time this repo is entered, and persist it
+            # in .env so it stays stable across sessions. Using a high port (50000-59999) avoids
+            # conflicts with system services. When the same repo is cloned twice, each clone gets
+            # its own port, so both can run Stalwart and the integration tests simultaneously.
+            if ! grep -qs '^STALWART_PORT=' .env 2>/dev/null; then
+              _port=$(( RANDOM % 10000 + 50000 ))
+              printf '# Per-clone Stalwart port — avoids conflicts when the repo is cloned more than once\n# on the same machine. Chosen on first "nix develop". Delete to regenerate.\nSTALWART_PORT=%s\n' "$_port" >> .env
+            fi
+            export STALWART_PORT=$(grep '^STALWART_PORT=' .env | cut -d= -f2)
+            export STALWART_URL="http://localhost:$STALWART_PORT"
             export STALWART_USER_A="admin"
             export STALWART_PASS_A="admin"
             export STALWART_USER_B="admin"
             export STALWART_PASS_B="admin"
 
-            echo "SharedInbox dev environment ready."
-            echo "  Start Stalwart : stalwart --config stalwart-dev/config.toml"
+            echo "SharedInbox dev environment ready (Stalwart port: $STALWART_PORT)."
+            echo "  Start Stalwart : stalwart-dev/start"
             echo "  Build          : amper build"
             echo "  Test           : amper test"
           '';

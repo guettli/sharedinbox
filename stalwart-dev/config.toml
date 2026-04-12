@@ -1,11 +1,12 @@
 # Minimal Stalwart Mail configuration for local development and integration tests.
 #
-# Start:  stalwart --config stalwart-dev/config.toml
-# Check:  curl http://localhost:8080/.well-known/jmap
+# Do not start directly — use stalwart-dev/start, which substitutes $STALWART_PORT
+# and writes a per-clone config into /tmp/stalwart-dev-PORT/ before starting.
+#
+# Check:  curl http://localhost:$STALWART_PORT/.well-known/jmap
 #
 # HTTP only — localhost testing, no TLS.
 # Two test accounts (alice, bob) for multi-account sync tests.
-# Data stored in /tmp/stalwart-dev (safe to delete between test runs).
 
 [server]
 hostname = "localhost"

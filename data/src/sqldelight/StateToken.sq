@@ -1,0 +1,12 @@
+CREATE TABLE state_token (
+    account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    type_name  TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    PRIMARY KEY (account_id, type_name)
+);
+
+upsertStateToken:
+INSERT OR REPLACE INTO state_token VALUES (?, ?, ?);
+
+selectStateToken:
+SELECT state FROM state_token WHERE account_id = ? AND type_name = ?;

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Starts a per-clone Stalwart instance for local development and integration tests.
+#
+# Reads STALWART_PORT from the environment (set by "nix develop" via .env).
+# Writes a config with the correct port and data dir into /tmp/stalwart-dev-PORT/
+# so two clones of this repo can run simultaneously without conflicting.
+set -euo pipefail
+
+: "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
+
+TMPDIR="/tmp/stalwart-dev-${STALWART_PORT}"
+mkdir -p "$TMPDIR"
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+sed -e "s|127.0.0.1:8080|127.0.0.1:${STALWART_PORT}|" \
+    -e "s|/tmp/stalwart-dev|${TMPDIR}|" \
+    "${REPO_ROOT}/stalwart-dev/config.toml" > "${TMPDIR}/config.toml"
+
+exec stalwart-mail --config "${TMPDIR}/config.toml"

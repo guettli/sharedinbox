@@ -1,0 +1,13 @@
+CREATE TABLE email_body (
+    email_id   TEXT NOT NULL,
+    account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    text_body  TEXT,
+    html_body  TEXT,
+    PRIMARY KEY (email_id, account_id)
+);
+
+upsertEmailBody:
+INSERT OR REPLACE INTO email_body VALUES (?, ?, ?, ?);
+
+selectEmailBody:
+SELECT * FROM email_body WHERE account_id = ? AND email_id = ?;
