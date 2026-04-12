@@ -47,10 +47,12 @@ Network (JMAP server)
 ### Unit tests (no server needed)
 
 ```bash
-./amper test :core
+amper test -m core -p jvm
 ```
 
 Runs `JmapSerializationTest` — verifies JMAP wire-format serialization round-trips.
+The `-p jvm` flag skips Android/iOS compilation (which takes several minutes) since
+these are pure-logic tests that only need the JVM target.
 
 ### Integration tests (requires Stalwart)
 
@@ -65,7 +67,7 @@ stalwart-dev/start
 Then run the integration tests:
 
 ```bash
-./amper test :data
+amper test -m data
 ```
 
 `STALWART_URL`, `STALWART_USER_A`, and `STALWART_PASS_A` are already exported by
