@@ -3,9 +3,10 @@
 ## Context
 
 SharedInbox is a JMAP email client (RFC 8621) built from scratch using Kotlin Compose Multiplatform.
-The repo is currently empty (README + AGENTS.md only). The goal is a working MVP email client
-targeting **Android, Desktop (JVM), and iOS**, tested against a self-hosted **Stalwart Mail**
-server, built with **JetBrains Amper** and managed via **Nix flake**.
+The goal is a working MVP email client targeting **Android, Desktop (JVM), and iOS**, tested against
+a self-hosted **Stalwart Mail** server, built with **JetBrains Amper** and managed via **Nix flake**.
+
+Phases 0–2 are complete: scaffolding, core models, auth/session discovery, and `TokenStore`.
 
 The app is built **bottom-up, offline-first**. The sync engine and SQLDelight database are fully
 working and integration-tested before any UI is written. The UI reads only from the local DB — it
@@ -224,8 +225,8 @@ dependencies:
 
 settings:
   android:
-    applicationId: com.sharedinbox.app
-    namespace: com.sharedinbox.app
+    applicationId: de.sharedinbox.app
+    namespace: de.sharedinbox.app
     compileSdk: 36
     targetSdk: 36
     minSdk: 26
@@ -250,7 +251,7 @@ settings:
   compose:
     enabled: true
   jvm:
-    mainClass: com.sharedinbox.desktop.MainKt
+    mainClass: de.sharedinbox.desktop.MainKt
     jdk:
       version: 21
 ```
@@ -505,9 +506,9 @@ Build order: data layer first, UI last.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **0 — Scaffolding** | Directories, module.yamls, `flake.nix` with `stalwart-mail` + Amper via `fetchurl`, `libs.versions.toml`, `stalwart-dev/config.toml` | `./amper build` succeeds; `stalwart-mail --config stalwart-dev/config.toml` starts |
-| **1 — Core models** | `@Serializable` data classes, custom `MethodCall` serializer, repository interfaces, unit tests | Serialization round-trips pass against captured Stalwart JSON |
-| **2 — Auth & session** | `createHttpClient` expect/actual, session discovery (`/.well-known/jmap`), Basic auth, `TokenStore` expect/actual (keyed by accountId) | Integration test: Stalwart session parsed; tokens stored and retrieved per account |
+| **0 — Scaffolding** ✓ | Directories, module.yamls, `flake.nix` with `stalwart-mail` + Amper via `fetchurl`, `libs.versions.toml`, `stalwart-dev/config.toml` | `./amper build` succeeds; `stalwart-mail --config stalwart-dev/config.toml` starts |
+| **1 — Core models** ✓ | `@Serializable` data classes, custom `MethodCall` serializer, repository interfaces, unit tests | Serialization round-trips pass against captured Stalwart JSON |
+| **2 — Auth & session** ✓ | `createHttpClient` expect/actual, session discovery (`/.well-known/jmap`), Basic auth, `TokenStore` expect/actual (keyed by accountId) | Integration test: Stalwart session parsed; tokens stored and retrieved per account |
 | **3 — SQLDelight schema** | Gradle-interop mode for `data`; `account` table + all child tables with `account_id` FK + `ON DELETE CASCADE`; driver expect/actual | Schema compiles; insert + query tests pass; cascade delete removes all account data |
 | **4 — Account management** | `AccountRepositoryImpl`: add account (discover → auth → insert row), remove account (delete cascades), `observeAccounts()` Flow | Integration test: add two Stalwart accounts; both rows in DB; remove one cascades all its data |
 | **5 — Mailbox sync** | `MailboxRepositoryImpl` scoped by accountId; `Mailbox/get` + `Mailbox/changes`; `observeMailboxes(accountId)` Flow | Integration test: mailboxes for both accounts sync independently; survive restart |
