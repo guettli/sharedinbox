@@ -1,4 +1,4 @@
-# SharedInbox
+# SharedInbox [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 JMAP email client written using [Kotlin Compose Multiplatform](https://kotlinlang.org/compose-multiplatform/).
 
