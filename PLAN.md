@@ -2,11 +2,19 @@
 
 ## Context
 
-SharedInbox is a JMAP email client (RFC 8621) built from scratch using Kotlin Compose Multiplatform. The repo is currently empty (README + AGENTS.md only). The goal is a working MVP email client targeting **Android, Desktop (JVM), and iOS**, tested against a self-hosted **Stalwart Mail** server, built with **JetBrains Amper** and managed via **Nix flake**.
+SharedInbox is a JMAP email client (RFC 8621) built from scratch using Kotlin Compose Multiplatform.
+The repo is currently empty (README + AGENTS.md only). The goal is a working MVP email client
+targeting **Android, Desktop (JVM), and iOS**, tested against a self-hosted **Stalwart Mail**
+server, built with **JetBrains Amper** and managed via **Nix flake**.
 
-The app is built **bottom-up, offline-first**. The sync engine and SQLDelight database are fully working and integration-tested before any UI is written. The UI reads only from the local DB — it never touches the network directly.
+The app is built **bottom-up, offline-first**. The sync engine and SQLDelight database are fully
+working and integration-tested before any UI is written. The UI reads only from the local DB — it
+never touches the network directly.
 
-**Multi-account from day one.** The app connects to N JMAP servers simultaneously. Every DB table carries an `accountId` foreign key. The sync engine runs one `SyncOrchestrator` and one SSE connection per account. Repositories are always account-scoped. This is baked into the schema from Phase 3 — retrofitting it later would require a full migration.
+**Multi-account from day one.** The app connects to N JMAP servers simultaneously. Every DB table
+carries an `accountId` foreign key. The sync engine runs one `SyncOrchestrator` and one SSE
+connection per account. Repositories are always account-scoped. This is baked into the schema from
+Phase 3 — retrofitting it later would require a full migration.
 
 ---
 
@@ -79,7 +87,8 @@ sharedinbox/
 
 ### Bootstrap via Nix (`flake.nix`)
 
-Amper is not in nixpkgs. Pin it as a `fetchurl` derivation so the binary is hash-verified and available automatically in `nix develop` — no manual curl/commit step needed:
+Amper is not in nixpkgs. Pin it as a `fetchurl` derivation so the binary is hash-verified and
+available automatically in `nix develop` — no manual curl/commit step needed:
 
 ```nix
 amper = pkgs.stdenv.mkDerivation {
@@ -99,7 +108,8 @@ Add `amper` to `buildInputs`. Get the correct hash once with:
 nix-prefetch-url "https://packages.jetbrains.team/maven/p/amper/amper/org/jetbrains/amper/cli/0.10.0/cli-0.10.0-wrapper"
 ```
 
-Contributors run `./amper build` (or just `amper build` inside `nix develop`) with no global install.
+Contributors run `./amper build` (or just `amper build` inside `nix develop`) with no global
+install.
 
 ### `project.yaml`
 
@@ -135,7 +145,8 @@ settings:
 
 ### `data/module.yaml`
 
-Note: `data/build.gradle.kts` sits alongside this file to apply the SQLDelight Gradle plugin (Gradle-interop mode).
+Note: `data/build.gradle.kts` sits alongside this file to apply the SQLDelight Gradle plugin
+(Gradle-interop mode).
 
 ```yaml
 product:
@@ -246,16 +257,21 @@ settings:
 
 ### Amper Quirks to Watch
 
-1. **No single `@ios` platform qualifier** — must list `@iosArm64`, `@iosSimulatorArm64`, `@iosX64` separately (or define an `aliases:` key in module.yaml).
-2. **SQLDelight Gradle plugin is incompatible** with Amper standalone — use **Gradle-interop mode** for the `data` module from the start: place a `build.gradle.kts` alongside `data/module.yaml` to apply the SQLDelight plugin.
-3. **Amper 0.10 is still experimental** — pin the wrapper version tightly, breaking changes between minor versions are possible.
+1. **No single `@ios` platform qualifier** — must list `@iosArm64`, `@iosSimulatorArm64`, `@iosX64`
+   separately (or define an `aliases:` key in module.yaml).
+2. **SQLDelight Gradle plugin is incompatible** with Amper standalone — use **Gradle-interop mode**
+   for the `data` module from the start: place a `build.gradle.kts` alongside `data/module.yaml` to
+   apply the SQLDelight plugin.
+3. **Amper 0.10 is still experimental** — pin the wrapper version tightly, breaking changes between
+   minor versions are possible.
 4. **`libs.versions.toml` must be at project root** (not `gradle/`).
 
 ---
 
 ## Nix Flake (`flake.nix`)
 
-Pins: **JDK 21 Temurin**, **Android SDK (API 36, build-tools 35)** via `android-nixpkgs/stable`, base channel `nixpkgs/nixos-25.11`.
+Pins: **JDK 21 Temurin**, **Android SDK (API 36, build-tools 35)** via `android-nixpkgs/stable`,
+base channel `nixpkgs/nixos-25.11`.
 
 ```nix
 {
@@ -328,14 +344,17 @@ use flake
 
 Key files under `core/src/commonMain/kotlin/com/sharedinbox/core/`:
 
-- `account/Account.kt` — `Account` (local record: id, displayName, hostname, username, jmapAccountId)
+- `account/Account.kt` — `Account` (local record: id, displayName, hostname, username,
+  jmapAccountId)
 - `jmap/Session.kt` — `JmapSession`, `JmapAccount`
-- `jmap/JmapRequest.kt` — `JmapRequest`, `JmapResponse`, `MethodCall` / `MethodResponse` with custom serializers for the `["name", {...}, "clientId"]` array wire format
+- `jmap/JmapRequest.kt` — `JmapRequest`, `JmapResponse`, `MethodCall` / `MethodResponse` with custom
+  serializers for the `["name", {...}, "clientId"]` array wire format
 - `jmap/mail/Mailbox.kt` — `Mailbox`, `MailboxRights`
 - `jmap/mail/Email.kt` — `Email`, `EmailAddress`, `EmailBodyPart`, `EmailBodyValue`
 - `jmap/push/StateChange.kt` — SSE push payload
 
-`Account` is the local concept (one row per configured server). `jmapAccountId` is the remote JMAP `accountId` returned by the session resource.
+`Account` is the local concept (one row per configured server). `jmapAccountId` is the remote JMAP
+`accountId` returned by the session resource.
 
 ### Repository interfaces (`core`)
 
@@ -425,13 +444,18 @@ Deleting an account cascades to all its mailboxes, emails, bodies, and state tok
 
 ### JMAP API implementation (`data` module)
 
-- `JmapApiClient` — wraps Ktor; single `POST apiUrl` with `JmapRequest` body; one instance per account
+- `JmapApiClient` — wraps Ktor; single `POST apiUrl` with `JmapRequest` body; one instance per
+  account
 - `createHttpClient(): HttpClient` — `expect/actual` per platform
-- `AccountSyncManager` — owns a `Map<accountId, SyncOrchestrator>`; starts/stops orchestrators as accounts are added/removed
-- `SyncOrchestrator(accountId)` — reads/writes `state_token` for its account; calls `*/changes` for incremental sync
-- `JmapEventSourceService(accountId)` — one SSE connection per account; dispatches `StateChange` to its `SyncOrchestrator`; reconnects on drop
+- `AccountSyncManager` — owns a `Map<accountId, SyncOrchestrator>`; starts/stops orchestrators as
+  accounts are added/removed
+- `SyncOrchestrator(accountId)` — reads/writes `state_token` for its account; calls `*/changes` for
+  incremental sync
+- `JmapEventSourceService(accountId)` — one SSE connection per account; dispatches `StateChange` to
+  its `SyncOrchestrator`; reconnects on drop
 
-**Auth:** HTTP Basic via Ktor `basic {}` provider (Stalwart supports this). OAuth2 deferred post-MVP.
+**Auth:** HTTP Basic via Ktor `basic {}` provider (Stalwart supports this). OAuth2 deferred
+post-MVP.
 
 ---
 
@@ -499,8 +523,12 @@ Build order: data layer first, UI last.
 
 ## Open Decisions
 
-1. **HTML rendering** — Plain-text only for MVP. Evaluate `compose-webview-multiplatform` for Phase 11.
+1. **HTML rendering** — Plain-text only for MVP. Evaluate `compose-webview-multiplatform` for Phase
+   11.
 2. **OAuth2** — HTTP Basic for MVP (Stalwart supports it); OAuth2 post-MVP.
 3. **Thread view** — Flat email list per mailbox for MVP; threaded conversation view post-MVP.
-4. **iOS Xcode scaffolding** — Verify `./amper init ios/app` generates a working Xcode project before starting iOS work (Phase 0).
-5. **SQLDelight + Gradle-interop** — Use Gradle-interop mode for `data` from Phase 3 onward: `data/build.gradle.kts` applies the SQLDelight plugin; `data/module.yaml` handles everything else.
+4. **iOS Xcode scaffolding** — Verify `./amper init ios/app` generates a working Xcode project
+   before starting iOS work (Phase 0).
+5. **SQLDelight + Gradle-interop** — Use Gradle-interop mode for `data` from Phase 3 onward:
+   `data/build.gradle.kts` applies the SQLDelight plugin; `data/module.yaml` handles everything
+   else.
