@@ -1,0 +1,8 @@
+modules:
+  - ./core
+  - ./data
+  - ./ui
+  - ./android-app
+  - ./desktop-app
+  # ios-app requires macOS — comment out on Linux CI runners
+  - ./ios-app

@@ -6,6 +6,8 @@ SharedInbox is a JMAP email client (RFC 8621) built from scratch using Kotlin Co
 
 The app is built **bottom-up, offline-first**. The sync engine and SQLDelight database are fully working and integration-tested before any UI is written. The UI reads only from the local DB — it never touches the network directly.
 
+**Multi-account from day one.** The app connects to N JMAP servers simultaneously. Every DB table carries an `accountId` foreign key. The sync engine runs one `SyncOrchestrator` and one SSE connection per account. Repositories are always account-scoped. This is baked into the schema from Phase 3 — retrofitting it later would require a full migration.
+
 ---
 
 ## Version Baseline
@@ -326,30 +328,108 @@ use flake
 
 Key files under `core/src/commonMain/kotlin/com/sharedinbox/core/`:
 
+- `account/Account.kt` — `Account` (local record: id, displayName, hostname, username, jmapAccountId)
 - `jmap/Session.kt` — `JmapSession`, `JmapAccount`
 - `jmap/JmapRequest.kt` — `JmapRequest`, `JmapResponse`, `MethodCall` / `MethodResponse` with custom serializers for the `["name", {...}, "clientId"]` array wire format
 - `jmap/mail/Mailbox.kt` — `Mailbox`, `MailboxRights`
 - `jmap/mail/Email.kt` — `Email`, `EmailAddress`, `EmailBodyPart`, `EmailBodyValue`
 - `jmap/push/StateChange.kt` — SSE push payload
 
+`Account` is the local concept (one row per configured server). `jmapAccountId` is the remote JMAP `accountId` returned by the session resource.
+
 ### Repository interfaces (`core`)
 
+All repositories are **account-scoped** — every method takes or implies an `accountId`.
+
 ```
-SessionRepository   — discover(hostname), getSession()
-AuthRepository      — authenticate(), isAuthenticated(), logout()
-MailboxRepository   — observeMailboxes(): Flow<List<Mailbox>>, syncMailboxes()
-EmailRepository     — observeEmails(mailboxId): Flow, syncEmails(), getEmail(),
-                      setKeyword(), moveEmail(), sendEmail(), deleteEmail()
-TokenStore          — expect/actual: EncryptedSharedPrefs (Android),
+AccountRepository   — observeAccounts(): Flow<List<Account>>
+                      addAccount(hostname, username, password): Result<Account>
+                      removeAccount(accountId)
+SessionRepository   — discover(hostname): Result<JmapSession>
+                      getSession(accountId): JmapSession?
+MailboxRepository   — observeMailboxes(accountId): Flow<List<Mailbox>>
+                      syncMailboxes(accountId)
+EmailRepository     — observeEmails(accountId, mailboxId): Flow
+                      syncEmails(accountId, mailboxId)
+                      getEmail(accountId, emailId): Result<Email>
+                      setKeyword / moveEmail / sendEmail / deleteEmail
+                        — all take accountId
+TokenStore          — saveTokens(accountId, …) / loadTokens(accountId) / clear(accountId)
+                      expect/actual: EncryptedSharedPrefs (Android),
                       Keychain (iOS), file-based (JVM)
 ```
 
+### SQLDelight schema (`data/src/commonMain/sqldelight/`)
+
+Every table references `account`:
+
+```sql
+-- account: one row per configured JMAP server
+CREATE TABLE account (
+    id           TEXT PRIMARY KEY,  -- local UUID
+    display_name TEXT NOT NULL,
+    hostname     TEXT NOT NULL,
+    username     TEXT NOT NULL,
+    jmap_account_id TEXT NOT NULL,  -- remote JMAP accountId from session
+    api_url      TEXT NOT NULL,
+    event_source_url TEXT NOT NULL,
+    added_at     INTEGER NOT NULL
+);
+
+-- mailbox: scoped to account
+CREATE TABLE mailbox (
+    id           TEXT NOT NULL,
+    account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    role         TEXT,
+    parent_id    TEXT,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    unread_emails INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (id, account_id)
+);
+
+-- email_header: scoped to account
+CREATE TABLE email_header (
+    id           TEXT NOT NULL,
+    account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    thread_id    TEXT NOT NULL,
+    mailbox_id   TEXT NOT NULL,
+    subject      TEXT,
+    from_address TEXT,
+    received_at  INTEGER NOT NULL,
+    keywords     TEXT NOT NULL DEFAULT '',  -- JSON array: ["$seen","$flagged"]
+    has_attachment INTEGER NOT NULL DEFAULT 0,
+    preview      TEXT,
+    PRIMARY KEY (id, account_id)
+);
+
+-- email_body: fetched on demand
+CREATE TABLE email_body (
+    email_id     TEXT NOT NULL,
+    account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    text_body    TEXT,
+    html_body    TEXT,
+    PRIMARY KEY (email_id, account_id)
+);
+
+-- state_token: JMAP incremental sync cursors
+CREATE TABLE state_token (
+    account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    type_name    TEXT NOT NULL,  -- "Mailbox", "Email", etc.
+    state        TEXT NOT NULL,
+    PRIMARY KEY (account_id, type_name)
+);
+```
+
+Deleting an account cascades to all its mailboxes, emails, bodies, and state tokens.
+
 ### JMAP API implementation (`data` module)
 
-- `JmapApiClient` — wraps Ktor; single `POST apiUrl` with `JmapRequest` body
+- `JmapApiClient` — wraps Ktor; single `POST apiUrl` with `JmapRequest` body; one instance per account
 - `createHttpClient(): HttpClient` — `expect/actual` per platform
-- `JmapEventSourceService` — connects SSE via `client.serverSentEventsSession {}`, dispatches `StateChange` to `SyncOrchestrator`
-- `SyncOrchestrator` — tracks JMAP state strings; calls `*/changes` for incremental sync
+- `AccountSyncManager` — owns a `Map<accountId, SyncOrchestrator>`; starts/stops orchestrators as accounts are added/removed
+- `SyncOrchestrator(accountId)` — reads/writes `state_token` for its account; calls `*/changes` for incremental sync
+- `JmapEventSourceService(accountId)` — one SSE connection per account; dispatches `StateChange` to its `SyncOrchestrator`; reconnects on drop
 
 **Auth:** HTTP Basic via Ktor `basic {}` provider (Stalwart supports this). OAuth2 deferred post-MVP.
 
@@ -383,12 +463,15 @@ Platform shell (android-app / desktop-app / ios-app)
 
 | Screen | Route | Notes |
 |---|---|---|
-| Login | `Screen.Login` | Hostname + username + password; session discovery + Basic auth |
-| Mailbox List | `Screen.MailboxList` | Unread counts; pull-to-refresh |
-| Email List | `Screen.EmailList(mailboxId)` | Subject/from/preview/date; swipe actions |
-| Email Detail | `Screen.EmailDetail(emailId)` | Plain-text body (HTML deferred); mark-as-read on open |
-| Compose / Reply | `Screen.Compose` | To/CC/Subject/Body; `Email/set create` + blob upload |
-| Settings | `Screen.Settings` | Account info; logout |
+| Account List | `Screen.AccountList` | All configured accounts with unread totals; "Add account" button; entry point on first launch |
+| Add Account | `Screen.AddAccount` | Hostname + username + password; session discovery + Basic auth; writes `account` row |
+| Mailbox List | `Screen.MailboxList(accountId)` | Mailboxes for one account with unread counts; pull-to-refresh |
+| Email List | `Screen.EmailList(accountId, mailboxId)` | Subject/from/preview/date; swipe actions |
+| Email Detail | `Screen.EmailDetail(accountId, emailId)` | Plain-text body (HTML deferred); mark-as-read on open |
+| Compose / Reply | `Screen.Compose(accountId)` | To/CC/Subject/Body; `Email/set create` + blob upload |
+| Settings | `Screen.Settings` | Manage accounts (remove); app preferences |
+
+Navigation entry point: `AccountList` (replaces the old single-account `Login` screen).
 
 ---
 
@@ -400,15 +483,16 @@ Build order: data layer first, UI last.
 |---|---|---|
 | **0 — Scaffolding** | Directories, module.yamls, `flake.nix` with `stalwart-mail` + Amper via `fetchurl`, `libs.versions.toml`, `stalwart-dev/config.toml` | `./amper build` succeeds; `stalwart-mail --config stalwart-dev/config.toml` starts |
 | **1 — Core models** | `@Serializable` data classes, custom `MethodCall` serializer, repository interfaces, unit tests | Serialization round-trips pass against captured Stalwart JSON |
-| **2 — Auth & session** | `createHttpClient` expect/actual, session discovery (`/.well-known/jmap`), Basic auth, `TokenStore` expect/actual | Integration test: Stalwart session object fully parsed |
-| **3 — SQLDelight schema** | Gradle-interop mode for `data`; schema for `mailbox`, `email_header`, `email_body`, `state_token` tables; migrations; driver expect/actual | Schema compiles; insert + query tests pass on all 3 platforms |
-| **4 — Mailbox sync** | `MailboxRepositoryImpl`: `Mailbox/get` + `Mailbox/changes`; writes to DB; `observeMailboxes()` returns DB `Flow` | Integration test: mailboxes persist in DB after sync; survive app restart |
-| **5 — Email header sync** | `EmailRepositoryImpl`: `Email/query` + `Email/get` (headers only); pagination; state tracking via `state_token` table | Integration test: email list persists in DB; incremental sync fetches only changes |
-| **6 — Email body sync** | On-demand body fetch (`Email/get` with body properties); stored in `email_body` table; `observeEmailBody(id)` Flow | Integration test: body available offline after first fetch |
-| **7 — Push / SSE** | `JmapEventSourceService` SSE connection; `StateChange` dispatch to `SyncOrchestrator`; reconnect on drop | Integration test: send email to Stalwart → inbox DB row appears without manual sync |
-| **8 — Mutations** | `Email/set` for keywords (read/unread, flagged), move, delete; `Email/set create` + blob upload for send; `Identity/get` | Integration test: mark-as-read, move, delete, send all reflected in DB |
-| **9 — UI: Login + browse** | Koin wiring, `LoginScreen`, `MailboxListScreen`, `EmailListScreen`, `EmailDetailScreen`, Navigation graph, platform entry points | End-to-end: login → browse inbox → read email (all from DB) |
-| **10 — UI: Compose + Settings** | `ComposeScreen`, `SettingsScreen`, logout | Can send email; logout clears DB and tokens |
+| **2 — Auth & session** | `createHttpClient` expect/actual, session discovery (`/.well-known/jmap`), Basic auth, `TokenStore` expect/actual (keyed by accountId) | Integration test: Stalwart session parsed; tokens stored and retrieved per account |
+| **3 — SQLDelight schema** | Gradle-interop mode for `data`; `account` table + all child tables with `account_id` FK + `ON DELETE CASCADE`; driver expect/actual | Schema compiles; insert + query tests pass; cascade delete removes all account data |
+| **4 — Account management** | `AccountRepositoryImpl`: add account (discover → auth → insert row), remove account (delete cascades), `observeAccounts()` Flow | Integration test: add two Stalwart accounts; both rows in DB; remove one cascades all its data |
+| **5 — Mailbox sync** | `MailboxRepositoryImpl` scoped by accountId; `Mailbox/get` + `Mailbox/changes`; `observeMailboxes(accountId)` Flow | Integration test: mailboxes for both accounts sync independently; survive restart |
+| **6 — Email header sync** | `EmailRepositoryImpl` scoped by accountId; `Email/query` + `Email/get` (headers); pagination; `state_token` per account | Integration test: email lists for both accounts in DB; incremental sync fetches only deltas |
+| **7 — Email body sync** | On-demand body fetch per account; stored in `email_body(account_id, email_id)`; not re-fetched if already present | Integration test: body available offline after first open |
+| **8 — Push / SSE** | `AccountSyncManager` starts one `JmapEventSourceService` + `SyncOrchestrator` per account; reconnect on drop; stops when account removed | Integration test: new email on account A appears in DB; account B unaffected |
+| **9 — Mutations** | Keyword set, move, delete, send — all account-scoped; `Identity/get` per account | Integration test: mutations on account A don't affect account B |
+| **10 — UI: Accounts + browse** | Koin wiring, `AccountListScreen`, `AddAccountScreen`, `MailboxListScreen`, `EmailListScreen`, `EmailDetailScreen`, Navigation graph, platform entry points | End-to-end: add two accounts, browse each inbox, read email |
+| **11 — UI: Compose + Settings** | `ComposeScreen` (account-scoped), `SettingsScreen` (remove account), remove cascades cleanly | Send email; remove one account; other account unaffected |
 | **11 — Polish** | Error screens, retry logic, Android WorkManager background sync, desktop tray, accessibility | Production-ready |
 
 ---

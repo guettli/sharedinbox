@@ -1,0 +1,15 @@
+product:
+  type: lib
+  platforms: [jvm, android, iosArm64, iosSimulatorArm64, iosX64]
+
+dependencies:
+  - $libs.coroutines-core
+  - $libs.serialization-json
+  - $libs.datetime
+
+test-dependencies:
+  - $libs.kotlin-test
+
+settings:
+  kotlin:
+    serialization: json

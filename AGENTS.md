@@ -14,6 +14,7 @@
 - **Layer order**: core models → auth/session → local DB schema → sync engine → UI
 - **UI is read-only**: screens read from the SQLDelight database only — never from the network directly
 - **Sync is independent**: the sync engine runs in the background and writes to the DB; the UI observes DB queries as `Flow`
+- **Multi-account from day one**: every DB table has an `accountId` foreign key; the sync engine runs one `SyncOrchestrator` and one SSE connection per account; repositories are always account-scoped
 - Do not start UI work until the sync layer has integration tests passing against a local Stalwart Mail instance
 
 ## SQLDelight + Amper

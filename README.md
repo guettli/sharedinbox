@@ -4,6 +4,8 @@ JMAP email client written using [Kotlin Compose Multiplatform](https://kotlinlan
 
 Targets **Android, Desktop (JVM), and iOS**. Tested against [Stalwart Mail](https://stalw.art).
 
+Supports **multiple JMAP accounts** simultaneously — connect to N servers at once, each synced independently.
+
 ## Design philosophy: offline-first
 
 The app is built bottom-up. The sync engine and local database are fully working and tested before any UI is written. The UI reads exclusively from the local SQLDelight database — it never touches the network directly. The sync layer runs independently in the background.

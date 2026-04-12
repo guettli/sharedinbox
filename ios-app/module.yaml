@@ -1,0 +1,11 @@
+# Building for iOS requires macOS with Xcode installed.
+# On Linux, exclude this module from project.yaml if it causes build errors.
+
+product: ios/app
+
+dependencies:
+  - ../ui
+
+settings:
+  compose:
+    enabled: true

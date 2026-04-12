@@ -1,0 +1,26 @@
+product:
+  type: lib
+  platforms: [jvm, android, iosArm64, iosSimulatorArm64, iosX64]
+
+dependencies:
+  - ../core: exported
+  - ../data: exported
+  - $compose.foundation
+  - $compose.material3
+  - $libs.lifecycle-viewmodel
+  - $libs.navigation-compose
+  - $libs.koin-compose
+  - $libs.koin-core
+
+dependencies@android:
+  - $libs.activity-compose
+  - $libs.koin-android
+
+test-dependencies:
+  - $libs.kotlin-test
+
+settings:
+  compose:
+    enabled: true
+  kotlin:
+    serialization: json

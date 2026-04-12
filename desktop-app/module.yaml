@@ -1,0 +1,11 @@
+product: jvm/app
+
+dependencies:
+  - ../ui
+
+settings:
+  compose:
+    enabled: true
+  jvm:
+    mainClass: com.sharedinbox.desktop.MainKt
+    release: 21

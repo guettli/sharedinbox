@@ -1,0 +1,50 @@
+[versions]
+kotlin             = "2.3.20"
+ktor               = "3.4.2"
+koin               = "4.1.1"
+sqldelight         = "2.3.2"
+coroutines         = "1.10.2"
+serialization      = "1.11.0"
+datetime           = "0.7.1"
+lifecycle          = "2.10.0"
+activity-compose   = "1.10.1"
+navigation-compose = "2.10.0"
+
+[libraries]
+# Ktor — HTTP client
+ktor-client-core       = { module = "io.ktor:ktor-client-core",                   version.ref = "ktor" }
+ktor-client-okhttp     = { module = "io.ktor:ktor-client-okhttp",                 version.ref = "ktor" }
+ktor-client-darwin     = { module = "io.ktor:ktor-client-darwin",                 version.ref = "ktor" }
+ktor-client-cio        = { module = "io.ktor:ktor-client-cio",                    version.ref = "ktor" }
+ktor-client-auth       = { module = "io.ktor:ktor-client-auth",                   version.ref = "ktor" }
+ktor-client-logging    = { module = "io.ktor:ktor-client-logging",                version.ref = "ktor" }
+ktor-client-contentneg = { module = "io.ktor:ktor-client-content-negotiation",    version.ref = "ktor" }
+ktor-serialization-json= { module = "io.ktor:ktor-serialization-kotlinx-json",    version.ref = "ktor" }
+
+# Koin — dependency injection
+koin-core    = { module = "io.insert-koin:koin-core",    version.ref = "koin" }
+koin-compose = { module = "io.insert-koin:koin-compose", version.ref = "koin" }
+koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
+
+# SQLDelight — local database (added to data module in Phase 3 via Gradle-interop)
+sqldelight-runtime    = { module = "app.cash.sqldelight:runtime",              version.ref = "sqldelight" }
+sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }
+sqldelight-android    = { module = "app.cash.sqldelight:android-driver",       version.ref = "sqldelight" }
+sqldelight-native     = { module = "app.cash.sqldelight:native-driver",        version.ref = "sqldelight" }
+sqldelight-jvm        = { module = "app.cash.sqldelight:sqlite-driver",        version.ref = "sqldelight" }
+
+# kotlinx
+coroutines-core   = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core",    version.ref = "coroutines" }
+serialization-json= { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+datetime          = { module = "org.jetbrains.kotlinx:kotlinx-datetime",            version.ref = "datetime" }
+
+# AndroidX / JetBrains KMP re-publications
+lifecycle-viewmodel  = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+navigation-compose   = { module = "org.jetbrains.androidx.navigation:navigation-compose",         version.ref = "navigation-compose" }
+activity-compose     = { module = "androidx.activity:activity-compose",                           version.ref = "activity-compose" }
+
+# Testing
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+
+[plugins]
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }

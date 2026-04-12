@@ -1,0 +1,35 @@
+# SQLDelight dependencies are added in Phase 3 via Gradle-interop mode.
+# data/build.gradle.kts will apply the SQLDelight plugin alongside this file.
+
+product:
+  type: lib
+  platforms: [jvm, android, iosArm64, iosSimulatorArm64, iosX64]
+
+dependencies:
+  - ../core
+  - $libs.ktor-client-core
+  - $libs.ktor-client-auth
+  - $libs.ktor-client-contentneg
+  - $libs.ktor-serialization-json
+  - $libs.ktor-client-logging
+  - $libs.koin-core
+
+dependencies@android:
+  - $libs.ktor-client-okhttp
+
+dependencies@iosArm64:
+  - $libs.ktor-client-darwin
+dependencies@iosSimulatorArm64:
+  - $libs.ktor-client-darwin
+dependencies@iosX64:
+  - $libs.ktor-client-darwin
+
+dependencies@jvm:
+  - $libs.ktor-client-cio
+
+test-dependencies:
+  - $libs.kotlin-test
+
+settings:
+  kotlin:
+    serialization: json

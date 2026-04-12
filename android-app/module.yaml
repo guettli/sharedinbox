@@ -1,0 +1,18 @@
+product: android/app
+
+dependencies:
+  - ../ui
+
+settings:
+  android:
+    applicationId: com.sharedinbox.app
+    namespace: com.sharedinbox.app
+    compileSdk: 36
+    targetSdk: 36
+    minSdk: 26
+    versionCode: 1
+    versionName: "0.1.0"
+  compose:
+    enabled: true
+  jvm:
+    release: 21
