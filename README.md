@@ -29,8 +29,10 @@ Network (JMAP server)
 | 0 — Scaffolding | Module layout, Nix flake, Amper, Stalwart dev config | Done |
 | 1 — Core models | `@Serializable` data classes, JMAP wire format, repository interfaces | Done |
 | 2 — Auth & session | Session discovery, Basic auth, `TokenStore` (JVM: file-based) | Done |
-| 3 — SQLDelight schema | Local DB schema with `account_id` FK on all tables | Pending |
-| 4+ — Sync, UI | Account management, mailbox/email sync, SSE push, Compose UI | Pending |
+| 3 — SQLDelight schema | Local DB schema with `account_id` FK on all tables | Done |
+| 4 — Account management | `AccountRepositoryImpl`: add/remove accounts, `observeAccounts()` Flow | Done |
+| 5 — Mailbox sync | `MailboxRepositoryImpl`, `JmapApiClient`, full + incremental sync | Done |
+| 6+ — Email sync, UI | Email header/body sync, SSE push, Compose UI | Pending |
 
 ## Build tooling
 

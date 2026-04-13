@@ -88,6 +88,35 @@ public class MailboxQueries(
     return result
   }
 
+  /**
+   * @return The number of rows updated.
+   */
+  public fun deleteMailbox(account_id: String, id: String): QueryResult<Long> {
+    val result = driver.execute(746_622_233, """DELETE FROM mailbox WHERE account_id = ? AND id = ?""", 2) {
+          var parameterIndex = 0
+          bindString(parameterIndex++, account_id)
+          bindString(parameterIndex++, id)
+        }
+    notifyQueries(746_622_233) { emit ->
+      emit("mailbox")
+    }
+    return result
+  }
+
+  /**
+   * @return The number of rows updated.
+   */
+  public fun deleteMailboxesByAccount(account_id: String): QueryResult<Long> {
+    val result = driver.execute(-2_025_470_449, """DELETE FROM mailbox WHERE account_id = ?""", 1) {
+          var parameterIndex = 0
+          bindString(parameterIndex++, account_id)
+        }
+    notifyQueries(-2_025_470_449) { emit ->
+      emit("mailbox")
+    }
+    return result
+  }
+
   private inner class SelectMailboxesByAccountQuery<out T : Any>(
     public val account_id: String,
     mapper: (SqlCursor) -> T,

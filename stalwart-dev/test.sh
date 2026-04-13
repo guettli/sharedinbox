@@ -25,7 +25,7 @@ done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Regenerate SQLDelight code if any .sq file is newer than the generated DB class.
-GENERATED_DB="$ROOT/data/src/de/sharedinbox/data/db/generated/de/sharedinbox/data/db/SharedInboxDatabase.kt"
+GENERATED_DB="$ROOT/data/src/generated/de/sharedinbox/data/db/SharedInboxDatabase.kt"
 if find "$ROOT/data/src/sqldelight" -name "*.sq" -newer "$GENERATED_DB" 2>/dev/null | grep -q . || [ ! -f "$GENERATED_DB" ]; then
     echo "Schema changed — regenerating SQLDelight code..."
     "$ROOT/gradlew" --project-dir "$ROOT/codegen" generateAndCopy

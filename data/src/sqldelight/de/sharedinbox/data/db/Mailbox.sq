@@ -17,3 +17,9 @@ SELECT * FROM mailbox WHERE account_id = ? ORDER BY sort_order;
 
 selectMailbox:
 SELECT * FROM mailbox WHERE account_id = ? AND id = ?;
+
+deleteMailbox:
+DELETE FROM mailbox WHERE account_id = ? AND id = ?;
+
+deleteMailboxesByAccount:
+DELETE FROM mailbox WHERE account_id = ?;

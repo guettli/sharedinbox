@@ -31,7 +31,7 @@ sqldelight {
 }
 
 val generatedSrc = layout.buildDirectory.dir("generated/sqldelight/code/SharedInboxDatabase/commonMain")
-val dataSrcDir = rootDir.resolve("../data/src/de/sharedinbox/data/db/generated")
+val dataSrcDir = rootDir.resolve("../data/src/generated")
 
 tasks.register<Copy>("generateAndCopy") {
     dependsOn("generateCommonMainSharedInboxDatabaseInterface")
