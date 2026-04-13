@@ -136,10 +136,12 @@ class DatabaseSchemaTest {
         db.accountQueries.insertAccount(
             id = id,
             display_name = id,
-            hostname = "http://localhost:8080",
+            base_url = "http://localhost:8080",
             username = "alice@localhost",
             jmap_account_id = "jmap-$id",
             api_url = "http://localhost:8080/jmap/",
+            upload_url = "http://localhost:8080/jmap/upload/{accountId}/",
+            download_url = "http://localhost:8080/jmap/download/{accountId}/{blobId}/{name}",
             event_source_url = "http://localhost:8080/jmap/eventsource/",
             added_at = 1000L,
         )

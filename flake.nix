@@ -46,7 +46,7 @@
           buildInputs = with pkgs; [
             temurin-bin-21   # JDK 21
             androidSdk
-            stalwart-mail    # 0.14.1 — local JMAP server for integration tests
+            stalwart-mail    # 0.14.1 — local JMAP server for integration tests (binary: stalwart)
             amper
             git
             curl
@@ -75,8 +75,8 @@
             export STALWART_URL="http://localhost:$STALWART_PORT"
             export STALWART_USER_A="admin"
             export STALWART_PASS_A="admin"
-            export STALWART_USER_B="admin"
-            export STALWART_PASS_B="admin"
+            export STALWART_USER_B="alice"
+            export STALWART_PASS_B="secret"
 
             echo "SharedInbox dev environment ready (Stalwart port: $STALWART_PORT)."
             echo "  Start Stalwart : stalwart-dev/start"

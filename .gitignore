@@ -2,4 +2,5 @@
 .direnv
 build/
 .amper/
+.gradle/
 stalwart-dev/local.toml

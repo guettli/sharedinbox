@@ -1,0 +1,110 @@
+package de.sharedinbox.`data`.db.sharedinboxcodegen
+
+import app.cash.sqldelight.TransacterImpl
+import app.cash.sqldelight.db.AfterVersion
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlSchema
+import de.sharedinbox.`data`.db.AccountQueries
+import de.sharedinbox.`data`.db.EmailBodyQueries
+import de.sharedinbox.`data`.db.EmailHeaderQueries
+import de.sharedinbox.`data`.db.MailboxQueries
+import de.sharedinbox.`data`.db.SharedInboxDatabase
+import de.sharedinbox.`data`.db.StateTokenQueries
+import kotlin.Long
+import kotlin.Unit
+import kotlin.reflect.KClass
+
+internal val KClass<SharedInboxDatabase>.schema: SqlSchema<QueryResult.Value<Unit>>
+  get() = SharedInboxDatabaseImpl.Schema
+
+internal fun KClass<SharedInboxDatabase>.newInstance(driver: SqlDriver): SharedInboxDatabase = SharedInboxDatabaseImpl(driver)
+
+private class SharedInboxDatabaseImpl(
+  driver: SqlDriver,
+) : TransacterImpl(driver),
+    SharedInboxDatabase {
+  override val accountQueries: AccountQueries = AccountQueries(driver)
+
+  override val emailBodyQueries: EmailBodyQueries = EmailBodyQueries(driver)
+
+  override val emailHeaderQueries: EmailHeaderQueries = EmailHeaderQueries(driver)
+
+  override val mailboxQueries: MailboxQueries = MailboxQueries(driver)
+
+  override val stateTokenQueries: StateTokenQueries = StateTokenQueries(driver)
+
+  public object Schema : SqlSchema<QueryResult.Value<Unit>> {
+    override val version: Long
+      get() = 1
+
+    override fun create(driver: SqlDriver): QueryResult.Value<Unit> {
+      driver.execute(null, """
+          |CREATE TABLE account (
+          |    id               TEXT PRIMARY KEY,
+          |    display_name     TEXT NOT NULL,
+          |    base_url         TEXT NOT NULL,
+          |    username         TEXT NOT NULL,
+          |    jmap_account_id  TEXT NOT NULL,
+          |    api_url          TEXT NOT NULL,
+          |    upload_url       TEXT NOT NULL,
+          |    download_url     TEXT NOT NULL,
+          |    event_source_url TEXT NOT NULL,
+          |    added_at         INTEGER NOT NULL
+          |)
+          """.trimMargin(), 0)
+      driver.execute(null, """
+          |CREATE TABLE email_body (
+          |    email_id   TEXT NOT NULL,
+          |    account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+          |    text_body  TEXT,
+          |    html_body  TEXT,
+          |    PRIMARY KEY (email_id, account_id)
+          |)
+          """.trimMargin(), 0)
+      driver.execute(null, """
+          |CREATE TABLE email_header (
+          |    id             TEXT NOT NULL,
+          |    account_id     TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+          |    thread_id      TEXT NOT NULL,
+          |    mailbox_id     TEXT NOT NULL,
+          |    subject        TEXT,
+          |    from_address   TEXT,
+          |    received_at    INTEGER NOT NULL,
+          |    keywords       TEXT NOT NULL DEFAULT '',
+          |    has_attachment INTEGER NOT NULL DEFAULT 0,
+          |    preview        TEXT,
+          |    PRIMARY KEY (id, account_id)
+          |)
+          """.trimMargin(), 0)
+      driver.execute(null, """
+          |CREATE TABLE mailbox (
+          |    id            TEXT NOT NULL,
+          |    account_id    TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+          |    name          TEXT NOT NULL,
+          |    role          TEXT,
+          |    parent_id     TEXT,
+          |    sort_order    INTEGER NOT NULL DEFAULT 0,
+          |    unread_emails INTEGER NOT NULL DEFAULT 0,
+          |    PRIMARY KEY (id, account_id)
+          |)
+          """.trimMargin(), 0)
+      driver.execute(null, """
+          |CREATE TABLE state_token (
+          |    account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+          |    type_name  TEXT NOT NULL,
+          |    state      TEXT NOT NULL,
+          |    PRIMARY KEY (account_id, type_name)
+          |)
+          """.trimMargin(), 0)
+      return QueryResult.Unit
+    }
+
+    override fun migrate(
+      driver: SqlDriver,
+      oldVersion: Long,
+      newVersion: Long,
+      vararg callbacks: AfterVersion,
+    ): QueryResult.Value<Unit> = QueryResult.Unit
+  }
+}

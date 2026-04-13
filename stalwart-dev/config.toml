@@ -27,17 +27,21 @@ blob      = "db"
 lookup    = "db"
 directory = "memory"
 
+# Suppress spam-filter rules download on first boot (not needed for tests).
+[version]
+spam-filter = "dev"
+
 [directory."memory"]
 type = "memory"
 
 [[directory."memory".principals]]
-type   = "user"
+class  = "individual"
 name   = "alice"
 secret = "secret"
 email  = ["alice@localhost"]
 
 [[directory."memory".principals]]
-type   = "user"
+class  = "individual"
 name   = "bob"
 secret = "secret"
 email  = ["bob@localhost"]

@@ -7,6 +7,7 @@
 set -euo pipefail
 
 : "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
+command -v stalwart >/dev/null || { echo "stalwart not in PATH — run inside nix develop"; exit 1; }
 
 TMPDIR="/tmp/stalwart-dev-${STALWART_PORT}"
 mkdir -p "$TMPDIR"
@@ -17,4 +18,4 @@ sed -e "s|127.0.0.1:8080|127.0.0.1:${STALWART_PORT}|" \
     -e "s|/tmp/stalwart-dev|${TMPDIR}|" \
     "${REPO_ROOT}/stalwart-dev/config.toml" > "${TMPDIR}/config.toml"
 
-exec stalwart-mail --config "${TMPDIR}/config.toml"
+exec stalwart --config "${TMPDIR}/config.toml"

@@ -62,7 +62,9 @@ class FileTokenStore(
 
     private fun load(): CredentialStore {
         if (!storePath.exists()) return CredentialStore()
-        return json.decodeFromString(storePath.readText())
+        val text = storePath.readText()
+        if (text.isBlank()) return CredentialStore()
+        return json.decodeFromString(text)
     }
 
     private fun save(store: CredentialStore) {

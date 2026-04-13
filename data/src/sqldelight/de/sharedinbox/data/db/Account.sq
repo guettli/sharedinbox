@@ -1,16 +1,18 @@
 CREATE TABLE account (
     id               TEXT PRIMARY KEY,
     display_name     TEXT NOT NULL,
-    hostname         TEXT NOT NULL,
+    base_url         TEXT NOT NULL,
     username         TEXT NOT NULL,
     jmap_account_id  TEXT NOT NULL,
     api_url          TEXT NOT NULL,
+    upload_url       TEXT NOT NULL,
+    download_url     TEXT NOT NULL,
     event_source_url TEXT NOT NULL,
     added_at         INTEGER NOT NULL
 );
 
 insertAccount:
-INSERT OR REPLACE INTO account VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO account VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectAllAccounts:
 SELECT * FROM account ORDER BY added_at;

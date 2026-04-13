@@ -13,6 +13,7 @@ dependencies:
   - io.insert-koin:koin-core:4.1.1
   - app.cash.sqldelight:runtime:2.3.2
   - app.cash.sqldelight:coroutines-extensions:2.3.2
+  - org.jetbrains.kotlinx:kotlinx-datetime:0.7.1
 
 dependencies@android:
   - io.ktor:ktor-client-okhttp:3.4.2

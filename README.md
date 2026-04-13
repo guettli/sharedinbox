@@ -56,20 +56,11 @@ these are pure-logic tests that only need the JVM target.
 
 ### Integration tests (requires Stalwart)
 
-Inside `nix develop`, the shell hook picks a per-clone random port (written to
-`.env` on first run) and exports `STALWART_URL` automatically. Start Stalwart
-in one terminal:
-
 ```bash
-stalwart-dev/start
+stalwart-dev/test
 ```
 
-Then run the integration tests:
-
-```bash
-amper test -m data
-```
-
+Starts Stalwart in the background, runs the JVM integration tests, then shuts it down.
 `STALWART_URL`, `STALWART_USER_A`, and `STALWART_PASS_A` are already exported by
 the shell hook — no manual env vars needed. Two clones on the same machine get
 different ports and different `/tmp/stalwart-dev-PORT` data directories, so their
