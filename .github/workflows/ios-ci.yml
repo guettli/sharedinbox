@@ -50,4 +50,4 @@ jobs:
         run: amper build -m ios-app
 
       - name: Run E2E tests
-        run: amper test -m data -p jvm
+        run: amper test -m data -p jvm -- --tests "de.sharedinbox.data.E2eRemoteIntegrationTest"
