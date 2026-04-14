@@ -2,7 +2,9 @@ package de.sharedinbox.ui.screen
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +21,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -44,6 +47,7 @@ fun MailboxListScreen(
 ) {
     vm.init(accountId)
     val mailboxes by vm.mailboxes.collectAsState()
+    val syncWarning by vm.syncWarning.collectAsState()
 
     Scaffold(
         topBar = {
@@ -68,41 +72,49 @@ fun MailboxListScreen(
             )
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                vm.isLoading && mailboxes.isEmpty() -> CircularProgressIndicator(
-                    Modifier.align(Alignment.Center)
-                        .semantics { contentDescription = "Loading mailboxes" }
-                )
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            SyncWarningBanner(syncWarning)
+            Box(Modifier.weight(1f)) {
+                when {
+                    vm.isLoading && mailboxes.isEmpty() ->
+                        CircularProgressIndicator(
+                            Modifier
+                                .align(Alignment.Center)
+                                .semantics { contentDescription = "Loading mailboxes" },
+                        )
 
-                vm.error != null && mailboxes.isEmpty() -> ErrorContent(
-                    message = vm.error!!,
-                    onRetry = { vm.refresh() },
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                    vm.error != null && mailboxes.isEmpty() ->
+                        ErrorContent(
+                            message = vm.error!!,
+                            onRetry = { vm.refresh() },
+                            modifier = Modifier.align(Alignment.Center),
+                        )
 
-                mailboxes.isEmpty() -> Text(
-                    text = "No mailboxes found.",
-                    modifier = Modifier.align(Alignment.Center),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                    mailboxes.isEmpty() ->
+                        Text(
+                            text = "No mailboxes found.",
+                            modifier = Modifier.align(Alignment.Center),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
 
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(mailboxes, key = { it.id }) { mailbox ->
-                        MailboxRow(mailbox = mailbox, onClick = { onNavigateToEmails(mailbox.id) })
-                        HorizontalDivider()
-                    }
+                    else ->
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(mailboxes, key = { it.id }) { mailbox ->
+                                MailboxRow(mailbox = mailbox, onClick = { onNavigateToEmails(mailbox.id) })
+                                HorizontalDivider()
+                            }
+                        }
                 }
-            }
-            // Error banner overlay when list is populated but sync failed
-            vm.error?.let { err ->
-                if (mailboxes.isNotEmpty()) {
-                    Text(
-                        text = "Sync failed: $err",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
+                // Error banner overlay when list is populated but a refresh failed
+                vm.error?.let { err ->
+                    if (mailboxes.isNotEmpty()) {
+                        Text(
+                            text = "Sync failed: $err",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
         }
@@ -110,15 +122,21 @@ fun MailboxListScreen(
 }
 
 @Composable
-private fun MailboxRow(mailbox: Mailbox, onClick: () -> Unit) {
+private fun MailboxRow(
+    mailbox: Mailbox,
+    onClick: () -> Unit,
+) {
     ListItem(
         headlineContent = { Text(mailbox.name) },
-        supportingContent = if (mailbox.unreadEmails > 0) {
-            { Text("${mailbox.unreadEmails} unread") }
-        } else {
-            null
-        },
-        modifier = Modifier.clickable(onClick = onClick)
-            .semantics { contentDescription = "${mailbox.name}, ${mailbox.unreadEmails} unread" },
+        supportingContent =
+            if (mailbox.unreadEmails > 0) {
+                { Text("${mailbox.unreadEmails} unread") }
+            } else {
+                null
+            },
+        modifier =
+            Modifier
+                .clickable(onClick = onClick)
+                .semantics { contentDescription = "${mailbox.name}, ${mailbox.unreadEmails} unread" },
     )
 }

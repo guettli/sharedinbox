@@ -25,9 +25,15 @@ data class JmapAccount(
     val accountCapabilities: Map<String, JsonObject>,
 )
 
-/** JMAP capability URNs (RFC 8620 / RFC 8621) */
+/** JMAP capability URNs (RFC 8620 / RFC 8621 / RFC 9610) */
 object JmapCapability {
     const val CORE = "urn:ietf:params:jmap:core"
     const val MAIL = "urn:ietf:params:jmap:mail"
     const val SUBMISSION = "urn:ietf:params:jmap:submission"
+
+    /** RFC 9610 — JMAP for Contacts (CardDAV replacement) */
+    const val CONTACTS = "urn:ietf:params:jmap:contacts"
+
+    /** JMAP Sieve — server-side mail filtering scripts */
+    const val SIEVE = "urn:ietf:params:jmap:sieve"
 }

@@ -27,9 +27,11 @@ blob      = "db"
 lookup    = "db"
 directory = "memory"
 
-# Suppress spam-filter rules download on first boot (not needed for tests).
-[version]
-spam-filter = "dev"
+[tracer."stdout"]
+type    = "stdout"
+level   = "warn"
+ansi    = false
+enable  = true
 
 [directory."memory"]
 type = "memory"

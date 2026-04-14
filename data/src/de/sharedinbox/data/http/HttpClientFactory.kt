@@ -19,40 +19,50 @@ import kotlinx.serialization.json.Json
  *
  * Credentials are sent on every request (no 401-challenge round-trip).
  */
-fun createHttpClient(username: String, password: String): HttpClient = HttpClient {
-    install(ContentNegotiation) {
-        json(Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        })
-    }
-    install(Auth) {
-        basic {
-            credentials { BasicAuthCredentials(username = username, password = password) }
-            sendWithoutRequest { true }
+fun createHttpClient(
+    username: String,
+    password: String,
+): HttpClient =
+    HttpClient {
+        install(ContentNegotiation) {
+            json(
+                Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                },
+            )
+        }
+        install(Auth) {
+            basic {
+                credentials { BasicAuthCredentials(username = username, password = password) }
+                sendWithoutRequest { true }
+            }
+        }
+        install(Logging) {
+            logger = Logger.DEFAULT
+            level = LogLevel.INFO
+        }
+        install(HttpRequestRetry) {
+            retryOnServerErrors(maxRetries = 2)
+            exponentialDelay()
         }
     }
-    install(Logging) {
-        logger = Logger.DEFAULT
-        level = LogLevel.INFO
-    }
-    install(HttpRequestRetry) {
-        retryOnServerErrors(maxRetries = 2)
-        exponentialDelay()
-    }
-}
 
 /** HTTP client with SSE plugin enabled — used by [AccountSyncManager]. */
-fun createSseHttpClient(username: String, password: String): HttpClient = HttpClient {
-    install(SSE)
-    install(Auth) {
-        basic {
-            credentials { BasicAuthCredentials(username = username, password = password) }
-            sendWithoutRequest { true }
+fun createSseHttpClient(
+    username: String,
+    password: String,
+): HttpClient =
+    HttpClient {
+        install(SSE)
+        install(Auth) {
+            basic {
+                credentials { BasicAuthCredentials(username = username, password = password) }
+                sendWithoutRequest { true }
+            }
+        }
+        install(Logging) {
+            logger = Logger.DEFAULT
+            level = LogLevel.NONE
         }
     }
-    install(Logging) {
-        logger = Logger.DEFAULT
-        level = LogLevel.NONE
-    }
-}

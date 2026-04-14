@@ -1,6 +1,7 @@
 package de.sharedinbox.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -21,6 +24,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import de.sharedinbox.core.jmap.mail.EmailAddress
 import de.sharedinbox.ui.viewmodel.ComposeViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,27 +68,30 @@ fun ComposeScreen(
         },
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedTextField(
+            AddressField(
                 value = vm.to,
-                onValueChange = { vm.to = it },
-                label = { Text("To") },
-                placeholder = { Text("user@example.com, other@example.com") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+                label = "To",
+                onValueChange = { vm.onAddressInput(ComposeViewModel.AddressField.TO, it) },
+                suggestions =
+                    if (vm.suggestionsField == ComposeViewModel.AddressField.TO) vm.suggestions else emptyList(),
+                onSuggestionSelected = { vm.acceptSuggestion(ComposeViewModel.AddressField.TO, it) },
+                onDismissSuggestions = { vm.clearSuggestions() },
             )
-            OutlinedTextField(
+            AddressField(
                 value = vm.cc,
-                onValueChange = { vm.cc = it },
-                label = { Text("CC") },
-                placeholder = { Text("user@example.com, other@example.com") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+                label = "CC",
+                onValueChange = { vm.onAddressInput(ComposeViewModel.AddressField.CC, it) },
+                suggestions =
+                    if (vm.suggestionsField == ComposeViewModel.AddressField.CC) vm.suggestions else emptyList(),
+                onSuggestionSelected = { vm.acceptSuggestion(ComposeViewModel.AddressField.CC, it) },
+                onDismissSuggestions = { vm.clearSuggestions() },
             )
             OutlinedTextField(
                 value = vm.subject,
@@ -94,7 +101,11 @@ fun ComposeScreen(
                 singleLine = true,
             )
             vm.error?.let { err ->
-                Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    err,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             OutlinedTextField(
                 value = vm.body,
@@ -103,6 +114,50 @@ fun ComposeScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 minLines = 8,
             )
+        }
+    }
+}
+
+/**
+ * An address input field with a drop-down suggestion list.
+ *
+ * [suggestions] should only be non-empty when this field is the active one.
+ * The caller is responsible for filtering suggestions by field identity.
+ */
+@Composable
+private fun AddressField(
+    value: String,
+    label: String,
+    onValueChange: (String) -> Unit,
+    suggestions: List<EmailAddress>,
+    onSuggestionSelected: (EmailAddress) -> Unit,
+    onDismissSuggestions: () -> Unit,
+) {
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            placeholder = { Text("user@example.com, other@example.com") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        DropdownMenu(
+            expanded = suggestions.isNotEmpty(),
+            onDismissRequest = onDismissSuggestions,
+        ) {
+            suggestions.forEach { address ->
+                DropdownMenuItem(
+                    text = {
+                        if (address.name != null) {
+                            Text("${address.name} <${address.email}>")
+                        } else {
+                            Text(address.email)
+                        }
+                    },
+                    onClick = { onSuggestionSelected(address) },
+                )
+            }
         }
     }
 }

@@ -4,10 +4,12 @@ import de.sharedinbox.core.jmap.JmapCapability
 import de.sharedinbox.core.jmap.JmapRequest
 import de.sharedinbox.core.jmap.JmapResponse
 import de.sharedinbox.core.jmap.MethodCall
+import de.sharedinbox.core.jmap.contacts.ContactCard
 import de.sharedinbox.core.jmap.mail.Email
 import de.sharedinbox.core.jmap.mail.EmailBodyPart
 import de.sharedinbox.core.jmap.mail.EmailBodyValue
 import de.sharedinbox.core.jmap.mail.Mailbox
+import de.sharedinbox.core.jmap.sieve.SieveScript
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -20,12 +22,21 @@ private val jmapUsing = listOf(JmapCapability.CORE, JmapCapability.MAIL)
 private val jmapUsingWithSubmission =
     listOf(JmapCapability.CORE, JmapCapability.MAIL, JmapCapability.SUBMISSION)
 
-private val HEADER_PROPERTIES = buildJsonArray {
-    listOf(
-        "id", "blobId", "threadId", "mailboxIds", "keywords",
-        "subject", "from", "receivedAt", "preview", "hasAttachment",
-    ).forEach { add(it) }
-}
+private val HEADER_PROPERTIES =
+    buildJsonArray {
+        listOf(
+            "id",
+            "blobId",
+            "threadId",
+            "mailboxIds",
+            "keywords",
+            "subject",
+            "from",
+            "receivedAt",
+            "preview",
+            "hasAttachment",
+        ).forEach { add(it) }
+    }
 
 /**
  * Low-level JMAP API client for one account.
@@ -38,7 +49,6 @@ class JmapApiClient(
     val httpClient: HttpClient,
     val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-
     // ── Mailbox ──────────────────────────────────────────────────────────────
 
     @Serializable
@@ -65,10 +75,11 @@ class JmapApiClient(
         jmapAccountId: String,
         ids: List<String>? = null,
     ): MailboxGetResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("ids", if (ids == null) JsonNull else buildJsonArray { ids.forEach { add(it) } })
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", if (ids == null) JsonNull else buildJsonArray { ids.forEach { add(it) } })
+            }
         return call("Mailbox/get", arguments)
     }
 
@@ -95,10 +106,11 @@ class JmapApiClient(
         jmapAccountId: String,
         arguments: JsonObject,
     ): MailboxSetResult {
-        val fullArgs = buildJsonObject {
-            put("accountId", jmapAccountId)
-            arguments.forEach { (k, v) -> put(k, v) }
-        }
+        val fullArgs =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                arguments.forEach { (k, v) -> put(k, v) }
+            }
         return call("Mailbox/set", fullArgs)
     }
 
@@ -107,10 +119,11 @@ class JmapApiClient(
         jmapAccountId: String,
         sinceState: String,
     ): MailboxChangesResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("sinceState", sinceState)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("sinceState", sinceState)
+            }
         return call("Mailbox/changes", arguments)
     }
 
@@ -126,24 +139,44 @@ class JmapApiClient(
         val total: Int = 0,
     )
 
-    /** Lists email IDs in [mailboxId], sorted by receivedAt descending. */
+    /**
+     * Lists email IDs in [mailboxId], sorted by receivedAt descending.
+     *
+     * @param after When non-null, only emails received at or after this UTC date-time
+     *   are returned (JMAP `after` filter, RFC 8621 §4.4.1).
+     */
     suspend fun queryEmails(
         jmapAccountId: String,
         mailboxId: String,
         limit: Int = 500,
+        after: kotlin.time.Instant? = null,
     ): EmailQueryResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("filter", buildJsonObject { put("inMailbox", mailboxId) })
-            put("sort", buildJsonArray {
-                add(buildJsonObject {
-                    put("property", "receivedAt")
-                    put("isAscending", false)
-                })
-            })
-            put("position", 0)
-            put("limit", limit)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put(
+                    "filter",
+                    buildJsonObject {
+                        put("inMailbox", mailboxId)
+                        if (after != null) {
+                            put("after", after.toString())
+                        }
+                    },
+                )
+                put(
+                    "sort",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("property", "receivedAt")
+                                put("isAscending", false)
+                            },
+                        )
+                    },
+                )
+                put("position", 0)
+                put("limit", limit)
+            }
         return call("Email/query", arguments)
     }
 
@@ -162,11 +195,12 @@ class JmapApiClient(
         jmapAccountId: String,
         ids: List<String>,
     ): EmailGetResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("ids", buildJsonArray { ids.forEach { add(it) } })
-            put("properties", HEADER_PROPERTIES)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", buildJsonArray { ids.forEach { add(it) } })
+                put("properties", HEADER_PROPERTIES)
+            }
         return call("Email/get", arguments)
     }
 
@@ -174,6 +208,8 @@ class JmapApiClient(
      * Body-only projection of an email — only fields requested in [getEmailBody].
      * Using a separate type avoids [kotlinx.serialization.MissingFieldException] from
      * required non-body fields (blobId, threadId, mailboxIds, receivedAt) in [Email].
+     *
+     * [attachments] is included so CID-referenced inline images can be resolved to blob IDs.
      */
     @Serializable
     data class EmailBodyOnly(
@@ -181,6 +217,7 @@ class JmapApiClient(
         val bodyValues: Map<String, EmailBodyValue> = emptyMap(),
         val htmlBody: List<EmailBodyPart> = emptyList(),
         val textBody: List<EmailBodyPart> = emptyList(),
+        val attachments: List<EmailBodyPart> = emptyList(),
     )
 
     @Serializable
@@ -191,21 +228,26 @@ class JmapApiClient(
         val notFound: List<String> = emptyList(),
     )
 
-    /** Fetches body content (text + HTML) for a single email. */
+    /** Fetches body content (text + HTML) for a single email. Includes attachments for CID resolution. */
     suspend fun getEmailBody(
         jmapAccountId: String,
         emailId: String,
     ): EmailBodyOnly {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("ids", buildJsonArray { add(emailId) })
-            put("properties", buildJsonArray {
-                listOf("id", "bodyValues", "htmlBody", "textBody").forEach { add(it) }
-            })
-            put("fetchHTMLBodyValues", true)
-            put("fetchTextBodyValues", true)
-            put("maxBodyValueBytes", 1048576)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", buildJsonArray { add(emailId) })
+                put(
+                    "properties",
+                    buildJsonArray {
+                        listOf("id", "bodyValues", "htmlBody", "textBody", "attachments")
+                            .forEach { add(it) }
+                    },
+                )
+                put("fetchHTMLBodyValues", true)
+                put("fetchTextBodyValues", true)
+                put("maxBodyValueBytes", 1048576)
+            }
         val result: EmailBodyOnlyResult = call("Email/get", arguments)
         return result.list.firstOrNull() ?: error("Email $emailId not found on server")
     }
@@ -227,10 +269,11 @@ class JmapApiClient(
         jmapAccountId: String,
         sinceState: String,
     ): EmailChangesResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("sinceState", sinceState)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("sinceState", sinceState)
+            }
         return call("Email/changes", arguments)
     }
 
@@ -263,10 +306,11 @@ class JmapApiClient(
         jmapAccountId: String,
         arguments: JsonObject,
     ): EmailSetResult {
-        val fullArgs = buildJsonObject {
-            put("accountId", jmapAccountId)
-            arguments.forEach { (k, v) -> put(k, v) }
-        }
+        val fullArgs =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                arguments.forEach { (k, v) -> put(k, v) }
+            }
         return call("Email/set", fullArgs)
     }
 
@@ -288,10 +332,11 @@ class JmapApiClient(
     )
 
     suspend fun getIdentities(jmapAccountId: String): IdentityGetResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("ids", JsonNull)
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", JsonNull)
+            }
         return call("Identity/get", arguments, jmapUsingWithSubmission)
     }
 
@@ -310,15 +355,22 @@ class JmapApiClient(
         identityId: String,
         emailId: String,
     ): EmailSubmissionSetResult {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("create", buildJsonObject {
-                put("sub1", buildJsonObject {
-                    put("identityId", identityId)
-                    put("emailId", emailId)
-                })
-            })
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put(
+                    "create",
+                    buildJsonObject {
+                        put(
+                            "sub1",
+                            buildJsonObject {
+                                put("identityId", identityId)
+                                put("emailId", emailId)
+                            },
+                        )
+                    },
+                )
+            }
         return call("EmailSubmission/set", arguments, jmapUsingWithSubmission)
     }
 
@@ -343,13 +395,17 @@ class JmapApiClient(
         jmapAccountId: String,
         emailId: String,
     ): List<EmailBodyPart> {
-        val arguments = buildJsonObject {
-            put("accountId", jmapAccountId)
-            put("ids", buildJsonArray { add(emailId) })
-            put("properties", buildJsonArray {
-                listOf("id", "attachments").forEach { add(it) }
-            })
-        }
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", buildJsonArray { add(emailId) })
+                put(
+                    "properties",
+                    buildJsonArray {
+                        listOf("id", "attachments").forEach { add(it) }
+                    },
+                )
+            }
         val result: EmailAttachmentsResult = call("Email/get", arguments)
         return result.list.firstOrNull()?.attachments ?: emptyList()
     }
@@ -366,12 +422,212 @@ class JmapApiClient(
         blobId: String,
         mimeType: String,
     ): ByteArray {
-        val url = downloadUrlTemplate
-            .replace("{accountId}", jmapAccountId)
-            .replace("{blobId}", blobId)
-            .replace("{type}", mimeType)
-            .replace("{name}", "attachment")
+        val url =
+            downloadUrlTemplate
+                .replace("{accountId}", jmapAccountId)
+                .replace("{blobId}", blobId)
+                .replace("{type}", mimeType)
+                .replace("{name}", "attachment")
         return httpClient.get(url).readRawBytes()
+    }
+
+    // ── Contacts (RFC 9610) ───────────────────────────────────────────────────
+
+    @Serializable
+    data class ContactCardQueryResult(
+        val accountId: String,
+        val queryState: String,
+        val ids: List<String>,
+        val total: Int = 0,
+    )
+
+    @Serializable
+    data class ContactCardGetResult(
+        val accountId: String,
+        val state: String,
+        val list: List<ContactCard>,
+        val notFound: List<String> = emptyList(),
+    )
+
+    /**
+     * Searches contacts by text on the server (RFC 9610 §4).
+     * Returns an empty list if the server does not support the contacts capability.
+     *
+     * @param jmapAccountId The JMAP account ID (from session).
+     * @param query Free-text search string.
+     * @param limit Maximum number of results.
+     */
+    suspend fun searchContactCards(
+        jmapAccountId: String,
+        query: String,
+        limit: Int = 20,
+    ): List<ContactCard> {
+        val using = listOf(JmapCapability.CORE, JmapCapability.CONTACTS)
+        val queryArgs =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("filter", buildJsonObject { put("text", query) })
+                put("limit", limit)
+            }
+        return runCatching {
+            val queryResult: ContactCardQueryResult = call("ContactCard/query", queryArgs, using)
+            if (queryResult.ids.isEmpty()) return@runCatching emptyList()
+            val getArgs =
+                buildJsonObject {
+                    put("accountId", jmapAccountId)
+                    put(
+                        "ids",
+                        buildJsonArray { queryResult.ids.forEach { add(it) } },
+                    )
+                    put(
+                        "properties",
+                        buildJsonArray {
+                            listOf("id", "fullName", "emails").forEach { add(it) }
+                        },
+                    )
+                }
+            val getResult: ContactCardGetResult = call("ContactCard/get", getArgs, using)
+            getResult.list
+        }.getOrDefault(emptyList())
+    }
+
+    // ── Sieve (JMAP Sieve, draft-ietf-extra-jmap-sieve) ──────────────────────
+
+    @Serializable
+    data class SieveScriptGetResult(
+        val accountId: String,
+        val state: String,
+        val list: List<SieveScript>,
+        val notFound: List<String> = emptyList(),
+    )
+
+    @Serializable
+    data class SieveScriptSetResult(
+        val accountId: String,
+        val newState: String,
+        val created: Map<String, SieveScript> = emptyMap(),
+        val updated: Map<String, SieveScript?> = emptyMap(),
+        val destroyed: List<String> = emptyList(),
+        val notCreated: Map<String, SetError> = emptyMap(),
+        val notUpdated: Map<String, SetError> = emptyMap(),
+        val notDestroyed: Map<String, SetError> = emptyMap(),
+    )
+
+    @Serializable
+    data class BlobUploadResult(
+        val accountId: String,
+        val blobId: String,
+        val type: String? = null,
+        val size: Long = 0,
+    )
+
+    private val jmapUsingSieve = listOf(JmapCapability.CORE, JmapCapability.SIEVE)
+
+    /** Returns all Sieve scripts for [jmapAccountId]. Empty list if none exist. */
+    suspend fun getSieveScripts(jmapAccountId: String): List<SieveScript> {
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("ids", JsonNull)
+            }
+        val result: SieveScriptGetResult = call("SieveScript/get", arguments, jmapUsingSieve)
+        return result.list
+    }
+
+    /**
+     * Uploads [content] as a blob and returns the assigned blobId.
+     *
+     * [uploadUrl] is the RFC 8620 §6.1 upload URL template from the session object.
+     */
+    suspend fun uploadBlob(
+        uploadUrl: String,
+        jmapAccountId: String,
+        content: ByteArray,
+    ): String {
+        val url = uploadUrl.replace("{accountId}", jmapAccountId)
+        val response: BlobUploadResult =
+            httpClient
+                .post(url) {
+                    contentType(ContentType.parse("application/octet-stream"))
+                    setBody(content)
+                }.body()
+        return response.blobId
+    }
+
+    /**
+     * Creates or replaces a Sieve script.
+     *
+     * If [scriptId] is null, a new script named [name] is created.
+     * If [scriptId] is non-null, the existing script is updated in-place.
+     *
+     * The caller must upload the content first via [uploadBlob] and pass the resulting [blobId].
+     * Returns the [SetError] if the server rejected the script (e.g. syntax error), or null on success.
+     */
+    suspend fun setSieveScript(
+        jmapAccountId: String,
+        scriptId: String?,
+        name: String,
+        blobId: String,
+    ): SetError? {
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                if (scriptId == null) {
+                    put(
+                        "create",
+                        buildJsonObject {
+                            put(
+                                "new1",
+                                buildJsonObject {
+                                    put("name", name)
+                                    put("blobId", blobId)
+                                },
+                            )
+                        },
+                    )
+                    // Activate the newly created script.
+                    put("onSuccessActivateScript", "#new1")
+                } else {
+                    put(
+                        "update",
+                        buildJsonObject {
+                            put(
+                                scriptId,
+                                buildJsonObject {
+                                    put("blobId", blobId)
+                                },
+                            )
+                        },
+                    )
+                }
+            }
+        val result: SieveScriptSetResult = call("SieveScript/set", arguments, jmapUsingSieve)
+        return if (scriptId == null) {
+            result.notCreated["new1"]
+        } else {
+            result.notUpdated[scriptId]
+        }
+    }
+
+    /**
+     * Destroys the Sieve script with [scriptId].
+     *
+     * Note: some servers (e.g. Stalwart) reject destroying an active script with
+     * `scriptIsActive`. Deactivate the script first before calling this.
+     *
+     * Returns the [SetError] if the server rejected the request, or null on success.
+     */
+    suspend fun destroySieveScript(
+        jmapAccountId: String,
+        scriptId: String,
+    ): SetError? {
+        val arguments =
+            buildJsonObject {
+                put("accountId", jmapAccountId)
+                put("destroy", buildJsonArray { add(scriptId) })
+            }
+        val result: SieveScriptSetResult = call("SieveScript/set", arguments, jmapUsingSieve)
+        return result.notDestroyed[scriptId]
     }
 
     // ── internal ─────────────────────────────────────────────────────────────
@@ -381,16 +637,20 @@ class JmapApiClient(
         arguments: JsonObject,
         using: List<String> = jmapUsing,
     ): T {
-        val request = JmapRequest(
-            using = using,
-            methodCalls = listOf(MethodCall(methodName, arguments, "c0")),
-        )
-        val response: JmapResponse = httpClient.post(apiUrl) {
-            contentType(ContentType.Application.Json)
-            setBody(request)
-        }.body()
-        val methodResponse = response.methodResponses.firstOrNull { it.clientId == "c0" }
-            ?: error("No response for $methodName")
+        val request =
+            JmapRequest(
+                using = using,
+                methodCalls = listOf(MethodCall(methodName, arguments, "c0")),
+            )
+        val response: JmapResponse =
+            httpClient
+                .post(apiUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(request)
+                }.body()
+        val methodResponse =
+            response.methodResponses.firstOrNull { it.clientId == "c0" }
+                ?: error("No response for $methodName")
         if (methodResponse.name == "error") {
             val type = methodResponse.result["type"]?.jsonPrimitive?.content ?: "unknown"
             error("JMAP error for $methodName: $type")

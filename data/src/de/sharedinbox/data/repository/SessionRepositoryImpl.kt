@@ -8,7 +8,6 @@ import io.ktor.client.call.*
 import io.ktor.client.request.*
 
 class SessionRepositoryImpl : SessionRepository {
-
     // Phase 3: cache sessions keyed by accountId in DB (state_token table)
     private val sessionCache = mutableMapOf<String, JmapSession>()
 
@@ -16,15 +15,15 @@ class SessionRepositoryImpl : SessionRepository {
         baseUrl: String,
         username: String,
         password: String,
-    ): Result<JmapSession> = runCatching {
-        val client = createHttpClient(username, password)
-        try {
-            client.get("$baseUrl/.well-known/jmap").body<JmapSession>()
-        } finally {
-            client.close()
+    ): Result<JmapSession> =
+        runCatching {
+            val client = createHttpClient(username, password)
+            try {
+                client.get("$baseUrl/.well-known/jmap").body<JmapSession>()
+            } finally {
+                client.close()
+            }
         }
-    }
 
-    override suspend fun getSession(accountId: String): JmapSession? =
-        sessionCache[accountId]
+    override suspend fun getSession(accountId: String): JmapSession? = sessionCache[accountId]
 }

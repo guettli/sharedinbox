@@ -15,29 +15,30 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 
-fun main() = application {
-    val windowState = rememberWindowState()
-    val icon = BitmapPainter(loadImageBitmap(ByteArrayInputStream(appIconBytes())))
+fun main() =
+    application {
+        val windowState = rememberWindowState()
+        val icon = BitmapPainter(loadImageBitmap(ByteArrayInputStream(appIconBytes())))
 
-    Tray(
-        icon = icon,
-        tooltip = "SharedInbox",
-        menu = {
-            Item("Open SharedInbox") { windowState.isMinimized = false }
-            Separator()
-            Item("Quit") { exitApplication() }
-        },
-    )
+        Tray(
+            icon = icon,
+            tooltip = "SharedInbox",
+            menu = {
+                Item("Open SharedInbox") { windowState.isMinimized = false }
+                Separator()
+                Item("Quit") { exitApplication() }
+            },
+        )
 
-    Window(
-        onCloseRequest = { windowState.isMinimized = true },
-        state = windowState,
-        title = "SharedInbox",
-        icon = icon,
-    ) {
-        App()
+        Window(
+            onCloseRequest = { windowState.isMinimized = true },
+            state = windowState,
+            title = "SharedInbox",
+            icon = icon,
+        ) {
+            App()
+        }
     }
-}
 
 /** Renders a simple "@" icon into a PNG byte array. */
 private fun appIconBytes(): ByteArray {

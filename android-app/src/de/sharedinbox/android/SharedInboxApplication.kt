@@ -5,7 +5,6 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 
 class SharedInboxApplication : Application() {
-
     override fun onCreate() {
         super.onCreate()
         // Initialize WorkManager with default configuration.

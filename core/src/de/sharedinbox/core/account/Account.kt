@@ -9,12 +9,12 @@ package de.sharedinbox.core.account
 data class Account(
     val id: String,
     val displayName: String,
-    val baseUrl: String,         // e.g. "https://mail.example.com" or "http://localhost:8080"
+    val baseUrl: String, // e.g. "https://mail.example.com" or "http://localhost:8080"
     val username: String,
     val jmapAccountId: String,
     val apiUrl: String,
     val uploadUrl: String,
     val downloadUrl: String,
     val eventSourceUrl: String,
-    val addedAt: Long,           // epoch millis
+    val addedAt: Long, // epoch millis
 )

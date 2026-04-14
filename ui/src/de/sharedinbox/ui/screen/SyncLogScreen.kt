@@ -62,18 +62,20 @@ fun SyncLogScreen(
     ) { innerPadding ->
         if (entries.isEmpty()) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
                 contentAlignment = Alignment.Center,
             ) {
                 Text("No sync activity recorded yet.", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
             ) {
                 items(entries, key = { it.id }) { entry ->
                     SyncLogRow(entry)
@@ -86,15 +88,17 @@ fun SyncLogScreen(
 
 @Composable
 private fun SyncLogRow(entry: SyncLogEntry) {
-    val statusColor = when (entry.status) {
-        SyncStatus.SUCCESS -> Color(0xFF2E7D32)   // dark green
-        SyncStatus.CONFLICT -> Color(0xFFE65100)  // deep orange
-        SyncStatus.ERROR -> Color(0xFFC62828)     // dark red
-    }
-    val directionLabel = when (entry.direction) {
-        SyncDirection.SERVER_TO_DB -> "↓ server→db"
-        SyncDirection.DB_TO_SERVER -> "↑ db→server"
-    }
+    val statusColor =
+        when (entry.status) {
+            SyncStatus.SUCCESS -> Color(0xFF2E7D32) // dark green
+            SyncStatus.CONFLICT -> Color(0xFFE65100) // deep orange
+            SyncStatus.ERROR -> Color(0xFFC62828) // dark red
+        }
+    val directionLabel =
+        when (entry.direction) {
+            SyncDirection.SERVER_TO_DB -> "↓ server→db"
+            SyncDirection.DB_TO_SERVER -> "↑ db→server"
+        }
 
     ListItem(
         headlineContent = {
@@ -113,9 +117,10 @@ private fun SyncLogRow(entry: SyncLogEntry) {
                     Text(
                         text = entry.detail,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp),
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp),
                     )
                 }
             }
@@ -135,7 +140,11 @@ private fun kotlin.time.Instant.formatLocal(): String {
     val kxInstant = kotlinx.datetime.Instant.fromEpochMilliseconds(toEpochMilliseconds())
     val local = kxInstant.toLocalDateTime(TimeZone.currentSystemDefault())
     return "%04d-%02d-%02d %02d:%02d:%02d".format(
-        local.year, local.monthNumber, local.dayOfMonth,
-        local.hour, local.minute, local.second,
+        local.year,
+        local.monthNumber,
+        local.dayOfMonth,
+        local.hour,
+        local.minute,
+        local.second,
     )
 }

@@ -45,10 +45,11 @@ fun AddAccountScreen(
         },
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(padding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             OutlinedTextField(
@@ -81,10 +82,11 @@ fun AddAccountScreen(
             }
             Button(
                 onClick = { vm.addAccount(onSuccess = onSuccess) },
-                enabled = !vm.isLoading &&
-                    vm.baseUrl.isNotBlank() &&
-                    vm.username.isNotBlank() &&
-                    vm.password.isNotBlank(),
+                enabled =
+                    !vm.isLoading &&
+                        vm.baseUrl.isNotBlank() &&
+                        vm.username.isNotBlank() &&
+                        vm.password.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (vm.isLoading) {

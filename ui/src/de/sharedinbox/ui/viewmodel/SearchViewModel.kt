@@ -14,7 +14,6 @@ import kotlinx.coroutines.launch
 class SearchViewModel(
     private val emailRepo: EmailRepository,
 ) : ViewModel() {
-
     var query by mutableStateOf("")
         private set
     var results by mutableStateOf(emptyList<Email>())
@@ -35,10 +34,14 @@ class SearchViewModel(
         selectedIds = if (emailId in selectedIds) selectedIds - emailId else selectedIds + emailId
     }
 
-    fun clearSelection() { selectedIds = emptySet() }
+    fun clearSelection() {
+        selectedIds = emptySet()
+    }
 
     fun bulkArchive() = bulkAction { id -> emailRepo.archiveEmail(accountId, id) }
+
     fun bulkDelete() = bulkAction { id -> emailRepo.deleteEmail(accountId, id) }
+
     fun bulkMarkSpam() = bulkAction { id -> emailRepo.markAsSpam(accountId, id) }
 
     private fun bulkAction(action: suspend (emailId: String) -> Result<Unit>) {
@@ -71,16 +74,18 @@ class SearchViewModel(
             results = emptyList()
             return
         }
-        searchJob = viewModelScope.launch {
-            delay(200)   // debounce — avoid hitting the DB on every keystroke
-            runSearch()
-        }
+        searchJob =
+            viewModelScope.launch {
+                delay(200) // debounce — avoid hitting the DB on every keystroke
+                runSearch()
+            }
     }
 
     private suspend fun runSearch() {
         if (query.isBlank()) return
         isSearching = true
-        emailRepo.searchEmails(accountId, query)
+        emailRepo
+            .searchEmails(accountId, query)
             .onSuccess { results = it }
             .onFailure { error = it.message }
         isSearching = false

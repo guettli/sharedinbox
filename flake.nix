@@ -48,6 +48,8 @@
             androidSdk
             stalwart-mail    # 0.14.1 — local JMAP server for integration tests (binary: stalwart)
             amper
+            go-task          # task runner (Taskfile.yml)
+            ktlint           # Kotlin linter / formatter
             git
             curl
             jq
@@ -99,9 +101,10 @@
             export STALWART_PASS_C="secret"
 
             echo "SharedInbox dev environment ready (Stalwart port: $STALWART_PORT)."
+            echo "  Check (fast)   : task check"
+            echo "  Check (full)   : task check-full"
             echo "  Start Stalwart : stalwart-dev/start"
             echo "  Build          : amper build"
-            echo "  Test           : amper test"
           '';
         };
       }

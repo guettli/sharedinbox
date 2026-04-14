@@ -17,8 +17,9 @@ import de.sharedinbox.ui.screen.ComposeScreen
 import de.sharedinbox.ui.screen.EmailDetailScreen
 import de.sharedinbox.ui.screen.EmailListScreen
 import de.sharedinbox.ui.screen.MailboxListScreen
-import de.sharedinbox.ui.screen.SettingsScreen
 import de.sharedinbox.ui.screen.SearchScreen
+import de.sharedinbox.ui.screen.SettingsScreen
+import de.sharedinbox.ui.screen.SieveFilterScreen
 import de.sharedinbox.ui.screen.SyncLogScreen
 import de.sharedinbox.ui.viewmodel.AccountListViewModel
 import de.sharedinbox.ui.viewmodel.AddAccountViewModel
@@ -27,7 +28,9 @@ import de.sharedinbox.ui.viewmodel.EmailDetailViewModel
 import de.sharedinbox.ui.viewmodel.EmailListViewModel
 import de.sharedinbox.ui.viewmodel.MailboxListViewModel
 import de.sharedinbox.ui.viewmodel.SearchViewModel
+import de.sharedinbox.ui.viewmodel.SieveFilterViewModel
 import de.sharedinbox.ui.viewmodel.SyncLogViewModel
+import de.sharedinbox.ui.viewmodel.SyncSettingsViewModel
 import org.koin.compose.KoinApplication
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -54,47 +57,61 @@ fun App(context: Any = Unit) {
 @Composable
 private fun AppNavigation() {
     var backStack by remember { mutableStateOf(listOf<Screen>(Screen.AccountList)) }
-    fun push(screen: Screen) { backStack = backStack + screen }
-    fun pop() { if (backStack.size > 1) backStack = backStack.dropLast(1) }
+
+    fun push(screen: Screen) {
+        backStack = backStack + screen
+    }
+
+    fun pop() {
+        if (backStack.size > 1) backStack = backStack.dropLast(1)
+    }
 
     // Shared AccountListViewModel — reused by both AccountListScreen and SettingsScreen
     val accountListVm = koinViewModel<AccountListViewModel>()
 
     when (val current = backStack.last()) {
-        Screen.AccountList -> AccountListScreen(
-            onNavigateToAdd = { push(Screen.AddAccount) },
-            onNavigateToMailboxes = { accountId -> push(Screen.MailboxList(accountId)) },
-            onNavigateToSettings = { push(Screen.Settings) },
-            vm = accountListVm,
-        )
-        Screen.AddAccount -> AddAccountScreen(
-            onSuccess = { pop() },
-            onCancel = { pop() },
-            vm = koinViewModel<AddAccountViewModel>(),
-        )
-        Screen.Settings -> SettingsScreen(
-            onBack = { pop() },
-            vm = accountListVm,
-        )
-        is Screen.MailboxList -> MailboxListScreen(
-            accountId = current.accountId,
-            onNavigateToEmails = { mailboxId -> push(Screen.EmailList(current.accountId, mailboxId)) },
-            onNavigateToSearch = { push(Screen.Search(current.accountId)) },
-            onNavigateToSyncLog = { push(Screen.SyncLog(current.accountId)) },
-            onBack = { pop() },
-            vm = koinViewModel<MailboxListViewModel>(),
-        )
-        is Screen.SyncLog -> SyncLogScreen(
-            accountId = current.accountId,
-            onBack = { pop() },
-            vm = koinViewModel<SyncLogViewModel>(),
-        )
-        is Screen.Search -> SearchScreen(
-            accountId = current.accountId,
-            onNavigateToDetail = { emailId -> push(Screen.EmailDetail(current.accountId, emailId)) },
-            onBack = { pop() },
-            vm = koinViewModel<SearchViewModel>(),
-        )
+        Screen.AccountList ->
+            AccountListScreen(
+                onNavigateToAdd = { push(Screen.AddAccount) },
+                onNavigateToMailboxes = { accountId -> push(Screen.MailboxList(accountId)) },
+                onNavigateToSettings = { push(Screen.Settings) },
+                vm = accountListVm,
+            )
+        Screen.AddAccount ->
+            AddAccountScreen(
+                onSuccess = { pop() },
+                onCancel = { pop() },
+                vm = koinViewModel<AddAccountViewModel>(),
+            )
+        Screen.Settings ->
+            SettingsScreen(
+                onBack = { pop() },
+                onNavigateToSieveFilter = { accountId -> push(Screen.SieveFilter(accountId)) },
+                vm = accountListVm,
+                syncSettingsVm = koinViewModel<SyncSettingsViewModel>(),
+            )
+        is Screen.MailboxList ->
+            MailboxListScreen(
+                accountId = current.accountId,
+                onNavigateToEmails = { mailboxId -> push(Screen.EmailList(current.accountId, mailboxId)) },
+                onNavigateToSearch = { push(Screen.Search(current.accountId)) },
+                onNavigateToSyncLog = { push(Screen.SyncLog(current.accountId)) },
+                onBack = { pop() },
+                vm = koinViewModel<MailboxListViewModel>(),
+            )
+        is Screen.SyncLog ->
+            SyncLogScreen(
+                accountId = current.accountId,
+                onBack = { pop() },
+                vm = koinViewModel<SyncLogViewModel>(),
+            )
+        is Screen.Search ->
+            SearchScreen(
+                accountId = current.accountId,
+                onNavigateToDetail = { emailId -> push(Screen.EmailDetail(current.accountId, emailId)) },
+                onBack = { pop() },
+                vm = koinViewModel<SearchViewModel>(),
+            )
         is Screen.EmailList -> {
             val accounts by accountListVm.accounts.collectAsState()
             val fromEmail = accounts.firstOrNull { it.id == current.accountId }?.username ?: ""
@@ -108,13 +125,14 @@ private fun AppNavigation() {
                 vm = koinViewModel<EmailListViewModel>(),
             )
         }
-        is Screen.EmailDetail -> EmailDetailScreen(
-            accountId = current.accountId,
-            emailId = current.emailId,
-            onBack = { pop() },
-            onNavigateToCompose = { push(it) },
-            vm = koinViewModel<EmailDetailViewModel>(),
-        )
+        is Screen.EmailDetail ->
+            EmailDetailScreen(
+                accountId = current.accountId,
+                emailId = current.emailId,
+                onBack = { pop() },
+                onNavigateToCompose = { push(it) },
+                vm = koinViewModel<EmailDetailViewModel>(),
+            )
         is Screen.Compose -> {
             val accounts by accountListVm.accounts.collectAsState()
             val fromEmail = accounts.firstOrNull { it.id == current.accountId }?.username ?: ""
@@ -131,5 +149,11 @@ private fun AppNavigation() {
                 vm = koinViewModel<ComposeViewModel>(),
             )
         }
+        is Screen.SieveFilter ->
+            SieveFilterScreen(
+                accountId = current.accountId,
+                onBack = { pop() },
+                vm = koinViewModel<SieveFilterViewModel>(),
+            )
     }
 }

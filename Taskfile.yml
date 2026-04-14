@@ -1,0 +1,56 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Run all checks (lint + unit tests + integration tests, in parallel)
+    deps: [check]
+
+  _nix-check:
+    internal: true
+    run: once
+    preconditions:
+      - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
+        msg: "Not in nix dev shell. Run: nix develop"
+
+  lint:
+    desc: Check Kotlin formatting with ktlint (excludes generated sources)
+    deps: [_nix-check]
+    cmds:
+      - |
+        START=$(date +%s)
+        ktlint --relative \
+          "**/*.kt" \
+          "!data/src/generated/**/*.kt" \
+          "!codegen/build/**/*.kt"
+        END=$(date +%s)
+        echo "lint: $((END - START))s"
+
+  lint-fix:
+    desc: Auto-fix Kotlin formatting with ktlint
+    deps: [_nix-check]
+    cmds:
+      - ktlint -F --relative "**/*.kt" "!data/src/generated/**/*.kt" "!codegen/build/**/*.kt"
+
+  test:
+    desc: Run unit tests with coverage check (≥70% line coverage required)
+    deps: [_nix-check]
+    cmds:
+      - |
+        START=$(date +%s)
+        ./gradlew --project-dir coverage test koverVerify
+        END=$(date +%s)
+        echo "test+coverage: $((END - START))s"
+
+  integration:
+    desc: Run integration tests (starts and stops Stalwart automatically)
+    deps: [_nix-check]
+    cmds:
+      - |
+        START=$(date +%s)
+        stalwart-dev/test.sh
+        END=$(date +%s)
+        echo "integration: $((END - START))s"
+
+  check:
+    desc: Full checks — lint + unit tests + integration tests in parallel (Stalwart required)
+    deps: [lint, test, integration]

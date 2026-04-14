@@ -1,0 +1,14 @@
+root = true
+
+[*.kt]
+# Compose functions are @Composable and conventionally start with uppercase.
+ktlint_function_naming_ignore_when_annotated_with = Composable
+
+# Backing properties (_name / name) are standard Kotlin style; allow them
+# even without a matching public counterpart in the same file.
+ktlint_standard_backing-property-naming = disabled
+
+# Ktor spreads its DSL across many sub-packages (client, call, request, http,
+# plugins, auth, sse, …). Wildcard imports are idiomatic for Ktor projects.
+# kotlinx.serialization.json and kotlinx.coroutines follow the same pattern.
+ij_kotlin_packages_to_use_import_on_demand = io.ktor.client,io.ktor.client.call,io.ktor.client.request,io.ktor.client.statement,io.ktor.client.plugins,io.ktor.client.plugins.auth,io.ktor.client.plugins.auth.providers,io.ktor.client.plugins.contentnegotiation,io.ktor.client.plugins.logging,io.ktor.client.plugins.sse,io.ktor.http,io.ktor.serialization.kotlinx.json,kotlinx.serialization.json,kotlinx.coroutines

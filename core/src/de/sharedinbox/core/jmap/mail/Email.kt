@@ -1,7 +1,7 @@
 package de.sharedinbox.core.jmap.mail
 
-import kotlin.time.Instant
 import kotlinx.serialization.Serializable
+import kotlin.time.Instant
 
 /** RFC 8621 §4 */
 @Serializable
@@ -49,6 +49,8 @@ data class EmailBodyPart(
     val name: String? = null,
     val size: Long? = null,
     val disposition: String? = null,
+    /** RFC 8621 §4.1.5 — the Content-ID header value, used for CID-referenced inline images. */
+    val cid: String? = null,
 )
 
 /** Outgoing email — used for send/reply (not a JMAP wire type, local only) */
@@ -63,8 +65,8 @@ data class EmailDraft(
 
 /** Standard JMAP keywords (RFC 8621 §4.1.1) */
 object EmailKeyword {
-    const val SEEN     = "\$seen"
-    const val FLAGGED  = "\$flagged"
+    const val SEEN = "\$seen"
+    const val FLAGGED = "\$flagged"
     const val ANSWERED = "\$answered"
-    const val DRAFT    = "\$draft"
+    const val DRAFT = "\$draft"
 }

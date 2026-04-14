@@ -8,7 +8,7 @@ data class Mailbox(
     val id: String,
     val name: String,
     val parentId: String? = null,
-    val role: String? = null,     // "inbox", "sent", "trash", "drafts", "archive", …
+    val role: String? = null, // "inbox", "sent", "trash", "drafts", "archive", …
     val sortOrder: Int = 0,
     val totalEmails: Int = 0,
     val unreadEmails: Int = 0,
@@ -33,10 +33,10 @@ data class MailboxRights(
 
 /** Well-known mailbox roles (RFC 8621 §2) */
 object MailboxRole {
-    const val INBOX   = "inbox"
-    const val SENT    = "sent"
-    const val TRASH   = "trash"
-    const val DRAFTS  = "drafts"
+    const val INBOX = "inbox"
+    const val SENT = "sent"
+    const val TRASH = "trash"
+    const val DRAFTS = "drafts"
     const val ARCHIVE = "archive"
-    const val SPAM    = "junk"
+    const val SPAM = "junk"
 }

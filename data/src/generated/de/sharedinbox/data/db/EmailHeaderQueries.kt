@@ -80,6 +80,47 @@ public class EmailHeaderQueries(
 
   public fun selectEmailById(account_id: String, id: String): Query<Email_header> = selectEmailById(account_id, id, ::Email_header)
 
+  public fun <T : Any> searchEmailHeaders(
+    account_id: String,
+    `value`: String,
+    value_: String,
+    value__: String,
+    mapper: (
+      id: String,
+      account_id: String,
+      thread_id: String,
+      mailbox_id: String,
+      subject: String?,
+      from_address: String?,
+      received_at: Long,
+      keywords: String,
+      has_attachment: Long,
+      preview: String?,
+      blob_id: String,
+    ) -> T,
+  ): Query<T> = SearchEmailHeadersQuery(account_id, value, value_, value__) { cursor ->
+    mapper(
+      cursor.getString(0)!!,
+      cursor.getString(1)!!,
+      cursor.getString(2)!!,
+      cursor.getString(3)!!,
+      cursor.getString(4),
+      cursor.getString(5),
+      cursor.getLong(6)!!,
+      cursor.getString(7)!!,
+      cursor.getLong(8)!!,
+      cursor.getString(9),
+      cursor.getString(10)!!
+    )
+  }
+
+  public fun searchEmailHeaders(
+    account_id: String,
+    value_: String,
+    value__: String,
+    value___: String,
+  ): Query<Email_header> = searchEmailHeaders(account_id, value_, value__, value___, ::Email_header)
+
   /**
    * @return The number of rows updated.
    */
@@ -231,5 +272,41 @@ public class EmailHeaderQueries(
     }
 
     override fun toString(): String = "EmailHeader.sq:selectEmailById"
+  }
+
+  private inner class SearchEmailHeadersQuery<out T : Any>(
+    public val account_id: String,
+    public val `value`: String,
+    public val value_: String,
+    public val value__: String,
+    mapper: (SqlCursor) -> T,
+  ) : Query<T>(mapper) {
+    override fun addListener(listener: Query.Listener) {
+      driver.addListener("email_header", listener = listener)
+    }
+
+    override fun removeListener(listener: Query.Listener) {
+      driver.removeListener("email_header", listener = listener)
+    }
+
+    override fun <R> execute(mapper: (SqlCursor) -> QueryResult<R>): QueryResult<R> = driver.executeQuery(79_371_095, """
+    |SELECT email_header.id, email_header.account_id, email_header.thread_id, email_header.mailbox_id, email_header.subject, email_header.from_address, email_header.received_at, email_header.keywords, email_header.has_attachment, email_header.preview, email_header.blob_id FROM email_header
+    |WHERE account_id = ?
+    |  AND (
+    |       subject      LIKE '%' || ? || '%' ESCAPE '\'
+    |    OR from_address LIKE '%' || ? || '%' ESCAPE '\'
+    |    OR preview      LIKE '%' || ? || '%' ESCAPE '\'
+    |  )
+    |ORDER BY received_at DESC
+    |LIMIT 200
+    """.trimMargin(), mapper, 4) {
+      var parameterIndex = 0
+      bindString(parameterIndex++, account_id)
+      bindString(parameterIndex++, value)
+      bindString(parameterIndex++, value_)
+      bindString(parameterIndex++, value__)
+    }
+
+    override fun toString(): String = "EmailHeader.sq:searchEmailHeaders"
   }
 }

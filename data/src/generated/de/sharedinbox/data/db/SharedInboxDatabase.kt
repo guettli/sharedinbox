@@ -15,9 +15,17 @@ public interface SharedInboxDatabase : Transacter {
 
   public val emailHeaderQueries: EmailHeaderQueries
 
+  public val imageTrustQueries: ImageTrustQueries
+
   public val mailboxQueries: MailboxQueries
 
+  public val recentAddressQueries: RecentAddressQueries
+
+  public val settingsQueries: SettingsQueries
+
   public val stateTokenQueries: StateTokenQueries
+
+  public val syncLogQueries: SyncLogQueries
 
   public companion object {
     public val Schema: SqlSchema<QueryResult.Value<Unit>>

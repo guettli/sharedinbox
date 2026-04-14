@@ -7,5 +7,9 @@ package de.sharedinbox.core.platform
  * Android/iOS: stub — can be extended later.
  */
 interface AttachmentOpener {
-    fun open(bytes: ByteArray, filename: String, mimeType: String)
+    fun open(
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+    )
 }

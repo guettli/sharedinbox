@@ -15,7 +15,7 @@ VALUES (?, ?, ?, ?, ?, ?);
 selectLogsByAccount:
 SELECT * FROM sync_log
 WHERE account_id = ?
-ORDER BY occurred_at DESC
+ORDER BY occurred_at DESC, id DESC
 LIMIT 200;
 
 deleteLogsByAccount:
@@ -23,3 +23,13 @@ DELETE FROM sync_log WHERE account_id = ?;
 
 deleteAllLogs:
 DELETE FROM sync_log;
+
+lastSuccessfulSync:
+SELECT MAX(occurred_at) FROM sync_log
+WHERE account_id = ? AND status = 'success';
+
+lastErrorEntry:
+SELECT * FROM sync_log
+WHERE account_id = ? AND status = 'error'
+ORDER BY occurred_at DESC
+LIMIT 1;
