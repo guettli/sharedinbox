@@ -26,6 +26,23 @@ jobs:
           key: gradle-linux-${{ hashFiles('coverage/build.gradle.kts') }}
           restore-keys: gradle-linux-
 
+      - name: Install Amper
+        run: |
+          curl -sSfL \
+            "https://packages.jetbrains.team/maven/p/amper/amper/org/jetbrains/amper/cli/0.10.0/cli-0.10.0-wrapper" \
+            -o amper
+          chmod +x amper
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Cache Amper distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.amper
+          key: amper-0.10.0-linux
+
+      - name: Compile iOS targets (catches KMP errors early)
+        run: amper build -m data -m ui -p iosX64
+
       - name: Run tests and verify coverage (≥70%)
         run: ./gradlew --project-dir coverage test koverVerify
 

@@ -24,7 +24,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 /** Ticks every [intervalMs] milliseconds so time-based UI stays fresh. */
-private fun tickerFlow(intervalMs: Long = 60_000L): Flow<Instant> =
+internal fun tickerFlow(intervalMs: Long = 60_000L): Flow<Instant> =
     flow {
         while (true) {
             emit(Clock.System.now())
