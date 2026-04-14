@@ -10,15 +10,15 @@ jobs:
     name: Test (JVM)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Cache Gradle caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -35,7 +35,7 @@ jobs:
           echo "$PWD" >> "$GITHUB_PATH"
 
       - name: Cache Amper distribution
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.amper
           key: amper-0.10.0-linux
@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # need full tag history
 
