@@ -10,7 +10,7 @@ class SyncSettingsRepositoryImpl(
     private val db: SharedInboxDatabase,
 ) : SyncSettingsRepository {
     override suspend fun get(): SyncSettings =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.settingsQueries
                 .selectSyncSettings()
                 .executeAsOneOrNull()
@@ -19,7 +19,7 @@ class SyncSettingsRepositoryImpl(
         }
 
     override suspend fun save(settings: SyncSettings): Unit =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.settingsQueries.upsertSyncSettings(
                 mobile_days = settings.mobileDays.toLong(),
                 mobile_mb_limit = settings.mobileMbLimit.toLong(),

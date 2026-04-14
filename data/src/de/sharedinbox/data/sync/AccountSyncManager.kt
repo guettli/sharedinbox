@@ -27,7 +27,7 @@ class AccountSyncManager(
     private val db: SharedInboxDatabase,
     private val tokenStore: TokenStore,
     private val onStateChange: suspend (accountId: String, changedTypes: Set<String>) -> Unit,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
 ) {
     private val jobs = mutableMapOf<String, Job>()
     private val json = Json { ignoreUnknownKeys = true }

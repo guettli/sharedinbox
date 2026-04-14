@@ -25,7 +25,7 @@ class AccountRepositoryImpl(
         db.accountQueries
             .selectAllAccounts()
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(Dispatchers.Default)
             .map { rows -> rows.map { it.toDomain() } }
 
     override suspend fun addAccount(

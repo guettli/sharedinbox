@@ -326,24 +326,13 @@ class EmailRepositoryIntegrationTest {
                     .first { it.subject == "Delete test" }
                     .id
 
-            val trashMailbox =
-                mailboxRepo
-                    .observeMailboxes(aliceId)
-                    .first()
-                    .firstOrNull { it.role == MailboxRole.TRASH || it.role == "junk" }
-
             emailRepo.deleteEmail(aliceId, emailId).getOrThrow()
 
-            if (trashMailbox != null) {
-                val inTrash = db.emailHeaderQueries.selectEmailById(aliceId, emailId).executeAsOneOrNull()
-                assertNotNull(inTrash)
-                assertEquals(
-                    trashMailbox.id,
-                    inTrash.mailbox_id,
-                    "Expected email to be in trash mailbox",
-                )
-            }
-            // (If no trash folder, the email is permanently deleted — that's fine too)
+            val inTrash = db.emailHeaderQueries.selectEmailById(aliceId, emailId).executeAsOneOrNull()
+            assertNotNull(inTrash, "Email should still exist (moved to trash, not deleted)")
+            val trashMailbox = db.mailboxQueries.selectMailbox(aliceId, inTrash.mailbox_id).executeAsOneOrNull()
+            assertNotNull(trashMailbox, "Email's mailbox should exist")
+            assertEquals(MailboxRole.TRASH, trashMailbox.role, "Email should be in trash mailbox")
         }
 
     @Test

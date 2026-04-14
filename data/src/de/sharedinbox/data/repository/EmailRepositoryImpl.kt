@@ -50,7 +50,7 @@ class EmailRepositoryImpl(
         db.emailHeaderQueries
             .selectEmailsByMailbox(accountId, mailboxId)
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(Dispatchers.Default)
             .map { rows -> rows.map { it.toDomain() } }
 
     // ── Sync (Phase 6) ────────────────────────────────────────────────────────

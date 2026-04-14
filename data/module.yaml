@@ -40,3 +40,4 @@ test-dependencies:
 settings:
   kotlin:
     serialization: json
+    freeCompilerArgs: ["-Xexpect-actual-classes"]

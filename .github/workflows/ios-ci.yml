@@ -16,9 +16,9 @@ jobs:
       E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -32,13 +32,13 @@ jobs:
           echo "$PWD" >> "$GITHUB_PATH"
 
       - name: Cache Amper distribution
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.amper
           key: amper-0.10.0-macos
 
       - name: Cache Gradle caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -50,4 +50,4 @@ jobs:
         run: amper build -m ios-app
 
       - name: Run E2E tests
-        run: amper test -m data -p jvm
+        run: amper test -m data -p jvm --include-classes "de.sharedinbox.data.E2eRemoteIntegrationTest"

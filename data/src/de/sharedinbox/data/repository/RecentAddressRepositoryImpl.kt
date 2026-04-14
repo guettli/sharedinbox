@@ -12,7 +12,7 @@ class RecentAddressRepositoryImpl(
     private val db: SharedInboxDatabase,
 ) : RecentAddressRepository {
     override suspend fun getRecentAddresses(accountId: String): List<RecentAddress> =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.recentAddressQueries
                 .selectRecentByAccount(accountId)
                 .executeAsList()
@@ -23,7 +23,7 @@ class RecentAddressRepositoryImpl(
         accountId: String,
         query: String,
     ): List<RecentAddress> =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.recentAddressQueries
                 .searchByAccount(accountId, query, query)
                 .executeAsList()
@@ -33,7 +33,7 @@ class RecentAddressRepositoryImpl(
     override suspend fun recordUsage(
         accountId: String,
         address: EmailAddress,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.Default) {
         val now = Clock.System.now().toEpochMilliseconds()
         db.recentAddressQueries.transaction {
             db.recentAddressQueries.insertOrIgnoreAddress(
