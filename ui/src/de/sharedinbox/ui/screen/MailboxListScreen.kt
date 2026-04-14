@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,7 +63,7 @@ fun MailboxListScreen(
                         Icon(Icons.Default.Search, contentDescription = "Search emails")
                     }
                     IconButton(onClick = onNavigateToSyncLog) {
-                        Icon(Icons.Default.List, contentDescription = "Sync log")
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Sync log")
                     }
                     IconButton(onClick = { vm.refresh() }, enabled = !vm.isLoading) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh mailboxes")

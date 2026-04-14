@@ -139,12 +139,10 @@ private fun kotlin.time.Instant.formatLocal(): String {
     // Convert kotlin.time.Instant → kotlinx.datetime via epoch millis
     val kxInstant = kotlinx.datetime.Instant.fromEpochMilliseconds(toEpochMilliseconds())
     val local = kxInstant.toLocalDateTime(TimeZone.currentSystemDefault())
-    return format("%04d-%02d-%02d %02d:%02d:%02d",
-        local.year,
-        local.monthNumber,
-        local.dayOfMonth,
-        local.hour,
-        local.minute,
-        local.second,
-    )
+    return "${local.year.toString().padStart(4, '0')}-" +
+        "${local.monthNumber.toString().padStart(2, '0')}-" +
+        "${local.dayOfMonth.toString().padStart(2, '0')} " +
+        "${local.hour.toString().padStart(2, '0')}:" +
+        "${local.minute.toString().padStart(2, '0')}:" +
+        local.second.toString().padStart(2, '0')
 }

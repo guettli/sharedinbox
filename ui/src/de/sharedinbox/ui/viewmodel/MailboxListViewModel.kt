@@ -95,11 +95,12 @@ class MailboxListViewModel(
         }
 }
 
-private fun toWarning(
+internal fun toWarning(
     health: SyncHealth,
     now: Instant,
 ): MailboxListViewModel.SyncWarning {
-    val stale = health.lastSuccessAt == null || (now - health.lastSuccessAt) > 60.minutes
+    val lastSuccess = health.lastSuccessAt
+    val stale = lastSuccess == null || (now - lastSuccess) > 60.minutes
     val errorMsg =
         health.lastError?.let { err ->
             buildString {
