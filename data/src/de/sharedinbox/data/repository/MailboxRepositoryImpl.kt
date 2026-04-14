@@ -28,7 +28,7 @@ class MailboxRepositoryImpl(
         db.mailboxQueries
             .selectMailboxesByAccount(accountId)
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(Dispatchers.Default)
             .map { rows -> rows.map { it.toDomain() } }
 
     override suspend fun syncMailboxes(accountId: String): Result<Unit> =

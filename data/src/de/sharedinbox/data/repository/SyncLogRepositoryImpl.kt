@@ -24,7 +24,7 @@ class SyncLogRepositoryImpl(
         db.syncLogQueries
             .selectLogsByAccount(accountId)
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(Dispatchers.Default)
             .map { rows -> rows.map { it.toDomain() } }
 
     override suspend fun log(
@@ -34,7 +34,7 @@ class SyncLogRepositoryImpl(
         status: SyncStatus,
         detail: String?,
     ): Unit =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.syncLogQueries.insertSyncLog(
                 account_id = accountId,
                 occurred_at = Clock.System.now().toEpochMilliseconds(),
@@ -46,7 +46,7 @@ class SyncLogRepositoryImpl(
         }
 
     override suspend fun clearLogs(accountId: String): Unit =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.syncLogQueries.deleteLogsByAccount(accountId)
         }
 
@@ -55,13 +55,13 @@ class SyncLogRepositoryImpl(
             db.syncLogQueries
                 .lastSuccessfulSync(accountId)
                 .asFlow()
-                .mapToOneOrNull(Dispatchers.IO)
+                .mapToOneOrNull(Dispatchers.Default)
                 .map { row -> row?.MAX?.let { Instant.fromEpochMilliseconds(it) } }
         val lastErrorFlow =
             db.syncLogQueries
                 .lastErrorEntry(accountId)
                 .asFlow()
-                .mapToOneOrNull(Dispatchers.IO)
+                .mapToOneOrNull(Dispatchers.Default)
                 .map { row -> row?.toDomain() }
         return combine(lastSuccessFlow, lastErrorFlow) { lastSuccess, lastError ->
             SyncHealth(lastSuccessAt = lastSuccess, lastError = lastError)

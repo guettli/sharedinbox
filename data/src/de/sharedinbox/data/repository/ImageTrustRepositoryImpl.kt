@@ -12,7 +12,7 @@ class ImageTrustRepositoryImpl(
         accountId: String,
         emailId: String,
     ): Boolean =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.imageTrustQueries.isImageTrusted(accountId, emailId).executeAsOne() > 0
         }
 
@@ -20,7 +20,7 @@ class ImageTrustRepositoryImpl(
         accountId: String,
         emailId: String,
     ): Unit =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             db.imageTrustQueries.grantImageTrust(accountId, emailId)
         }
 }
