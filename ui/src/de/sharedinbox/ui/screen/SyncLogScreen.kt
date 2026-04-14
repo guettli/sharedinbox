@@ -138,7 +138,7 @@ private fun SyncLogRow(entry: SyncLogEntry) {
 private fun kotlin.time.Instant.formatLocal(): String {
     val local = toLocalDateTime(TimeZone.currentSystemDefault())
     return "${local.year.toString().padStart(4, '0')}-" +
-        "${local.month.number.toString().padStart(2, '0')}-" +
+        "${(local.month.ordinal + 1).toString().padStart(2, '0')}-" +
         "${local.day.toString().padStart(2, '0')} " +
         "${local.hour.toString().padStart(2, '0')}:" +
         "${local.minute.toString().padStart(2, '0')}:" +
