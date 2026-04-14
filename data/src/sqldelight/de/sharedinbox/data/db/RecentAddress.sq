@@ -1,0 +1,42 @@
+CREATE TABLE recent_address (
+    email      TEXT    NOT NULL,
+    name       TEXT,                          -- last known display name (may be null)
+    account_id TEXT    NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    last_used  INTEGER NOT NULL,              -- epoch millis
+    use_count  INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (email, account_id)
+);
+
+-- Insert if not yet seen; ignored if already present (update follows separately).
+insertOrIgnoreAddress:
+INSERT OR IGNORE INTO recent_address(email, name, account_id, last_used, use_count)
+VALUES (?, ?, ?, ?, 0);
+
+-- Bump counter and refresh name/timestamp; called immediately after insertOrIgnoreAddress.
+updateAddressUsage:
+UPDATE recent_address
+SET name      = ?,
+    last_used = ?,
+    use_count = use_count + 1
+WHERE email = ? AND account_id = ?;
+
+-- Most-recently-used addresses, capped to avoid unbounded growth.
+selectRecentByAccount:
+SELECT * FROM recent_address
+WHERE account_id = ?
+ORDER BY last_used DESC
+LIMIT 50;
+
+-- Substring search across email and name for autocomplete.
+searchByAccount:
+SELECT * FROM recent_address
+WHERE account_id = ?
+  AND (
+       email LIKE '%' || ? || '%' ESCAPE '\'
+    OR name  LIKE '%' || ? || '%' ESCAPE '\'
+  )
+ORDER BY use_count DESC, last_used DESC
+LIMIT 20;
+
+deleteByAccount:
+DELETE FROM recent_address WHERE account_id = ?;

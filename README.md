@@ -101,7 +101,7 @@ test runs never conflict.
 **Prerequisite:** [Nix](https://nixos.org/download) with flakes enabled.
 
 ```bash
-git clone https://github.com/yourorg/sharedinbox
+git clone https://github.com/guettli/sharedinbox
 cd sharedinbox
 nix develop        # installs JDK 21, Amper, Android SDK, Stalwart — takes a few minutes once
 amper run -m desktop-app
@@ -119,7 +119,7 @@ amper run -m android-app
 ### As a user
 
 Download the latest release from the
-[Releases page](https://github.com/yourorg/sharedinbox/releases).
+[Releases page](https://github.com/guettli/sharedinbox/releases).
 
 #### Option A — Native installer (recommended, no JRE needed)
 
@@ -131,7 +131,17 @@ Download the latest release from the
 
 The installer bundles a trimmed JRE — nothing else needs to be installed.
 
-#### Option B — Fat JAR (requires JRE 21)
+#### Option B — jbang (always runs the latest release)
+
+If you have [jbang](https://www.jbang.dev/download/) installed:
+
+```bash
+jbang --fresh https://github.com/guettli/sharedinbox/releases/latest/download/sharedinbox-linux.jar
+```
+
+`--fresh` tells jbang to re-check the URL on every run, so you always get the latest release without any manual update step. Replace `linux` with `macos` or `windows` as needed.
+
+#### Option C — Fat JAR (requires JRE 21)
 
 If you already have [Java 21](https://adoptium.net) installed:
 

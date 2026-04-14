@@ -34,7 +34,10 @@ object MethodCallSerializer : KSerializer<MethodCall> {
     private val delegate = ListSerializer(JsonElement.serializer())
     override val descriptor: SerialDescriptor = delegate.descriptor
 
-    override fun serialize(encoder: Encoder, value: MethodCall) {
+    override fun serialize(
+        encoder: Encoder,
+        value: MethodCall,
+    ) {
         encoder.encodeSerializableValue(
             delegate,
             listOf(JsonPrimitive(value.name), value.arguments, JsonPrimitive(value.clientId)),
@@ -69,7 +72,10 @@ object MethodResponseSerializer : KSerializer<MethodResponse> {
     private val delegate = ListSerializer(JsonElement.serializer())
     override val descriptor: SerialDescriptor = delegate.descriptor
 
-    override fun serialize(encoder: Encoder, value: MethodResponse) {
+    override fun serialize(
+        encoder: Encoder,
+        value: MethodResponse,
+    ) {
         encoder.encodeSerializableValue(
             delegate,
             listOf(JsonPrimitive(value.name), value.result, JsonPrimitive(value.clientId)),

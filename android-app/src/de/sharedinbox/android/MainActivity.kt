@@ -19,8 +19,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleBackgroundSync() {
-        val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
-            .build()
+        val request =
+            PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+                .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             SyncWorker.WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,

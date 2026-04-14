@@ -23,7 +23,6 @@ import kotlin.io.path.writeText
 class FileTokenStore(
     private val storePath: Path = defaultStorePath(),
 ) : TokenStore {
-
     private val json = Json { prettyPrint = false }
 
     @Serializable
@@ -38,11 +37,16 @@ class FileTokenStore(
         val entries: Map<String, CredentialEntry> = emptyMap(),
     )
 
-    override suspend fun saveCredentials(accountId: String, username: String, password: String) {
+    override suspend fun saveCredentials(
+        accountId: String,
+        username: String,
+        password: String,
+    ) {
         val store = load()
-        val updated = store.copy(
-            entries = store.entries + (accountId to CredentialEntry(accountId, username, password))
-        )
+        val updated =
+            store.copy(
+                entries = store.entries + (accountId to CredentialEntry(accountId, username, password)),
+            )
         save(updated)
     }
 
@@ -75,12 +79,11 @@ class FileTokenStore(
             setOf(
                 java.nio.file.attribute.PosixFilePermission.OWNER_READ,
                 java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
-            )
+            ),
         )
     }
 
     companion object {
-        fun defaultStorePath(): Path =
-            Path.of(System.getProperty("user.home"), ".sharedinbox", "credentials.json")
+        fun defaultStorePath(): Path = Path.of(System.getProperty("user.home"), ".sharedinbox", "credentials.json")
     }
 }

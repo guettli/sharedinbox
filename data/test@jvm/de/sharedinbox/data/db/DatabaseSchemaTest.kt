@@ -13,7 +13,6 @@ import kotlin.test.assertNull
  * Uses an in-memory SQLite driver — no Stalwart instance required.
  */
 class DatabaseSchemaTest {
-
     private lateinit var db: SharedInboxDatabase
 
     @BeforeTest
@@ -26,7 +25,7 @@ class DatabaseSchemaTest {
 
     @AfterTest
     fun tearDown() {
-        db.accountQueries  // access forces lazy init; driver closed by GC for in-memory
+        db.accountQueries // access forces lazy init; driver closed by GC for in-memory
     }
 
     // --- account ---
@@ -59,14 +58,31 @@ class DatabaseSchemaTest {
     fun deleteAccount_cascadesToMailboxes() {
         insertAccount("acc1")
         db.mailboxQueries.upsertMailbox(
-            id = "mbox1", account_id = "acc1", name = "INBOX",
-            role = "inbox", parent_id = null, sort_order = 0, unread_emails = 3,
+            id = "mbox1",
+            account_id = "acc1",
+            name = "INBOX",
+            role = "inbox",
+            parent_id = null,
+            sort_order = 0,
+            unread_emails = 3,
         )
-        assertEquals(1, db.mailboxQueries.selectMailboxesByAccount("acc1").executeAsList().size)
+        assertEquals(
+            1,
+            db.mailboxQueries
+                .selectMailboxesByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
 
         db.accountQueries.deleteAccount("acc1")
 
-        assertEquals(0, db.mailboxQueries.selectMailboxesByAccount("acc1").executeAsList().size)
+        assertEquals(
+            0,
+            db.mailboxQueries
+                .selectMailboxesByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
     }
 
     // --- CASCADE: email_header ---
@@ -75,15 +91,35 @@ class DatabaseSchemaTest {
     fun deleteAccount_cascadesToEmailHeaders() {
         insertAccount("acc1")
         db.emailHeaderQueries.upsertEmailHeader(
-            id = "e1", account_id = "acc1", thread_id = "t1", mailbox_id = "mbox1",
-            subject = "Hello", from_address = "bob@localhost", received_at = 1000L,
-            keywords = "[]", has_attachment = 0, preview = null, blob_id = "",
+            id = "e1",
+            account_id = "acc1",
+            thread_id = "t1",
+            mailbox_id = "mbox1",
+            subject = "Hello",
+            from_address = "bob@localhost",
+            received_at = 1000L,
+            keywords = "[]",
+            has_attachment = 0,
+            preview = null,
+            blob_id = "",
         )
-        assertEquals(1, db.emailHeaderQueries.selectEmailsByMailbox("acc1", "mbox1").executeAsList().size)
+        assertEquals(
+            1,
+            db.emailHeaderQueries
+                .selectEmailsByMailbox("acc1", "mbox1")
+                .executeAsList()
+                .size,
+        )
 
         db.accountQueries.deleteAccount("acc1")
 
-        assertEquals(0, db.emailHeaderQueries.selectEmailsByMailbox("acc1", "mbox1").executeAsList().size)
+        assertEquals(
+            0,
+            db.emailHeaderQueries
+                .selectEmailsByMailbox("acc1", "mbox1")
+                .executeAsList()
+                .size,
+        )
     }
 
     // --- CASCADE: email_body ---
@@ -92,14 +128,28 @@ class DatabaseSchemaTest {
     fun deleteAccount_cascadesToEmailBodies() {
         insertAccount("acc1")
         db.emailBodyQueries.upsertEmailBody(
-            email_id = "e1", account_id = "acc1",
-            text_body = "plain text", html_body = null,
+            email_id = "e1",
+            account_id = "acc1",
+            text_body = "plain text",
+            html_body = null,
         )
-        assertEquals(1, db.emailBodyQueries.selectEmailBody("acc1", "e1").executeAsList().size)
+        assertEquals(
+            1,
+            db.emailBodyQueries
+                .selectEmailBody("acc1", "e1")
+                .executeAsList()
+                .size,
+        )
 
         db.accountQueries.deleteAccount("acc1")
 
-        assertEquals(0, db.emailBodyQueries.selectEmailBody("acc1", "e1").executeAsList().size)
+        assertEquals(
+            0,
+            db.emailBodyQueries
+                .selectEmailBody("acc1", "e1")
+                .executeAsList()
+                .size,
+        )
     }
 
     // --- CASCADE: state_token ---
@@ -126,8 +176,20 @@ class DatabaseSchemaTest {
 
         db.accountQueries.deleteAccount("acc1")
 
-        assertEquals(0, db.mailboxQueries.selectMailboxesByAccount("acc1").executeAsList().size)
-        assertEquals(1, db.mailboxQueries.selectMailboxesByAccount("acc2").executeAsList().size)
+        assertEquals(
+            0,
+            db.mailboxQueries
+                .selectMailboxesByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
+        assertEquals(
+            1,
+            db.mailboxQueries
+                .selectMailboxesByAccount("acc2")
+                .executeAsList()
+                .size,
+        )
     }
 
     // --- sync_log ---
@@ -160,11 +222,23 @@ class DatabaseSchemaTest {
             status = "success",
             detail = null,
         )
-        assertEquals(1, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
+        assertEquals(
+            1,
+            db.syncLogQueries
+                .selectLogsByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
 
         db.accountQueries.deleteAccount("acc1")
 
-        assertEquals(0, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
+        assertEquals(
+            0,
+            db.syncLogQueries
+                .selectLogsByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
     }
 
     @Test
@@ -176,8 +250,20 @@ class DatabaseSchemaTest {
 
         db.syncLogQueries.deleteLogsByAccount("acc1")
 
-        assertEquals(0, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
-        assertEquals(1, db.syncLogQueries.selectLogsByAccount("acc2").executeAsList().size)
+        assertEquals(
+            0,
+            db.syncLogQueries
+                .selectLogsByAccount("acc1")
+                .executeAsList()
+                .size,
+        )
+        assertEquals(
+            1,
+            db.syncLogQueries
+                .selectLogsByAccount("acc2")
+                .executeAsList()
+                .size,
+        )
     }
 
     // --- helpers ---

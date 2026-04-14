@@ -5,8 +5,11 @@ import java.awt.Desktop
 import java.io.File
 
 class JvmAttachmentOpener : AttachmentOpener {
-
-    override fun open(bytes: ByteArray, filename: String, mimeType: String) {
+    override fun open(
+        bytes: ByteArray,
+        filename: String,
+        mimeType: String,
+    ) {
         val suffix = filename.substringAfterLast('.', "").let { if (it.isNotBlank()) ".$it" else "" }
         val tmp = File.createTempFile("sharedinbox-", suffix)
         tmp.deleteOnExit()

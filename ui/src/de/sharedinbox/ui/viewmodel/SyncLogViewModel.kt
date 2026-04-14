@@ -16,13 +16,13 @@ import kotlinx.coroutines.launch
 class SyncLogViewModel(
     private val syncLogRepo: SyncLogRepository,
 ) : ViewModel() {
-
     private val _accountId = MutableStateFlow<String?>(null)
 
-    val entries = _accountId
-        .filterNotNull()
-        .flatMapLatest { syncLogRepo.observeLogs(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<SyncLogEntry>())
+    val entries =
+        _accountId
+            .filterNotNull()
+            .flatMapLatest { syncLogRepo.observeLogs(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<SyncLogEntry>())
 
     fun init(accountId: String) {
         if (_accountId.value == accountId) return

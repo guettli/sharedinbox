@@ -24,9 +24,8 @@ class SyncWorker(
     context: Context,
     workerParams: WorkerParameters,
 ) : CoroutineWorker(context, workerParams) {
-
-    override suspend fun doWork(): Result {
-        return try {
+    override suspend fun doWork(): Result =
+        try {
             val driver = DriverFactory(applicationContext).createDriver()
             val db = SharedInboxDatabase(driver)
             val tokenStore = AndroidTokenStore(applicationContext)
@@ -39,8 +38,12 @@ class SyncWorker(
             for (account in accounts) {
                 mailboxRepo.syncMailboxes(account.id)
 
-                val inboxId = mailboxRepo.observeMailboxes(account.id).first()
-                    .firstOrNull { it.role == MailboxRole.INBOX }?.id ?: continue
+                val inboxId =
+                    mailboxRepo
+                        .observeMailboxes(account.id)
+                        .first()
+                        .firstOrNull { it.role == MailboxRole.INBOX }
+                        ?.id ?: continue
 
                 emailRepo.syncEmails(account.id, inboxId)
             }
@@ -50,7 +53,6 @@ class SyncWorker(
         } catch (_: Exception) {
             Result.retry()
         }
-    }
 
     companion object {
         const val WORK_NAME = "sharedinbox_background_sync"

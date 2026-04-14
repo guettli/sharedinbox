@@ -12,7 +12,6 @@ import platform.Foundation.NSUserDefaults
  * TODO Phase 12: replace with Keychain via Security.framework.
  */
 class IosTokenStore : TokenStore {
-
     private val json = Json { prettyPrint = false }
     private val defaults = NSUserDefaults.standardUserDefaults
     private val storeKey = "sharedinbox_credentials"
@@ -29,7 +28,11 @@ class IosTokenStore : TokenStore {
         val entries: Map<String, CredentialEntry> = emptyMap(),
     )
 
-    override suspend fun saveCredentials(accountId: String, username: String, password: String) {
+    override suspend fun saveCredentials(
+        accountId: String,
+        username: String,
+        password: String,
+    ) {
         val store = load()
         save(store.copy(entries = store.entries + (accountId to CredentialEntry(accountId, username, password))))
     }
@@ -53,4 +56,3 @@ class IosTokenStore : TokenStore {
         defaults.setObject(json.encodeToString(store), storeKey)
     }
 }
-

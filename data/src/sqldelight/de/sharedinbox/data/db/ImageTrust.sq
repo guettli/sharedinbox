@@ -1,0 +1,14 @@
+CREATE TABLE image_trust (
+    account_id TEXT NOT NULL,
+    email_id   TEXT NOT NULL,
+    PRIMARY KEY (account_id, email_id)
+);
+
+grantImageTrust:
+INSERT OR IGNORE INTO image_trust VALUES (?, ?);
+
+isImageTrusted:
+SELECT COUNT(*) FROM image_trust WHERE account_id = ? AND email_id = ?;
+
+revokeImageTrust:
+DELETE FROM image_trust WHERE account_id = ? AND email_id = ?;

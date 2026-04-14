@@ -107,7 +107,10 @@ private fun AccountRow(
             title = { Text("Remove account?") },
             text = { Text("This will remove ${account.displayName} and all its data.") },
             confirmButton = {
-                TextButton(onClick = { onDelete(); showConfirm = false }) { Text("Remove") }
+                TextButton(onClick = {
+                    onDelete()
+                    showConfirm = false
+                }) { Text("Remove") }
             },
             dismissButton = {
                 TextButton(onClick = { showConfirm = false }) { Text("Cancel") }

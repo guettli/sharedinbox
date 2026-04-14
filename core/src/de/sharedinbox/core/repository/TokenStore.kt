@@ -8,8 +8,14 @@ package de.sharedinbox.core.repository
  *   JVM      — local encrypted file (java.util.prefs or AES-GCM file)
  */
 interface TokenStore {
-    suspend fun saveCredentials(accountId: String, username: String, password: String)
+    suspend fun saveCredentials(
+        accountId: String,
+        username: String,
+        password: String,
+    )
+
     suspend fun loadCredentials(accountId: String): StoredCredentials?
+
     suspend fun clearCredentials(accountId: String)
 }
 

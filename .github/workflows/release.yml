@@ -101,6 +101,9 @@ jobs:
           cp \
             "build/tasks/_desktop-app_executableJarJvm/desktop-app-jvm-executable.jar" \
             "sharedinbox-${{ steps.ver.outputs.version }}-${{ matrix.label }}.jar"
+          cp \
+            "build/tasks/_desktop-app_executableJarJvm/desktop-app-jvm-executable.jar" \
+            "sharedinbox-${{ matrix.label }}.jar"
 
       # ── jpackage native installer ────────────────────────────────────────────
       - name: Create installer with jpackage
@@ -135,4 +138,5 @@ jobs:
           generate_release_notes: true
           files: |
             sharedinbox-${{ steps.ver.outputs.version }}-${{ matrix.label }}.jar
+            sharedinbox-${{ matrix.label }}.jar
             dist/${{ matrix.pkg-glob }}

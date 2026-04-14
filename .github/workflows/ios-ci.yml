@@ -1,0 +1,53 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ios:
+    name: Build & E2E test (macOS)
+    runs-on: macos-latest
+    env:
+      E2E_URL: ${{ secrets.E2E_URL }}
+      E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
+      E2E_USER: ${{ secrets.E2E_USER }}
+      E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Amper
+        run: |
+          curl -sSfL \
+            "https://packages.jetbrains.team/maven/p/amper/amper/org/jetbrains/amper/cli/0.10.0/cli-0.10.0-wrapper" \
+            -o amper
+          chmod +x amper
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Cache Amper distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.amper
+          key: amper-0.10.0-macos
+
+      - name: Cache Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
+          restore-keys: gradle-macos-
+
+      - name: Build iOS app
+        run: amper build -m ios-app
+
+      - name: Run E2E tests
+        run: amper test -m data -p jvm

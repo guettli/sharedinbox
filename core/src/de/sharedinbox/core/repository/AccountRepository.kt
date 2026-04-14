@@ -1,6 +1,7 @@
 package de.sharedinbox.core.repository
 
 import de.sharedinbox.core.account.Account
+import de.sharedinbox.core.jmap.JmapCapability
 import kotlinx.coroutines.flow.Flow
 
 interface AccountRepository {
@@ -8,11 +9,24 @@ interface AccountRepository {
     fun observeAccounts(): Flow<List<Account>>
 
     /**
+     * Re-fetches the JMAP session for [accountId] and returns the set of
+     * capability URNs supported by that account (from [JmapAccount.accountCapabilities]).
+     * Returns null if credentials are unavailable or the request fails.
+     *
+     * Common values: [JmapCapability.MAIL], [JmapCapability.SUBMISSION], [JmapCapability.CONTACTS].
+     */
+    suspend fun getCapabilities(accountId: String): Set<String>?
+
+    /**
      * Discovers the JMAP session at [baseUrl]/.well-known/jmap, authenticates with [username]/[password],
      * persists the account row and credentials, and returns the new [Account].
      * [baseUrl] must include scheme and port, e.g. "https://mail.example.com" or "http://localhost:8080".
      */
-    suspend fun addAccount(baseUrl: String, username: String, password: String): Result<Account>
+    suspend fun addAccount(
+        baseUrl: String,
+        username: String,
+        password: String,
+    ): Result<Account>
 
     /**
      * Removes the account and all its data (mailboxes, emails, state tokens)

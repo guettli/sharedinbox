@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]   # tag pushes don't match branch filters, so no infinite loop
+  pull_request:
+
+jobs:
+  test:
+    name: Test (JVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-linux-${{ hashFiles('coverage/build.gradle.kts') }}
+          restore-keys: gradle-linux-
+
+      - name: Run tests and verify coverage (≥70%)
+        run: ./gradlew --project-dir coverage test koverVerify
+
+  bump-patch:
+    name: Bump patch version
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full tag history
+
+      - name: Compute next patch tag
+        id: tag
+        run: |
+          latest=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [[ -z "$latest" ]]; then
+            next="v0.1.0"
+          else
+            IFS='.' read -r major minor patch <<< "${latest#v}"
+            next="v${major}.${minor}.$((patch + 1))"
+          fi
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        run: |
+          git tag "${{ steps.tag.outputs.tag }}"
+          git push origin "${{ steps.tag.outputs.tag }}"

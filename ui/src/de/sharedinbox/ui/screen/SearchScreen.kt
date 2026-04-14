@@ -81,22 +81,27 @@ fun SearchScreen(
                             leadingIcon = {
                                 Icon(Icons.Default.Search, contentDescription = null)
                             },
-                            trailingIcon = if (vm.query.isNotEmpty()) {
-                                {
-                                    IconButton(onClick = { vm.onQueryChange("") }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            trailingIcon =
+                                if (vm.query.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = { vm.onQueryChange("") }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                        }
                                     }
-                                }
-                            } else null,
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(focusRequester),
+                                } else {
+                                    null
+                                },
+                            colors =
+                                TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                ),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(focusRequester),
                         )
                     },
                     navigationIcon = {
@@ -114,50 +119,60 @@ fun SearchScreen(
                 .padding(padding),
         ) {
             when {
-                vm.isSearching -> CircularProgressIndicator(
-                    Modifier
-                        .align(Alignment.Center)
-                        .semantics { contentDescription = "Searching" },
-                )
+                vm.isSearching ->
+                    CircularProgressIndicator(
+                        Modifier
+                            .align(Alignment.Center)
+                            .semantics { contentDescription = "Searching" },
+                    )
 
-                vm.error != null -> ErrorContent(
-                    message = vm.error!!,
-                    onRetry = { vm.onQueryChange(vm.query) },
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                vm.error != null ->
+                    ErrorContent(
+                        message = vm.error!!,
+                        onRetry = { vm.onQueryChange(vm.query) },
+                        modifier = Modifier.align(Alignment.Center),
+                    )
 
-                vm.query.isBlank() -> Text(
-                    text = "Type to search across subject, sender, and preview.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 24.dp),
-                )
+                vm.query.isBlank() ->
+                    Text(
+                        text = "Type to search across subject, sender, and preview.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier =
+                            Modifier
+                                .align(Alignment.Center)
+                                .padding(horizontal = 24.dp),
+                    )
 
-                vm.results.isEmpty() -> Text(
-                    text = "No results for \"${vm.query}\".",
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 24.dp),
-                )
+                vm.results.isEmpty() ->
+                    Text(
+                        text = "No results for \"${vm.query}\".",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier =
+                            Modifier
+                                .align(Alignment.Center)
+                                .padding(horizontal = 24.dp),
+                    )
 
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(vm.results, key = { it.id }) { email ->
-                        val selected = email.id in vm.selectedIds
-                        SearchEmailRow(
-                            email = email,
-                            selected = selected,
-                            inSelectionMode = inSelection,
-                            onClick = {
-                                if (inSelection) vm.toggleSelection(email.id)
-                                else onNavigateToDetail(email.id)
-                            },
-                            onLongClick = { vm.toggleSelection(email.id) },
-                        )
-                        HorizontalDivider()
+                else ->
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(vm.results, key = { it.id }) { email ->
+                            val selected = email.id in vm.selectedIds
+                            SearchEmailRow(
+                                email = email,
+                                selected = selected,
+                                inSelectionMode = inSelection,
+                                onClick = {
+                                    if (inSelection) {
+                                        vm.toggleSelection(email.id)
+                                    } else {
+                                        onNavigateToDetail(email.id)
+                                    }
+                                },
+                                onLongClick = { vm.toggleSelection(email.id) },
+                            )
+                            HorizontalDivider()
+                        }
                     }
-                }
             }
         }
     }
@@ -185,17 +200,22 @@ private fun SearchEmailRow(
             )
         },
         supportingContent = { Text("$from · ${email.preview ?: ""}") },
-        leadingContent = if (inSelectionMode) {
-            { Checkbox(checked = selected, onCheckedChange = null) }
-        } else null,
-        modifier = Modifier
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics {
-                contentDescription = buildString {
-                    if (isUnread) append("Unread. ")
-                    append(email.subject ?: "No subject")
-                    append(". From $from")
-                }
+        leadingContent =
+            if (inSelectionMode) {
+                { Checkbox(checked = selected, onCheckedChange = null) }
+            } else {
+                null
             },
+        modifier =
+            Modifier
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .semantics {
+                    contentDescription =
+                        buildString {
+                            if (isUnread) append("Unread. ")
+                            append(email.subject ?: "No subject")
+                            append(". From $from")
+                        }
+                },
     )
 }

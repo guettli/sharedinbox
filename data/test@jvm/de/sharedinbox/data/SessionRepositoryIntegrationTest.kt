@@ -24,13 +24,15 @@ import kotlin.test.assertTrue
  * the admin API. Phase 2 uses the fallback admin (plaintext auth).
  */
 class SessionRepositoryIntegrationTest {
-
-    private val baseUrl = System.getenv("STALWART_URL")
-        ?: error("STALWART_URL not set — start Stalwart: stalwart --config stalwart-dev/config.toml")
-    private val username = System.getenv("STALWART_USER_A")
-        ?: error("STALWART_USER_A not set")
-    private val password = System.getenv("STALWART_PASS_A")
-        ?: error("STALWART_PASS_A not set")
+    private val baseUrl =
+        System.getenv("STALWART_URL")
+            ?: error("STALWART_URL not set — start Stalwart: stalwart --config stalwart-dev/config.toml")
+    private val username =
+        System.getenv("STALWART_USER_A")
+            ?: error("STALWART_USER_A not set")
+    private val password =
+        System.getenv("STALWART_PASS_A")
+            ?: error("STALWART_PASS_A not set")
 
     // --- Session discovery ---
 
@@ -57,7 +59,7 @@ class SessionRepositoryIntegrationTest {
 
         assertNotNull(
             session.primaryAccounts[JmapCapability.MAIL],
-            "Expected primaryAccounts to contain urn:ietf:params:jmap:mail"
+            "Expected primaryAccounts to contain urn:ietf:params:jmap:mail",
         )
         assertTrue(session.accounts.isNotEmpty(), "Expected at least one account in session")
     }
@@ -96,47 +98,50 @@ class SessionRepositoryIntegrationTest {
     // --- TokenStore (FileTokenStore on JVM) ---
 
     @Test
-    fun fileTokenStore_saveAndLoad_roundTrip() = runBlocking {
-        val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
-        tmp.toFile().deleteOnExit()
-        val store = FileTokenStore(storePath = tmp)
+    fun fileTokenStore_saveAndLoad_roundTrip() =
+        runBlocking {
+            val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
+            tmp.toFile().deleteOnExit()
+            val store = FileTokenStore(storePath = tmp)
 
-        store.saveCredentials("acc1", "alice@localhost", "secret")
-        val loaded = store.loadCredentials("acc1")
+            store.saveCredentials("acc1", "alice@localhost", "secret")
+            val loaded = store.loadCredentials("acc1")
 
-        assertNotNull(loaded)
-        assertEquals("acc1", loaded.accountId)
-        assertEquals("alice@localhost", loaded.username)
-        assertEquals("secret", loaded.password)
-    }
-
-    @Test
-    fun fileTokenStore_clear_removesEntry() = runBlocking {
-        val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
-        tmp.toFile().deleteOnExit()
-        val store = FileTokenStore(storePath = tmp)
-
-        store.saveCredentials("acc1", "alice@localhost", "secret")
-        store.clearCredentials("acc1")
-
-        val loaded = store.loadCredentials("acc1")
-        assertTrue(loaded == null, "Expected null after clear, got $loaded")
-    }
+            assertNotNull(loaded)
+            assertEquals("acc1", loaded.accountId)
+            assertEquals("alice@localhost", loaded.username)
+            assertEquals("secret", loaded.password)
+        }
 
     @Test
-    fun fileTokenStore_multipleAccounts_isolatedEntries() = runBlocking {
-        val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
-        tmp.toFile().deleteOnExit()
-        val store = FileTokenStore(storePath = tmp)
+    fun fileTokenStore_clear_removesEntry() =
+        runBlocking {
+            val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
+            tmp.toFile().deleteOnExit()
+            val store = FileTokenStore(storePath = tmp)
 
-        store.saveCredentials("acc1", "alice@localhost", "passA")
-        store.saveCredentials("acc2", "bob@localhost", "passB")
+            store.saveCredentials("acc1", "alice@localhost", "secret")
+            store.clearCredentials("acc1")
 
-        assertEquals("passA", store.loadCredentials("acc1")?.password)
-        assertEquals("passB", store.loadCredentials("acc2")?.password)
+            val loaded = store.loadCredentials("acc1")
+            assertTrue(loaded == null, "Expected null after clear, got $loaded")
+        }
 
-        store.clearCredentials("acc1")
-        assertTrue(store.loadCredentials("acc1") == null)
-        assertEquals("passB", store.loadCredentials("acc2")?.password)
-    }
+    @Test
+    fun fileTokenStore_multipleAccounts_isolatedEntries() =
+        runBlocking {
+            val tmp = createTempFile(prefix = "sharedinbox-test-", suffix = ".json")
+            tmp.toFile().deleteOnExit()
+            val store = FileTokenStore(storePath = tmp)
+
+            store.saveCredentials("acc1", "alice@localhost", "passA")
+            store.saveCredentials("acc2", "bob@localhost", "passB")
+
+            assertEquals("passA", store.loadCredentials("acc1")?.password)
+            assertEquals("passB", store.loadCredentials("acc2")?.password)
+
+            store.clearCredentials("acc1")
+            assertTrue(store.loadCredentials("acc1") == null)
+            assertEquals("passB", store.loadCredentials("acc2")?.password)
+        }
 }

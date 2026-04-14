@@ -34,9 +34,10 @@ class AccountSyncManager(
 
     fun startAccount(accountId: String) {
         if (accountId in jobs) return
-        jobs[accountId] = scope.launch {
-            runWithReconnect { streamEvents(accountId) }
-        }
+        jobs[accountId] =
+            scope.launch {
+                runWithReconnect { streamEvents(accountId) }
+            }
     }
 
     fun stopAccount(accountId: String) {
@@ -58,11 +59,13 @@ class AccountSyncManager(
             session.incoming.collect { event ->
                 if (event.event == "state") {
                     val data = event.data ?: return@collect
-                    val stateChange = runCatching {
-                        json.decodeFromString<StateChange>(data)
-                    }.getOrNull() ?: return@collect
-                    val changedTypes = stateChange.changed[account.jmap_account_id]?.keys
-                        ?: return@collect
+                    val stateChange =
+                        runCatching {
+                            json.decodeFromString<StateChange>(data)
+                        }.getOrNull() ?: return@collect
+                    val changedTypes =
+                        stateChange.changed[account.jmap_account_id]?.keys
+                            ?: return@collect
                     onStateChange(accountId, changedTypes)
                 }
             }
@@ -71,10 +74,11 @@ class AccountSyncManager(
         }
     }
 
-    private fun expandUrlTemplate(template: String): String = template
-        .replace("{types}", "*")
-        .replace("{closeafter}", "no")
-        .replace("{ping}", "60")
+    private fun expandUrlTemplate(template: String): String =
+        template
+            .replace("{types}", "*")
+            .replace("{closeafter}", "no")
+            .replace("{ping}", "60")
 
     /** Retries [block] with exponential back-off on failure; stops on cancellation. */
     private suspend fun runWithReconnect(block: suspend () -> Unit) {

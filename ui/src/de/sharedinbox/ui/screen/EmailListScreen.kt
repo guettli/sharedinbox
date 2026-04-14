@@ -3,6 +3,7 @@ package de.sharedinbox.ui.screen
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -52,6 +53,7 @@ fun EmailListScreen(
 ) {
     vm.init(accountId, mailboxId)
     val emails by vm.emails.collectAsState()
+    val syncWarning by vm.syncWarning.collectAsState()
     val inSelection = vm.inSelectionMode
 
     Scaffold(
@@ -94,51 +96,62 @@ fun EmailListScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                vm.isLoading && emails.isEmpty() -> CircularProgressIndicator(
-                    Modifier.align(Alignment.Center)
-                        .semantics { contentDescription = "Loading emails" }
-                )
-
-                vm.error != null && emails.isEmpty() -> ErrorContent(
-                    message = vm.error!!,
-                    onRetry = { vm.refresh() },
-                    modifier = Modifier.align(Alignment.Center),
-                )
-
-                emails.isEmpty() -> Text(
-                    text = "No emails in this mailbox.",
-                    modifier = Modifier.align(Alignment.Center),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(emails, key = { it.id }) { email ->
-                        val selected = email.id in vm.selectedIds
-                        EmailRow(
-                            email = email,
-                            selected = selected,
-                            inSelectionMode = inSelection,
-                            onClick = {
-                                if (inSelection) vm.toggleSelection(email.id)
-                                else onNavigateToDetail(email.id)
-                            },
-                            onLongClick = { vm.toggleSelection(email.id) },
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            SyncWarningBanner(syncWarning)
+            Box(Modifier.weight(1f)) {
+                when {
+                    vm.isLoading && emails.isEmpty() ->
+                        CircularProgressIndicator(
+                            Modifier
+                                .align(Alignment.Center)
+                                .semantics { contentDescription = "Loading emails" },
                         )
-                        HorizontalDivider()
-                    }
+
+                    vm.error != null && emails.isEmpty() ->
+                        ErrorContent(
+                            message = vm.error!!,
+                            onRetry = { vm.refresh() },
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+
+                    emails.isEmpty() ->
+                        Text(
+                            text = "No emails in this mailbox.",
+                            modifier = Modifier.align(Alignment.Center),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+
+                    else ->
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(emails, key = { it.id }) { email ->
+                                val selected = email.id in vm.selectedIds
+                                EmailRow(
+                                    email = email,
+                                    selected = selected,
+                                    inSelectionMode = inSelection,
+                                    onClick = {
+                                        if (inSelection) {
+                                            vm.toggleSelection(email.id)
+                                        } else {
+                                            onNavigateToDetail(email.id)
+                                        }
+                                    },
+                                    onLongClick = { vm.toggleSelection(email.id) },
+                                )
+                                HorizontalDivider()
+                            }
+                        }
                 }
-            }
-            // Error banner overlay when list is populated but sync failed
-            vm.error?.let { err ->
-                if (emails.isNotEmpty()) {
-                    Text(
-                        text = "Sync failed: $err",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
+                // Error banner overlay when list is populated but a refresh failed
+                vm.error?.let { err ->
+                    if (emails.isNotEmpty()) {
+                        Text(
+                            text = "Sync failed: $err",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
         }
@@ -163,16 +176,22 @@ private fun EmailRow(
             )
         },
         supportingContent = { Text("$from · ${email.preview ?: ""}") },
-        leadingContent = if (inSelectionMode) {
-            { Checkbox(checked = selected, onCheckedChange = null) }
-        } else null,
-        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics {
-                contentDescription = buildString {
-                    if (isUnread) append("Unread. ")
-                    append(email.subject ?: "No subject")
-                    append(". From $from")
-                }
+        leadingContent =
+            if (inSelectionMode) {
+                { Checkbox(checked = selected, onCheckedChange = null) }
+            } else {
+                null
             },
+        modifier =
+            Modifier
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .semantics {
+                    contentDescription =
+                        buildString {
+                            if (isUnread) append("Unread. ")
+                            append(email.subject ?: "No subject")
+                            append(". From $from")
+                        }
+                },
     )
 }

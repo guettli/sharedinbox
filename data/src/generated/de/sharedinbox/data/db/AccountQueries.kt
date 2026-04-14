@@ -115,7 +115,9 @@ public class AccountQueries(
       emit("email_body")
       emit("email_header")
       emit("mailbox")
+      emit("recent_address")
       emit("state_token")
+      emit("sync_log")
     }
     return result
   }

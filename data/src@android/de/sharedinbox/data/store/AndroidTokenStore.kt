@@ -14,19 +14,22 @@ import kotlinx.serialization.json.Json
  * Keys are AES256-SIV encrypted; values are AES256-GCM encrypted.
  * Credentials are serialized as JSON and stored under the accountId key.
  */
-class AndroidTokenStore(context: Context) : TokenStore {
-
+class AndroidTokenStore(
+    context: Context,
+) : TokenStore {
     private val json = Json { prettyPrint = false }
 
-    private val prefs = EncryptedSharedPreferences.create(
-        context,
-        "sharedinbox_secure_prefs",
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val prefs =
+        EncryptedSharedPreferences.create(
+            context,
+            "sharedinbox_secure_prefs",
+            MasterKey
+                .Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
 
     @Serializable
     private data class CredentialEntry(
@@ -35,8 +38,13 @@ class AndroidTokenStore(context: Context) : TokenStore {
         val password: String,
     )
 
-    override suspend fun saveCredentials(accountId: String, username: String, password: String) {
-        prefs.edit()
+    override suspend fun saveCredentials(
+        accountId: String,
+        username: String,
+        password: String,
+    ) {
+        prefs
+            .edit()
             .putString(accountId, json.encodeToString(CredentialEntry(accountId, username, password)))
             .apply()
     }
