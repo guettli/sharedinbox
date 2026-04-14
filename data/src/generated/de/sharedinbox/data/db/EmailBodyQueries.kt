@@ -54,6 +54,21 @@ public class EmailBodyQueries(
     return result
   }
 
+  /**
+   * @return The number of rows updated.
+   */
+  public fun deleteEmailBody(account_id: String, email_id: String): QueryResult<Long> {
+    val result = driver.execute(420_503_321, """DELETE FROM email_body WHERE account_id = ? AND email_id = ?""", 2) {
+          var parameterIndex = 0
+          bindString(parameterIndex++, account_id)
+          bindString(parameterIndex++, email_id)
+        }
+    notifyQueries(420_503_321) { emit ->
+      emit("email_body")
+    }
+    return result
+  }
+
   private inner class SelectEmailBodyQuery<out T : Any>(
     public val account_id: String,
     public val email_id: String,

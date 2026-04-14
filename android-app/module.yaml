@@ -2,6 +2,7 @@ product: android/app
 
 dependencies:
   - ../ui
+  - androidx.work:work-runtime-ktx:2.10.1
 
 settings:
   android:

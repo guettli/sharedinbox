@@ -6,14 +6,15 @@ CREATE TABLE email_header (
     subject        TEXT,
     from_address   TEXT,
     received_at    INTEGER NOT NULL,
-    keywords       TEXT NOT NULL DEFAULT '',
+    keywords       TEXT NOT NULL DEFAULT '[]',
     has_attachment INTEGER NOT NULL DEFAULT 0,
     preview        TEXT,
+    blob_id        TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (id, account_id)
 );
 
 upsertEmailHeader:
-INSERT OR REPLACE INTO email_header VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO email_header VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectEmailsByMailbox:
 SELECT * FROM email_header
@@ -22,3 +23,28 @@ ORDER BY received_at DESC;
 
 selectEmailById:
 SELECT * FROM email_header WHERE account_id = ? AND id = ?;
+
+deleteEmailHeader:
+DELETE FROM email_header WHERE account_id = ? AND id = ?;
+
+deleteEmailHeadersByAccount:
+DELETE FROM email_header WHERE account_id = ?;
+
+updateEmailKeywords:
+UPDATE email_header SET keywords = ? WHERE account_id = ? AND id = ?;
+
+updateEmailMailboxId:
+UPDATE email_header SET mailbox_id = ? WHERE account_id = ? AND id = ?;
+
+-- Case-insensitive substring search across subject, sender, and preview.
+-- Bind the same query string for all three ? parameters.
+searchEmailHeaders:
+SELECT * FROM email_header
+WHERE account_id = ?
+  AND (
+       subject      LIKE '%' || ? || '%' ESCAPE '\'
+    OR from_address LIKE '%' || ? || '%' ESCAPE '\'
+    OR preview      LIKE '%' || ? || '%' ESCAPE '\'
+  )
+ORDER BY received_at DESC
+LIMIT 200;

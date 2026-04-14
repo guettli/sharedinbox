@@ -24,6 +24,7 @@ data class Email(
     val bodyValues: Map<String, EmailBodyValue> = emptyMap(),
     val htmlBody: List<EmailBodyPart> = emptyList(),
     val textBody: List<EmailBodyPart> = emptyList(),
+    val attachments: List<EmailBodyPart> = emptyList(),
 )
 
 @Serializable
@@ -45,6 +46,9 @@ data class EmailBodyPart(
     val blobId: String? = null,
     val type: String,
     val charset: String? = null,
+    val name: String? = null,
+    val size: Long? = null,
+    val disposition: String? = null,
 )
 
 /** Outgoing email — used for send/reply (not a JMAP wire type, local only) */

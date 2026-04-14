@@ -71,9 +71,10 @@ private class SharedInboxDatabaseImpl(
           |    subject        TEXT,
           |    from_address   TEXT,
           |    received_at    INTEGER NOT NULL,
-          |    keywords       TEXT NOT NULL DEFAULT '',
+          |    keywords       TEXT NOT NULL DEFAULT '[]',
           |    has_attachment INTEGER NOT NULL DEFAULT 0,
           |    preview        TEXT,
+          |    blob_id        TEXT NOT NULL DEFAULT '',
           |    PRIMARY KEY (id, account_id)
           |)
           """.trimMargin(), 0)

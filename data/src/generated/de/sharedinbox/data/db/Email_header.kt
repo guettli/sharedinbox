@@ -14,4 +14,5 @@ public data class Email_header(
   public val keywords: String,
   public val has_attachment: Long,
   public val preview: String?,
+  public val blob_id: String,
 )

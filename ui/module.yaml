@@ -5,13 +5,17 @@ product:
 dependencies:
   - ../core: exported
   - ../data: exported
+  - app.cash.sqldelight:runtime:2.3.2
   - $compose.foundation
   - $compose.material3
   - org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0
   - org.jetbrains.androidx.navigation3:navigation3-ui:1.0.0-alpha05
   - org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-navigation3:2.10.0
   - io.insert-koin:koin-compose:4.1.1
+  - io.insert-koin:koin-compose-viewmodel:4.1.1
   - io.insert-koin:koin-core:4.1.1
+  - org.jetbrains.compose.material:material-icons-core:1.7.3
+  - org.jetbrains.kotlinx:kotlinx-datetime:0.7.1
 
 dependencies@android:
   - androidx.activity:activity-compose:1.10.1

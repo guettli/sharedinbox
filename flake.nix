@@ -51,9 +51,27 @@
             git
             curl
             jq
+            # OpenGL + X11 + C++ runtime — required by Skiko (Compose Desktop renderer) on Linux
+            libGL
+            libGLU
+            mesa      # DRI drivers incl. software rasterizer (swrast_dri.so)
+            stdenv.cc.cc.lib  # libstdc++.so.6
+            xorg.libX11
+            xorg.libXext
+            xorg.libXrandr
+            xorg.libXi
+            xorg.libXrender
+            xorg.libXxf86vm
+            xorg.libXcursor
           ];
 
           shellHook = ''
+            # Skiko (Compose Desktop renderer) needs OpenGL + X11 + C++ runtime at runtime.
+            export LD_LIBRARY_PATH="${pkgs.libGL}/lib:${pkgs.libGLU}/lib:${pkgs.mesa}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.xorg.libX11}/lib:${pkgs.xorg.libXext}/lib:${pkgs.xorg.libXrandr}/lib:${pkgs.xorg.libXi}/lib:${pkgs.xorg.libXrender}/lib:${pkgs.xorg.libXxf86vm}/lib:${pkgs.xorg.libXcursor}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
+            # Fall back to Mesa software rasterizer when no GPU is available (CI, VMs, headless).
+            export SKIKO_RENDER_API=SOFTWARE
+
             export ANDROID_HOME="${androidSdk}/share/android-sdk"
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
             export JAVA_HOME="${pkgs.temurin-bin-21}"
@@ -77,6 +95,8 @@
             export STALWART_PASS_A="admin"
             export STALWART_USER_B="alice"
             export STALWART_PASS_B="secret"
+            export STALWART_USER_C="bob"
+            export STALWART_PASS_C="secret"
 
             echo "SharedInbox dev environment ready (Stalwart port: $STALWART_PORT)."
             echo "  Start Stalwart : stalwart-dev/start"

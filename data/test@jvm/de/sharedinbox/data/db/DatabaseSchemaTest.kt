@@ -77,7 +77,7 @@ class DatabaseSchemaTest {
         db.emailHeaderQueries.upsertEmailHeader(
             id = "e1", account_id = "acc1", thread_id = "t1", mailbox_id = "mbox1",
             subject = "Hello", from_address = "bob@localhost", received_at = 1000L,
-            keywords = "", has_attachment = 0, preview = null,
+            keywords = "[]", has_attachment = 0, preview = null, blob_id = "",
         )
         assertEquals(1, db.emailHeaderQueries.selectEmailsByMailbox("acc1", "mbox1").executeAsList().size)
 
@@ -128,6 +128,56 @@ class DatabaseSchemaTest {
 
         assertEquals(0, db.mailboxQueries.selectMailboxesByAccount("acc1").executeAsList().size)
         assertEquals(1, db.mailboxQueries.selectMailboxesByAccount("acc2").executeAsList().size)
+    }
+
+    // --- sync_log ---
+
+    @Test
+    fun insertAndSelectSyncLog() {
+        insertAccount("acc1")
+        db.syncLogQueries.insertSyncLog(
+            account_id = "acc1",
+            occurred_at = 1000L,
+            direction = "db_to_server",
+            operation = "create_mailbox",
+            status = "conflict",
+            detail = "notAllowed: permission denied",
+        )
+        val rows = db.syncLogQueries.selectLogsByAccount("acc1").executeAsList()
+        assertEquals(1, rows.size)
+        assertEquals("create_mailbox", rows[0].operation)
+        assertEquals("conflict", rows[0].status)
+    }
+
+    @Test
+    fun deleteAccount_cascadesToSyncLog() {
+        insertAccount("acc1")
+        db.syncLogQueries.insertSyncLog(
+            account_id = "acc1",
+            occurred_at = 1000L,
+            direction = "server_to_db",
+            operation = "sync_mailboxes",
+            status = "success",
+            detail = null,
+        )
+        assertEquals(1, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
+
+        db.accountQueries.deleteAccount("acc1")
+
+        assertEquals(0, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
+    }
+
+    @Test
+    fun clearSyncLog_removesOnlyTargetAccount() {
+        insertAccount("acc1")
+        insertAccount("acc2")
+        db.syncLogQueries.insertSyncLog("acc1", 1000L, "server_to_db", "sync_emails", "success", null)
+        db.syncLogQueries.insertSyncLog("acc2", 2000L, "server_to_db", "sync_emails", "success", null)
+
+        db.syncLogQueries.deleteLogsByAccount("acc1")
+
+        assertEquals(0, db.syncLogQueries.selectLogsByAccount("acc1").executeAsList().size)
+        assertEquals(1, db.syncLogQueries.selectLogsByAccount("acc2").executeAsList().size)
     }
 
     // --- helpers ---

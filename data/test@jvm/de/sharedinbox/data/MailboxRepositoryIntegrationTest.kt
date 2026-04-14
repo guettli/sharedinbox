@@ -3,9 +3,11 @@ package de.sharedinbox.data
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import de.sharedinbox.core.jmap.mail.MailboxRole
 import de.sharedinbox.data.db.SharedInboxDatabase
+import de.sharedinbox.core.sync.SyncStatus
 import de.sharedinbox.data.repository.AccountRepositoryImpl
 import de.sharedinbox.data.repository.MailboxRepositoryImpl
 import de.sharedinbox.data.repository.SessionRepositoryImpl
+import de.sharedinbox.data.repository.SyncLogRepositoryImpl
 import de.sharedinbox.data.store.FileTokenStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -13,7 +15,9 @@ import kotlin.io.path.createTempFile
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -38,6 +42,7 @@ class MailboxRepositoryIntegrationTest {
 
     private lateinit var db: SharedInboxDatabase
     private lateinit var tokenStore: FileTokenStore
+    private lateinit var syncLogRepo: SyncLogRepositoryImpl
     private lateinit var accountRepo: AccountRepositoryImpl
     private lateinit var mailboxRepo: MailboxRepositoryImpl
 
@@ -51,8 +56,9 @@ class MailboxRepositoryIntegrationTest {
             createTempFile(prefix = "sharedinbox-test-creds-", suffix = ".json")
                 .also { it.toFile().deleteOnExit() }
         )
+        syncLogRepo = SyncLogRepositoryImpl(db)
         accountRepo = AccountRepositoryImpl(db, tokenStore, SessionRepositoryImpl())
-        mailboxRepo = MailboxRepositoryImpl(db, tokenStore)
+        mailboxRepo = MailboxRepositoryImpl(db, tokenStore, syncLogRepo)
     }
 
     @Test
@@ -139,5 +145,128 @@ class MailboxRepositoryIntegrationTest {
 
         val afterRemove = mailboxRepo.observeMailboxes(account.id).first()
         assertTrue(afterRemove.isEmpty(), "Mailboxes should be cascade-deleted with account")
+    }
+
+    // ── Bidirectional sync: DB → Server mutations ─────────────────────────────
+
+    @Test
+    fun createMailbox_appearsInDbAndServer() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        mailboxRepo.syncMailboxes(account.id).getOrThrow()
+
+        val created = mailboxRepo.createMailbox(account.id, "TestFolder").getOrThrow()
+
+        // Appears in local DB immediately
+        val local = mailboxRepo.observeMailboxes(account.id).first()
+        assertTrue(local.any { it.id == created.id }, "Created mailbox must appear in local DB")
+
+        // Server state reflects it after a fresh sync
+        mailboxRepo.syncMailboxes(account.id).getOrThrow()
+        val afterSync = mailboxRepo.observeMailboxes(account.id).first()
+        assertTrue(afterSync.any { it.name == "TestFolder" }, "Server must report the created mailbox")
+
+        // Clean up
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+    }
+
+    @Test
+    fun createMailbox_logsSuccessInSyncLog() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+
+        val created = mailboxRepo.createMailbox(account.id, "LogTest").getOrThrow()
+
+        val logs = syncLogRepo.observeLogs(account.id).first()
+        val createLog = logs.firstOrNull { it.operation == "create_mailbox" }
+        assertNotNull(createLog, "Expected a create_mailbox log entry")
+        assertEquals(SyncStatus.SUCCESS, createLog.status)
+
+        // Clean up
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+    }
+
+    @Test
+    fun renameMailbox_updatesNameLocally() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        val created = mailboxRepo.createMailbox(account.id, "Original").getOrThrow()
+
+        mailboxRepo.renameMailbox(account.id, created.id, "Renamed").getOrThrow()
+
+        val mailboxes = mailboxRepo.observeMailboxes(account.id).first()
+        assertTrue(mailboxes.any { it.id == created.id && it.name == "Renamed" },
+            "Renamed mailbox must appear with new name in local DB")
+
+        // Clean up
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+    }
+
+    @Test
+    fun renameMailbox_logsSuccessInSyncLog() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        val created = mailboxRepo.createMailbox(account.id, "ForRename").getOrThrow()
+
+        mailboxRepo.renameMailbox(account.id, created.id, "AfterRename").getOrThrow()
+
+        val logs = syncLogRepo.observeLogs(account.id).first()
+        val renameLog = logs.firstOrNull { it.operation == "rename_mailbox" }
+        assertNotNull(renameLog, "Expected a rename_mailbox log entry")
+        assertEquals(SyncStatus.SUCCESS, renameLog.status)
+
+        // Clean up
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+    }
+
+    @Test
+    fun deleteMailbox_removedFromDb() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        val created = mailboxRepo.createMailbox(account.id, "ToDelete").getOrThrow()
+
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+
+        val mailboxes = mailboxRepo.observeMailboxes(account.id).first()
+        assertTrue(mailboxes.none { it.id == created.id }, "Deleted mailbox must not appear in DB")
+    }
+
+    @Test
+    fun deleteMailbox_logsSuccessInSyncLog() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        val created = mailboxRepo.createMailbox(account.id, "ForDelete").getOrThrow()
+
+        mailboxRepo.deleteMailbox(account.id, created.id).getOrThrow()
+
+        val logs = syncLogRepo.observeLogs(account.id).first()
+        val deleteLog = logs.firstOrNull { it.operation == "delete_mailbox" }
+        assertNotNull(deleteLog, "Expected a delete_mailbox log entry")
+        assertEquals(SyncStatus.SUCCESS, deleteLog.status)
+    }
+
+    @Test
+    fun deleteMailbox_systemMailbox_logsConflict() = runBlocking {
+        // Deleting a system mailbox (Inbox) should be rejected by the server.
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        mailboxRepo.syncMailboxes(account.id).getOrThrow()
+
+        val inbox = mailboxRepo.observeMailboxes(account.id).first()
+            .firstOrNull { it.role == de.sharedinbox.core.jmap.mail.MailboxRole.INBOX }
+            ?: return@runBlocking  // server doesn't have an Inbox — skip
+
+        val result = mailboxRepo.deleteMailbox(account.id, inbox.id)
+        assertTrue(result.isFailure, "Deleting the Inbox should fail")
+
+        val logs = syncLogRepo.observeLogs(account.id).first()
+        val conflictLog = logs.firstOrNull {
+            it.operation == "delete_mailbox" && it.status == SyncStatus.CONFLICT
+        }
+        assertNotNull(conflictLog, "Expected a CONFLICT log entry when deleting system mailbox")
+    }
+
+    @Test
+    fun syncMailboxes_logsInSyncLog() = runBlocking {
+        val account = accountRepo.addAccount(baseUrl, userA, passA).getOrThrow()
+        mailboxRepo.syncMailboxes(account.id).getOrThrow()
+
+        val logs = syncLogRepo.observeLogs(account.id).first()
+        val syncLog = logs.firstOrNull { it.operation == "sync_mailboxes" }
+        assertNotNull(syncLog, "Expected a sync_mailboxes log entry")
+        assertEquals(SyncStatus.SUCCESS, syncLog.status)
     }
 }

@@ -1,0 +1,25 @@
+CREATE TABLE sync_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id  TEXT    NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    occurred_at INTEGER NOT NULL,   -- epoch millis
+    direction   TEXT    NOT NULL,   -- "server_to_db" | "db_to_server"
+    operation   TEXT    NOT NULL,   -- e.g. "sync_mailboxes", "create_mailbox", "move_email"
+    status      TEXT    NOT NULL,   -- "success" | "conflict" | "error"
+    detail      TEXT                -- optional human-readable description or JSON
+);
+
+insertSyncLog:
+INSERT INTO sync_log(account_id, occurred_at, direction, operation, status, detail)
+VALUES (?, ?, ?, ?, ?, ?);
+
+selectLogsByAccount:
+SELECT * FROM sync_log
+WHERE account_id = ?
+ORDER BY occurred_at DESC
+LIMIT 200;
+
+deleteLogsByAccount:
+DELETE FROM sync_log WHERE account_id = ?;
+
+deleteAllLogs:
+DELETE FROM sync_log;

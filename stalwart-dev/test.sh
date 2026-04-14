@@ -6,6 +6,9 @@ set -Eeuo pipefail
 # Starts Stalwart in the background, runs integration tests, then stops it.
 
 : "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
+# Provide defaults for vars added in later commits (avoid breakage before re-entering nix shell).
+export STALWART_USER_C="${STALWART_USER_C:-bob}"
+export STALWART_PASS_C="${STALWART_PASS_C:-secret}"
 command -v stalwart >/dev/null || { echo "stalwart not in PATH — run inside nix develop"; exit 1; }
 
 STALWART_URL="http://127.0.0.1:${STALWART_PORT}"

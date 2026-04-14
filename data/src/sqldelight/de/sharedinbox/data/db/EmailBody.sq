@@ -11,3 +11,6 @@ INSERT OR REPLACE INTO email_body VALUES (?, ?, ?, ?);
 
 selectEmailBody:
 SELECT * FROM email_body WHERE account_id = ? AND email_id = ?;
+
+deleteEmailBody:
+DELETE FROM email_body WHERE account_id = ? AND email_id = ?;

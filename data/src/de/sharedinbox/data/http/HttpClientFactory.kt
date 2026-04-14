@@ -6,6 +6,7 @@ import io.ktor.client.plugins.auth.*
 import io.ktor.client.plugins.auth.providers.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
+import io.ktor.client.plugins.sse.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 
@@ -38,5 +39,20 @@ fun createHttpClient(username: String, password: String): HttpClient = HttpClien
     install(HttpRequestRetry) {
         retryOnServerErrors(maxRetries = 2)
         exponentialDelay()
+    }
+}
+
+/** HTTP client with SSE plugin enabled — used by [AccountSyncManager]. */
+fun createSseHttpClient(username: String, password: String): HttpClient = HttpClient {
+    install(SSE)
+    install(Auth) {
+        basic {
+            credentials { BasicAuthCredentials(username = username, password = password) }
+            sendWithoutRequest { true }
+        }
+    }
+    install(Logging) {
+        logger = Logger.DEFAULT
+        level = LogLevel.NONE
     }
 }
