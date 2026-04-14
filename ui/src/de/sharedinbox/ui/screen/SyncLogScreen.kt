@@ -115,7 +115,7 @@ private fun SyncLogRow(entry: SyncLogEntry) {
                 )
                 if (!entry.detail.isNullOrBlank()) {
                     Text(
-                        text = entry.detail,
+                        text = entry.detail!!,
                         style = MaterialTheme.typography.bodySmall,
                         modifier =
                             Modifier
@@ -136,15 +136,11 @@ private fun SyncLogRow(entry: SyncLogEntry) {
 }
 
 private fun kotlin.time.Instant.formatLocal(): String {
-    // Convert kotlin.time.Instant → kotlinx.datetime via epoch millis
-    val kxInstant = kotlinx.datetime.Instant.fromEpochMilliseconds(toEpochMilliseconds())
-    val local = kxInstant.toLocalDateTime(TimeZone.currentSystemDefault())
-    return "%04d-%02d-%02d %02d:%02d:%02d".format(
-        local.year,
-        local.monthNumber,
-        local.dayOfMonth,
-        local.hour,
-        local.minute,
-        local.second,
-    )
+    val local = toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${local.year.toString().padStart(4, '0')}-" +
+        "${(local.month.ordinal + 1).toString().padStart(2, '0')}-" +
+        "${local.day.toString().padStart(2, '0')} " +
+        "${local.hour.toString().padStart(2, '0')}:" +
+        "${local.minute.toString().padStart(2, '0')}:" +
+        local.second.toString().padStart(2, '0')
 }

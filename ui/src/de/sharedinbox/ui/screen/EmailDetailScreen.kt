@@ -312,7 +312,10 @@ private fun formatSize(bytes: Long): String =
     when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> "${"%.1f".format(bytes / (1024.0 * 1024))} MB"
+        else -> {
+            val tenths = (bytes * 10L / (1024L * 1024L))
+            "${tenths / 10}.${tenths % 10} MB"
+        }
     }
 
 /** Strips HTML tags and decodes common entities to produce readable plain text. */
