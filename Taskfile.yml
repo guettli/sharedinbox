@@ -51,6 +51,16 @@ tasks:
         END=$(date +%s)
         echo "integration: $((END - START))s"
 
+  ios-compile:
+    desc: Cross-compile data+ui for iosX64 (catches KMP/Native errors on Linux)
+    deps: [_nix-check]
+    cmds:
+      - |
+        START=$(date +%s)
+        amper build -m data -m ui -p iosX64
+        END=$(date +%s)
+        echo "ios-compile: $((END - START))s"
+
   check:
-    desc: Full checks — lint + unit tests + integration tests in parallel (Stalwart required)
-    deps: [lint, test, integration]
+    desc: Full checks — lint + unit tests + integration tests + iOS compile in parallel (Stalwart required)
+    deps: [lint, test, integration, ios-compile]
