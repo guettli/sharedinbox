@@ -78,6 +78,11 @@ jobs:
           mkdir -p ~/.gradle/init.d
           cp gradle/init.d/remote-cache.init.gradle.kts ~/.gradle/init.d/
 
+      - name: Create local.properties for GitHub Packages credentials
+        run: |
+          echo "github.username=${{ github.actor }}" > local.properties
+          echo "github.token=${{ secrets.GITHUB_TOKEN }}" >> local.properties
+
       - name: Build iOS app
         run: amper build -m ios-app
         env:

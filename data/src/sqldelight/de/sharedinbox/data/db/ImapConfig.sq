@@ -1,0 +1,23 @@
+-- IMAP and SMTP connection parameters for an account.
+-- Present only for accounts that sync via IMAP/SMTP instead of (or in addition to) JMAP.
+--
+-- imap_security / smtp_security values match ImapSecurity / SmtpSecurity enum names:
+--   NONE | STARTTLS | TLS
+CREATE TABLE imap_config (
+    account_id    TEXT PRIMARY KEY REFERENCES account(id) ON DELETE CASCADE,
+    imap_host     TEXT NOT NULL,
+    imap_port     INTEGER NOT NULL DEFAULT 993,
+    imap_security TEXT NOT NULL DEFAULT 'TLS',
+    smtp_host     TEXT NOT NULL,
+    smtp_port     INTEGER NOT NULL DEFAULT 587,
+    smtp_security TEXT NOT NULL DEFAULT 'STARTTLS'
+);
+
+upsertImapConfig:
+INSERT OR REPLACE INTO imap_config VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectImapConfig:
+SELECT * FROM imap_config WHERE account_id = ?;
+
+deleteImapConfig:
+DELETE FROM imap_config WHERE account_id = ?;

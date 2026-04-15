@@ -50,6 +50,8 @@ class AccountAndCredentialsTest {
         assertEquals("urn:ietf:params:jmap:core", JmapCapability.CORE)
         assertEquals("urn:ietf:params:jmap:mail", JmapCapability.MAIL)
         assertEquals("urn:ietf:params:jmap:submission", JmapCapability.SUBMISSION)
+        assertEquals("urn:ietf:params:jmap:contacts", JmapCapability.CONTACTS)
+        assertEquals("urn:ietf:params:jmap:sieve", JmapCapability.SIEVE)
     }
 
     @Test

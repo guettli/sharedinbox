@@ -109,7 +109,17 @@ class JmapSerializationTest {
 
         val session = json.decodeFromString<JmapSession>(wireJson)
         assertEquals("alice@localhost", session.username)
+        assertEquals("http://localhost:8080/jmap/", session.apiUrl)
+        assertEquals("http://localhost:8080/jmap/download/{accountId}/{blobId}/{name}", session.downloadUrl)
+        assertEquals("http://localhost:8080/jmap/upload/{accountId}/", session.uploadUrl)
+        assertEquals("http://localhost:8080/jmap/eventsource/", session.eventSourceUrl)
+        assertEquals("state1", session.state)
+        assertEquals(emptyMap(), session.capabilities)
         assertEquals("A1", session.primaryAccounts[JmapCapability.MAIL])
-        assertEquals(true, session.accounts["A1"]?.isPersonal)
+        val account = session.accounts["A1"]!!
+        assertEquals("alice@localhost", account.name)
+        assertEquals(true, account.isPersonal)
+        assertEquals(false, account.isReadOnly)
+        assertEquals(emptyMap(), account.accountCapabilities)
     }
 }

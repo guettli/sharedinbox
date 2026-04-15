@@ -9,6 +9,7 @@ import de.sharedinbox.`data`.db.AccountQueries
 import de.sharedinbox.`data`.db.EmailBodyQueries
 import de.sharedinbox.`data`.db.EmailHeaderQueries
 import de.sharedinbox.`data`.db.ImageTrustQueries
+import de.sharedinbox.`data`.db.ImapConfigQueries
 import de.sharedinbox.`data`.db.MailboxQueries
 import de.sharedinbox.`data`.db.RecentAddressQueries
 import de.sharedinbox.`data`.db.SettingsQueries
@@ -35,6 +36,8 @@ private class SharedInboxDatabaseImpl(
   override val emailHeaderQueries: EmailHeaderQueries = EmailHeaderQueries(driver)
 
   override val imageTrustQueries: ImageTrustQueries = ImageTrustQueries(driver)
+
+  override val imapConfigQueries: ImapConfigQueries = ImapConfigQueries(driver)
 
   override val mailboxQueries: MailboxQueries = MailboxQueries(driver)
 
@@ -95,6 +98,17 @@ private class SharedInboxDatabaseImpl(
           |    account_id TEXT NOT NULL,
           |    email_id   TEXT NOT NULL,
           |    PRIMARY KEY (account_id, email_id)
+          |)
+          """.trimMargin(), 0)
+      driver.execute(null, """
+          |CREATE TABLE imap_config (
+          |    account_id    TEXT PRIMARY KEY REFERENCES account(id) ON DELETE CASCADE,
+          |    imap_host     TEXT NOT NULL,
+          |    imap_port     INTEGER NOT NULL DEFAULT 993,
+          |    imap_security TEXT NOT NULL DEFAULT 'TLS',
+          |    smtp_host     TEXT NOT NULL,
+          |    smtp_port     INTEGER NOT NULL DEFAULT 587,
+          |    smtp_security TEXT NOT NULL DEFAULT 'STARTTLS'
           |)
           """.trimMargin(), 0)
       driver.execute(null, """

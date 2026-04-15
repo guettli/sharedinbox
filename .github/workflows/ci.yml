@@ -40,6 +40,11 @@ jobs:
           path: ~/.amper
           key: amper-0.10.0-linux
 
+      - name: Create local.properties for GitHub Packages credentials
+        run: |
+          echo "github.username=${{ github.actor }}" > local.properties
+          echo "github.token=${{ secrets.GITHUB_TOKEN }}" >> local.properties
+
       - name: Compile iOS targets (catches KMP errors early)
         run: amper build -m data -m ui -p iosX64
 

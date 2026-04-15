@@ -114,6 +114,7 @@ public class AccountQueries(
       emit("account")
       emit("email_body")
       emit("email_header")
+      emit("imap_config")
       emit("mailbox")
       emit("recent_address")
       emit("state_token")
