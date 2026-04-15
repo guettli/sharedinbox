@@ -70,6 +70,16 @@ class EmailListViewModel(
 
     fun bulkMarkSpam() = bulkAction { accountId, emailId -> emailRepo.markAsSpam(accountId, emailId) }
 
+    fun swipeArchive(emailId: String) {
+        val p = _params.value ?: return
+        viewModelScope.launch { emailRepo.archiveEmail(p.accountId, emailId) }
+    }
+
+    fun swipeDelete(emailId: String) {
+        val p = _params.value ?: return
+        viewModelScope.launch { emailRepo.deleteEmail(p.accountId, emailId) }
+    }
+
     private fun bulkAction(action: suspend (accountId: String, emailId: String) -> Result<Unit>) {
         val p = _params.value ?: return
         val ids = selectedIds.toSet()

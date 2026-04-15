@@ -5,6 +5,8 @@ sealed interface Screen {
 
     data object AddAccount : Screen
 
+    data object AddImapSmtpAccount : Screen
+
     data object Settings : Screen
 
     data class MailboxList(

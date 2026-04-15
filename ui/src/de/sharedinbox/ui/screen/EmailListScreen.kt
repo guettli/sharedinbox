@@ -1,11 +1,13 @@
 package de.sharedinbox.ui.screen
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,14 +27,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -125,7 +133,7 @@ fun EmailListScreen(
                         LazyColumn(Modifier.fillMaxSize()) {
                             items(emails, key = { it.id }) { email ->
                                 val selected = email.id in vm.selectedIds
-                                EmailRow(
+                                SwipeableEmailRow(
                                     email = email,
                                     selected = selected,
                                     inSelectionMode = inSelection,
@@ -137,6 +145,8 @@ fun EmailListScreen(
                                         }
                                     },
                                     onLongClick = { vm.toggleSelection(email.id) },
+                                    onSwipeArchive = { vm.swipeArchive(email.id) },
+                                    onSwipeDelete = { vm.swipeDelete(email.id) },
                                 )
                                 HorizontalDivider()
                             }
@@ -155,6 +165,70 @@ fun EmailListScreen(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableEmailRow(
+    email: Email,
+    selected: Boolean,
+    inSelectionMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onSwipeArchive: () -> Unit,
+    onSwipeDelete: () -> Unit,
+) {
+    val dismissState = rememberSwipeToDismissBoxState()
+
+    LaunchedEffect(dismissState.currentValue) {
+        when (dismissState.currentValue) {
+            SwipeToDismissBoxValue.EndToStart -> {
+                onSwipeArchive()
+                dismissState.reset()
+            }
+            SwipeToDismissBoxValue.StartToEnd -> {
+                onSwipeDelete()
+                dismissState.reset()
+            }
+            SwipeToDismissBoxValue.Settled -> Unit
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val (bgColor, icon, alignment) =
+                when (dismissState.targetValue) {
+                    SwipeToDismissBoxValue.StartToEnd ->
+                        Triple(MaterialTheme.colorScheme.errorContainer, Icons.Default.Delete, Alignment.CenterStart)
+                    SwipeToDismissBoxValue.EndToStart ->
+                        Triple(MaterialTheme.colorScheme.secondaryContainer, Icons.Default.Refresh, Alignment.CenterEnd)
+                    SwipeToDismissBoxValue.Settled -> Triple(Color.Transparent, null, Alignment.CenterStart)
+                }
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(bgColor)
+                        .padding(horizontal = 20.dp),
+                contentAlignment = alignment,
+            ) {
+                if (icon != null) {
+                    Icon(icon, contentDescription = null)
+                }
+            }
+        },
+        enableDismissFromStartToEnd = !inSelectionMode,
+        enableDismissFromEndToStart = !inSelectionMode,
+    ) {
+        EmailRow(
+            email = email,
+            selected = selected,
+            inSelectionMode = inSelectionMode,
+            onClick = onClick,
+            onLongClick = onLongClick,
+        )
     }
 }
 

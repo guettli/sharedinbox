@@ -29,6 +29,22 @@ interface AccountRepository {
     ): Result<Account>
 
     /**
+     * Stores an IMAP+SMTP account locally (no JMAP discovery).
+     * Creates an account row with empty JMAP fields and an imap_config row.
+     */
+    suspend fun addImapSmtpAccount(
+        displayName: String,
+        username: String,
+        password: String,
+        imapHost: String,
+        imapPort: Int,
+        imapSecurity: String,
+        smtpHost: String,
+        smtpPort: Int,
+        smtpSecurity: String,
+    ): Result<Account>
+
+    /**
      * Removes the account and all its data (mailboxes, emails, state tokens)
      * via ON DELETE CASCADE. Also clears stored credentials.
      */
