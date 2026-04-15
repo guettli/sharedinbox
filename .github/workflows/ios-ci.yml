@@ -14,6 +14,8 @@ jobs:
       E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
       E2E_USER: ${{ secrets.E2E_USER }}
       E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+      GRADLE_CACHE_USER: ${{ secrets.GRADLE_CACHE_USER }}
+      GRADLE_CACHE_TOKEN: ${{ secrets.GRADLE_CACHE_TOKEN }}
 
     steps:
       - uses: actions/checkout@v6
@@ -46,8 +48,22 @@ jobs:
           key: gradle-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
           restore-keys: gradle-macos-
 
+      - name: Cache Kotlin/Native compiler
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
+          restore-keys: konan-macos-
+
+      - name: Configure Gradle remote build cache
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cp gradle/init.d/remote-cache.init.gradle.kts ~/.gradle/init.d/
+
       - name: Build iOS app
         run: amper build -m ios-app
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.caching=true"
 
       - name: Run E2E tests
         run: amper test -m data -p jvm --include-classes "de.sharedinbox.data.E2eRemoteIntegrationTest"
