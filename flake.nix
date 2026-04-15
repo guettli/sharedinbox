@@ -79,20 +79,13 @@
             export JAVA_HOME="${pkgs.temurin-bin-21}"
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-            # Assign a random Stalwart port the first time this repo is entered, and persist it
-            # in .env so it stays stable across sessions. Using a high port (50000-59999) avoids
-            # conflicts with system services. When the same repo is cloned twice, each clone gets
-            # its own port, so both can run Stalwart and the integration tests simultaneously.
-            # Assign a random Stalwart port the first time this repo is entered, and persist it
-            # in .env so it stays stable across sessions. Using a high port (50000-59999) avoids
-            # conflicts with system services. When the same repo is cloned twice, each clone gets
-            # its own port, so both can run Stalwart and the integration tests simultaneously.
-            if ! grep -qs '^STALWART_PORT=' .env 2>/dev/null; then
-              _port=$(( RANDOM % 10000 + 50000 ))
-              printf '# Per-clone Stalwart port — avoids conflicts when the repo is cloned more than once\n# on the same machine. Chosen on first "nix develop". Delete to regenerate.\nSTALWART_PORT=%s\n' "$_port" >> .env
-            fi
-            export STALWART_PORT=$(grep '^STALWART_PORT=' .env | cut -d= -f2)
+            # Stalwart integration tests now choose fresh random ports per run.
+            # The shell still exports defaults for convenience when starting the
+            # dev server manually via stalwart-dev/start.
+            export STALWART_PORT="''${STALWART_PORT:-0}"
             export STALWART_URL="http://localhost:$STALWART_PORT"
+            export STALWART_IMAP_PORT="''${STALWART_IMAP_PORT:-0}"
+            export STALWART_SMTP_PORT="''${STALWART_SMTP_PORT:-0}"
             export STALWART_USER_A="admin"
             export STALWART_PASS_A="admin"
             export STALWART_USER_B="alice"
@@ -100,7 +93,7 @@
             export STALWART_USER_C="bob"
             export STALWART_PASS_C="secret"
 
-            echo "SharedInbox dev environment ready (Stalwart port: $STALWART_PORT)."
+            echo "SharedInbox dev environment ready (Stalwart test ports are chosen automatically)."
             echo "  Check (fast)   : task check"
             echo "  Check (full)   : task check-full"
             echo "  Start Stalwart : stalwart-dev/start"

@@ -30,9 +30,18 @@ dependencies@iosX64:
   - io.ktor:ktor-client-darwin:3.4.2
   - app.cash.sqldelight:native-driver:2.3.2
 
+repositories:
+  - url: https://maven.pkg.github.com/guettli/kmp-mail
+    credentials:
+      file: ../local.properties
+      usernameKey: github.username
+      passwordKey: github.token
+
 dependencies@jvm:
   - io.ktor:ktor-client-cio:3.4.2
   - app.cash.sqldelight:sqlite-driver:2.3.2
+  - io.github.kmpmail:kmp-imap:0.1.1
+  - io.github.kmpmail:kmp-smtp:0.1.1
 
 test-dependencies:
   - org.jetbrains.kotlin:kotlin-test:2.3.20
