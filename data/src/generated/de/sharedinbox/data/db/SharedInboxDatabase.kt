@@ -17,6 +17,8 @@ public interface SharedInboxDatabase : Transacter {
 
   public val imageTrustQueries: ImageTrustQueries
 
+  public val imapConfigQueries: ImapConfigQueries
+
   public val mailboxQueries: MailboxQueries
 
   public val recentAddressQueries: RecentAddressQueries

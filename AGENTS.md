@@ -31,8 +31,8 @@ amper test -m core -p jvm
 stalwart-dev/test.sh
 ```
 
-Both commands must be run inside `nix develop` so `STALWART_PORT`, `STALWART_URL`,
-`STALWART_USER_A/B`, and `STALWART_PASS_A/B` are set.
+Both commands must be run inside `nix develop` so the Stalwart test accounts and
+helper environment are available. Integration tests choose fresh random ports automatically.
 
 ## Stalwart dev server
 

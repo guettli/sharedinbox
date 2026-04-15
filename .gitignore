@@ -1,6 +1,8 @@
+.claude
 .env
 .direnv
 build/
 .amper/
 .gradle/
 stalwart-dev/local.toml
+local.properties

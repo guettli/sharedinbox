@@ -16,6 +16,16 @@ id       = "jmap"
 bind     = ["127.0.0.1:8080"]
 protocol = "http"
 
+[[server.listener]]
+id       = "imap"
+bind     = ["127.0.0.1:1430"]
+protocol = "imap"
+
+[[server.listener]]
+id       = "smtp"
+bind     = ["127.0.0.1:1025"]
+protocol = "smtp"
+
 [store."db"]
 type = "sqlite"
 path = "/tmp/stalwart-dev/data.sqlite"

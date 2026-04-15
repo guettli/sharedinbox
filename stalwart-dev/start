@@ -1,21 +1,74 @@
 #!/usr/bin/env bash
-# Starts a per-clone Stalwart instance for local development and integration tests.
+# Starts a Stalwart instance for local development and integration tests.
 #
-# Reads STALWART_PORT from the environment (set by "nix develop" via .env).
-# Writes a config with the correct port and data dir into /tmp/stalwart-dev-PORT/
-# so two clones of this repo can run simultaneously without conflicting.
+# By default it uses STALWART_PORT from the environment. When STALWART_PORT=0
+# or STALWART_RANDOM_PORTS=1, three free random ports are chosen and written to
+# STALWART_TMPDIR/ports.env for other scripts to source.
 set -euo pipefail
 
-: "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
-command -v stalwart >/dev/null || { echo "stalwart not in PATH — run inside nix develop"; exit 1; }
+command -v stalwart >/dev/null || {
+    echo "stalwart not in PATH — run inside nix develop"
+    exit 1
+}
 
-TMPDIR="/tmp/stalwart-dev-${STALWART_PORT}"
+command -v ss >/dev/null || {
+    echo "ss not in PATH — cannot verify Stalwart ports"
+    exit 1
+}
+
+if [ "${STALWART_RANDOM_PORTS:-0}" = "1" ] || [ "${STALWART_PORT:-0}" = "0" ]; then
+    command -v python3 >/dev/null || {
+        echo "python3 not in PATH — cannot choose random Stalwart ports"
+        exit 1
+    }
+    read -r STALWART_PORT STALWART_IMAP_PORT STALWART_SMTP_PORT < <(
+        python3 - <<'PY'
+import socket
+ports = []
+for _ in range(3):
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    ports.append(str(sock.getsockname()[1]))
+    sock.close()
+print(" ".join(ports))
+PY
+    )
+else
+    : "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
+    STALWART_IMAP_PORT="${STALWART_IMAP_PORT:-$((STALWART_PORT + 1))}"
+    STALWART_SMTP_PORT="${STALWART_SMTP_PORT:-$((STALWART_PORT + 2))}"
+fi
+
+export STALWART_PORT STALWART_IMAP_PORT STALWART_SMTP_PORT
+export STALWART_URL="http://127.0.0.1:${STALWART_PORT}"
+
+TMPDIR="${STALWART_TMPDIR:-/tmp/stalwart-dev-${STALWART_PORT}}"
 mkdir -p "$TMPDIR"
+
+for port in "$STALWART_PORT" "$STALWART_IMAP_PORT" "$STALWART_SMTP_PORT"; do
+    ss -ltnH "sport = :$port" | grep -q . && {
+        echo "Stalwart port $port is already in use"
+        exit 1
+    }
+done
+
+cat >"${TMPDIR}/ports.env" <<EOF
+export STALWART_PORT=${STALWART_PORT}
+export STALWART_IMAP_PORT=${STALWART_IMAP_PORT}
+export STALWART_SMTP_PORT=${STALWART_SMTP_PORT}
+export STALWART_URL=${STALWART_URL}
+EOF
+
+echo "Stalwart ports: JMAP=${STALWART_PORT} IMAP=${STALWART_IMAP_PORT} SMTP=${STALWART_SMTP_PORT}" >&2
+echo "Stalwart is running in the foreground. Press Ctrl+C to stop." >&2
+echo "Connection info written to ${TMPDIR}/ports.env" >&2
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 sed -e "s|127.0.0.1:8080|127.0.0.1:${STALWART_PORT}|" \
+    -e "s|127.0.0.1:1430|127.0.0.1:${STALWART_IMAP_PORT}|" \
+    -e "s|127.0.0.1:1025|127.0.0.1:${STALWART_SMTP_PORT}|" \
     -e "s|/tmp/stalwart-dev|${TMPDIR}|" \
-    "${REPO_ROOT}/stalwart-dev/config.toml" > "${TMPDIR}/config.toml"
+    "${REPO_ROOT}/stalwart-dev/config.toml" >"${TMPDIR}/config.toml"
 
 exec stalwart --config "${TMPDIR}/config.toml"
