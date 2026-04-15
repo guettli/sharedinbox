@@ -33,20 +33,17 @@ jobs:
           chmod +x amper
           echo "$PWD" >> "$GITHUB_PATH"
 
-      - name: Cache Amper distribution
+      # On macOS, amper stores its distribution (CLI JAR + bundled JRE) and all
+      # downloaded toolchain artifacts under ~/Library/Caches/JetBrains/Amper.
+      # Caching this directory avoids re-downloading ~250 MB of K/N toolchain on
+      # every run. The key includes the dep hash so new dependencies trigger a
+      # fresh download while restore-keys fall back to the previous version.
+      - name: Cache Amper (distribution + downloads)
         uses: actions/cache@v5
         with:
-          path: ~/.amper
-          key: amper-0.10.0-macos
-
-      - name: Cache Gradle caches
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
-          restore-keys: gradle-macos-
+          path: ~/Library/Caches/JetBrains/Amper
+          key: amper-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
+          restore-keys: amper-macos-
 
       - name: Cache Kotlin/Native compiler
         uses: actions/cache@v5
@@ -54,24 +51,6 @@ jobs:
           path: ~/.konan
           key: konan-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
           restore-keys: konan-macos-
-
-      # Amper downloads Kotlin/Native prebuilt (~1.7 GB) and other toolchains here.
-      # Without this cache, every run re-downloads them from Maven Central.
-      - name: Cache Amper download cache
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/JetBrains/Amper/download.cache
-          key: amper-downloads-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
-          restore-keys: amper-downloads-macos-
-
-      # Xcode's incremental build artifacts. Without this, xcodebuild rebuilds
-      # everything from scratch on every run.
-      - name: Cache Xcode DerivedData
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Developer/Xcode/DerivedData
-          key: xcode-derived-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
-          restore-keys: xcode-derived-macos-
 
       - name: Configure Gradle remote build cache
         run: |
