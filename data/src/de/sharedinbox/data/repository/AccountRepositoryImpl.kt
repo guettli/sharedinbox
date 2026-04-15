@@ -70,6 +70,59 @@ class AccountRepositoryImpl(
             )
         }
 
+    override suspend fun addImapSmtpAccount(
+        displayName: String,
+        username: String,
+        password: String,
+        imapHost: String,
+        imapPort: Int,
+        imapSecurity: String,
+        smtpHost: String,
+        smtpPort: Int,
+        smtpSecurity: String,
+    ): Result<Account> =
+        runCatching {
+            val accountId = Uuid.random().toString()
+            val now = Clock.System.now().toEpochMilliseconds()
+            val name = displayName.ifBlank { username }
+
+            db.accountQueries.insertAccount(
+                id = accountId,
+                display_name = name,
+                base_url = imapHost,
+                username = username,
+                jmap_account_id = "",
+                api_url = "",
+                upload_url = "",
+                download_url = "",
+                event_source_url = "",
+                added_at = now,
+            )
+            db.imapConfigQueries.upsertImapConfig(
+                account_id = accountId,
+                imap_host = imapHost,
+                imap_port = imapPort.toLong(),
+                imap_security = imapSecurity,
+                smtp_host = smtpHost,
+                smtp_port = smtpPort.toLong(),
+                smtp_security = smtpSecurity,
+            )
+            tokenStore.saveCredentials(accountId, username, password)
+
+            Account(
+                id = accountId,
+                displayName = name,
+                baseUrl = imapHost,
+                username = username,
+                jmapAccountId = "",
+                apiUrl = "",
+                uploadUrl = "",
+                downloadUrl = "",
+                eventSourceUrl = "",
+                addedAt = now,
+            )
+        }
+
     override suspend fun removeAccount(accountId: String) {
         db.accountQueries.deleteAccount(accountId)
         tokenStore.clearCredentials(accountId)

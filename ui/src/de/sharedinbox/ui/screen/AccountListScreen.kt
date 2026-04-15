@@ -37,11 +37,33 @@ import de.sharedinbox.ui.viewmodel.AccountListViewModel
 @Composable
 fun AccountListScreen(
     onNavigateToAdd: () -> Unit,
+    onNavigateToAddImap: () -> Unit,
     onNavigateToMailboxes: (accountId: String) -> Unit,
     onNavigateToSettings: () -> Unit,
     vm: AccountListViewModel,
 ) {
     val accounts by vm.accounts.collectAsState()
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Add Account") },
+            text = { Text("Choose the protocol for the new account.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showAddDialog = false
+                    onNavigateToAdd()
+                }) { Text("JMAP") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAddDialog = false
+                    onNavigateToAddImap()
+                }) { Text("IMAP + SMTP") }
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -55,7 +77,7 @@ fun AccountListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onNavigateToAdd) {
+            FloatingActionButton(onClick = { showAddDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Add account")
             }
         },

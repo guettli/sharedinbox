@@ -36,11 +36,12 @@ class ContactsSerializationTest {
 
     @Test
     fun contactCard_full_roundTrip() {
-        val card = ContactCard(
-            id = "card2",
-            fullName = "Alice Smith",
-            emails = mapOf("work" to ContactEmail(address = "alice@example.com")),
-        )
+        val card =
+            ContactCard(
+                id = "card2",
+                fullName = "Alice Smith",
+                emails = mapOf("work" to ContactEmail(address = "alice@example.com")),
+            )
         val decoded = json.decodeFromString<ContactCard>(json.encodeToString(card))
         assertEquals("card2", decoded.id)
         assertEquals("Alice Smith", decoded.fullName)
@@ -50,14 +51,16 @@ class ContactsSerializationTest {
 
     @Test
     fun contactCard_multipleEmails() {
-        val card = ContactCard(
-            id = "card3",
-            fullName = "Bob",
-            emails = mapOf(
-                "home" to ContactEmail(address = "bob@home.example.com"),
-                "work" to ContactEmail(address = "bob@work.example.com"),
-            ),
-        )
+        val card =
+            ContactCard(
+                id = "card3",
+                fullName = "Bob",
+                emails =
+                    mapOf(
+                        "home" to ContactEmail(address = "bob@home.example.com"),
+                        "work" to ContactEmail(address = "bob@work.example.com"),
+                    ),
+            )
         assertEquals(2, card.emails.size)
     }
 

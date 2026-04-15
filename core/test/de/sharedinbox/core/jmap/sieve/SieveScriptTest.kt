@@ -20,12 +20,13 @@ class SieveScriptTest {
 
     @Test
     fun sieveScript_roundTrip() {
-        val script = SieveScript(
-            id = "sieve1",
-            name = "spam-filter",
-            blobId = "blob-abc",
-            isActive = true,
-        )
+        val script =
+            SieveScript(
+                id = "sieve1",
+                name = "spam-filter",
+                blobId = "blob-abc",
+                isActive = true,
+            )
         val decoded = json.decodeFromString<SieveScript>(json.encodeToString(script))
         assertEquals("sieve1", decoded.id)
         assertEquals("spam-filter", decoded.name)

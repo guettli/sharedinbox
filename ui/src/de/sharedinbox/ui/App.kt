@@ -13,6 +13,7 @@ import de.sharedinbox.ui.di.uiModule
 import de.sharedinbox.ui.navigation.Screen
 import de.sharedinbox.ui.screen.AccountListScreen
 import de.sharedinbox.ui.screen.AddAccountScreen
+import de.sharedinbox.ui.screen.AddImapSmtpAccountScreen
 import de.sharedinbox.ui.screen.ComposeScreen
 import de.sharedinbox.ui.screen.EmailDetailScreen
 import de.sharedinbox.ui.screen.EmailListScreen
@@ -23,6 +24,7 @@ import de.sharedinbox.ui.screen.SieveFilterScreen
 import de.sharedinbox.ui.screen.SyncLogScreen
 import de.sharedinbox.ui.viewmodel.AccountListViewModel
 import de.sharedinbox.ui.viewmodel.AddAccountViewModel
+import de.sharedinbox.ui.viewmodel.AddImapSmtpAccountViewModel
 import de.sharedinbox.ui.viewmodel.ComposeViewModel
 import de.sharedinbox.ui.viewmodel.EmailDetailViewModel
 import de.sharedinbox.ui.viewmodel.EmailListViewModel
@@ -73,6 +75,7 @@ private fun AppNavigation() {
         Screen.AccountList ->
             AccountListScreen(
                 onNavigateToAdd = { push(Screen.AddAccount) },
+                onNavigateToAddImap = { push(Screen.AddImapSmtpAccount) },
                 onNavigateToMailboxes = { accountId -> push(Screen.MailboxList(accountId)) },
                 onNavigateToSettings = { push(Screen.Settings) },
                 vm = accountListVm,
@@ -82,6 +85,12 @@ private fun AppNavigation() {
                 onSuccess = { pop() },
                 onCancel = { pop() },
                 vm = koinViewModel<AddAccountViewModel>(),
+            )
+        Screen.AddImapSmtpAccount ->
+            AddImapSmtpAccountScreen(
+                onSuccess = { pop() },
+                onCancel = { pop() },
+                vm = koinViewModel<AddImapSmtpAccountViewModel>(),
             )
         Screen.Settings ->
             SettingsScreen(

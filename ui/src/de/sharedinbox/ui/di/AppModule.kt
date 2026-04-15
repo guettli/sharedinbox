@@ -25,6 +25,7 @@ import de.sharedinbox.data.repository.SyncSettingsRepositoryImpl
 import de.sharedinbox.data.sync.AccountSyncManager
 import de.sharedinbox.ui.viewmodel.AccountListViewModel
 import de.sharedinbox.ui.viewmodel.AddAccountViewModel
+import de.sharedinbox.ui.viewmodel.AddImapSmtpAccountViewModel
 import de.sharedinbox.ui.viewmodel.ComposeViewModel
 import de.sharedinbox.ui.viewmodel.EmailDetailViewModel
 import de.sharedinbox.ui.viewmodel.EmailListViewModel
@@ -88,6 +89,7 @@ val uiModule =
     module {
         viewModelOf(::AccountListViewModel)
         viewModelOf(::AddAccountViewModel)
+        viewModelOf(::AddImapSmtpAccountViewModel)
         viewModelOf(::MailboxListViewModel)
         viewModelOf(::EmailListViewModel)
         viewModelOf(::EmailDetailViewModel)

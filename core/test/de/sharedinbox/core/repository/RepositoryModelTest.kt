@@ -11,7 +11,6 @@ import kotlin.test.assertNull
 import kotlin.time.Instant
 
 class RepositoryModelTest {
-
     // --- NetworkType ---
 
     @Test
@@ -66,12 +65,13 @@ class RepositoryModelTest {
 
     @Test
     fun recentAddress_construction() {
-        val addr = RecentAddress(
-            email = "alice@example.com",
-            name = "Alice",
-            useCount = 5,
-            lastUsedEpochMillis = 1_700_000_000_000L,
-        )
+        val addr =
+            RecentAddress(
+                email = "alice@example.com",
+                name = "Alice",
+                useCount = 5,
+                lastUsedEpochMillis = 1_700_000_000_000L,
+            )
         assertEquals("alice@example.com", addr.email)
         assertEquals("Alice", addr.name)
         assertEquals(5, addr.useCount)
@@ -119,19 +119,21 @@ class RepositoryModelTest {
 
     @Test
     fun syncHealth_withValues() {
-        val entry = SyncLogEntry(
-            id = 1L,
-            accountId = "acc1",
-            occurredAt = Instant.parse("2024-06-01T00:00:00Z"),
-            direction = SyncDirection.SERVER_TO_DB,
-            operation = "sync",
-            status = SyncStatus.ERROR,
-            detail = "timeout",
-        )
-        val health = SyncHealth(
-            lastSuccessAt = Instant.parse("2024-06-01T00:00:00Z"),
-            lastError = entry,
-        )
+        val entry =
+            SyncLogEntry(
+                id = 1L,
+                accountId = "acc1",
+                occurredAt = Instant.parse("2024-06-01T00:00:00Z"),
+                direction = SyncDirection.SERVER_TO_DB,
+                operation = "sync",
+                status = SyncStatus.ERROR,
+                detail = "timeout",
+            )
+        val health =
+            SyncHealth(
+                lastSuccessAt = Instant.parse("2024-06-01T00:00:00Z"),
+                lastError = entry,
+            )
         assertEquals(Instant.parse("2024-06-01T00:00:00Z"), health.lastSuccessAt)
         assertEquals(entry, health.lastError)
     }
