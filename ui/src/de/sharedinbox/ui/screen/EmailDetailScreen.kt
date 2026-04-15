@@ -325,4 +325,3 @@ private fun formatSize(bytes: Long): String =
             "${tenths / 10}.${tenths % 10} MB"
         }
     }
-

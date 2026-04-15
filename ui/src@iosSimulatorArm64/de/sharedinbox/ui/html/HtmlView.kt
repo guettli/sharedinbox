@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
-import platform.CoreGraphics.CGRectZero
+import platform.CoreGraphics.CGRectMake
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 
@@ -26,7 +26,7 @@ actual fun HtmlView(
     UIKitView(
         factory = {
             WKWebView(
-                frame = CGRectZero.readValue(),
+                frame = CGRectMake(0.0, 0.0, 0.0, 0.0),
                 configuration = WKWebViewConfiguration(),
             ).also { wv ->
                 // Disable WKWebView's own scroll; the Compose column handles scrolling
