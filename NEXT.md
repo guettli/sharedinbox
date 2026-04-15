@@ -1,14 +1,9 @@
-### CI for iOS App
-
-I can provide a stalwart URL with username and password, whih can send mails to itself.
 
 ---
 
 - **Swipe actions** (mobile) — swipe left = archive, swipe right = delete; configurable
 
 - **Avatar / contact photo** — show sender photo from contact book in email list
-
-- **Improved HTML rendering** — proper `WebView` instead of stripping tags
 
 ### Attachment sending
 - File picker in `ComposeScreen` — opens platform file chooser
