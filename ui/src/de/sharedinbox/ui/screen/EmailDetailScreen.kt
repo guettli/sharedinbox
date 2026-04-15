@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.unit.dp
+import de.sharedinbox.ui.html.HtmlView
 import de.sharedinbox.ui.navigation.Screen
 import de.sharedinbox.ui.viewmodel.EmailDetailViewModel
 
@@ -207,8 +208,15 @@ fun EmailDetailScreen(
                     if (hasImages && !vm.imagesAllowed) {
                         ImagesBanner(onLoadImages = { vm.allowImages() })
                     }
-                    val displayBody = textBody ?: htmlBody?.let { htmlToPlainText(it) } ?: "(no body)"
-                    Text(displayBody, style = MaterialTheme.typography.bodyMedium)
+                    if (htmlBody != null) {
+                        HtmlView(
+                            html = htmlBody,
+                            blockNetworkImages = !vm.imagesAllowed,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        Text(textBody ?: "(no body)", style = MaterialTheme.typography.bodyMedium)
+                    }
                     if (vm.inlineImages.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
                         InlineImagesSection(vm.inlineImages)
@@ -318,31 +326,3 @@ private fun formatSize(bytes: Long): String =
         }
     }
 
-/** Strips HTML tags and decodes common entities to produce readable plain text. */
-private fun htmlToPlainText(html: String): String {
-    // Block-level tags → newline before content
-    val blockTags = Regex("<(br|p|div|tr|li|h[1-6])(\\s[^>]*)?/?>", RegexOption.IGNORE_CASE)
-    // Strip all remaining tags
-    val anyTag = Regex("<[^>]+>")
-    // Common HTML entities
-    val entities =
-        mapOf(
-            "&amp;" to "&",
-            "&lt;" to "<",
-            "&gt;" to ">",
-            "&quot;" to "\"",
-            "&apos;" to "'",
-            "&nbsp;" to " ",
-            "&#39;" to "'",
-            "&#160;" to " ",
-        )
-    var text = html
-    text = blockTags.replace(text, "\n")
-    text = anyTag.replace(text, "")
-    for ((entity, replacement) in entities) {
-        text = text.replace(entity, replacement, ignoreCase = true)
-    }
-    // Collapse runs of blank lines to at most two
-    text = Regex("\n{3,}").replace(text, "\n\n")
-    return text.trim()
-}
