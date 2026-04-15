@@ -55,6 +55,24 @@ jobs:
           key: konan-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
           restore-keys: konan-macos-
 
+      # Amper downloads Kotlin/Native prebuilt (~1.7 GB) and other toolchains here.
+      # Without this cache, every run re-downloads them from Maven Central.
+      - name: Cache Amper download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/JetBrains/Amper/download.cache
+          key: amper-downloads-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
+          restore-keys: amper-downloads-macos-
+
+      # Xcode's incremental build artifacts. Without this, xcodebuild rebuilds
+      # everything from scratch on every run.
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: xcode-derived-macos-${{ hashFiles('**/module.yaml', 'libs.versions.toml') }}
+          restore-keys: xcode-derived-macos-
+
       - name: Configure Gradle remote build cache
         run: |
           mkdir -p ~/.gradle/init.d
