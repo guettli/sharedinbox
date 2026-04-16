@@ -11,6 +11,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.accountId,
     this.replyToEmailId,
     this.prefillTo,
+    this.prefillCc,
     this.prefillSubject,
     this.prefillBody,
   });
@@ -18,6 +19,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? accountId;
   final String? replyToEmailId;
   final String? prefillTo;
+  final String? prefillCc;
   final String? prefillSubject;
   final String? prefillBody;
 
@@ -37,6 +39,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   void initState() {
     super.initState();
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
+    if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;

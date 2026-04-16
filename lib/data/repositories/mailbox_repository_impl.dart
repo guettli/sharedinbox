@@ -29,18 +29,33 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final password = await _accounts.getPassword(accountId);
     final client = await connectImap(account, password);
     try {
-      final response = await client.listMailboxes();
-      for (final mb in response.mailboxes ?? const <imap.Mailbox>[]) {
-        final path = mb.path ?? mb.name;
+      // listMailboxes() returns List<imap.Mailbox>
+      final mailboxes = await client.listMailboxes(recursive: true);
+      for (final mb in mailboxes) {
+        final path = mb.path;
         final id = '${accountId}:$path';
+
+        // Fetch STATUS (unread + total counts) for each mailbox.
+        // Suppress errors — some mailboxes (e.g. \Noselect) can't be selected.
+        int unread = 0;
+        int total = 0;
+        try {
+          final status = await client.statusMailbox(
+            mb,
+            [imap.StatusFlags.messages, imap.StatusFlags.unseen],
+          );
+          unread = status.messagesUnseen;
+          total = status.messagesExists;
+        } catch (_) {}
+
         await _db.into(_db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
                 id: id,
                 accountId: accountId,
                 path: path,
                 name: mb.name,
-                unreadCount: Value(mb.messagesUnseen ?? 0),
-                totalCount: Value(mb.messagesExists ?? 0),
+                unreadCount: Value(unread),
+                totalCount: Value(total),
               ),
             );
       }

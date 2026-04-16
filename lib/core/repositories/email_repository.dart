@@ -2,6 +2,7 @@ import '../models/email.dart';
 
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(String accountId, String mailboxPath);
+  Future<Email?> getEmail(String emailId);
   Future<EmailBody> getEmailBody(String emailId);
   Future<void> syncEmails(String accountId, String mailboxPath);
   Future<void> setFlag(

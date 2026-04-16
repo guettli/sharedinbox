@@ -9,7 +9,7 @@ import '../repositories/mailbox_repository.dart';
 import '../../data/imap/imap_client_factory.dart';
 
 /// Manages one IMAP IDLE connection per account.
-/// On new message notification it triggers a sync and notifies listeners.
+/// On a new-message notification it triggers a re-sync then goes back to IDLE.
 class AccountSyncManager {
   AccountSyncManager(this._accounts, this._mailboxes, this._emails);
 
@@ -18,32 +18,32 @@ class AccountSyncManager {
   final EmailRepository _emails;
 
   final Map<String, _AccountSync> _active = {};
+  StreamSubscription<List<Account>>? _accountsSub;
 
-  Future<void> start() async {
-    _accounts.observeAccounts().listen((accounts) {
-      final ids = accounts.map((a) => a.id).toSet();
-      // Start new
+  void start() {
+    _accountsSub = _accounts.observeAccounts().listen((accounts) {
+      final currentIds = accounts.map((a) => a.id).toSet();
+
+      // Start sync for newly added accounts.
       for (final account in accounts) {
         if (!_active.containsKey(account.id)) {
-          _start(account);
+          final sync = _AccountSync(account, _accounts, _mailboxes, _emails);
+          _active[account.id] = sync;
+          sync.start();
         }
       }
-      // Stop removed
+
+      // Stop sync for removed accounts.
       for (final id in _active.keys.toList()) {
-        if (!ids.contains(id)) {
+        if (!currentIds.contains(id)) {
           _active.remove(id)?.stop();
         }
       }
     });
   }
 
-  void _start(Account account) {
-    final sync = _AccountSync(account, _accounts, _mailboxes, _emails);
-    _active[account.id] = sync;
-    sync.start();
-  }
-
   void dispose() {
+    _accountsSub?.cancel();
     for (final s in _active.values) {
       s.stop();
     }
@@ -97,21 +97,36 @@ class _AccountSync {
     final password = await _accounts.getPassword(account.id);
     final client = await connectImap(account, password);
     _idleClient = client;
-    await client.selectMailboxByPath('INBOX');
-    final idleDone = Completer<void>();
-    await client.idleStart();
-    client.eventBus
-        .on<imap.ImapEvent>()
-        .where((e) => e is imap.ImapMessagesExistEvent)
-        .first
-        .then((_) => idleDone.complete());
-    // Stop idle after 25 minutes to stay within server limits
-    Future.delayed(const Duration(minutes: 25)).then((_) {
-      if (!idleDone.isCompleted) idleDone.complete();
-    });
-    await idleDone.future;
-    await client.idleDone();
-    await client.logout();
-    _idleClient = null;
+    try {
+      await client.selectMailboxByPath('INBOX');
+
+      final newMessageCompleter = Completer<void>();
+
+      // Wake up when new messages arrive or messages are expunged.
+      final sub = client.eventBus
+          .on<imap.ImapEvent>()
+          .where(
+            (e) =>
+                e is imap.ImapMessagesExistEvent ||
+                e is imap.ImapExpungeEvent,
+          )
+          .listen((_) {
+        if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
+      });
+
+      await client.idleStart();
+
+      // Cap IDLE at 25 minutes to stay within the RFC 2177 recommendation.
+      await Future.any([
+        newMessageCompleter.future,
+        Future.delayed(const Duration(minutes: 25)),
+      ]);
+
+      await client.idleDone();
+      await sub.cancel();
+    } finally {
+      await client.logout();
+      _idleClient = null;
+    }
   }
 }

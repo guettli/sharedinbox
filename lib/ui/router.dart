@@ -51,6 +51,7 @@ final router = GoRouter(
           accountId: extra?['accountId'] as String?,
           replyToEmailId: extra?['replyToEmailId'] as String?,
           prefillTo: extra?['prefillTo'] as String?,
+          prefillCc: extra?['prefillCc'] as String?,
           prefillSubject: extra?['prefillSubject'] as String?,
           prefillBody: extra?['prefillBody'] as String?,
         );

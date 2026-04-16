@@ -8,14 +8,23 @@ void main() {
   runApp(const ProviderScope(child: SharedInboxApp()));
 }
 
-class SharedInboxApp extends ConsumerWidget {
+class SharedInboxApp extends ConsumerStatefulWidget {
   const SharedInboxApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Start background sync
-    ref.watch(syncManagerProvider).start();
+  ConsumerState<SharedInboxApp> createState() => _SharedInboxAppState();
+}
 
+class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Start background IMAP sync once — runs for the lifetime of the app.
+    ref.read(syncManagerProvider).start();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'SharedInbox',
       theme: ThemeData(

@@ -9,12 +9,6 @@ class AccountListScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final accountsAsync = ref.watch(
-      accountRepositoryProvider.select(
-        (r) => r.observeAccounts(),
-      ).stream,
-    );
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('SharedInbox'),
@@ -28,7 +22,9 @@ class AccountListScreen extends ConsumerWidget {
       body: StreamBuilder(
         stream: ref.watch(accountRepositoryProvider).observeAccounts(),
         builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
           final accounts = snap.data!;
           if (accounts.isEmpty) {
             return Center(
@@ -54,8 +50,7 @@ class AccountListScreen extends ConsumerWidget {
                 leading: const Icon(Icons.account_circle),
                 title: Text(a.displayName),
                 subtitle: Text(a.email),
-                onTap: () =>
-                    context.push('/accounts/${a.id}/mailboxes'),
+                onTap: () => context.push('/accounts/${a.id}/mailboxes'),
               );
             },
           );
