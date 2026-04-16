@@ -7,7 +7,7 @@
 import 'dart:io';
 
 // Minimum line-hit percentage across all measured (non-excluded) files.
-const _minCoveragePercent = 70;
+const _minCoveragePercent = 85;
 
 // Pure-abstract interfaces: no executable code, Dart VM never instruments them.
 const _noCode = {
@@ -29,13 +29,10 @@ const _excluded = {
   'lib/di.dart',
   'lib/main.dart',
   'lib/ui/router.dart',
-  'lib/ui/screens/account_list_screen.dart',
+  // Screens below the 70% gate — covered by widget tests but not yet fully:
   'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/compose_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
-  'lib/ui/screens/email_list_screen.dart',
-  'lib/ui/screens/mailbox_list_screen.dart',
-  'lib/ui/screens/settings_screen.dart',
 };
 
 void main() {

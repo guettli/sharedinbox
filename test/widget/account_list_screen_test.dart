@@ -83,6 +83,49 @@ void main() {
       expect(find.text('Settings'), findsOneWidget);
     });
 
+    testWidgets(
+        '"Add account" button in empty state navigates to add-account screen',
+        (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository()),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Add account'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Display name'), findsOneWidget);
+    });
+
+    testWidgets('tapping an account tile navigates to its mailboxes',
+        (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository([kTestMailbox])),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('INBOX'), findsWidgets);
+    });
+
     testWidgets('tapping FAB navigates to add-account screen', (tester) async {
       await tester.pumpWidget(buildApp(
         initialLocation: '/accounts',

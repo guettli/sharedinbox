@@ -28,11 +28,11 @@ jobs:
       - name: Analyze
         run: flutter analyze --fatal-infos
 
-      - name: Unit tests
-        run: flutter test test/unit/ --coverage
+      - name: Unit + widget tests with coverage
+        run: flutter test test/unit/ test/widget/ --coverage
 
-      - name: Widget tests
-        run: flutter test test/widget/
+      - name: Coverage gate
+        run: dart run scripts/check_coverage.dart
 
   integration:
     name: Integration tests (Stalwart)

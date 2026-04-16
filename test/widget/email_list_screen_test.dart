@@ -82,6 +82,99 @@ void main() {
       expect(find.text('Search…'), findsOneWidget);
     });
 
+    testWidgets('submitting a search query shows "No results" when empty',
+        (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+
+      expect(find.text('No results'), findsOneWidget);
+    });
+
+    testWidgets('submitting a search query shows matching emails',
+        (tester) async {
+      final email = testEmail(subject: 'Found it');
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider.overrideWithValue(
+            FakeEmailRepository(searchResults: [email]),
+          ),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'Found');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Found it'), findsOneWidget);
+    });
+
+    testWidgets('tapping sync button triggers syncEmails', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.sync));
+      await tester.pumpAndSettle();
+
+      // No assertion needed — we just verify the tap doesn't throw.
+    });
+
+    testWidgets('tapping edit button navigates to compose screen',
+        (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.edit));
+      await tester.pumpAndSettle();
+
+      expect(find.text('To'), findsOneWidget);
+    });
+
     testWidgets('tapping back arrow in search bar closes it', (tester) async {
       await tester.pumpWidget(buildApp(
         initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',

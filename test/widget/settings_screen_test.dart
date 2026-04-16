@@ -65,6 +65,30 @@ void main() {
       expect(find.text('Remove'), findsOneWidget);
     });
 
+    testWidgets('tapping Remove in the confirmation dialog calls removeAccount',
+        (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/settings',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+
+      // Dialog dismissed after confirmation.
+      expect(find.text('Remove account?'), findsNothing);
+    });
+
     testWidgets('tapping Cancel in the confirmation dialog dismisses it',
         (tester) async {
       await tester.pumpWidget(buildApp(

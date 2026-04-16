@@ -74,12 +74,16 @@ class FakeEmailRepository implements EmailRepository {
   final Email? _emailDetail;
   final EmailBody _emailBody;
 
+  final List<Email> _searchResults;
+
   FakeEmailRepository({
     List<Email>? emails,
     Email? emailDetail,
     EmailBody? emailBody,
+    List<Email>? searchResults,
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
+        _searchResults = searchResults ?? [],
         _emailBody =
             emailBody ?? const EmailBody(emailId: '', attachments: []);
 
@@ -114,7 +118,7 @@ class FakeEmailRepository implements EmailRepository {
     String mailboxPath,
     String query,
   ) async =>
-      [];
+      _searchResults;
 }
 
 // ---------------------------------------------------------------------------
