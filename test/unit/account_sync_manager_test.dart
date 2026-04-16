@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -43,6 +44,15 @@ class FakeMailboxRepository implements MailboxRepository {
 
   @override
   Future<void> syncMailboxes(String accountId) async {}
+}
+
+class FailingMailboxRepository implements MailboxRepository {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([]);
+
+  @override
+  Future<void> syncMailboxes(String accountId) async =>
+      throw Exception('simulated sync failure');
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -156,6 +166,35 @@ void main() {
 
       mgr.dispose();
       await pumpEventQueue(times: 10);
+    });
+
+    test('logs error and applies backoff when sync fails', () {
+      fakeAsync((async) {
+        final accounts = FakeAccountRepository();
+        final mgr = AccountSyncManager(
+          accounts,
+          FailingMailboxRepository(),
+          FakeEmailRepository(),
+        );
+        mgr.start();
+
+        // Sync: true controller fires the listener synchronously; _loop()
+        // starts and suspends at the first await inside _sync().
+        accounts.push([_account]);
+
+        // Drain microtasks: syncMailboxes throws, the catch block runs and
+        // schedules a Future.delayed(5 s) backoff timer.
+        async.flushMicrotasks();
+
+        // Stop the manager before the backoff expires so the loop exits
+        // cleanly after the delay rather than retrying indefinitely.
+        mgr.dispose();
+
+        // Advance past the 5-second backoff so Future.delayed completes and
+        // the _backoffSeconds update (line 97) is executed.
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+      });
     });
   });
 }

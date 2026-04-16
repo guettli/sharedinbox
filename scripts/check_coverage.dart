@@ -2,17 +2,23 @@
 // Checks that every non-excluded lib/ source file appears in coverage/lcov.info.
 // Run after: flutter test test/unit/ --coverage
 //
-// To exclude a file add its lib-relative path to [excluded] below.
+// To exclude a file add its lib-relative path to [_excluded] below.
 
 import 'dart:io';
+
+// Minimum line-hit percentage across all measured (non-excluded) files.
+const _minCoveragePercent = 70;
+
+// Pure-abstract interfaces: no executable code, Dart VM never instruments them.
+const _noCode = {
+  'lib/core/repositories/account_repository.dart',
+  'lib/core/repositories/email_repository.dart',
+  'lib/core/repositories/mailbox_repository.dart',
+};
 
 // Files excluded from the unit-coverage gate because they require integration
 // or widget tests (covered by `task integration` / `task test-flutter`).
 const _excluded = {
-  // Abstract interfaces — no executable code; Dart VM never instruments them.
-  'lib/core/repositories/account_repository.dart',
-  'lib/core/repositories/email_repository.dart',
-  'lib/core/repositories/mailbox_repository.dart',
   // Data layer — requires Drift/SQLite, IMAP/SMTP network connections.
   'lib/data/db/database.dart',
   'lib/data/imap/imap_client_factory.dart',
@@ -47,7 +53,7 @@ void main() {
       .whereType<File>()
       .where((f) => f.path.endsWith('.dart') && !f.path.endsWith('.g.dart'))
       .map((f) => f.path.replaceFirst('./', ''))
-      .where((p) => !_excluded.contains(p))
+      .where((p) => !_excluded.contains(p) && !_noCode.contains(p))
       .toList()
     ..sort();
 
@@ -64,16 +70,34 @@ void main() {
     exit(1);
   }
 
+  // Compute line-hit percentage, skipping excluded files so their 0% lines
+  // don't distort the number for genuinely tested code.
+  String? currentSf;
   int total = 0, hits = 0;
   for (final line in lcovFile.readAsLinesSync()) {
-    if (!line.startsWith('DA:')) continue;
-    final count = int.parse(line.substring(3).split(',')[1]);
-    total++;
-    if (count > 0) hits++;
+    if (line.startsWith('SF:')) {
+      currentSf = line.substring(3);
+    } else if (line.startsWith('DA:') &&
+        currentSf != null &&
+        !_excluded.contains(currentSf)) {
+      final count = int.parse(line.substring(3).split(',')[1]);
+      total++;
+      if (count > 0) hits++;
+    }
   }
   final pct = total > 0 ? (hits * 100 ~/ total) : 0;
+  final measuredCount =
+      measuredFiles.where((f) => !_excluded.contains(f)).length;
   stdout.writeln(
-    'coverage: $pct% across ${measuredFiles.length} measured files'
-    ' (${_excluded.length} excluded — see scripts/check_coverage.dart)',
+    'coverage: $pct% across $measuredCount measured files'
+    ' (${_excluded.length} integration-excluded, ${_noCode.length} no-code'
+    ' — see scripts/check_coverage.dart)',
   );
+
+  if (pct < _minCoveragePercent) {
+    stderr.writeln(
+      'ERROR: coverage $pct% is below the required $_minCoveragePercent%.',
+    );
+    exit(1);
+  }
 }

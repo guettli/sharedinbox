@@ -136,5 +136,35 @@ void main() {
       expect(draft.to, hasLength(1));
       expect(draft.cc, isEmpty);
     });
+
+    test('runtime construction stores all fields', () {
+      // Use a non-const list so the constructor runs at runtime and is
+      // instrumented by the coverage tool.
+      final to = [const EmailAddress(email: 'you@example.com')];
+      final draft = EmailDraft(
+        from: const EmailAddress(name: 'Me', email: 'me@example.com'),
+        to: to,
+        cc: const [],
+        subject: 'Hi',
+        body: 'There',
+      );
+      expect(draft.from.email, 'me@example.com');
+      expect(draft.body, 'There');
+    });
+  });
+
+  group('EmailAttachment', () {
+    test('runtime construction stores all fields', () {
+      // Non-const construction so the constructor is instrumented.
+      final filename = 'report.pdf';
+      final att = EmailAttachment(
+        filename: filename,
+        contentType: 'application/pdf',
+        size: 2048,
+      );
+      expect(att.filename, 'report.pdf');
+      expect(att.contentType, 'application/pdf');
+      expect(att.size, 2048);
+    });
   });
 }
