@@ -1,8 +1,9 @@
 version: "3"
+silent: true
 
 tasks:
   default:
-    desc: Run all checks (analyze + unit tests, in parallel)
+    desc: Run all checks (analyze + unit tests + integration, in parallel)
     deps: [check]
 
   _nix-check:
@@ -23,21 +24,13 @@ tasks:
     desc: Generate Drift DB code (run after any schema change)
     deps: [_nix-check]
     cmds:
-      - |
-        START=$(date +%s)
-        flutter pub run build_runner build --delete-conflicting-outputs
-        END=$(date +%s)
-        echo "codegen: $((END - START))s"
+      - flutter pub run build_runner build --delete-conflicting-outputs
 
   analyze:
-    desc: Static analysis with flutter analyze + analysis_options.yaml rules
+    desc: Static analysis (flutter analyze)
     deps: [_nix-check]
     cmds:
-      - |
-        START=$(date +%s)
-        flutter analyze
-        END=$(date +%s)
-        echo "analyze: $((END - START))s"
+      - scripts/run_analyze.sh
 
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply
@@ -46,53 +39,28 @@ tasks:
       - dart fix --apply
 
   test:
-    desc: Run unit tests (no device needed) and enforce ≥100% line coverage
+    desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
     deps: [_nix-check]
-    vars:
-      COVERAGE_THRESHOLD: "100"
     cmds:
-      - |
-        START=$(date +%s)
-        flutter test test/unit/ --coverage
-        END=$(date +%s)
-        echo "test: $((END - START))s"
-      - |
-        COVERED=$(awk '/^DA:/{split($0,a,":");split(a[2],b,",");t++;if(b[2]>0)h++} END{printf "%d", (t>0 ? int(h*100/t) : 0)}' coverage/lcov.info)
-        echo "coverage: ${COVERED}% (threshold: {{.COVERAGE_THRESHOLD}}%)"
-        if [ "${COVERED}" -lt "{{.COVERAGE_THRESHOLD}}" ]; then
-          echo "ERROR: coverage ${COVERED}% is below threshold {{.COVERAGE_THRESHOLD}}%"
-          exit 1
-        fi
+      - scripts/run_unit_tests.sh
 
   test-flutter:
-    desc: Run Flutter widget tests
+    desc: Flutter widget tests
     deps: [_nix-check]
     cmds:
-      - |
-        START=$(date +%s)
-        flutter test
-        END=$(date +%s)
-        echo "flutter test: $((END - START))s"
+      - flutter test
 
   integration:
-    desc: Run integration tests (starts and stops Stalwart automatically)
+    desc: Integration tests against a local Stalwart mail server
     deps: [_nix-check]
     cmds:
-      - |
-        START=$(date +%s)
-        stalwart-dev/test.sh
-        END=$(date +%s)
-        echo "integration: $((END - START))s"
+      - stalwart-dev/test.sh
 
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
     deps: [_nix-check]
     cmds:
-      - |
-        START=$(date +%s)
-        flutter build apk --release
-        END=$(date +%s)
-        echo "build-android: $((END - START))s"
+      - flutter build apk --release
 
   run:
     desc: Run the app on Linux desktop
@@ -101,5 +69,5 @@ tasks:
       - flutter run -d linux
 
   check:
-    desc: All fast checks — analyze + unit tests in parallel
+    desc: All fast checks — analyze + unit tests + integration in parallel
     deps: [analyze, test, integration]

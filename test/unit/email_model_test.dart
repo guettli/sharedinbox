@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:test/test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+// Import the abstract interface so it appears in coverage.
+import 'package:sharedinbox/core/repositories/email_repository.dart'; // ignore: unused_import
 
 // Mirrors the encoding logic in EmailRepositoryImpl so we can test it
 // independently without spinning up a database.
