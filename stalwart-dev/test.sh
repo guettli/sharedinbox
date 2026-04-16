@@ -53,8 +53,8 @@ echo "Stalwart ready — IMAP=:${STALWART_IMAP_PORT}  SMTP=:${STALWART_SMTP_PORT
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Export vars so dart test can read them.
+# Export vars so flutter test can read them.
 export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
 
-dart test test/integration/
+flutter test test/integration/
