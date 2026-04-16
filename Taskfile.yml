@@ -18,7 +18,7 @@ tasks:
     cmds:
       - |
         START=$(date +%s)
-        dart run build_runner build --delete-conflicting-outputs
+        flutter pub run build_runner build --delete-conflicting-outputs
         END=$(date +%s)
         echo "codegen: $((END - START))s"
 
@@ -39,12 +39,12 @@ tasks:
       - dart fix --apply
 
   test:
-    desc: Run pure-Dart unit tests (no device needed)
+    desc: Run unit tests (no device needed)
     deps: [_nix-check]
     cmds:
       - |
         START=$(date +%s)
-        dart test test/unit/
+        flutter test test/unit/
         END=$(date +%s)
         echo "test: $((END - START))s"
 
