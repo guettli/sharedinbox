@@ -30,7 +30,6 @@ UI never touches the network. The sync layer runs independently.
 
 ## Next candidates
 
-- Search (IMAP `SEARCH` command)
 - Thread view (group by `References` / `In-Reply-To`)
 - Attachment download + open
 - Draft auto-save

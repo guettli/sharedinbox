@@ -238,6 +238,65 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  @override
+  Future<List<model.Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query,
+  ) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    final client = await connectImap(account, password);
+    try {
+      await client.selectMailboxByPath(mailboxPath);
+      final escaped = query.replaceAll('"', '\\"');
+      final result = await client.uidSearchMessages(
+        searchCriteria: 'OR SUBJECT "$escaped" TEXT "$escaped"',
+      );
+      final uids = result.matchingSequence?.toList() ?? [];
+      if (uids.isEmpty) return [];
+
+      final fetch = await client.fetchMessages(
+        imap.MessageSequence.fromIds(uids, isUid: true),
+        '(UID FLAGS ENVELOPE)',
+      );
+      return fetch.messages
+          .where((msg) => msg.uid != null && msg.envelope != null)
+          .map((msg) {
+        final envelope = msg.envelope!;
+        final uid = msg.uid!;
+        final emailId = '$accountId:$uid';
+        return model.Email(
+          id: emailId,
+          accountId: accountId,
+          mailboxPath: mailboxPath,
+          uid: uid,
+          subject: envelope.subject,
+          sentAt: envelope.date,
+          receivedAt: envelope.date ?? DateTime.now(),
+          from: _toAddressList(envelope.from),
+          to: _toAddressList(envelope.to),
+          cc: _toAddressList(envelope.cc),
+          isSeen: msg.flags?.contains(r'\Seen') ?? false,
+          isFlagged: msg.flags?.contains(r'\Flagged') ?? false,
+          hasAttachment: msg.hasAttachments(),
+        );
+      }).toList();
+    } finally {
+      await client.logout();
+    }
+  }
+
+  List<model.EmailAddress> _toAddressList(List<imap.MailAddress>? addresses) =>
+      (addresses ?? const [])
+          .map(
+            (a) => model.EmailAddress(
+              name: a.personalName,
+              email: a.email,
+            ),
+          )
+          .toList();
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(

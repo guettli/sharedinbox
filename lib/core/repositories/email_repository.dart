@@ -13,4 +13,12 @@ abstract class EmailRepository {
   Future<void> moveEmail(String emailId, String destMailboxPath);
   Future<void> deleteEmail(String emailId);
   Future<void> sendEmail(String accountId, EmailDraft draft);
+
+  /// Returns emails in [mailboxPath] whose subject or body contain [query].
+  /// Results come from the server (IMAP SEARCH) and are not cached.
+  Future<List<Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query,
+  );
 }
