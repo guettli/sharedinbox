@@ -71,18 +71,6 @@
             # Disable Flutter telemetry inside dev shell
             export FLUTTER_SUPPRESS_ANALYTICS=true
 
-            # Stalwart integration tests choose fresh random ports per run.
-            export STALWART_PORT="''${STALWART_PORT:-0}"
-            export STALWART_URL="http://localhost:$STALWART_PORT"
-            export STALWART_IMAP_PORT="''${STALWART_IMAP_PORT:-0}"
-            export STALWART_SMTP_PORT="''${STALWART_SMTP_PORT:-0}"
-            export STALWART_USER_A="admin"
-            export STALWART_PASS_A="admin"
-            export STALWART_USER_B="alice"
-            export STALWART_PASS_B="secret"
-            export STALWART_USER_C="bob"
-            export STALWART_PASS_C="secret"
-
             echo "SharedInbox Flutter dev environment ready."
             echo "  Analyze        : task analyze"
             echo "  Unit tests     : task test"

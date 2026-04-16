@@ -4,6 +4,8 @@
 set -Eeuo pipefail
 trap 'echo "Warning: A command failed ($0:$LINENO)"; exit 3' ERR
 
+export STALWART_USER_B="${STALWART_USER_B:-alice}"
+export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
 export STALWART_USER_C="${STALWART_USER_C:-bob}"
 export STALWART_PASS_C="${STALWART_PASS_C:-secret}"
 export STALWART_RANDOM_PORTS=1
