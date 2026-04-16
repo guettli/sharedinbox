@@ -146,6 +146,9 @@ test/
 - **Email detail** — renders plain text; falls back to HTML→plain conversion; marks as read on open; shows attachment names and sizes
 - **Reply / Reply all** — pre-fills To, Subject (`Re:`), Cc from original
 - **Compose** — To, Cc, Subject, Body fields; sends via SMTP
+- **Flag / unflag** — star button in detail view; amber star indicator in list; synced to server
+- **Move to folder** — bottom-sheet folder picker; moves on server via IMAP MOVE
+- **Attachment indicators** — paperclip icon in email list; filename + size in detail
 - **Delete email** — removes from server (IMAP expunge) and local DB
 - **Settings** — list and remove accounts
 - **Offline-first** — all reads come from local Drift/SQLite DB; network only for sync and send

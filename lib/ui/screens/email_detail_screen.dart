@@ -82,6 +82,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 },
               ),
               IconButton(
+                icon: const Icon(Icons.drive_file_move_outline),
+                tooltip: 'Move to folder',
+                onPressed: header == null ? null : () => _moveTo(context, header),
+              ),
+              IconButton(
                 icon: const Icon(Icons.delete),
                 tooltip: 'Delete',
                 onPressed: () async {
@@ -167,9 +172,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
-    final cc = replyAll
-        ? header.to.map((a) => a.email).join(', ')
-        : '';
+    final cc = replyAll ? header.to.map((a) => a.email).join(', ') : '';
     context.push('/compose', extra: {
       'replyToEmailId': widget.emailId,
       'prefillTo': to,
@@ -178,4 +181,42 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     });
   }
 
+  Future<void> _moveTo(BuildContext context, Email header) async {
+    final mailboxRepo = ref.read(mailboxRepositoryProvider);
+    final mailboxes =
+        await mailboxRepo.observeMailboxes(header.accountId).first;
+
+    // Remove the current mailbox from the list.
+    final destinations = mailboxes
+        .where((m) => m.path != header.mailboxPath)
+        .toList();
+
+    if (!context.mounted) return;
+
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => ListView(
+        shrinkWrap: true,
+        children: [
+          const ListTile(
+            title: Text(
+              'Move to…',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          for (final m in destinations)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(m.name),
+              onTap: () => Navigator.pop(ctx, m.path),
+            ),
+        ],
+      ),
+    );
+
+    if (chosen == null || !context.mounted) return;
+
+    await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
+    if (context.mounted) context.pop();
+  }
 }

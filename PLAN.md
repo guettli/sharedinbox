@@ -26,13 +26,10 @@ UI never touches the network. The sync layer runs independently.
 | 5 — SMTP send | `connectSmtp`, `EmailRepositoryImpl.sendEmail` | Done |
 | 6 — UI | AccountList, AddAccount, MailboxList, EmailList, EmailDetail, Compose, Settings | Done |
 | 7 — Dev tooling | Nix flake, Taskfile, Stalwart dev server, unit + integration tests, CI, pre-commit | Done |
-| 8 — UI gaps | Account picker in compose, flag button, move-to-trash | **In progress** |
+| 8 — UI gaps | Account picker in compose, flag/unflag, move-to-folder, attachment indicators | Done |
 
 ## Next candidates
 
-- Account picker in compose screen (currently broken for new mail with >1 account)
-- Flag / star button in email detail
-- Move to trash from email detail
 - Search (IMAP `SEARCH` command)
 - Thread view (group by `References` / `In-Reply-To`)
 - Attachment download + open

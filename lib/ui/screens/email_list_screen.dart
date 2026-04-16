@@ -71,9 +71,19 @@ class EmailListScreen extends ConsumerWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: Text(
-                  e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-                  style: Theme.of(ctx).textTheme.bodySmall,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (e.isFlagged)
+                      const Icon(Icons.star, color: Colors.amber, size: 16),
+                    if (e.hasAttachment)
+                      const Icon(Icons.attach_file, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ],
                 ),
                 onTap: () => context.push(
                   '/accounts/$accountId/mailboxes/${Uri.encodeComponent(mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
