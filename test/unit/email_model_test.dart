@@ -83,7 +83,7 @@ void main() {
         accountId: 'acc',
         mailboxPath: 'INBOX',
         uid: 1,
-        receivedAt: DateTime(2024, 1, 1),
+        receivedAt: DateTime(2024),
         from: const [],
         to: const [],
         cc: const [],
