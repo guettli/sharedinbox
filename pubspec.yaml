@@ -1,0 +1,48 @@
+name: sharedinbox
+description: IMAP email client for Android, iOS, and Desktop.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Vendored IMAP/SMTP/MIME library
+  enough_mail:
+    path: packages/enough_mail
+
+  # Local persistence (offline-first)
+  drift: ^2.20.3
+  sqlite3_flutter_libs: ^0.5.28
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.4.1
+
+  # Navigation
+  go_router: ^14.8.1
+
+  # Utilities
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+  intl: any
+  collection: ^1.19.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  drift_dev: ^2.20.3
+  riverpod_generator: ^2.6.2
+  freezed: ^2.5.8
+  json_serializable: ^6.9.0
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true

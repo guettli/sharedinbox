@@ -1,0 +1,26 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+pubspec.lock
+build/
+*.g.dart
+*.freezed.dart
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/google-services.json
+
+# iOS / macOS
+ios/Pods/
+macos/Pods/
+*.xcworkspace/
