@@ -11,11 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Forked IMAP/SMTP/MIME library — https://github.com/guettli/enough_mail
-  enough_mail:
-    git:
-      url: https://github.com/guettli/enough_mail.git
-      ref: 25320adab0d9c1d98c3602ebf53fb15e28e3a0e9
+  enough_mail: ^2.1.7
 
   # Local persistence (offline-first)
   drift: ^2.20.3
