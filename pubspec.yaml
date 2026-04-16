@@ -28,6 +28,9 @@ dependencies:
   # Navigation
   go_router: ^14.8.1
 
+  # Secure credential storage (passwords)
+  flutter_secure_storage: ^9.2.4
+
   # Utilities
   freezed_annotation: ^2.4.4
   json_annotation: ^4.9.0
