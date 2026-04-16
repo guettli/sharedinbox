@@ -63,6 +63,9 @@ class _AccountSync {
   imap.ImapClient? _idleClient;
   bool _running = false;
   int _backoffSeconds = 5;
+  // Completed by stop() to wake up _idle() immediately rather than waiting
+  // for the 25-minute cap or the next incoming message.
+  Completer<void>? _stopSignal;
 
   void start() {
     _running = true;
@@ -71,6 +74,9 @@ class _AccountSync {
 
   void stop() {
     _running = false;
+    if (_stopSignal != null && !_stopSignal!.isCompleted) {
+      _stopSignal!.complete();
+    }
     _idleClient?.logout().ignore();
     _idleClient = null;
   }
@@ -100,6 +106,7 @@ class _AccountSync {
 
   Future<void> _idle() async {
     if (!_running) return;
+    _stopSignal = Completer<void>();
     final password = await _accounts.getPassword(account.id);
     final client = await connectImap(account, password);
     _idleClient = client;
@@ -122,10 +129,12 @@ class _AccountSync {
 
       await client.idleStart();
 
-      // Cap IDLE at 25 minutes to stay within the RFC 2177 recommendation.
+      // Cap IDLE at 25 minutes (RFC 2177).  Also wakes up when stop() is
+      // called or a new message / expunge event arrives.
       await Future.any([
         newMessageCompleter.future,
         Future.delayed(const Duration(minutes: 25)),
+        _stopSignal!.future,
       ]);
 
       await client.idleDone();
@@ -133,6 +142,7 @@ class _AccountSync {
     } finally {
       await client.logout();
       _idleClient = null;
+      _stopSignal = null;
     }
   }
 }
