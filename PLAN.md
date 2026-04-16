@@ -18,8 +18,7 @@ UI never touches the network. The sync layer runs independently.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 0 — Scaffold | pubspec, Drift schema, DI, router, enough_mail vendored | Done |
-| 0a — enough_mail fork | Remove vendored copy; point pubspec at [guettli/enough_mail](https://github.com/guettli/enough_mail) via git dep | Done |
+| 0 — Scaffold | pubspec, Drift schema, DI, router, enough_mail from pub.dev | Done |
 | 1 — Core models | `Account`, `Mailbox`, `Email`, `EmailBody`, repository interfaces | Done |
 | 2 — DB layer | Drift tables, `AccountRepositoryImpl`, `MailboxRepositoryImpl`, `EmailRepositoryImpl` | Done |
 | 3 — IMAP sync | `connectImap`, `MailboxRepositoryImpl.syncMailboxes`, `EmailRepositoryImpl.syncEmails` | Done |
