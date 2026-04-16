@@ -76,6 +76,51 @@ void main() {
     });
   });
 
+  group('Email', () {
+    test('constructs with required fields', () {
+      final email = Email(
+        id: 'acc:1',
+        accountId: 'acc',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        receivedAt: DateTime(2024, 1, 1),
+        from: const [],
+        to: const [],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+      expect(email.id, 'acc:1');
+      expect(email.isSeen, isFalse);
+    });
+  });
+
+  group('EmailBody', () {
+    test('constructs with required fields', () {
+      const body = EmailBody(emailId: 'acc:1', attachments: []);
+      expect(body.emailId, 'acc:1');
+      expect(body.textBody, isNull);
+      expect(body.attachments, isEmpty);
+    });
+
+    test('holds attachment list', () {
+      const body = EmailBody(
+        emailId: 'acc:2',
+        attachments: [
+          EmailAttachment(
+            filename: 'doc.pdf',
+            contentType: 'application/pdf',
+            size: 1024,
+          ),
+        ],
+      );
+      expect(body.attachments, hasLength(1));
+      expect(body.attachments.first.filename, 'doc.pdf');
+      expect(body.attachments.first.size, 1024);
+    });
+  });
+
   group('EmailDraft', () {
     test('constructs with required fields', () {
       const draft = EmailDraft(

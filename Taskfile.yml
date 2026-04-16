@@ -39,14 +39,23 @@ tasks:
       - dart fix --apply
 
   test:
-    desc: Run unit tests (no device needed)
+    desc: Run unit tests (no device needed) and enforce ≥100% line coverage
     deps: [_nix-check]
+    vars:
+      COVERAGE_THRESHOLD: "100"
     cmds:
       - |
         START=$(date +%s)
-        flutter test test/unit/
+        flutter test test/unit/ --coverage
         END=$(date +%s)
         echo "test: $((END - START))s"
+      - |
+        COVERED=$(awk '/^DA:/{split($0,a,":");split(a[2],b,",");t++;if(b[2]>0)h++} END{printf "%d", (t>0 ? int(h*100/t) : 0)}' coverage/lcov.info)
+        echo "coverage: ${COVERED}% (threshold: {{.COVERAGE_THRESHOLD}}%)"
+        if [ "${COVERED}" -lt "{{.COVERAGE_THRESHOLD}}" ]; then
+          echo "ERROR: coverage ${COVERED}% is below threshold {{.COVERAGE_THRESHOLD}}%"
+          exit 1
+        fi
 
   test-flutter:
     desc: Run Flutter widget tests
