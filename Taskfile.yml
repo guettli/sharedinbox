@@ -3,7 +3,7 @@ silent: true
 
 tasks:
   default:
-    desc: Run all checks (analyze + unit tests + integration, in parallel)
+    desc: Run all checks (analyze + unit tests + widget tests + integration, in parallel)
     deps: [check]
 
   _nix-check:
@@ -14,11 +14,9 @@ tasks:
         msg: "Not in nix dev shell. Run: nix develop"
 
   install-hooks:
-    desc: Install git hooks from hooks/ into .git/hooks/
+    desc: Install pre-commit hooks (requires pre-commit; see .pre-commit-config.yaml)
     cmds:
-      - cp hooks/pre-commit .git/hooks/pre-commit
-      - chmod +x .git/hooks/pre-commit
-      - echo "Installed hooks/pre-commit → .git/hooks/pre-commit"
+      - pre-commit install
 
   codegen:
     desc: Generate Drift DB code (run after any schema change)
@@ -44,8 +42,14 @@ tasks:
     cmds:
       - scripts/run_unit_tests.sh
 
+  test-widget:
+    desc: Widget tests — headless, no display or network required
+    deps: [_nix-check]
+    cmds:
+      - flutter test test/widget/
+
   test-flutter:
-    desc: Flutter widget tests
+    desc: Full Flutter test suite (unit + widget + integration)
     deps: [_nix-check]
     cmds:
       - flutter test
@@ -69,5 +73,5 @@ tasks:
       - flutter run -d linux
 
   check:
-    desc: All fast checks — analyze + unit tests + integration in parallel
-    deps: [analyze, test, integration]
+    desc: All fast checks — analyze + unit tests + widget tests + integration in parallel
+    deps: [analyze, test, test-widget, integration]

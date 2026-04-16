@@ -1,0 +1,247 @@
+// Shared helpers for widget tests.
+//
+// Each test pumps [buildApp] which wires up a fresh GoRouter (same route tree
+// as the real app) inside a ProviderScope whose repository providers are
+// replaced with lightweight in-memory fakes.  No database or network is used.
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/ui/screens/account_list_screen.dart';
+import 'package:sharedinbox/ui/screens/add_account_screen.dart';
+import 'package:sharedinbox/ui/screens/compose_screen.dart';
+import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/settings_screen.dart';
+
+// ---------------------------------------------------------------------------
+// Fake repositories
+// ---------------------------------------------------------------------------
+
+class FakeAccountRepository implements AccountRepository {
+  final List<Account> _accounts;
+
+  FakeAccountRepository([List<Account>? accounts])
+      : _accounts = List.of(accounts ?? []);
+
+  @override
+  Stream<List<Account>> observeAccounts() => Stream.value(List.of(_accounts));
+
+  @override
+  Future<Account?> getAccount(String id) async {
+    for (final a in _accounts) {
+      if (a.id == id) return a;
+    }
+    return null;
+  }
+
+  @override
+  Future<void> addAccount(Account account, String password) async =>
+      _accounts.add(account);
+
+  @override
+  Future<void> removeAccount(String id) async =>
+      _accounts.removeWhere((a) => a.id == id);
+
+  @override
+  Future<String> getPassword(String accountId) async => 'test-password';
+}
+
+class FakeMailboxRepository implements MailboxRepository {
+  final List<Mailbox> _mailboxes;
+
+  FakeMailboxRepository([List<Mailbox>? mailboxes])
+      : _mailboxes = mailboxes ?? [];
+
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String accountId) =>
+      Stream.value(List.of(_mailboxes));
+
+  @override
+  Future<void> syncMailboxes(String accountId) async {}
+}
+
+class FakeEmailRepository implements EmailRepository {
+  final List<Email> _emails;
+  final Email? _emailDetail;
+  final EmailBody _emailBody;
+
+  FakeEmailRepository({
+    List<Email>? emails,
+    Email? emailDetail,
+    EmailBody? emailBody,
+  })  : _emails = emails ?? [],
+        _emailDetail = emailDetail,
+        _emailBody =
+            emailBody ?? const EmailBody(emailId: '', attachments: []);
+
+  @override
+  Stream<List<Email>> observeEmails(String accountId, String mailboxPath) =>
+      Stream.value(List.of(_emails));
+
+  @override
+  Future<Email?> getEmail(String emailId) async => _emailDetail;
+
+  @override
+  Future<EmailBody> getEmailBody(String emailId) async => _emailBody;
+
+  @override
+  Future<void> syncEmails(String accountId, String mailboxPath) async {}
+
+  @override
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
+
+  @override
+  Future<void> moveEmail(String emailId, String destMailboxPath) async {}
+
+  @override
+  Future<void> deleteEmail(String emailId) async {}
+
+  @override
+  Future<void> sendEmail(String accountId, EmailDraft draft) async {}
+
+  @override
+  Future<List<Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query,
+  ) async =>
+      [];
+}
+
+// ---------------------------------------------------------------------------
+// App builder
+// ---------------------------------------------------------------------------
+
+/// Builds a fully wired test app that starts at [initialLocation].
+///
+/// Providers are replaced with [overrides], so no database or network is used.
+/// A fresh [GoRouter] is created for every call so tests are independent.
+Widget buildApp({
+  required String initialLocation,
+  required List<Override> overrides,
+}) {
+  final testRouter = GoRouter(
+    initialLocation: initialLocation,
+    routes: [
+      GoRoute(
+        path: '/accounts',
+        builder: (ctx, state) => const AccountListScreen(),
+        routes: [
+          GoRoute(
+            path: 'add',
+            builder: (ctx, state) => const AddAccountScreen(),
+          ),
+          GoRoute(
+            path: ':accountId/mailboxes',
+            builder: (ctx, state) => MailboxListScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
+            routes: [
+              GoRoute(
+                path: ':mailboxPath/emails',
+                builder: (ctx, state) => EmailListScreen(
+                  accountId: state.pathParameters['accountId']!,
+                  mailboxPath: state.pathParameters['mailboxPath']!,
+                ),
+                routes: [
+                  GoRoute(
+                    path: ':emailId',
+                    builder: (ctx, state) => EmailDetailScreen(
+                      emailId: state.pathParameters['emailId']!,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+      GoRoute(
+        path: '/compose',
+        builder: (ctx, state) {
+          final extra = state.extra as Map<String, dynamic>?;
+          return ComposeScreen(
+            accountId: extra?['accountId'] as String?,
+            replyToEmailId: extra?['replyToEmailId'] as String?,
+            prefillTo: extra?['prefillTo'] as String?,
+            prefillCc: extra?['prefillCc'] as String?,
+            prefillSubject: extra?['prefillSubject'] as String?,
+            prefillBody: extra?['prefillBody'] as String?,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (ctx, state) => const SettingsScreen(),
+      ),
+    ],
+  );
+
+  return ProviderScope(
+    overrides: overrides,
+    child: MaterialApp.router(
+      routerConfig: testRouter,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Common test fixtures
+// ---------------------------------------------------------------------------
+
+const kTestAccount = Account(
+  id: 'acc-1',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'imap.example.com',
+  imapPort: 993,
+  imapSsl: true,
+  smtpHost: 'smtp.example.com',
+  smtpPort: 587,
+  smtpSsl: false,
+);
+
+const kTestMailbox = Mailbox(
+  id: 'acc-1:INBOX',
+  accountId: 'acc-1',
+  path: 'INBOX',
+  name: 'INBOX',
+  unreadCount: 3,
+  totalCount: 10,
+);
+
+Email testEmail({
+  String id = 'acc-1:42',
+  String subject = 'Hello world',
+  bool isSeen = false,
+  bool isFlagged = false,
+  bool hasAttachment = false,
+}) =>
+    Email(
+      id: id,
+      accountId: 'acc-1',
+      mailboxPath: 'INBOX',
+      uid: 42,
+      subject: subject,
+      receivedAt: DateTime(2024, 6),
+      sentAt: DateTime(2024, 6),
+      from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      to: const [EmailAddress(email: 'alice@example.com')],
+      cc: const [],
+      isSeen: isSeen,
+      isFlagged: isFlagged,
+      hasAttachment: hasAttachment,
+    );

@@ -74,14 +74,27 @@ task check
 
 ```bash
 task analyze          # flutter analyze (uses analysis_options.yaml)
-task test             # pure-Dart unit tests — fast, no device
-task test-flutter     # Flutter widget tests
+task test             # pure-Dart unit tests + coverage gate (≥70%)
+task test-widget      # widget tests — headless, no device needed
+task test-flutter     # full Flutter test suite (unit + widget + integration)
 task integration      # IMAP/SMTP integration tests via local Stalwart server
 task run              # flutter run -d linux
 task analyze-fix      # dart fix --apply
 ```
 
 `task check` runs `analyze` + `test` in parallel — use it before every commit.
+
+### Widget tests
+
+`test/widget/` contains [Flutter widget tests](https://docs.flutter.dev/testing/overview#widget-tests) for every screen. They run headlessly — no display server, no device, no database, no network. Each test pumps the screen into a virtual render canvas and uses in-memory fakes for the Riverpod repository providers.
+
+Run them locally:
+
+```bash
+task test-widget   # or: flutter test test/widget/
+```
+
+They also run in CI on every push (see the **Widget tests** step in `.github/workflows/ci.yml`).
 
 ### After changing the DB schema
 
@@ -132,6 +145,7 @@ packages/
 stalwart-dev/        — local mail server config + start/test scripts
 test/
   unit/              — pure-Dart unit tests (no device)
+  widget/            — Flutter widget tests (headless, no device)
   integration/       — IMAP/SMTP tests against local Stalwart
 ```
 

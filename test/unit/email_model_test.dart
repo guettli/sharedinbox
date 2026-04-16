@@ -155,8 +155,9 @@ void main() {
 
   group('EmailAttachment', () {
     test('runtime construction stores all fields', () {
-      // Non-const construction so the constructor is instrumented.
-      final filename = 'report.pdf';
+      // Non-const construction so the constructor is instrumented for coverage.
+      const filename = 'report.pdf';
+      // ignore: prefer_const_constructors
       final att = EmailAttachment(
         filename: filename,
         contentType: 'application/pdf',

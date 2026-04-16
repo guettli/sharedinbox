@@ -79,7 +79,9 @@ void main() {
       currentSf = line.substring(3);
     } else if (line.startsWith('DA:') &&
         currentSf != null &&
-        !_excluded.contains(currentSf)) {
+        !_excluded.contains(currentSf) &&
+        !_noCode.contains(currentSf) &&
+        !currentSf.endsWith('.g.dart')) {
       final count = int.parse(line.substring(3).split(',')[1]);
       total++;
       if (count > 0) hits++;

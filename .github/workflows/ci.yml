@@ -31,6 +31,9 @@ jobs:
       - name: Unit tests
         run: flutter test test/unit/ --coverage
 
+      - name: Widget tests
+        run: flutter test test/widget/
+
   integration:
     name: Integration tests (Stalwart)
     runs-on: ubuntu-latest

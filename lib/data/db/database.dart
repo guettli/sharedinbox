@@ -49,7 +49,7 @@ class Emails extends Table {
   DateTimeColumn get receivedAt => dateTime()();
   // JSON-encoded List<{name,email}>
   TextColumn get fromJson => text().withDefault(const Constant('[]'))();
-  TextColumn get toJson => text().withDefault(const Constant('[]'))();
+  TextColumn get toAddresses => text().withDefault(const Constant('[]'))();
   TextColumn get ccJson => text().withDefault(const Constant('[]'))();
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
