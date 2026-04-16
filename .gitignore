@@ -1,4 +1,5 @@
 # Flutter/Dart
+coverage/
 .dart_tool/
 .packages
 pubspec.lock
