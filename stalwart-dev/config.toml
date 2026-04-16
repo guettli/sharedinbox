@@ -61,3 +61,12 @@ email  = ["bob@localhost"]
 [authentication.fallback-admin]
 user   = "admin"
 secret = "admin"
+
+# Allow LOGIN/PLAIN on the clear-text dev ports (no TLS in local test env).
+# By default Stalwart only advertises PLAIN/LOGIN when is_tls — override that.
+[imap.auth]
+allow-plain-text = true
+
+[session.auth]
+mechanisms = "[plain, login, oauthbearer, xoauth2]"
+allow-plain-text = true

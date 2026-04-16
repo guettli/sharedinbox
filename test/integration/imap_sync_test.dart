@@ -63,7 +63,7 @@ void main() {
     final smtpClient = SmtpClient('test');
     await smtpClient.connectToServer(imapHost, smtpPort, isSecure: false);
     await smtpClient.ehlo();
-    await smtpClient.authenticate('$userA@localhost', passA);
+    await smtpClient.authenticate(userA, passA);
 
     final builder = MessageBuilder()
       ..from = [MailAddress('Alice', '$userA@localhost')]
