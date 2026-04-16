@@ -20,6 +20,7 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   late final Future<(Email?, EmailBody)> _dataFuture;
+  bool _isFlagged = false;
 
   @override
   void initState() {
@@ -28,7 +29,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     _dataFuture = Future.wait([
       repo.getEmail(widget.emailId),
       repo.getEmailBody(widget.emailId),
-    ]).then((results) => (results[0] as Email?, results[1] as EmailBody));
+    ]).then((results) {
+      final email = results[0] as Email?;
+      if (email != null && mounted) {
+        setState(() => _isFlagged = email.isFlagged);
+      }
+      return (email, results[1] as EmailBody);
+    });
     repo.setFlag(widget.emailId, seen: true);
   }
 
@@ -51,17 +58,32 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               IconButton(
                 icon: const Icon(Icons.reply),
                 tooltip: 'Reply',
-                onPressed:
-                    header == null ? null : () => _reply(context, header, replyAll: false),
+                onPressed: header == null
+                    ? null
+                    : () => _reply(context, header, replyAll: false),
               ),
               IconButton(
                 icon: const Icon(Icons.reply_all),
                 tooltip: 'Reply all',
-                onPressed:
-                    header == null ? null : () => _reply(context, header, replyAll: true),
+                onPressed: header == null
+                    ? null
+                    : () => _reply(context, header, replyAll: true),
+              ),
+              IconButton(
+                icon: Icon(
+                  _isFlagged ? Icons.star : Icons.star_border,
+                  color: _isFlagged ? Colors.amber : null,
+                ),
+                tooltip: _isFlagged ? 'Unflag' : 'Flag',
+                onPressed: () async {
+                  final next = !_isFlagged;
+                  await repo.setFlag(widget.emailId, flagged: next);
+                  if (mounted) setState(() => _isFlagged = next);
+                },
               ),
               IconButton(
                 icon: const Icon(Icons.delete),
+                tooltip: 'Delete',
                 onPressed: () async {
                   await repo.deleteEmail(widget.emailId);
                   if (context.mounted) context.pop();

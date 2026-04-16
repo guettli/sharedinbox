@@ -21,23 +21,21 @@ The UI never touches the network. The sync engine runs in the background and wri
 
 | Platform | Status |
 | --- | --- |
-| Linux desktop | Working |
-| macOS desktop | Entry point pending |
-| Windows desktop | Entry point pending |
-| Android | Entry point pending |
-| iOS | Entry point pending |
+| Linux desktop | Working (`task run`) |
+| Android | APK builds (`task build-android`) |
+| macOS desktop | Scaffolded |
+| Windows desktop | Scaffolded |
+| iOS | Scaffolded |
 
 ## Key packages
 
 | Package | Role |
 | --- | --- |
-| `enough_mail` (vendored in `packages/`) | IMAP / SMTP / MIME |
+| [`enough_mail`](https://pub.dev/packages/enough_mail) | IMAP / SMTP / MIME |
 | `drift` | Local SQLite ORM (offline-first store) |
 | `flutter_riverpod` | State management / DI |
 | `go_router` | Navigation |
 | `flutter_secure_storage` | Password storage |
-
-`enough_mail` is vendored under `packages/` so it can be patched without waiting for an upstream release.
 
 ---
 
@@ -136,3 +134,18 @@ test/
   unit/              — pure-Dart unit tests (no device)
   integration/       — IMAP/SMTP tests against local Stalwart
 ```
+
+---
+
+## Working features
+
+- **Multiple accounts** — add any number of IMAP/SMTP accounts; each syncs independently
+- **IMAP IDLE** — background sync with push-like latency; exponential backoff (5 s → 5 min) on error
+- **Mailbox list** — shows all folders with unread / total counts
+- **Email list** — sender, subject, date; bold for unread; manual sync button
+- **Email detail** — renders plain text; falls back to HTML→plain conversion; marks as read on open; shows attachment names and sizes
+- **Reply / Reply all** — pre-fills To, Subject (`Re:`), Cc from original
+- **Compose** — To, Cc, Subject, Body fields; sends via SMTP
+- **Delete email** — removes from server (IMAP expunge) and local DB
+- **Settings** — list and remove accounts
+- **Offline-first** — all reads come from local Drift/SQLite DB; network only for sync and send

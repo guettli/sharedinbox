@@ -24,16 +24,16 @@ UI never touches the network. The sync layer runs independently.
 | 3 — IMAP sync | `connectImap`, `MailboxRepositoryImpl.syncMailboxes`, `EmailRepositoryImpl.syncEmails` | Done |
 | 4 — IMAP IDLE | `AccountSyncManager` with exponential-backoff reconnect | Done |
 | 5 — SMTP send | `connectSmtp`, `EmailRepositoryImpl.sendEmail` | Done |
-| 6 — UI | All screens: AccountList, AddAccount, MailboxList, EmailList, EmailDetail, Compose, Settings | Done |
-| 7 — Dev tooling | Nix flake, `.envrc`, Taskfile, Stalwart dev server (IMAP+SMTP), integration tests | Done |
-| 8 — Code-gen | Run `task codegen` to generate `database.g.dart` and Riverpod providers | Pending |
-| 9 — Platform targets | Android, iOS, Linux, macOS, Windows entry points | Pending |
-| 10 — Polish | Reply prefill, attachment open, thread view, search | Next |
+| 6 — UI | AccountList, AddAccount, MailboxList, EmailList, EmailDetail, Compose, Settings | Done |
+| 7 — Dev tooling | Nix flake, Taskfile, Stalwart dev server, unit + integration tests, CI, pre-commit | Done |
+| 8 — UI gaps | Account picker in compose, flag button, move-to-trash | **In progress** |
 
 ## Next candidates
 
-- Reply-with-prefill (subject/body/from populated from original email)
-- Thread view (group by `References` / `In-Reply-To`)
+- Account picker in compose screen (currently broken for new mail with >1 account)
+- Flag / star button in email detail
+- Move to trash from email detail
 - Search (IMAP `SEARCH` command)
+- Thread view (group by `References` / `In-Reply-To`)
 - Attachment download + open
 - Draft auto-save

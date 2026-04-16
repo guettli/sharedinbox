@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/models/account.dart';
 import '../../core/models/email.dart';
 import '../../di.dart';
 
@@ -33,6 +34,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _subject = TextEditingController();
   final _body = TextEditingController();
   String? _accountId;
+  List<Account> _accounts = [];
   bool _sending = false;
 
   @override
@@ -43,6 +45,18 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;
+    _loadAccounts();
+  }
+
+  Future<void> _loadAccounts() async {
+    final accounts =
+        await ref.read(accountRepositoryProvider).observeAccounts().first;
+    if (!mounted) return;
+    setState(() {
+      _accounts = accounts;
+      // Auto-select the first account when none was pre-selected.
+      _accountId ??= accounts.isNotEmpty ? accounts.first.id : null;
+    });
   }
 
   @override
@@ -55,8 +69,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   Future<void> _send() async {
     if (_accountId == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Select an account first')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select an account first')),
+      );
       return;
     }
     setState(() => _sending = true);
@@ -112,6 +127,39 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (_accounts.length > 1)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: DropdownButtonFormField<String>(
+                initialValue: _accountId,
+                decoration: const InputDecoration(
+                  labelText: 'From',
+                  border: OutlineInputBorder(),
+                ),
+                items: _accounts
+                    .map(
+                      (a) => DropdownMenuItem(
+                        value: a.id,
+                        child: Text('${a.displayName} <${a.email}>'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) => setState(() => _accountId = v),
+              ),
+            )
+          else if (_accounts.length == 1)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'From',
+                  border: OutlineInputBorder(),
+                ),
+                child: Text(
+                  '${_accounts.first.displayName} <${_accounts.first.email}>',
+                ),
+              ),
+            ),
           _field(_to, 'To', keyboardType: TextInputType.emailAddress),
           _field(_cc, 'Cc', keyboardType: TextInputType.emailAddress),
           _field(_subject, 'Subject'),
