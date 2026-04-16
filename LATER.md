@@ -1,5 +1,9 @@
-Can I publish my enough mail changes somehow. Maybe do a repo fork ?
+# Later
 
-Add pre-commit
+Thread view (group by References / In-Reply-To)
 
-Add GH CI
+Search (IMAP SEARCH command)
+
+Attachment download + open
+
+Draft auto-save

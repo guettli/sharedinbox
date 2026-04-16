@@ -12,6 +12,13 @@ tasks:
       - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
         msg: "Not in nix dev shell. Run: nix develop"
 
+  install-hooks:
+    desc: Install git hooks from hooks/ into .git/hooks/
+    cmds:
+      - cp hooks/pre-commit .git/hooks/pre-commit
+      - chmod +x .git/hooks/pre-commit
+      - echo "Installed hooks/pre-commit → .git/hooks/pre-commit"
+
   codegen:
     desc: Generate Drift DB code (run after any schema change)
     deps: [_nix-check]

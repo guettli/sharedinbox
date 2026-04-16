@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Runs fast checks before every commit.
+# Install with: task install-hooks
+set -euo pipefail
+
+# Only run if flutter is in PATH (i.e. inside the nix dev shell).
+if ! command -v flutter >/dev/null 2>&1; then
+    echo "pre-commit: flutter not in PATH — skipping (run inside nix develop)"
+    exit 0
+fi
+
+echo "pre-commit: flutter analyze..."
+flutter analyze --fatal-infos
+
+echo "pre-commit: unit tests..."
+flutter test test/unit/ --coverage
+
+echo "pre-commit: all checks passed."
