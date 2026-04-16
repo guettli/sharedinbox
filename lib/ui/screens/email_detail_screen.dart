@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/models/email.dart';
+import '../../core/utils/format_utils.dart';
+import '../../core/utils/html_utils.dart';
 import '../../di.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
@@ -86,7 +88,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           const Divider(),
         ],
         SelectableText(
-          body.textBody ?? _htmlToPlain(body.htmlBody ?? ''),
+          body.textBody ?? htmlToPlain(body.htmlBody ?? ''),
           style: Theme.of(ctx).textTheme.bodyMedium,
         ),
         if (body.attachments.isNotEmpty) ...[
@@ -103,7 +105,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               dense: true,
               leading: const Icon(Icons.attach_file),
               title: Text(att.filename),
-              subtitle: Text(_fmtSize(att.size)),
+              subtitle: Text(fmtSize(att.size)),
             ),
         ],
       ],
@@ -154,18 +156,4 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     });
   }
 
-  String _htmlToPlain(String html) => html
-      .replaceAll(RegExp(r'<br\s*/?>'), '\n')
-      .replaceAll(RegExp(r'<[^>]+>'), '')
-      .replaceAll('&amp;', '&')
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&nbsp;', ' ');
-
-  String _fmtSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
 }

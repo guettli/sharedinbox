@@ -15,12 +15,23 @@ build/
 .DS_Store
 Thumbs.db
 
+# Local environment overrides (copied from .env.example)
+.env
+.env.local
+
 # Android
 android/.gradle/
 android/local.properties
 android/app/google-services.json
+android/key.properties
 
 # iOS / macOS
 ios/Pods/
 macos/Pods/
 *.xcworkspace/
+
+# Linux build output
+linux/build/
+
+# Stalwart dev server runtime data (created by stalwart-dev/start)
+/tmp/stalwart-dev-*/

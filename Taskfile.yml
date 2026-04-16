@@ -2,7 +2,7 @@ version: "3"
 
 tasks:
   default:
-    desc: Run all checks (analyze + test, in parallel)
+    desc: Run all checks (analyze + unit tests, in parallel)
     deps: [check]
 
   _nix-check:
@@ -13,7 +13,7 @@ tasks:
         msg: "Not in nix dev shell. Run: nix develop"
 
   codegen:
-    desc: Run build_runner to generate Drift and Riverpod code
+    desc: Generate Drift DB code (run after any schema change)
     deps: [_nix-check]
     cmds:
       - |
@@ -23,7 +23,7 @@ tasks:
         echo "codegen: $((END - START))s"
 
   analyze:
-    desc: Run flutter analyze
+    desc: Static analysis with flutter analyze + analysis_options.yaml rules
     deps: [_nix-check]
     cmds:
       - |
@@ -33,20 +33,30 @@ tasks:
         echo "analyze: $((END - START))s"
 
   analyze-fix:
-    desc: Auto-fix with dart fix --apply
+    desc: Auto-fix lint issues with dart fix --apply
     deps: [_nix-check]
     cmds:
       - dart fix --apply
 
   test:
-    desc: Run unit tests
+    desc: Run pure-Dart unit tests (no device needed)
+    deps: [_nix-check]
+    cmds:
+      - |
+        START=$(date +%s)
+        dart test test/unit/
+        END=$(date +%s)
+        echo "test: $((END - START))s"
+
+  test-flutter:
+    desc: Run Flutter widget tests
     deps: [_nix-check]
     cmds:
       - |
         START=$(date +%s)
         flutter test
         END=$(date +%s)
-        echo "test: $((END - START))s"
+        echo "flutter test: $((END - START))s"
 
   integration:
     desc: Run integration tests (starts and stops Stalwart automatically)
@@ -65,5 +75,5 @@ tasks:
       - flutter run -d linux
 
   check:
-    desc: All checks — analyze + unit tests in parallel
+    desc: All fast checks — analyze + unit tests in parallel
     deps: [analyze, test]

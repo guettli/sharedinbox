@@ -23,7 +23,6 @@ dependencies:
 
   # State management
   flutter_riverpod: ^2.6.1
-  riverpod_annotation: ^2.4.1
 
   # Navigation
   go_router: ^14.8.1
@@ -31,21 +30,16 @@ dependencies:
   # Secure credential storage (passwords)
   flutter_secure_storage: ^9.2.4
 
-  # Utilities
-  freezed_annotation: ^2.4.4
-  json_annotation: ^4.9.0
+  # Date formatting
   intl: any
-  collection: ^1.19.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
   drift_dev: ^2.20.3
-  riverpod_generator: ^2.6.2
-  freezed: ^2.5.8
-  json_serializable: ^6.9.0
   build_runner: ^2.4.13
+  test: ^1.25.0
 
 flutter:
   uses-material-design: true

@@ -6,6 +6,7 @@ import '../models/account.dart';
 import '../repositories/account_repository.dart';
 import '../repositories/email_repository.dart';
 import '../repositories/mailbox_repository.dart';
+import '../utils/logger.dart';
 import '../../data/imap/imap_client_factory.dart';
 
 /// Manages one IMAP IDLE connection per account.
@@ -80,7 +81,12 @@ class _AccountSync {
         await _sync();
         await _idle();
         _backoffSeconds = 5;
-      } catch (_) {
+      } catch (e, st) {
+        log(
+          'Sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
+          error: e,
+          stackTrace: st,
+        );
         await Future.delayed(Duration(seconds: _backoffSeconds));
         _backoffSeconds = (_backoffSeconds * 2).clamp(5, 300);
       }

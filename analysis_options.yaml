@@ -1,0 +1,49 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # Treat these as errors, not warnings.
+    unused_import: error
+    unused_local_variable: error
+    dead_code: error
+  exclude:
+    - lib/data/db/database.g.dart
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+linter:
+  rules:
+    # Style
+    - prefer_single_quotes
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - prefer_const_collections
+    - prefer_final_locals
+    - prefer_final_in_for_each
+    - unnecessary_const
+    - unnecessary_new
+    - unnecessary_this
+    - avoid_redundant_argument_values
+
+    # Safety
+    - avoid_catching_errors
+    - avoid_dynamic_calls
+    - avoid_empty_else
+    - avoid_print
+    - avoid_returning_null_for_future
+    - avoid_returning_null_for_void
+    - avoid_type_to_string
+    - cancel_subscriptions
+    - close_sinks
+    - literal_only_boolean_expressions
+    - no_duplicate_case_values
+    - throw_in_finally
+    - unawaited_futures
+
+    # Correctness
+    - always_declare_return_types
+    - annotate_overrides
+    - empty_catches            # flag silent catch{} — use comment if intentional
+    - hash_and_equals
+    - use_rethrow_when_possible
+    - valid_regexps

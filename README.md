@@ -2,44 +2,137 @@
 
 IMAP/SMTP email client written in [Flutter](https://flutter.dev).
 
-Targets **Android, iOS, and Desktop** (Linux, macOS, Windows).  
+Targets **Android, iOS, and Desktop** (Linux done; macOS, Windows, Android, iOS scaffolded).  
 Supports **multiple accounts** — each synced independently via IMAP IDLE.
 
 ## Design philosophy: offline-first
 
-```
+```text
 IMAP/SMTP server
        ↓
   AccountSyncManager  ←→  Drift (SQLite, local DB)
-                                   ↓
-                             UI (reads only from DB)
+  (IMAP IDLE per account)         ↓
+                            UI (reads only from DB)
 ```
 
-The UI never touches the network. The sync engine runs in the background and writes to a local Drift database. Screens observe reactive streams from that DB.
+The UI never touches the network. The sync engine runs in the background and writes to a local [Drift](https://drift.simonbinder.eu/) database. Screens observe reactive streams from that DB.
+
+## Platform support
+
+| Platform | Status |
+| --- | --- |
+| Linux desktop | Working |
+| macOS desktop | Entry point pending |
+| Windows desktop | Entry point pending |
+| Android | Entry point pending |
+| iOS | Entry point pending |
 
 ## Key packages
 
 | Package | Role |
-|---|---|
+| --- | --- |
 | `enough_mail` (vendored in `packages/`) | IMAP / SMTP / MIME |
-| `drift` | Local SQLite ORM |
+| `drift` | Local SQLite ORM (offline-first store) |
 | `flutter_riverpod` | State management / DI |
 | `go_router` | Navigation |
+| `flutter_secure_storage` | Password storage |
 
-## Building
+`enough_mail` is vendored under `packages/` so it can be patched without waiting for an upstream release.
+
+---
+
+## For users
+
+Download the latest release from the [Releases page](https://github.com/guettli/sharedinbox3/releases) *(not yet published)*.
+
+Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs your INBOX in the background using IMAP IDLE and works offline — the network is only needed during initial sync and when sending mail.
+
+---
+
+## For developers
+
+### Prerequisites
+
+[Nix](https://nixos.org/download) with flakes enabled, and [direnv](https://direnv.net/).
 
 ```bash
-# Install dependencies and run code generation
-dart pub get
-dart run build_runner build --delete-conflicting-outputs
-
-# Run on desktop
-flutter run -d linux   # or macos / windows
-
-# Run on Android / iOS
-flutter run
+# One-time: allow direnv in this directory
+direnv allow
 ```
 
-## Vendored enough_mail
+`direnv` loads the Nix flake automatically — no manual `nix develop` needed after that. The flake pins **Flutter 3.41.6**, Android SDK, Stalwart mail server (for integration tests), and all Linux desktop build tools (GTK3, clang, cmake).
 
-`packages/enough_mail/` is a local copy of [enough_mail](https://github.com/Enough-Software/enough_mail) so it can be modified if needed. It is referenced via a `path:` dependency in `pubspec.yaml`.
+### First-time setup
+
+```bash
+# Generate the Drift database layer (required before first build)
+task codegen
+
+# Verify everything compiles and tests pass
+task check
+```
+
+### Daily workflow
+
+```bash
+task analyze          # flutter analyze (uses analysis_options.yaml)
+task test             # pure-Dart unit tests — fast, no device
+task test-flutter     # Flutter widget tests
+task integration      # IMAP/SMTP integration tests via local Stalwart server
+task run              # flutter run -d linux
+task analyze-fix      # dart fix --apply
+```
+
+`task check` runs `analyze` + `test` in parallel — use it before every commit.
+
+### After changing the DB schema
+
+Edit `lib/data/db/database.dart`, then:
+
+```bash
+task codegen   # regenerates lib/data/db/database.g.dart
+```
+
+`database.g.dart` is git-ignored; every developer must regenerate it after cloning or pulling schema changes.
+
+### Integration tests
+
+```bash
+task integration
+```
+
+Starts a local [Stalwart](https://stalw.art) mail server on random ports, runs the tests in `test/integration/`, then stops it. No manual setup needed — Stalwart is provided by the Nix flake.
+
+### Adding a screen
+
+1. Create `lib/ui/screens/my_screen.dart` — extend `ConsumerWidget`.
+2. Add a `GoRoute` in `lib/ui/router.dart`.
+3. Read from Riverpod providers in `lib/di.dart`; never call the network directly from UI.
+
+### Project layout
+
+```text
+lib/
+  core/
+    models/          — plain Dart data classes (Account, Email, Mailbox, …)
+    repositories/    — abstract interfaces
+    sync/            — AccountSyncManager (IMAP IDLE + backoff)
+    utils/           — htmlToPlain, fmtSize (pure functions, unit-tested)
+  data/
+    db/              — Drift schema + generated code
+    imap/            — connectImap / connectSmtp helpers
+    repositories/    — concrete implementations
+  ui/
+    screens/         — one file per screen
+    router.dart      — go_router route tree
+  di.dart            — Riverpod providers
+  main.dart          — entry point
+
+packages/
+  enough_mail/       — vendored IMAP/SMTP library (editable)
+
+stalwart-dev/        — local mail server config + start/test scripts
+test/
+  unit/              — pure-Dart unit tests (no device)
+  integration/       — IMAP/SMTP tests against local Stalwart
+```

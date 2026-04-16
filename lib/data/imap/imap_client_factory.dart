@@ -1,6 +1,7 @@
 import 'package:enough_mail/enough_mail.dart';
 
 import '../../core/models/account.dart';
+import '../../core/utils/logger.dart';
 
 /// Opens an authenticated IMAP client for [account].
 Future<ImapClient> connectImap(Account account, String password) async {
@@ -35,8 +36,8 @@ Future<SmtpClient> connectSmtp(Account account, String password) async {
     // Opportunistic TLS on submission port (587)
     try {
       await client.startTls();
-    } catch (_) {
-      // Server doesn't support STARTTLS — proceed without it.
+    } catch (e) {
+      log('STARTTLS not available on ${account.smtpHost}: $e — continuing without TLS');
     }
   }
   await client.authenticate(account.email, password);

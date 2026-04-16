@@ -6,6 +6,7 @@ import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/mailbox_repository.dart';
 import '../db/database.dart';
 import '../db/database.dart' as db show Mailbox;
+import '../../core/utils/logger.dart';
 import '../imap/imap_client_factory.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
@@ -46,7 +47,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
           );
           unread = status.messagesUnseen;
           total = status.messagesExists;
-        } catch (_) {}
+        } catch (e) {
+          // \Noselect mailboxes can't be STATUSed — skip counts silently.
+          log('STATUS skipped for $path: $e');
+        }
 
         await _db.into(_db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
