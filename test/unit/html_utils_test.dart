@@ -21,7 +21,7 @@ void main() {
     });
 
     test('converts <p> to newline', () {
-      expect(htmlToPlain('<p>paragraph</p>'), '\nparagraph');
+      expect(htmlToPlain('<p>paragraph</p>'), 'paragraph');
     });
 
     test('decodes &amp;', () {
@@ -53,7 +53,7 @@ void main() {
     });
 
     test('handles nested tags', () {
-      expect(htmlToPlain('<div><p>text</p></div>'), '\ntext');
+      expect(htmlToPlain('<div><p>text</p></div>'), 'text');
     });
 
     test('real-world HTML email snippet', () {

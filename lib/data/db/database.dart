@@ -24,6 +24,7 @@ class Accounts extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+@DataClassName('MailboxRow')
 class Mailboxes extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>

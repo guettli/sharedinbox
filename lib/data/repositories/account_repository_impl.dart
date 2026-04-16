@@ -1,11 +1,8 @@
-import 'package:drift/drift.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../../core/models/account.dart';
+import '../../core/models/account.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../db/database.dart';
-import '../db/database.dart' as db show Account;
 
 class AccountRepositoryImpl implements AccountRepository {
   AccountRepositoryImpl(this._db);
@@ -14,14 +11,14 @@ class AccountRepositoryImpl implements AccountRepository {
   final _storage = const FlutterSecureStorage();
 
   @override
-  Stream<List<Account>> observeAccounts() {
+  Stream<List<model.Account>> observeAccounts() {
     return _db.select(_db.accounts).watch().map(
           (rows) => rows.map(_toModel).toList(),
         );
   }
 
   @override
-  Future<Account?> getAccount(String id) async {
+  Future<model.Account?> getAccount(String id) async {
     final row = await (_db.select(_db.accounts)
           ..where((t) => t.id.equals(id)))
         .getSingleOrNull();
@@ -29,7 +26,7 @@ class AccountRepositoryImpl implements AccountRepository {
   }
 
   @override
-  Future<void> addAccount(Account account, String password) async {
+  Future<void> addAccount(model.Account account, String password) async {
     await _db.into(_db.accounts).insertOnConflictUpdate(
           AccountsCompanion.insert(
             id: account.id,
@@ -55,13 +52,15 @@ class AccountRepositoryImpl implements AccountRepository {
   @override
   Future<String> getPassword(String accountId) async {
     final pw = await _storage.read(key: _passwordKey(accountId));
-    if (pw == null) throw StateError('No password stored for account $accountId');
+    if (pw == null) {
+      throw StateError('No password stored for account $accountId');
+    }
     return pw;
   }
 
   String _passwordKey(String accountId) => 'account_password_$accountId';
 
-  Account _toModel(db.Account row) => Account(
+  model.Account _toModel(Account row) => model.Account(
         id: row.id,
         displayName: row.displayName,
         email: row.email,

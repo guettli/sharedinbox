@@ -83,6 +83,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       await ref.read(emailRepositoryProvider).sendEmail(_accountId!, draft);
       if (mounted) context.pop();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Send failed: $e')));
     } finally {

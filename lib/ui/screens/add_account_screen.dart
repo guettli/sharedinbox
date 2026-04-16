@@ -61,6 +61,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           .addAccount(account, _password.text);
       if (mounted) context.pop();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {

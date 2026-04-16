@@ -13,11 +13,11 @@ String encodeAddresses(List<EmailAddress> addresses) => jsonEncode(
     );
 
 List<EmailAddress> decodeAddresses(String json) {
-  final list = jsonDecode(json) as List;
+  final list = jsonDecode(json) as List<dynamic>;
   return list
       .map(
         (e) => EmailAddress(
-          name: e['name'] as String?,
+          name: (e as Map<String, dynamic>)['name'] as String?,
           email: e['email'] as String,
         ),
       )
@@ -78,9 +78,9 @@ void main() {
 
   group('EmailDraft', () {
     test('constructs with required fields', () {
-      final draft = EmailDraft(
-        from: const EmailAddress(name: 'Me', email: 'me@example.com'),
-        to: [const EmailAddress(email: 'you@example.com')],
+      const draft = EmailDraft(
+        from: EmailAddress(name: 'Me', email: 'me@example.com'),
+        to: [EmailAddress(email: 'you@example.com')],
         cc: [],
         subject: 'Hello',
         body: 'World',

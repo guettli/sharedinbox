@@ -1,12 +1,11 @@
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 
-import '../../core/models/mailbox.dart';
+import '../../core/models/mailbox.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/mailbox_repository.dart';
-import '../db/database.dart';
-import '../db/database.dart' as db show Mailbox;
 import '../../core/utils/logger.dart';
+import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
@@ -16,7 +15,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final AccountRepository _accounts;
 
   @override
-  Stream<List<Mailbox>> observeMailboxes(String accountId) {
+  Stream<List<model.Mailbox>> observeMailboxes(String accountId) {
     return (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId))
           ..orderBy([(t) => OrderingTerm.asc(t.path)]))
@@ -30,16 +29,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final password = await _accounts.getPassword(accountId);
     final client = await connectImap(account, password);
     try {
-      // listMailboxes() returns List<imap.Mailbox>
       final mailboxes = await client.listMailboxes(recursive: true);
       for (final mb in mailboxes) {
         final path = mb.path;
-        final id = '${accountId}:$path';
+        final id = '$accountId:$path';
 
-        // Fetch STATUS (unread + total counts) for each mailbox.
-        // Suppress errors — some mailboxes (e.g. \Noselect) can't be selected.
-        int unread = 0;
-        int total = 0;
+        // Fetch STATUS (unread + total counts). Some mailboxes (\Noselect)
+        // can't be selected — skip counts for those silently.
+        var unread = 0;
+        var total = 0;
         try {
           final status = await client.statusMailbox(
             mb,
@@ -48,7 +46,6 @@ class MailboxRepositoryImpl implements MailboxRepository {
           unread = status.messagesUnseen;
           total = status.messagesExists;
         } catch (e) {
-          // \Noselect mailboxes can't be STATUSed — skip counts silently.
           log('STATUS skipped for $path: $e');
         }
 
@@ -68,7 +65,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
   }
 
-  Mailbox _toModel(db.Mailbox row) => Mailbox(
+  model.Mailbox _toModel(MailboxRow row) => model.Mailbox(
         id: row.id,
         accountId: row.accountId,
         path: row.path,

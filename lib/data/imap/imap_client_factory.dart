@@ -5,7 +5,7 @@ import '../../core/utils/logger.dart';
 
 /// Opens an authenticated IMAP client for [account].
 Future<ImapClient> connectImap(Account account, String password) async {
-  final client = ImapClient(isLogEnabled: false);
+  final client = ImapClient();
   await client.connectToServer(
     account.imapHost,
     account.imapPort,
@@ -25,7 +25,7 @@ Future<SmtpClient> connectSmtp(Account account, String password) async {
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  final client = SmtpClient(clientDomain, isLogEnabled: false);
+  final client = SmtpClient(clientDomain);
   await client.connectToServer(
     account.smtpHost,
     account.smtpPort,

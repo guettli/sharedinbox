@@ -3,11 +3,10 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 
-import '../../core/models/email.dart';
+import '../../core/models/email.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/email_repository.dart';
 import '../db/database.dart';
-import '../db/database.dart' as db show Email, EmailBody;
 import '../imap/imap_client_factory.dart';
 
 class EmailRepositoryImpl implements EmailRepository {
@@ -19,7 +18,10 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Observe ────────────────────────────────────────────────────────────────
 
   @override
-  Stream<List<Email>> observeEmails(String accountId, String mailboxPath) {
+  Stream<List<model.Email>> observeEmails(
+    String accountId,
+    String mailboxPath,
+  ) {
     return (_db.select(_db.emails)
           ..where(
             (t) =>
@@ -32,7 +34,7 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
-  Future<Email?> getEmail(String emailId) async {
+  Future<model.Email?> getEmail(String emailId) async {
     final row = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
@@ -42,7 +44,7 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Body (on-demand) ───────────────────────────────────────────────────────
 
   @override
-  Future<EmailBody> getEmailBody(String emailId) async {
+  Future<model.EmailBody> getEmailBody(String emailId) async {
     final cached = await (_db.select(_db.emailBodies)
           ..where((t) => t.emailId.equals(emailId)))
         .getSingleOrNull();
@@ -56,17 +58,11 @@ class EmailRepositoryImpl implements EmailRepository {
     final client = await connectImap(account, password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
-      final fetch = await client.fetchMessage(
-        imap.MessageSequence.fromId(emailRow.uid, isUid: true),
-        '(BODY[])',
-        isUidSequence: true,
-      );
+      final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY[])');
       final msg = fetch.messages.first;
       final textBody = msg.decodeTextPlainPart();
       final htmlBody = msg.decodeTextHtmlPart();
-      final contentInfos = msg.findContentInfo(
-        disposition: imap.ContentDisposition.attachment,
-      );
+      final contentInfos = msg.findContentInfo();
 
       final attachmentsJson = jsonEncode(
         contentInfos
@@ -88,7 +84,7 @@ class EmailRepositoryImpl implements EmailRepository {
               attachmentsJson: Value(attachmentsJson),
             ),
           );
-      return EmailBody(
+      return model.EmailBody(
         emailId: emailId,
         textBody: textBody,
         htmlBody: htmlBody,
@@ -117,17 +113,17 @@ class EmailRepositoryImpl implements EmailRepository {
         if (envelope == null) continue;
         final uid = msg.uid;
         if (uid == null) continue;
-        final emailId = '${accountId}:$uid';
+        final emailId = '$accountId:$uid';
 
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
                 accountId: accountId,
                 mailboxPath: mailboxPath,
-                uid: Value(uid),
+                uid: uid,
                 subject: Value(envelope.subject),
                 sentAt: Value(envelope.date),
-                receivedAt: Value(envelope.date ?? DateTime.now()),
+                receivedAt: envelope.date ?? DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toJson: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
@@ -145,7 +141,11 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   @override
-  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+  Future<void> setFlag(
+    String emailId, {
+    bool? seen,
+    bool? flagged,
+  }) async {
     final row = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
         .getSingle();
@@ -157,13 +157,13 @@ class EmailRepositoryImpl implements EmailRepository {
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
       if (seen != null) {
         seen
-            ? await client.markSeen(seq, isUidSequence: true)
-            : await client.markUnseen(seq, isUidSequence: true);
+            ? await client.uidMarkSeen(seq)
+            : await client.uidMarkUnseen(seq);
       }
       if (flagged != null) {
         flagged
-            ? await client.markFlagged(seq, isUidSequence: true)
-            : await client.markUnflagged(seq, isUidSequence: true);
+            ? await client.uidMarkFlagged(seq)
+            : await client.uidMarkUnflagged(seq);
       }
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
           .write(
@@ -187,10 +187,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final client = await connectImap(account, password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
-      await client.move(
+      await client.uidMove(
         imap.MessageSequence.fromId(row.uid, isUid: true),
         targetMailboxPath: destMailboxPath,
-        isUidSequence: true,
       );
       await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
     } finally {
@@ -208,10 +207,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final client = await connectImap(account, password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
-      await client.deleteMessages(
-        imap.MessageSequence.fromId(row.uid, isUid: true),
-        isUidSequence: true,
-      );
+      final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
+      await client.uidMarkDeleted(seq);
+      await client.uidExpunge(seq);
       await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
     } finally {
       await client.logout();
@@ -219,7 +217,7 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
-  Future<void> sendEmail(String accountId, EmailDraft draft) async {
+  Future<void> sendEmail(String accountId, model.EmailDraft draft) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final smtpClient = await connectSmtp(account, password);
@@ -242,27 +240,26 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  String _encodeAddresses(List<imap.MailAddress>? addresses) =>
-      jsonEncode(
+  String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(
         (addresses ?? const [])
             .map((a) => {'name': a.personalName, 'email': a.email})
             .toList(),
       );
 
-  Email _toModel(db.Email row) {
-    List<EmailAddress> parseAddresses(String json) {
-      final list = jsonDecode(json) as List;
+  model.Email _toModel(Email row) {
+    List<model.EmailAddress> parseAddresses(String json) {
+      final list = jsonDecode(json) as List<dynamic>;
       return list
           .map(
-            (e) => EmailAddress(
-              name: e['name'] as String?,
+            (e) => model.EmailAddress(
+              name: (e as Map<String, dynamic>)['name'] as String?,
               email: e['email'] as String,
             ),
           )
           .toList();
     }
 
-    return Email(
+    return model.Email(
       id: row.id,
       accountId: row.accountId,
       mailboxPath: row.mailboxPath,
@@ -280,19 +277,19 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
-  EmailBody _bodyRowToModel(db.EmailBody row) => EmailBody(
+  model.EmailBody _bodyRowToModel(EmailBody row) => model.EmailBody(
         emailId: row.emailId,
         textBody: row.textBody,
         htmlBody: row.htmlBody,
         attachments: _parseAttachments(row.attachmentsJson),
       );
 
-  List<EmailAttachment> _parseAttachments(String json) {
-    final list = jsonDecode(json) as List;
+  List<model.EmailAttachment> _parseAttachments(String json) {
+    final list = jsonDecode(json) as List<dynamic>;
     return list
         .map(
-          (e) => EmailAttachment(
-            filename: e['filename'] as String,
+          (e) => model.EmailAttachment(
+            filename: (e as Map<String, dynamic>)['filename'] as String,
             contentType: e['contentType'] as String,
             size: e['size'] as int,
           ),

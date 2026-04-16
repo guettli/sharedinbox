@@ -16,28 +16,26 @@ String _env(String key) {
   return v;
 }
 
-ImapClient _makeClient() => ImapClient(isLogEnabled: false);
-
 Future<ImapClient> _connect(
   String user,
   String pass, {
-  String host = '127.0.0.1',
-  int? port,
+  required String host,
+  required int port,
 }) async {
-  final p = port ?? int.parse(_env('STALWART_IMAP_PORT'));
-  final client = _makeClient();
-  await client.connectToServer(host, p, isSecure: false);
+  final client = ImapClient();
+  await client.connectToServer(host, port, isSecure: false);
   await client.login(user, pass);
   return client;
 }
 
 void main() {
-  final imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
+  late String imapHost;
   late int imapPort;
   late int smtpPort;
   late String userA, passA, userB, passB;
 
   setUpAll(() {
+    imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
     imapPort = int.parse(_env('STALWART_IMAP_PORT'));
     smtpPort = int.parse(_env('STALWART_SMTP_PORT'));
     userA = _env('STALWART_USER_B'); // alice
@@ -47,26 +45,25 @@ void main() {
   });
 
   test('login and list mailboxes', () async {
-    final client = await _connect(userA, passA, host: imapHost, port: imapPort);
+    final client = await _connect(
+      userA,
+      passA,
+      host: imapHost,
+      port: imapPort,
+    );
     addTearDown(() => client.logout().ignore());
 
-    final response = await client.listMailboxes();
-    expect(response.mailboxes, isNotEmpty);
-    expect(
-      response.mailboxes!.map((m) => m.name),
-      contains('INBOX'),
-    );
+    // listMailboxes() returns List<Mailbox> directly
+    final mailboxes = await client.listMailboxes();
+    expect(mailboxes, isNotEmpty);
+    expect(mailboxes.map((m) => m.name), contains('INBOX'));
   });
 
   test('send via SMTP and receive via IMAP', () async {
-    final smtpClient = SmtpClient('test', isLogEnabled: false);
+    final smtpClient = SmtpClient('test');
     await smtpClient.connectToServer(imapHost, smtpPort, isSecure: false);
     await smtpClient.ehlo();
-    await smtpClient.authenticate(
-      '$userA@localhost',
-      passA,
-      AuthMechanism.plain,
-    );
+    await smtpClient.authenticate('$userA@localhost', passA);
 
     final builder = MessageBuilder()
       ..from = [MailAddress('Alice', '$userA@localhost')]
@@ -74,16 +71,20 @@ void main() {
       ..subject = 'Integration test ${DateTime.now().millisecondsSinceEpoch}'
       ..text = 'Hello from SharedInbox integration test.';
     await smtpClient.sendMessage(builder.buildMimeMessage());
-    smtpClient.disconnect();
+    await smtpClient.quit();
 
     // Give Stalwart a moment to deliver the message.
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future<void>.delayed(const Duration(milliseconds: 500));
 
-    final imapClient =
-        await _connect(userB, passB, host: imapHost, port: imapPort);
+    final imapClient = await _connect(
+      userB,
+      passB,
+      host: imapHost,
+      port: imapPort,
+    );
     addTearDown(() => imapClient.logout().ignore());
 
-    final mailbox = await imapClient.selectMailboxByPath('INBOX');
-    expect(mailbox.messagesExists, greaterThan(0));
+    final inbox = await imapClient.selectMailboxByPath('INBOX');
+    expect(inbox.messagesExists, greaterThan(0));
   });
 }

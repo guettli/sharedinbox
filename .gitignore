@@ -24,14 +24,29 @@ android/.gradle/
 android/local.properties
 android/app/google-services.json
 android/key.properties
+android/app/src/main/java/io/flutter/plugins/
 
-# iOS / macOS
+# iOS
 ios/Pods/
-macos/Pods/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
 *.xcworkspace/
 
-# Linux build output
-linux/build/
+# macOS
+macos/Pods/
+macos/Flutter/GeneratedPluginRegistrant.swift
+macos/Flutter/ephemeral/
 
-# Stalwart dev server runtime data (created by stalwart-dev/start)
-/tmp/stalwart-dev-*/
+# Linux generated plugin wiring (recreated by flutter pub get)
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.*
+linux/flutter/generated_plugins.cmake
+
+# Flutter generated metadata
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# direnv cache
+.direnv/
