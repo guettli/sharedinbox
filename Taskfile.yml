@@ -13,6 +13,13 @@ tasks:
       - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
         msg: "Not in nix dev shell. Run: nix develop"
 
+  _pub-get:
+    internal: true
+    run: once
+    deps: [_nix-check]
+    cmds:
+      - flutter pub get --suppress-analytics 2>/dev/null
+
   install-hooks:
     desc: Install pre-commit hooks (requires pre-commit; see .pre-commit-config.yaml)
     cmds:
@@ -20,13 +27,13 @@ tasks:
 
   codegen:
     desc: Generate Drift DB code (run after any schema change)
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
       - flutter pub run build_runner build --delete-conflicting-outputs
 
   analyze:
     desc: Static analysis (flutter analyze)
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
       - scripts/run_analyze.sh
 
@@ -38,15 +45,15 @@ tasks:
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
       - scripts/run_unit_tests.sh
 
   test-widget:
     desc: Widget tests — headless, no display or network required
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
-      - flutter test test/widget/
+      - scripts/run_widget_tests.sh
 
   test-flutter:
     desc: Full Flutter test suite (unit + widget + integration)
@@ -60,18 +67,41 @@ tasks:
     cmds:
       - stalwart-dev/test.sh
 
+  _check-libsecret:
+    internal: true
+    cmds:
+      - |
+        if pkg-config --exists libsecret-1; then
+          exit 0
+        elif dpkg -s libsecret-1-dev >/dev/null 2>&1; then
+          echo "Error: libsecret-1-dev is installed but pkg-config cannot find it."
+          echo "Your nix shell was opened before the package was installed."
+          echo "Fix: exit the nix shell and re-enter with: nix develop"
+          exit 1
+        else
+          echo "Error: libsecret-1-dev is not installed."
+          echo "Fix: sudo apt install libsecret-1-dev"
+          exit 1
+        fi
+
+  build-linux:
+    desc: Build the Linux desktop app (debug)
+    deps: [_nix-check, _pub-get, _check-libsecret]
+    cmds:
+      - flutter build linux --debug --no-pub
+
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
-      - flutter build apk --release
+      - flutter build apk --release --no-pub
 
   run:
     desc: Run the app on Linux desktop
-    deps: [_nix-check]
+    deps: [_nix-check, _pub-get]
     cmds:
-      - flutter run -d linux
+      - flutter run -d linux --no-pub
 
   check:
-    desc: All fast checks — analyze + unit tests + widget tests + integration in parallel
-    deps: [analyze, test, test-widget, integration]
+    desc: All fast checks — analyze + unit tests + widget tests + build-linux + integration in parallel
+    deps: [analyze, test, test-widget, build-linux, integration]

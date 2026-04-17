@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 START=$(date +%s)
-flutter analyze
+flutter analyze --no-pub
 END=$(date +%s)
 echo "analyze: $((END - START))s"

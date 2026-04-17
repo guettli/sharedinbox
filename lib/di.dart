@@ -8,6 +8,7 @@ import 'data/db/database.dart';
 import 'data/repositories/account_repository_impl.dart';
 import 'data/repositories/email_repository_impl.dart';
 import 'data/repositories/mailbox_repository_impl.dart';
+import 'data/storage/flutter_secure_storage_impl.dart';
 
 final dbProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();
@@ -16,7 +17,10 @@ final dbProvider = Provider<AppDatabase>((ref) {
 });
 
 final accountRepositoryProvider = Provider<AccountRepository>((ref) {
-  return AccountRepositoryImpl(ref.watch(dbProvider));
+  return AccountRepositoryImpl(
+    ref.watch(dbProvider),
+    const FlutterSecureStorageImpl(),
+  );
 });
 
 final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {

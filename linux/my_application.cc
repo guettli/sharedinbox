@@ -34,9 +34,9 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
-static void my_application_local_command_line(GApplication* application,
-                                              gchar*** arguments,
-                                              int* exit_status) {
+static gboolean my_application_local_command_line(GApplication* application,
+                                                   gchar*** arguments,
+                                                   int* exit_status) {
   MyApplication* self = MY_APPLICATION(application);
   // Strip the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
@@ -45,11 +45,12 @@ static void my_application_local_command_line(GApplication* application,
   if (!g_application_register(application, nullptr, &error)) {
     g_warning("Failed to register: %s", error->message);
     *exit_status = 1;
-    return;
+    return TRUE;
   }
 
   g_application_activate(application);
   *exit_status = 0;
+  return TRUE;
 }
 
 static void my_application_dispose(GObject* object) {

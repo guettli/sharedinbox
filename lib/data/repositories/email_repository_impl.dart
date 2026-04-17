@@ -3,17 +3,31 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 
+import '../../core/models/account.dart' as account_model;
 import '../../core/models/email.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/email_repository.dart';
 import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 
+typedef ImapConnectFn = Future<imap.ImapClient> Function(
+    account_model.Account account, String password);
+typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
+    account_model.Account account, String password);
+
 class EmailRepositoryImpl implements EmailRepository {
-  EmailRepositoryImpl(this._db, this._accounts);
+  EmailRepositoryImpl(
+    this._db,
+    this._accounts, {
+    ImapConnectFn imapConnect = connectImap,
+    SmtpConnectFn smtpConnect = connectSmtp,
+  })  : _imapConnect = imapConnect,
+        _smtpConnect = smtpConnect;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
+  final ImapConnectFn _imapConnect;
+  final SmtpConnectFn _smtpConnect;
 
   // ── Observe ────────────────────────────────────────────────────────────────
 
@@ -55,7 +69,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY[])');
@@ -101,7 +115,7 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> syncEmails(String accountId, String mailboxPath) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final fetch = await client.fetchMessages(
@@ -151,7 +165,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -184,7 +198,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       await client.uidMove(
@@ -204,7 +218,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -220,7 +234,7 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> sendEmail(String accountId, model.EmailDraft draft) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final smtpClient = await connectSmtp(account, password);
+    final smtpClient = await _smtpConnect(account, password);
     try {
       final builder = imap.MessageBuilder()
         ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
@@ -246,7 +260,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final escaped = query.replaceAll('"', '\\"');

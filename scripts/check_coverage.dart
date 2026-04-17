@@ -14,17 +14,24 @@ const _noCode = {
   'lib/core/repositories/account_repository.dart',
   'lib/core/repositories/email_repository.dart',
   'lib/core/repositories/mailbox_repository.dart',
+  'lib/core/storage/secure_storage.dart',
 };
 
 // Files excluded from the unit-coverage gate because they require integration
 // or widget tests (covered by `task integration` / `task test-flutter`).
 const _excluded = {
-  // Data layer — requires Drift/SQLite, IMAP/SMTP network connections.
+  // Drift table schema DSL + database factory — the column getters (e.g.
+  // `TextColumn get id => text()()`) are build-time input to Drift's code
+  // generator and are never called at runtime. The `_openConnection()`
+  // factory uses `path_provider` which is unavailable in unit tests.
   'lib/data/db/database.dart',
+  // IMAP/SMTP factory — top-level functions that open real network connections;
+  // no seam to inject a fake client without wrapping the enough_mail types.
   'lib/data/imap/imap_client_factory.dart',
-  'lib/data/repositories/account_repository_impl.dart',
-  'lib/data/repositories/email_repository_impl.dart',
-  'lib/data/repositories/mailbox_repository_impl.dart',
+  // Pure adapter over FlutterSecureStorage (a platform plugin);
+  // all three methods just delegate — no logic, and platform channels are
+  // unavailable in unit tests.
+  'lib/data/storage/flutter_secure_storage_impl.dart',
   // Flutter wiring — requires full widget/app context.
   'lib/di.dart',
   'lib/main.dart',

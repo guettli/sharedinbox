@@ -7,12 +7,18 @@ import '../../core/repositories/mailbox_repository.dart';
 import '../../core/utils/logger.dart';
 import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
+import 'email_repository_impl.dart' show ImapConnectFn;
 
 class MailboxRepositoryImpl implements MailboxRepository {
-  MailboxRepositoryImpl(this._db, this._accounts);
+  MailboxRepositoryImpl(
+    this._db,
+    this._accounts, {
+    ImapConnectFn imapConnect = connectImap,
+  }) : _imapConnect = imapConnect;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
+  final ImapConnectFn _imapConnect;
 
   @override
   Stream<List<model.Mailbox>> observeMailboxes(String accountId) {
@@ -27,7 +33,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<void> syncMailboxes(String accountId) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await connectImap(account, password);
+    final client = await _imapConnect(account, password);
     try {
       final mailboxes = await client.listMailboxes(recursive: true);
       for (final mb in mailboxes) {

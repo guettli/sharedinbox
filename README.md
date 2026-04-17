@@ -74,15 +74,61 @@ task check
 
 ```bash
 task analyze          # flutter analyze (uses analysis_options.yaml)
-task test             # pure-Dart unit tests + coverage gate (≥70%)
+task test             # pure-Dart unit tests + coverage gate (≥85%)
 task test-widget      # widget tests — headless, no device needed
 task test-flutter     # full Flutter test suite (unit + widget + integration)
 task integration      # IMAP/SMTP integration tests via local Stalwart server
+task build-linux      # flutter build linux --debug (compile check)
 task run              # flutter run -d linux
 task analyze-fix      # dart fix --apply
 ```
 
-`task check` runs `analyze` + `test` in parallel — use it before every commit.
+`task check` runs `analyze` + `test` + `test-widget` + `build-linux` + `integration` in parallel — use it before every commit.
+
+### Running the app on desktop in mobile screen resolution
+
+Start the app on the Linux desktop target:
+
+```bash
+task run   # or: flutter run -d linux
+```
+
+After the window opens, resize it to a phone-like size. Typical reference dimensions:
+
+| Device profile | Width × Height |
+| --- | --- |
+| Compact phone (e.g. Pixel 6a) | 360 × 800 |
+| Large phone (e.g. iPhone 14 Pro) | 393 × 852 |
+| Tall phone (e.g. Samsung S24) | 360 × 780 |
+
+Drag the window border to those dimensions, or use your window manager's "set window size" feature. The Flutter layout engine responds to the window size exactly as it would on a real device — breakpoints, overflow, and scrolling behave identically. Hot-reload (`r` in the terminal) preserves the window size between reloads.
+
+### Building and installing an Android APK
+
+Build a release APK with:
+
+```bash
+task build-android   # or: flutter build apk --release
+```
+
+The signed APK is written to:
+
+```text
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+**Install via ADB** (USB cable or Wi-Fi ADB, device must have "Install from unknown sources" enabled):
+
+```bash
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+**Install by side-loading** (no cable):
+
+1. Copy `app-release.apk` to the device (e.g. via USB file transfer, cloud storage, or `adb push`).
+2. Open a file manager on the device, tap the `.apk` file, and confirm the install prompt.
+
+> **Tip — split APKs for smaller size:** `flutter build apk --split-per-abi` produces three smaller APKs (one per CPU architecture). Install the one matching the device: `app-arm64-v8a-release.apk` covers almost all modern Android phones.
 
 ### Widget tests
 

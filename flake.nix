@@ -48,6 +48,11 @@
             libepoxy
             at-spi2-atk
             at-spi2-core
+            # libsecret intentionally omitted from Nix inputs: the binary-cache
+            # build of libgpg-error (a transitive dep) requires GLIBC_2.42 which
+            # is absent on non-NixOS hosts (nixpkgs issue, glibc 2.40 vs 2.42).
+            # Use the system package instead:
+            #   sudo apt install libsecret-1-dev
 
             # Local IMAP/SMTP dev server for integration tests
             stalwart-mail
@@ -67,6 +72,19 @@
             export ANDROID_HOME="${androidSdk}/share/android-sdk"
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+
+            # flutter_secure_storage_linux needs libsecret-1 via pkg-config.
+            # We use the system package (sudo apt install libsecret-1-dev) because
+            # the Nix binary-cache build of libgpg-error (a transitive dep) requires
+            # GLIBC_2.42 which is absent in this closure's glibc 2.40.
+            export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:''${PKG_CONFIG_PATH:-}"
+
+            # Nix sets TMPDIR/TMP/TEMP to a per-shell dir that is removed when the
+            # shell exits. Flutter refuses to start if that dir no longer exists
+            # (https://github.com/flutter/flutter/issues/74042). Reset to /tmp.
+            export TMPDIR=/tmp
+            export TMP=/tmp
+            export TEMP=/tmp
 
             # Disable Flutter telemetry inside dev shell
             export FLUTTER_SUPPRESS_ANALYTICS=true

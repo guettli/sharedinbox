@@ -1,14 +1,13 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import '../../core/models/account.dart' as model;
 import '../../core/repositories/account_repository.dart';
+import '../../core/storage/secure_storage.dart';
 import '../db/database.dart';
 
 class AccountRepositoryImpl implements AccountRepository {
-  AccountRepositoryImpl(this._db);
+  AccountRepositoryImpl(this._db, this._storage);
 
   final AppDatabase _db;
-  final _storage = const FlutterSecureStorage();
+  final SecureStorage _storage;
 
   @override
   Stream<List<model.Account>> observeAccounts() {
