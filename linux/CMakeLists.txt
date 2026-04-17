@@ -6,7 +6,6 @@ set(APPLICATION_ID "de.sharedinbox.sharedinbox")
 
 cmake_policy(SET CMP0063 NEW)
 
-# Load bundled libraries from the lib/ directory relative to the binary.
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
 
 # Build mode defaults.
@@ -50,14 +49,6 @@ target_compile_definitions(${BINARY_NAME} PRIVATE FLUTTER_VERSION_PATCH=${FLUTTE
 target_compile_definitions(${BINARY_NAME} PRIVATE FLUTTER_VERSION_BUILD=${FLUTTER_VERSION_BUILD})
 target_link_libraries(${BINARY_NAME} PRIVATE flutter PkgConfig::GTK)
 
-# nixos-25.11 packages are compiled against glibc 2.42 from the Nix toolchain.
-# On non-NixOS hosts with an older glibc (e.g. 2.40) the static linker cannot
-# resolve versioned symbols such as __inet_pton_chk@GLIBC_2.42 that live in
-# Nix-built transitive dependencies (libgpg-error → libsecret →
-# flutter_secure_storage_linux). Those .so files carry their own RPATH to the
-# Nix glibc, so the symbols ARE present at runtime — the link-time check is a
-# false alarm. --allow-shlib-undefined suppresses it.
-target_link_options(${BINARY_NAME} PRIVATE -Wl,--allow-shlib-undefined)
 
 add_dependencies(${BINARY_NAME} flutter_assemble)
 

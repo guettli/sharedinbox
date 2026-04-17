@@ -9,7 +9,8 @@ export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
 export STALWART_USER_C="${STALWART_USER_C:-bob}"
 export STALWART_PASS_C="${STALWART_PASS_C:-secret}"
 export STALWART_RANDOM_PORTS=1
-export STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
+STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
+export STALWART_TMPDIR
 
 command -v stalwart >/dev/null || {
     echo "stalwart not in PATH — run inside nix develop"
@@ -60,6 +61,6 @@ export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
 
 START=$(date +%s)
-flutter test test/integration/
+fvm flutter test test/integration/
 END=$(date +%s)
 echo "integration: $((END - START))s"

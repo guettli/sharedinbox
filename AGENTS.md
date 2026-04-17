@@ -19,15 +19,19 @@
 
 ## Running
 
+Flutter build dependencies (libgtk-3-dev, libepoxy-dev, libsecret-1-dev, etc.) are installed via apt — see the Flutter Linux docs. The nix dev shell provides only tools: `task`, `fvm`, `stalwart-mail`.
+
+Enter the nix dev shell first: `nix develop`
+
 ```bash
 # Code generation (must run after schema changes)
-dart run build_runner build --delete-conflicting-outputs
+task codegen
 
 # Desktop
-flutter run -d linux
+task run
 
 # Tests
-flutter test
+task test
 ```
 
 ## Adding a screen

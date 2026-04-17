@@ -18,14 +18,23 @@ tasks:
     run: once
     deps: [_nix-check]
     cmds:
-      - cmd: command -v flutter >/dev/null 2>&1 || fvm install
+      - cmd: fvm install --skip-pub-get
 
   _pub-get:
     internal: true
     run: once
     deps: [_flutter-check]
     cmds:
-      - flutter pub get --suppress-analytics 2>/dev/null
+      - fvm flutter pub get --suppress-analytics
+
+  _linux-deps-check:
+    internal: true
+    run: once
+    preconditions:
+      - sh: command -v clang >/dev/null 2>&1
+        msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
+      - sh: pkg-config --exists gtk+-3.0 2>/dev/null
+        msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
 
   install-hooks:
     desc: Install pre-commit hooks (requires pre-commit; see .pre-commit-config.yaml)
@@ -36,7 +45,7 @@ tasks:
     desc: Generate Drift DB code (run after any schema change)
     deps: [_nix-check, _pub-get]
     cmds:
-      - flutter pub run build_runner build --delete-conflicting-outputs
+      - fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   analyze:
     desc: Static analysis (flutter analyze)
@@ -48,7 +57,7 @@ tasks:
     desc: Auto-fix lint issues with dart fix --apply
     deps: [_nix-check]
     cmds:
-      - dart fix --apply
+      - fvm dart fix --apply
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
@@ -66,7 +75,7 @@ tasks:
     desc: Full Flutter test suite (unit + widget + integration)
     deps: [_nix-check]
     cmds:
-      - flutter test
+      - fvm flutter test
 
   integration:
     desc: Integration tests against a local Stalwart mail server
@@ -74,48 +83,23 @@ tasks:
     cmds:
       - stalwart-dev/test.sh
 
-  _check-libsecret:
-    internal: true
-    cmds:
-      - |
-        if pkg-config --exists libsecret-1; then
-          exit 0
-        elif dpkg -s libsecret-1-dev >/dev/null 2>&1; then
-          echo "Error: libsecret-1-dev is installed but pkg-config cannot find it."
-          echo "Your nix shell was opened before the package was installed."
-          echo "Fix: exit the nix shell and re-enter with: nix develop"
-        else
-          echo "Error: libsecret-1-dev is not installed."
-          echo "Fix: sudo apt install libsecret-1-dev"
-        fi
-        exit 1
-
   build-linux:
     desc: Build the Linux desktop app (debug)
-    deps: [_nix-check, _pub-get, _check-libsecret]
+    deps: [_nix-check, _linux-deps-check, _pub-get]
     cmds:
-      - flutter build linux --debug --no-pub
-      - |
-        binary=build/linux/x64/debug/bundle/sharedinbox
-        missing=$(LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu ldd "$binary" 2>/dev/null | grep 'not found' || true)
-        if [ -n "$missing" ]; then
-          echo "Error: built binary has unresolvable runtime dependencies:"
-          echo "$missing"
-          echo "Fix: sudo apt install libsecret-1-0"
-          exit 1
-        fi
+      - fvm flutter build linux --debug --no-pub
 
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
     deps: [_nix-check, _pub-get]
     cmds:
-      - flutter build apk --release --no-pub
+      - fvm flutter build apk --release --no-pub
 
   run:
     desc: Run the app on Linux desktop
-    deps: [_nix-check, _pub-get]
+    deps: [_nix-check, _linux-deps-check, _pub-get]
     cmds:
-      - flutter run -d linux --no-pub
+      - fvm flutter run -d linux --no-pub
 
   check:
     desc: All fast checks — analyze + unit tests + widget tests + build-linux + integration in parallel
