@@ -13,10 +13,17 @@ tasks:
       - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
         msg: "Not in nix dev shell. Run: nix develop"
 
-  _pub-get:
+  _flutter-check:
     internal: true
     run: once
     deps: [_nix-check]
+    cmds:
+      - cmd: command -v flutter >/dev/null 2>&1 || fvm install
+
+  _pub-get:
+    internal: true
+    run: once
+    deps: [_flutter-check]
     cmds:
       - flutter pub get --suppress-analytics 2>/dev/null
 
@@ -63,7 +70,7 @@ tasks:
 
   integration:
     desc: Integration tests against a local Stalwart mail server
-    deps: [_nix-check]
+    deps: [_flutter-check]
     cmds:
       - stalwart-dev/test.sh
 
@@ -77,18 +84,26 @@ tasks:
           echo "Error: libsecret-1-dev is installed but pkg-config cannot find it."
           echo "Your nix shell was opened before the package was installed."
           echo "Fix: exit the nix shell and re-enter with: nix develop"
-          exit 1
         else
           echo "Error: libsecret-1-dev is not installed."
           echo "Fix: sudo apt install libsecret-1-dev"
-          exit 1
         fi
+        exit 1
 
   build-linux:
     desc: Build the Linux desktop app (debug)
     deps: [_nix-check, _pub-get, _check-libsecret]
     cmds:
       - flutter build linux --debug --no-pub
+      - |
+        binary=build/linux/x64/debug/bundle/sharedinbox
+        missing=$(LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu ldd "$binary" 2>/dev/null | grep 'not found' || true)
+        if [ -n "$missing" ]; then
+          echo "Error: built binary has unresolvable runtime dependencies:"
+          echo "$missing"
+          echo "Fix: sudo apt install libsecret-1-0"
+          exit 1
+        fi
 
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)

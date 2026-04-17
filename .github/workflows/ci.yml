@@ -37,8 +37,7 @@ jobs:
   integration:
     name: Integration tests (Stalwart)
     runs-on: ubuntu-latest
-    # Run integration tests only on push to main, not on every PR,
-    # since they require downloading the Stalwart binary via Nix.
+    # Run integration tests only on push to main, not on every PR.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -54,7 +53,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Enter Nix shell and run integration tests
+      - name: Run integration tests
         run: |
           nix develop --command bash -c "
             flutter pub get &&

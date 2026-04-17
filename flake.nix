@@ -31,9 +31,6 @@
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            # Flutter / Dart toolchain
-            flutter
-
             # Android
             androidSdk
 
@@ -59,6 +56,9 @@
 
             # Task runner
             go-task
+
+            # Flutter version manager (fvm install downloads the pinned Flutter SDK)
+            fvm
 
             # Utilities
             git

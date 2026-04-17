@@ -51,14 +51,17 @@ Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs y
 
 ### Prerequisites
 
-[Nix](https://nixos.org/download) with flakes enabled, and [direnv](https://direnv.net/).
+[Nix](https://nixos.org/download) with flakes enabled and [direnv](https://direnv.net/).
 
 ```bash
-# One-time: allow direnv in this directory
+# One-time: allow direnv to load the Nix dev shell
 direnv allow
+
+# One-time: install the pinned Flutter version (fvm is provided by Nix)
+fvm install
 ```
 
-`direnv` loads the Nix flake automatically — no manual `nix develop` needed after that. The flake pins **Flutter 3.41.6**, Android SDK, Stalwart mail server (for integration tests), and all Linux desktop build tools (GTK3, clang, cmake).
+`direnv` loads the Nix flake automatically — it provides go-task, fvm, Android SDK, Stalwart, and Linux build tools. Flutter itself is managed by FVM (pinned in `.fvmrc`) rather than Nix, which avoids glibc compatibility issues on non-NixOS hosts. `task check` also runs `fvm install` automatically if Flutter is missing.
 
 ### First-time setup
 

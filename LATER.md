@@ -1,6 +1,14 @@
 # Later
 
-is there a e2e test tool in Flutter like Playwright? Application should launch, create screenshots...
+Flutter best practices?
+
+---
+
+Flutter/Dart Linters?
+
+---
+
+integration_test (similar to Playwright)
 
 ---
 
