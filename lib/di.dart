@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/repositories/account_repository.dart';
 import 'core/repositories/email_repository.dart';
 import 'core/repositories/mailbox_repository.dart';
+import 'core/storage/secure_storage.dart';
 import 'core/sync/account_sync_manager.dart';
 import 'data/db/database.dart';
 import 'data/repositories/account_repository_impl.dart';
@@ -16,10 +17,14 @@ final dbProvider = Provider<AppDatabase>((ref) {
   return db;
 });
 
+final secureStorageProvider = Provider<SecureStorage>((ref) {
+  return const FlutterSecureStorageImpl();
+});
+
 final accountRepositoryProvider = Provider<AccountRepository>((ref) {
   return AccountRepositoryImpl(
     ref.watch(dbProvider),
-    const FlutterSecureStorageImpl(),
+    ref.watch(secureStorageProvider),
   );
 });
 

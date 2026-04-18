@@ -17,6 +17,9 @@ class FakeImapClient extends imap.ImapClient {
   int markDeletedCalls = 0;
   int expungeCalls = 0;
   int moveEmailCalls = 0;
+  int appendCalls = 0;
+  String? lastAppendMailboxPath;
+  int createMailboxCalls = 0;
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(
@@ -105,6 +108,30 @@ class FakeImapClient extends imap.ImapClient {
   Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
     expungeCalls++;
     return null;
+  }
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    createMailboxCalls++;
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      flags: [],
+      pathSeparator: '/',
+    );
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appendCalls++;
+    lastAppendMailboxPath = targetMailboxPath;
+    return imap.GenericImapResult();
   }
 
   @override

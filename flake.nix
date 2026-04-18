@@ -22,6 +22,9 @@
             # Local IMAP/SMTP dev server for integration tests
             stalwart-mail
 
+            # Headless display for UI integration tests
+            xvfb-run          # wraps Xvfb; xvfb-run --auto-servernum ...
+
             # Utilities
             git
             curl

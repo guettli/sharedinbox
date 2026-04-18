@@ -1,3 +1,5 @@
+import 'dart:io' show HandshakeException;
+
 import 'package:enough_mail/enough_mail.dart';
 
 import '../../core/models/account.dart';
@@ -25,7 +27,7 @@ Future<SmtpClient> connectSmtp(Account account, String password) async {
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  final client = SmtpClient(clientDomain);
+  var client = SmtpClient(clientDomain);
   await client.connectToServer(
     account.smtpHost,
     account.smtpPort,
@@ -33,9 +35,20 @@ Future<SmtpClient> connectSmtp(Account account, String password) async {
   );
   await client.ehlo();
   if (!account.smtpSsl) {
-    // Opportunistic TLS on submission port (587)
+    // Opportunistic TLS on submission port (587).
     try {
       await client.startTls();
+    } on HandshakeException catch (e) {
+      // TLS handshake failure (e.g. self-signed cert) breaks the socket.
+      // Reconnect plaintext so authenticate() can still proceed.
+      log('STARTTLS handshake failed on ${account.smtpHost}: $e — reconnecting without TLS');
+      client = SmtpClient(clientDomain);
+      await client.connectToServer(
+        account.smtpHost,
+        account.smtpPort,
+        isSecure: false,
+      );
+      await client.ehlo();
     } catch (e) {
       log('STARTTLS not available on ${account.smtpHost}: $e — continuing without TLS');
     }

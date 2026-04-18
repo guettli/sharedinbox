@@ -66,8 +66,8 @@ void main() {
     await smtpClient.authenticate(userA, passA);
 
     final builder = MessageBuilder()
-      ..from = [MailAddress('Alice', '$userA@localhost')]
-      ..to = [MailAddress('Bob', '$userB@localhost')]
+      ..from = [MailAddress('Alice', userA)]
+      ..to = [MailAddress('Bob', userB)]
       ..subject = 'Integration test ${DateTime.now().millisecondsSinceEpoch}'
       ..text = 'Hello from SharedInbox integration test.';
     await smtpClient.sendMessage(builder.buildMimeMessage());

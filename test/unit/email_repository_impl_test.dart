@@ -371,7 +371,7 @@ void main() {
       expect(r.fakeImap.logoutCalled, isTrue);
     });
 
-    test('sendEmail calls SMTP sendMessage and quit', () async {
+    test('sendEmail sends via SMTP and appends copy to Sent folder', () async {
       final r = _makeReposWithFakes();
       await r.accounts.addAccount(_account, 'pw');
 
@@ -388,6 +388,9 @@ void main() {
 
       expect(r.fakeSmtp.messageSent, isTrue);
       expect(r.fakeSmtp.quitCalled, isTrue);
+      expect(r.fakeImap.appendCalls, 1);
+      expect(r.fakeImap.lastAppendMailboxPath, 'Sent');
+      expect(r.fakeImap.logoutCalled, isTrue);
     });
 
     test('searchEmails returns emails matching IMAP search', () async {

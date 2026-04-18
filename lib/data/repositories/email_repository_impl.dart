@@ -234,21 +234,35 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> sendEmail(String accountId, model.EmailDraft draft) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
+    final builder = imap.MessageBuilder()
+      ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
+      ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
+      ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
+      ..subject = draft.subject
+      ..text = draft.body;
+    final mimeMessage = builder.buildMimeMessage();
     final smtpClient = await _smtpConnect(account, password);
     try {
-      final builder = imap.MessageBuilder()
-        ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-        ..to = draft.to
-            .map((a) => imap.MailAddress(a.name, a.email))
-            .toList()
-        ..cc = draft.cc
-            .map((a) => imap.MailAddress(a.name, a.email))
-            .toList()
-        ..subject = draft.subject
-        ..text = draft.body;
-      await smtpClient.sendMessage(builder.buildMimeMessage());
+      await smtpClient.sendMessage(mimeMessage);
     } finally {
       await smtpClient.quit();
+    }
+    // Save a copy to the Sent folder via IMAP APPEND.
+    // Create the folder first — many servers don't pre-create it.
+    final imapClient = await _imapConnect(account, password);
+    try {
+      try {
+        await imapClient.createMailbox('Sent');
+      } catch (_) {
+        // Already exists — that's fine.
+      }
+      await imapClient.appendMessage(
+        mimeMessage,
+        targetMailboxPath: 'Sent',
+        flags: [r'\Seen'],
+      );
+    } finally {
+      await imapClient.logout();
     }
   }
 

@@ -4,8 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'di.dart';
 import 'ui/router.dart';
 
-void main() {
-  runApp(const ProviderScope(child: SharedInboxApp()));
+void main({List<Override> overrides = const []}) {
+  runApp(ProviderScope(overrides: overrides, child: const SharedInboxApp()));
 }
 
 class SharedInboxApp extends ConsumerStatefulWidget {

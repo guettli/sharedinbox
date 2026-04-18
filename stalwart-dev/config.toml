@@ -48,13 +48,13 @@ type = "memory"
 
 [[directory."memory".principals]]
 class  = "individual"
-name   = "alice"
+name   = "alice@localhost"
 secret = "secret"
 email  = ["alice@localhost"]
 
 [[directory."memory".principals]]
 class  = "individual"
-name   = "bob"
+name   = "bob@localhost"
 secret = "secret"
 email  = ["bob@localhost"]
 

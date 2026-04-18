@@ -61,6 +61,39 @@ jobs:
             stalwart-dev/test.sh
           "
 
+  integration-ui:
+    name: UI Integration tests (Stalwart + Xvfb)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v14
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Install Flutter Linux build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev pkg-config cmake ninja-build clang \
+            libsecret-1-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.6"
+          channel: stable
+          cache: true
+
+      - name: Run UI integration tests
+        run: |
+          nix develop --command bash -c "
+            flutter pub get &&
+            flutter pub run build_runner build --delete-conflicting-outputs &&
+            stalwart-dev/integration_ui_test.sh
+          "
+
   build-linux:
     name: Build Linux desktop
     runs-on: ubuntu-latest

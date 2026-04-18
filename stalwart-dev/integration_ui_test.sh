@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Starts Stalwart in the background on fresh random ports, runs Flutter
-# integration tests, then stops it.
+# Starts Stalwart on random ports, then runs Flutter UI integration tests inside
+# a virtual X server (Xvfb).  Works on a local desktop and in headless CI.
+# No D-Bus or keyring daemon is required — tests inject an in-memory SecureStorage.
+#
+# Run inside nix develop: stalwart-dev/integration_ui_test.sh
 set -Eeuo pipefail
-trap 'echo "Warning: A command failed ($0:$LINENO)"; exit 3' ERR
 
 export STALWART_USER_B="${STALWART_USER_B:-alice@localhost}"
 export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
@@ -12,8 +14,26 @@ export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
 export STALWART_TMPDIR
 
+# Isolate the app database: fresh HOME → fresh path_provider directory.
+TEST_HOME="$(mktemp -d /tmp/sharedinbox-test-home-XXXXXX)"
+
+cleanup() {
+    kill "${STALWART_PID:-}" 2>/dev/null || true
+    wait "${STALWART_PID:-}" 2>/dev/null || true
+    rm -rf "$TEST_HOME"
+}
+trap cleanup EXIT
+
 command -v stalwart >/dev/null || {
-    echo "stalwart not in PATH — run inside nix develop"
+    echo "stalwart not in PATH."
+    echo "Run inside the nix dev shell:"
+    echo "  nix develop --command stalwart-dev/integration_ui_test.sh"
+    exit 1
+}
+command -v xvfb-run >/dev/null || {
+    echo "xvfb-run not in PATH."
+    echo "Run inside the nix dev shell:"
+    echo "  nix develop --command stalwart-dev/integration_ui_test.sh"
     exit 1
 }
 
@@ -28,7 +48,6 @@ rm -f "$LOGFILE"
 
 "$(dirname "$0")/start" >"$LOGFILE" 2>&1 &
 STALWART_PID=$!
-trap 'kill "$STALWART_PID" 2>/dev/null || true; wait "$STALWART_PID" 2>/dev/null || true' EXIT
 
 # Wait until Stalwart is accepting connections (up to 10 s).
 for _i in $(seq 1 20); do
@@ -57,11 +76,16 @@ echo "Stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_P
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Export vars so flutter test can read them.
 export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
+export HOME="$TEST_HOME"
 
 START=$(date +%s)
-fvm flutter test test/integration/
+
+# xvfb-run provides a virtual framebuffer so the Flutter Linux runner has a
+# display without requiring a real desktop session.  No D-Bus or keyring daemon
+# is needed because the integration tests inject an in-memory SecureStorage.
+xvfb-run --auto-servernum fvm flutter test integration_test/ -d linux
+
 END=$(date +%s)
-echo "integration: $((END - START))s"
+echo "ui-integration: $((END - START))s"
