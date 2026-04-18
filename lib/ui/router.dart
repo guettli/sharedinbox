@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import 'screens/account_list_screen.dart';
 import 'screens/add_account_screen.dart';
+import 'screens/edit_account_screen.dart';
 import 'screens/mailbox_list_screen.dart';
 import 'screens/email_list_screen.dart';
 import 'screens/email_detail_screen.dart';
@@ -18,6 +19,12 @@ final router = GoRouter(
         GoRoute(
           path: 'add',
           builder: (ctx, state) => const AddAccountScreen(),
+        ),
+        GoRoute(
+          path: ':accountId/edit',
+          builder: (ctx, state) => EditAccountScreen(
+            accountId: state.pathParameters['accountId']!,
+          ),
         ),
         GoRoute(
           path: ':accountId/mailboxes',

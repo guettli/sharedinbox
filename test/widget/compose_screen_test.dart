@@ -79,11 +79,7 @@ void main() {
         displayName: 'Bob',
         email: 'bob@example.com',
         imapHost: 'imap.example.com',
-        imapPort: 993,
-        imapSsl: true,
         smtpHost: 'smtp.example.com',
-        smtpPort: 587,
-        smtpSsl: false,
       );
       await tester.pumpWidget(buildApp(
         initialLocation: '/compose',

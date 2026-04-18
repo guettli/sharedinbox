@@ -25,8 +25,9 @@ class AccountSyncManager {
     _accountsSub = _accounts.observeAccounts().listen((accounts) {
       final currentIds = accounts.map((a) => a.id).toSet();
 
-      // Start sync for newly added accounts.
+      // Start sync for newly added IMAP accounts only.
       for (final account in accounts) {
+        if (account.type != AccountType.imap) continue;
         if (!_active.containsKey(account.id)) {
           final sync = _AccountSync(account, _accounts, _mailboxes, _emails);
           _active[account.id] = sync;

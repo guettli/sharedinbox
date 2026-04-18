@@ -40,6 +40,9 @@ class _FakeAccounts implements AccountRepository {
   Future<void> addAccount(Account account, String pass) async {}
 
   @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+
+  @override
   Future<void> removeAccount(String id) async {}
 
   @override
@@ -117,7 +120,6 @@ void main() {
       imapSsl: false,
       smtpHost: imapHost,
       smtpPort: smtpPort,
-      smtpSsl: false,
     );
 
     final mgr = AccountSyncManager(

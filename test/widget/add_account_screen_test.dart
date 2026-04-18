@@ -1,115 +1,240 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
 
-import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/add_account_screen.dart';
+import 'package:sharedinbox/core/models/discovery_result.dart';
 
 import 'helpers.dart';
 
-// Wrap AddAccountScreen in a minimal GoRouter so context.pop() doesn't throw
-// when the save succeeds in other tests.
-Widget _buildScreen(List<Override> overrides) {
-  final router = GoRouter(
-    initialLocation: '/',
-    routes: [
-      GoRoute(
-        path: '/',
-        builder: (ctx, state) => const AddAccountScreen(),
-      ),
-    ],
-  );
-  return ProviderScope(
-    overrides: overrides,
-    child: MaterialApp.router(
-      routerConfig: router,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
-    ),
-  );
-}
-
-List<Override> get _overrides => [
-      accountRepositoryProvider.overrideWithValue(FakeAccountRepository()),
-      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-    ];
-
-/// Drags the form's ListView so the bottom of the form (Save button) is
-/// visible.  The drag distance is empirically large enough to clear all
-/// fields in the default 800×600 test viewport.
-Future<void> _scrollToBottom(WidgetTester tester) async {
-  await tester.drag(find.byType(ListView), const Offset(0, -2000));
-  await tester.pumpAndSettle();
-}
-
 void main() {
   group('AddAccountScreen', () {
-    testWidgets('renders fields visible at the top of the form',
-        (tester) async {
-      await tester.pumpWidget(_buildScreen(_overrides));
+    testWidgets('step 1: shows email field and Continue button', (tester) async {
+      await tester.pumpWidget(
+          buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()));
       await tester.pumpAndSettle();
 
-      // These fields are near the top and visible without scrolling.
-      expect(find.text('Add account'), findsOneWidget); // app-bar title
-      expect(find.text('Display name'), findsOneWidget);
+      expect(find.text('Add account'), findsOneWidget);
       expect(find.text('Email address'), findsOneWidget);
-      expect(find.text('Password'), findsOneWidget);
+      expect(find.text('Continue'), findsOneWidget);
     });
 
-    testWidgets('Save button is reachable by scrolling', (tester) async {
-      await tester.pumpWidget(_buildScreen(_overrides));
+    testWidgets('step 1: empty submit shows validation error', (tester) async {
+      await tester.pumpWidget(
+          buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()));
       await tester.pumpAndSettle();
 
-      await _scrollToBottom(tester);
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
 
-      expect(find.text('Save'), findsOneWidget);
+      expect(find.text('Required'), findsOneWidget);
     });
 
-    testWidgets('shows "Required" validation errors when submitted empty',
-        (tester) async {
-      await tester.pumpWidget(_buildScreen(_overrides));
+    testWidgets('step 1: invalid email shows validation error', (tester) async {
+      await tester.pumpWidget(
+          buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()));
       await tester.pumpAndSettle();
 
-      // Scroll to the Save button and tap it.
-      await _scrollToBottom(tester);
+      await tester.enterText(find.byKey(const Key('emailField')), 'notanemail');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Enter a valid email address'), findsOneWidget);
+    });
+
+    testWidgets('unknown discovery shows choose-type step', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(discovery: UnknownDiscovery()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('JMAP'), findsOneWidget);
+      expect(find.text('IMAP / SMTP'), findsOneWidget);
+    });
+
+    testWidgets('JMAP discovery navigates directly to JMAP form', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(
+          discovery: JmapDiscovery(apiUrl: 'https://mail.example.com/jmap'),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('JMAP API URL'), findsOneWidget);
+      expect(find.text('https://mail.example.com/jmap'), findsOneWidget);
+    });
+
+    testWidgets('IMAP discovery navigates directly to IMAP form', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(
+          discovery: ImapSmtpDiscovery(
+            imapHost: 'imap.example.com',
+            imapPort: 993,
+            imapSsl: true,
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpSsl: false,
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('IMAP / SMTP'), findsWidgets);
+      expect(find.text('imap.example.com'), findsOneWidget);
+      expect(find.text('smtp.example.com'), findsOneWidget);
+    });
+
+    testWidgets('choose-type: tapping JMAP shows JMAP form', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(discovery: UnknownDiscovery()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('JMAP'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('JMAP API URL'), findsOneWidget);
+    });
+
+    testWidgets('choose-type: tapping IMAP/SMTP shows IMAP form', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(discovery: UnknownDiscovery()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('IMAP / SMTP'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('IMAP'), findsWidgets);
+      expect(find.text('SMTP'), findsWidgets);
+    });
+
+    testWidgets('successful JMAP save pops back to accounts list', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(
+          discovery: JmapDiscovery(apiUrl: 'https://mail.example.com/jmap'),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextFormField, 'Display name'), 'Alice');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Password'), 'secret');
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      // Scroll back to the top to see the first validation errors.
-      await tester.drag(find.byType(ListView), const Offset(0, 2000));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Required'), findsWidgets);
+      expect(find.text('No accounts yet.'), findsOneWidget);
     });
 
-    testWidgets('IMAP SSL toggle is on by default', (tester) async {
-      await tester.pumpWidget(_buildScreen(_overrides));
-      await tester.pumpAndSettle();
-
-      // The IMAP SSL tile is near the top and visible without scrolling.
-      final imapTile = tester.widget<SwitchListTile>(find.ancestor(
-        of: find.text('SSL/TLS').first,
-        matching: find.byType(SwitchListTile),
+    testWidgets('JMAP connection failure shows error message', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(
+          discovery: JmapDiscovery(apiUrl: 'https://mail.example.com/jmap'),
+          connectionError: Exception('auth failed'),
+        ),
       ));
-      expect(imapTile.value, isTrue);
-    });
-
-    testWidgets('SMTP SSL toggle is off by default', (tester) async {
-      await tester.pumpWidget(_buildScreen(_overrides));
       await tester.pumpAndSettle();
 
-      // Scroll to reveal the SMTP section.
-      await _scrollToBottom(tester);
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
 
-      // After scrolling, there are two SwitchListTile widgets in the tree;
-      // the last one is the SMTP SSL toggle.
+      await tester.enterText(find.widgetWithText(TextFormField, 'Display name'), 'Alice');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Password'), 'wrong');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Connection failed'), findsOneWidget);
+    });
+
+    testWidgets('successful IMAP save pops back to accounts list', (tester) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(
+          discovery: ImapSmtpDiscovery(
+            imapHost: 'imap.example.com',
+            imapPort: 993,
+            imapSsl: true,
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpSsl: false,
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextFormField, 'Display name'), 'Alice');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Password'), 'secret');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No accounts yet.'), findsOneWidget);
+    });
+
+    testWidgets('IMAP SSL is on by default', (tester) async {
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts/add',
+        overrides: baseOverrides(discovery: UnknownDiscovery()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('emailField')), 'user@example.com');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('IMAP / SMTP'));
+      await tester.pumpAndSettle();
+
       final tiles = tester
           .widgetList<SwitchListTile>(find.byType(SwitchListTile))
           .toList();
+      expect(tiles.first.value, isTrue, reason: 'IMAP SSL on by default');
       expect(tiles.last.value, isFalse, reason: 'SMTP SSL off by default');
     });
   });

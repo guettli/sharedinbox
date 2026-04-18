@@ -19,6 +19,10 @@ class Accounts extends Table {
   TextColumn get smtpHost => text()();
   IntColumn get smtpPort => integer()();
   BoolColumn get smtpSsl => boolean()();
+  // Added in schema v2:
+  TextColumn get accountType =>
+      text().withDefault(const Constant('imap'))();
+  TextColumn get jmapUrl => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -54,7 +58,8 @@ class Emails extends Table {
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
-  BoolColumn get hasAttachment => boolean().withDefault(const Constant(false))();
+  BoolColumn get hasAttachment =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -80,7 +85,17 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(accounts, accounts.accountType);
+            await m.addColumn(accounts, accounts.jmapUrl);
+          }
+        },
+      );
 }
 
 LazyDatabase _openConnection() {

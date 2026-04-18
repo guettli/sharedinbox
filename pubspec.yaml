@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
 
   enough_mail: ^2.1.7
+  http: ^1.2.0
 
   # Local persistence (offline-first)
   drift: ^2.20.3

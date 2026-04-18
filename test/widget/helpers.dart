@@ -9,14 +9,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/services/account_discovery_service.dart';
+import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
+import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
@@ -46,6 +51,12 @@ class FakeAccountRepository implements AccountRepository {
   @override
   Future<void> addAccount(Account account, String password) async =>
       _accounts.add(account);
+
+  @override
+  Future<void> updateAccount(Account account, {String? password}) async {
+    final idx = _accounts.indexWhere((a) => a.id == account.id);
+    if (idx >= 0) _accounts[idx] = account;
+  }
 
   @override
   Future<void> removeAccount(String id) async =>
@@ -122,6 +133,28 @@ class FakeEmailRepository implements EmailRepository {
 }
 
 // ---------------------------------------------------------------------------
+// Fake services
+// ---------------------------------------------------------------------------
+
+class FakeDiscoveryService implements AccountDiscoveryService {
+  FakeDiscoveryService(this._result);
+  final DiscoveryResult _result;
+
+  @override
+  Future<DiscoveryResult> discover(String email) async => _result;
+}
+
+class FakeConnectionTestService implements ConnectionTestService {
+  FakeConnectionTestService({Exception? error}) : _error = error;
+  final Exception? _error;
+
+  @override
+  Future<void> testConnection(Account account, String password) async {
+    if (_error != null) throw _error;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App builder
 // ---------------------------------------------------------------------------
 
@@ -143,6 +176,12 @@ Widget buildApp({
           GoRoute(
             path: 'add',
             builder: (ctx, state) => const AddAccountScreen(),
+          ),
+          GoRoute(
+            path: ':accountId/edit',
+            builder: (ctx, state) => EditAccountScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
           ),
           GoRoute(
             path: ':accountId/mailboxes',
@@ -202,6 +241,29 @@ Widget buildApp({
   );
 }
 
+/// Convenience override list used by most widget tests.
+///
+/// Includes fakes for all repositories and the two network services so tests
+/// never hit the real database, network, or IMAP server.
+List<Override> baseOverrides({
+  List<Account>? accounts,
+  List<Mailbox>? mailboxes,
+  DiscoveryResult? discovery,
+  Exception? connectionError,
+}) =>
+    [
+      accountRepositoryProvider
+          .overrideWithValue(FakeAccountRepository(accounts)),
+      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository(mailboxes)),
+      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      accountDiscoveryServiceProvider.overrideWithValue(
+        FakeDiscoveryService(discovery ?? UnknownDiscovery()),
+      ),
+      connectionTestServiceProvider.overrideWithValue(
+        FakeConnectionTestService(error: connectionError),
+      ),
+    ];
+
 // ---------------------------------------------------------------------------
 // Common test fixtures
 // ---------------------------------------------------------------------------
@@ -211,11 +273,7 @@ const kTestAccount = Account(
   displayName: 'Alice',
   email: 'alice@example.com',
   imapHost: 'imap.example.com',
-  imapPort: 993,
-  imapSsl: true,
   smtpHost: 'smtp.example.com',
-  smtpPort: 587,
-  smtpSsl: false,
 );
 
 const kTestMailbox = Mailbox(

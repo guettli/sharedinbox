@@ -28,6 +28,9 @@ class FakeAccountRepository implements AccountRepository {
   Future<void> addAccount(Account account, String password) async {}
 
   @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+
+  @override
   Future<void> removeAccount(String id) async {}
 
   @override
@@ -98,11 +101,7 @@ const _account = Account(
   displayName: 'Test',
   email: 'test@example.com',
   imapHost: 'imap.example.com',
-  imapPort: 993,
-  imapSsl: true,
   smtpHost: 'smtp.example.com',
-  smtpPort: 587,
-  smtpSsl: false,
 );
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

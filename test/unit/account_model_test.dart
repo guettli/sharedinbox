@@ -11,11 +11,7 @@ void main() {
       displayName: 'Work',
       email: 'me@example.com',
       imapHost: 'imap.example.com',
-      imapPort: 993,
-      imapSsl: true,
       smtpHost: 'smtp.example.com',
-      smtpPort: 587,
-      smtpSsl: false,
     );
 
     test('stores all fields', () {
@@ -36,11 +32,7 @@ void main() {
         displayName: 'Work',
         email: 'me@example.com',
         imapHost: 'imap.example.com',
-        imapPort: 993,
-        imapSsl: true,
         smtpHost: 'smtp.example.com',
-        smtpPort: 587,
-        smtpSsl: false,
       );
       expect(identical(account, same), isTrue);
     });

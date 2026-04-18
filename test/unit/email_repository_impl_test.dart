@@ -19,11 +19,7 @@ const _account = Account(
   displayName: 'Alice',
   email: 'alice@example.com',
   imapHost: 'imap.example.com',
-  imapPort: 993,
-  imapSsl: true,
   smtpHost: 'smtp.example.com',
-  smtpPort: 587,
-  smtpSsl: false,
 );
 
 Future<imap.ImapClient> _noImapConnect(Account a, String p) =>

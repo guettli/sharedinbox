@@ -34,11 +34,7 @@ const _account = Account(
   displayName: 'Alice',
   email: 'alice@example.com',
   imapHost: 'imap.example.com',
-  imapPort: 993,
-  imapSsl: true,
   smtpHost: 'smtp.example.com',
-  smtpPort: 587,
-  smtpSsl: false,
 );
 
 AccountRepositoryImpl _makeRepo() =>
@@ -112,11 +108,7 @@ void main() {
         displayName: 'Alice Updated',
         email: 'alice@example.com',
         imapHost: 'imap.example.com',
-        imapPort: 993,
-        imapSsl: true,
         smtpHost: 'smtp.example.com',
-        smtpPort: 587,
-        smtpSsl: false,
       );
       await repo.addAccount(updated, 'v2');
       final accounts = await repo.observeAccounts().first;

@@ -1,3 +1,5 @@
+import 'package:drift/drift.dart' show Value;
+
 import '../../core/models/account.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/storage/secure_storage.dart';
@@ -37,9 +39,31 @@ class AccountRepositoryImpl implements AccountRepository {
             smtpHost: account.smtpHost,
             smtpPort: account.smtpPort,
             smtpSsl: account.smtpSsl,
+            accountType: Value(account.type.name),
+            jmapUrl: Value(account.jmapUrl),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
+  }
+
+  @override
+  Future<void> updateAccount(model.Account account, {String? password}) async {
+    await (_db.update(_db.accounts)..where((t) => t.id.equals(account.id)))
+        .write(AccountsCompanion(
+      displayName: Value(account.displayName),
+      email: Value(account.email),
+      imapHost: Value(account.imapHost),
+      imapPort: Value(account.imapPort),
+      imapSsl: Value(account.imapSsl),
+      smtpHost: Value(account.smtpHost),
+      smtpPort: Value(account.smtpPort),
+      smtpSsl: Value(account.smtpSsl),
+      accountType: Value(account.type.name),
+      jmapUrl: Value(account.jmapUrl),
+    ));
+    if (password != null) {
+      await _storage.write(key: _passwordKey(account.id), value: password);
+    }
   }
 
   @override
@@ -63,11 +87,13 @@ class AccountRepositoryImpl implements AccountRepository {
         id: row.id,
         displayName: row.displayName,
         email: row.email,
+        type: model.AccountType.values.byName(row.accountType),
         imapHost: row.imapHost,
         imapPort: row.imapPort,
         imapSsl: row.imapSsl,
         smtpHost: row.smtpHost,
         smtpPort: row.smtpPort,
         smtpSsl: row.smtpSsl,
+        jmapUrl: row.jmapUrl,
       );
 }
