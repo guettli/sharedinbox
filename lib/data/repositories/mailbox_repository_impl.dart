@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 
+import '../../core/models/account.dart' as account_model;
 import '../../core/models/mailbox.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/mailbox_repository.dart';
@@ -20,6 +21,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
 
+  String _effectiveUsername(account_model.Account account) =>
+      account.username.isNotEmpty ? account.username : account.email;
+
   @override
   Stream<List<model.Mailbox>> observeMailboxes(String accountId) {
     return (_db.select(_db.mailboxes)
@@ -33,7 +37,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<void> syncMailboxes(String accountId) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       final mailboxes = await client.listMailboxes(recursive: true);
       for (final mb in mailboxes) {

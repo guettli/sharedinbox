@@ -22,10 +22,10 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
-Future<imap.ImapClient> _noImapConnect(Account a, String p) =>
+Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
 
-Future<imap.SmtpClient> _noSmtpConnect(Account a, String p) =>
+Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
 ({
@@ -59,8 +59,8 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String p) =>
   final emails = EmailRepositoryImpl(
     db,
     accounts,
-    imapConnect: (_, __) async => fakeImap,
-    smtpConnect: (_, __) async => fakeSmtp,
+    imapConnect: (_, __, ___) async => fakeImap,
+    smtpConnect: (_, __, ___) async => fakeSmtp,
   );
   return (
     db: db,

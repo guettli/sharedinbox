@@ -109,7 +109,9 @@ class _AccountSync {
     if (!_running) return;
     _stopSignal = Completer<void>();
     final password = await _accounts.getPassword(account.id);
-    final client = await connectImap(account, password);
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
+    final client = await connectImap(account, username, password);
     _idleClient = client;
     try {
       await client.selectMailboxByPath('INBOX');

@@ -17,10 +17,15 @@ class Account {
   // Used when type == AccountType.jmap
   final String? jmapUrl;
 
+  /// Login username for IMAP/SMTP/JMAP. Empty means fall back to [email],
+  /// then to the local part of [email] (the part before '@').
+  final String username;
+
   const Account({
     required this.id,
     required this.displayName,
     required this.email,
+    this.username = '',
     this.type = AccountType.imap,
     this.imapHost = '',
     this.imapPort = 993,

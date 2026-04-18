@@ -21,7 +21,7 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
-Future<imap.ImapClient> _noImapConnect(Account a, String p) =>
+Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
 
 ({
@@ -51,7 +51,7 @@ Future<imap.ImapClient> _noImapConnect(Account a, String p) =>
   final mailboxes = MailboxRepositoryImpl(
     db,
     accounts,
-    imapConnect: (_, __) async => fakeImap,
+    imapConnect: (_, __, ___) async => fakeImap,
   );
   return (db: db, accounts: accounts, mailboxes: mailboxes, fakeImap: fakeImap);
 }

@@ -23,6 +23,8 @@ class Accounts extends Table {
   TextColumn get accountType =>
       text().withDefault(const Constant('imap'))();
   TextColumn get jmapUrl => text().nullable()();
+  // Added in schema v3:
+  TextColumn get username => text().withDefault(const Constant(''))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -85,7 +87,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -93,6 +95,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.addColumn(accounts, accounts.accountType);
             await m.addColumn(accounts, accounts.jmapUrl);
+          }
+          if (from < 3) {
+            await m.addColumn(accounts, accounts.username);
           }
         },
       );

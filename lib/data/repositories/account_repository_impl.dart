@@ -41,6 +41,7 @@ class AccountRepositoryImpl implements AccountRepository {
             smtpSsl: account.smtpSsl,
             accountType: Value(account.type.name),
             jmapUrl: Value(account.jmapUrl),
+            username: Value(account.username),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
@@ -60,6 +61,7 @@ class AccountRepositoryImpl implements AccountRepository {
       smtpSsl: Value(account.smtpSsl),
       accountType: Value(account.type.name),
       jmapUrl: Value(account.jmapUrl),
+      username: Value(account.username),
     ));
     if (password != null) {
       await _storage.write(key: _passwordKey(account.id), value: password);
@@ -87,6 +89,7 @@ class AccountRepositoryImpl implements AccountRepository {
         id: row.id,
         displayName: row.displayName,
         email: row.email,
+        username: row.username,
         type: model.AccountType.values.byName(row.accountType),
         imapHost: row.imapHost,
         imapPort: row.imapPort,

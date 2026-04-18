@@ -22,6 +22,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   // -- controllers -----------------------------------------------------------
   final _emailCtrl = TextEditingController();
   final _displayNameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _jmapApiUrlCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
@@ -30,6 +31,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController(text: '587');
   var _smtpSsl = false;
+
+  // -- "Try connection" state ------------------------------------------------
+  bool _tryTesting = false;
+  String? _tryOk;
+  String? _tryErr;
 
   // -- form keys -------------------------------------------------------------
   final _emailFormKey = GlobalKey<FormState>();
@@ -41,6 +47,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     for (final c in [
       _emailCtrl,
       _displayNameCtrl,
+      _usernameCtrl,
       _passwordCtrl,
       _jmapApiUrlCtrl,
       _imapHostCtrl,
@@ -93,6 +100,57 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     }
   }
 
+  Account _buildJmapAccount() => Account(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        displayName: _displayNameCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+        username: _usernameCtrl.text.trim(),
+        type: AccountType.jmap,
+        jmapUrl: _jmapApiUrlCtrl.text.trim(),
+      );
+
+  Account _buildImapAccount() => Account(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        displayName: _displayNameCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+        username: _usernameCtrl.text.trim(),
+        imapHost: _imapHostCtrl.text.trim(),
+        imapPort: int.parse(_imapPortCtrl.text),
+        imapSsl: _imapSsl,
+        smtpHost: _smtpHostCtrl.text.trim(),
+        smtpPort: int.parse(_smtpPortCtrl.text),
+        smtpSsl: _smtpSsl,
+      );
+
+  Future<void> _tryConnection(
+      GlobalKey<FormState> formKey, Account Function() buildAccount) async {
+    if (!formKey.currentState!.validate()) return;
+    setState(() {
+      _tryTesting = true;
+      _tryOk = null;
+      _tryErr = null;
+    });
+    try {
+      final account = buildAccount();
+      final effective = await ref
+          .read(connectionTestServiceProvider)
+          .testConnection(account, _passwordCtrl.text);
+      if (mounted) {
+        setState(() {
+          _tryTesting = false;
+          _tryOk = 'Connected as $effective';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _tryTesting = false;
+          _tryErr = e.toString();
+        });
+      }
+    }
+  }
+
   Future<void> _saveJmap() async {
     if (!_jmapFormKey.currentState!.validate()) return;
     setState(() {
@@ -100,19 +158,21 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       _errorMessage = null;
     });
     try {
-      final account = Account(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        displayName: _displayNameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
-        type: AccountType.jmap,
-        jmapUrl: _jmapApiUrlCtrl.text.trim(),
-      );
-      await ref
+      final account = _buildJmapAccount();
+      final effective = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
+      final accountToSave = Account(
+        id: account.id,
+        displayName: account.displayName,
+        email: account.email,
+        username: account.username.isNotEmpty ? account.username : effective,
+        type: account.type,
+        jmapUrl: account.jmapUrl,
+      );
       await ref
           .read(accountRepositoryProvider)
-          .addAccount(account, _passwordCtrl.text);
+          .addAccount(accountToSave, _passwordCtrl.text);
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
@@ -131,23 +191,25 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       _errorMessage = null;
     });
     try {
-      final account = Account(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        displayName: _displayNameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
-        imapHost: _imapHostCtrl.text.trim(),
-        imapPort: int.parse(_imapPortCtrl.text),
-        imapSsl: _imapSsl,
-        smtpHost: _smtpHostCtrl.text.trim(),
-        smtpPort: int.parse(_smtpPortCtrl.text),
-        smtpSsl: _smtpSsl,
-      );
-      await ref
+      final account = _buildImapAccount();
+      final effective = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
+      final accountToSave = Account(
+        id: account.id,
+        displayName: account.displayName,
+        email: account.email,
+        username: account.username.isNotEmpty ? account.username : effective,
+        imapHost: account.imapHost,
+        imapPort: account.imapPort,
+        imapSsl: account.imapSsl,
+        smtpHost: account.smtpHost,
+        smtpPort: account.smtpPort,
+        smtpSsl: account.smtpSsl,
+      );
       await ref
           .read(accountRepositoryProvider)
-          .addAccount(account, _passwordCtrl.text);
+          .addAccount(accountToSave, _passwordCtrl.text);
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
@@ -278,8 +340,25 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _field(_displayNameCtrl, 'Display name'),
             _field(_jmapApiUrlCtrl, 'JMAP API URL',
                 keyboardType: TextInputType.url),
+            _field(_usernameCtrl, 'Username (leave blank to use email)',
+                required: false),
             _field(_passwordCtrl, 'Password', obscure: true),
-            const SizedBox(height: 24),
+            _tryResultBanner(),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              key: const Key('tryConnectionButton'),
+              onPressed: _tryTesting
+                  ? null
+                  : () => _tryConnection(_jmapFormKey, _buildJmapAccount),
+              child: _tryTesting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Try connection'),
+            ),
+            const SizedBox(height: 8),
             FilledButton(
               onPressed: _saveJmap,
               child: const Text('Save'),
@@ -301,6 +380,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _emailHeader('IMAP / SMTP'),
             if (_errorMessage != null) _errorBanner(),
             _field(_displayNameCtrl, 'Display name'),
+            _field(_usernameCtrl, 'Username (leave blank to use email)',
+                required: false),
             _field(_passwordCtrl, 'Password', obscure: true),
             const Divider(height: 32),
             Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
@@ -322,7 +403,22 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               value: _smtpSsl,
               onChanged: (v) => setState(() => _smtpSsl = v),
             ),
-            const SizedBox(height: 24),
+            _tryResultBanner(),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              key: const Key('tryConnectionButton'),
+              onPressed: _tryTesting
+                  ? null
+                  : () => _tryConnection(_imapFormKey, _buildImapAccount),
+              child: _tryTesting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Try connection'),
+            ),
+            const SizedBox(height: 8),
             FilledButton(
               onPressed: _saveImap,
               child: const Text('Save'),
@@ -364,10 +460,33 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     );
   }
 
+  Widget _tryResultBanner() {
+    if (_tryOk != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          _tryOk!,
+          style: TextStyle(color: Theme.of(context).colorScheme.primary),
+        ),
+      );
+    }
+    if (_tryErr != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          _tryErr!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   Widget _field(
     TextEditingController ctrl,
     String label, {
     bool obscure = false,
+    bool required = true,
     TextInputType? keyboardType,
   }) {
     return Padding(
@@ -380,8 +499,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           labelText: label,
           border: const OutlineInputBorder(),
         ),
-        validator: (v) =>
-            (v == null || v.trim().isEmpty) ? 'Required' : null,
+        validator: required
+            ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+            : null,
       ),
     );
   }

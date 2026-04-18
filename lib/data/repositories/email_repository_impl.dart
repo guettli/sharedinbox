@@ -11,9 +11,9 @@ import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 
 typedef ImapConnectFn = Future<imap.ImapClient> Function(
-    account_model.Account account, String password);
+    account_model.Account account, String username, String password);
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
-    account_model.Account account, String password);
+    account_model.Account account, String username, String password);
 
 class EmailRepositoryImpl implements EmailRepository {
   EmailRepositoryImpl(
@@ -28,6 +28,9 @@ class EmailRepositoryImpl implements EmailRepository {
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final SmtpConnectFn _smtpConnect;
+
+  String _effectiveUsername(account_model.Account account) =>
+      account.username.isNotEmpty ? account.username : account.email;
 
   // ── Observe ────────────────────────────────────────────────────────────────
 
@@ -69,7 +72,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY[])');
@@ -115,7 +118,7 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> syncEmails(String accountId, String mailboxPath) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final fetch = await client.fetchMessages(
@@ -165,7 +168,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -198,7 +201,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       await client.uidMove(
@@ -218,7 +221,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -241,7 +244,7 @@ class EmailRepositoryImpl implements EmailRepository {
       ..subject = draft.subject
       ..text = draft.body;
     final mimeMessage = builder.buildMimeMessage();
-    final smtpClient = await _smtpConnect(account, password);
+    final smtpClient = await _smtpConnect(account, _effectiveUsername(account), password);
     try {
       await smtpClient.sendMessage(mimeMessage);
     } finally {
@@ -249,7 +252,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     // Save a copy to the Sent folder via IMAP APPEND.
     // Create the folder first — many servers don't pre-create it.
-    final imapClient = await _imapConnect(account, password);
+    final imapClient = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       try {
         await imapClient.createMailbox('Sent');
@@ -274,7 +277,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await _imapConnect(account, password);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final escaped = query.replaceAll('"', '\\"');

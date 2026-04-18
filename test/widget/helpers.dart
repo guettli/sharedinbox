@@ -149,8 +149,9 @@ class FakeConnectionTestService implements ConnectionTestService {
   final Exception? _error;
 
   @override
-  Future<void> testConnection(Account account, String password) async {
+  Future<String> testConnection(Account account, String password) async {
     if (_error != null) throw _error;
+    return account.username.isNotEmpty ? account.username : account.email;
   }
 }
 

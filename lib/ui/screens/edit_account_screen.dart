@@ -22,6 +22,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   Account? _account;
 
   final _displayNameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController();
@@ -30,6 +31,11 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = false;
   final _jmapUrlCtrl = TextEditingController();
+
+  // -- "Try connection" state ------------------------------------------------
+  bool _tryTesting = false;
+  String? _tryOk;
+  String? _tryErr;
 
   @override
   void initState() {
@@ -47,6 +53,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     }
     _account = account;
     _displayNameCtrl.text = account.displayName;
+    _usernameCtrl.text = account.username;
     _imapHostCtrl.text = account.imapHost;
     _imapPortCtrl.text = account.imapPort.toString();
     _imapSsl = account.imapSsl;
@@ -61,6 +68,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   void dispose() {
     for (final c in [
       _displayNameCtrl,
+      _usernameCtrl,
       _passwordCtrl,
       _imapHostCtrl,
       _imapPortCtrl,
@@ -73,16 +81,13 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     super.dispose();
   }
 
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+  Account _buildUpdated() {
     final account = _account!;
-    final password =
-        _passwordCtrl.text.isNotEmpty ? _passwordCtrl.text : null;
-
-    final updated = Account(
+    return Account(
       id: account.id,
       displayName: _displayNameCtrl.text.trim(),
       email: account.email,
+      username: _usernameCtrl.text.trim(),
       type: account.type,
       imapHost: _imapHostCtrl.text.trim(),
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
@@ -93,6 +98,42 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       jmapUrl:
           _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
     );
+  }
+
+  Future<void> _tryConnection() async {
+    if (!_formKey.currentState!.validate()) return;
+    final password = _passwordCtrl.text.isNotEmpty
+        ? _passwordCtrl.text
+        : await ref.read(accountRepositoryProvider).getPassword(widget.accountId);
+    setState(() {
+      _tryTesting = true;
+      _tryOk = null;
+      _tryErr = null;
+    });
+    try {
+      final effective = await ref
+          .read(connectionTestServiceProvider)
+          .testConnection(_buildUpdated(), password);
+      if (mounted) {
+        setState(() {
+          _tryTesting = false;
+          _tryOk = 'Connected as $effective';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _tryTesting = false;
+          _tryErr = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    final password =
+        _passwordCtrl.text.isNotEmpty ? _passwordCtrl.text : null;
 
     setState(() {
       _saving = true;
@@ -100,10 +141,28 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     });
 
     try {
+      Account updated = _buildUpdated();
       if (password != null) {
-        await ref
+        final effective = await ref
             .read(connectionTestServiceProvider)
             .testConnection(updated, password);
+        // Persist the discovered effective username when none was explicit.
+        if (updated.username.isEmpty) {
+          updated = Account(
+            id: updated.id,
+            displayName: updated.displayName,
+            email: updated.email,
+            username: effective,
+            type: updated.type,
+            imapHost: updated.imapHost,
+            imapPort: updated.imapPort,
+            imapSsl: updated.imapSsl,
+            smtpHost: updated.smtpHost,
+            smtpPort: updated.smtpPort,
+            smtpSsl: updated.smtpSsl,
+            jmapUrl: updated.jmapUrl,
+          );
+        }
       }
       await ref
           .read(accountRepositoryProvider)
@@ -157,6 +216,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 ),
               ),
             _field(_displayNameCtrl, 'Display name'),
+            _field(_usernameCtrl, 'Username (leave blank to use email)',
+                required: false),
             _field(_passwordCtrl, 'New password (leave blank to keep)',
                 key: const Key('editPasswordField'),
                 obscure: true,
@@ -188,7 +249,37 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 onChanged: (v) => setState(() => _smtpSsl = v),
               ),
             ],
-            const SizedBox(height: 24),
+            if (_tryOk != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _tryOk!,
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary),
+                ),
+              ),
+            if (_tryErr != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _tryErr!,
+                  style:
+                      TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              key: const Key('editTryConnectionButton'),
+              onPressed: _tryTesting ? null : _tryConnection,
+              child: _tryTesting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Try connection'),
+            ),
+            const SizedBox(height: 8),
             FilledButton(onPressed: _save, child: const Text('Save')),
           ],
         ),
