@@ -10,9 +10,11 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/discovery_result.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
@@ -64,6 +66,52 @@ class FakeAccountRepository implements AccountRepository {
 
   @override
   Future<String> getPassword(String accountId) async => 'test-password';
+}
+
+class FakeDraftRepository implements DraftRepository {
+  int _nextId = 1;
+  final Map<int, SavedDraft> _drafts = {};
+
+  @override
+  Future<SavedDraft> saveDraft({
+    int? id,
+    String? accountId,
+    String? replyToEmailId,
+    required String toText,
+    required String ccText,
+    required String subjectText,
+    required String bodyText,
+  }) async {
+    final draftId = id ?? _nextId++;
+    final draft = SavedDraft(
+      id: draftId,
+      accountId: accountId,
+      replyToEmailId: replyToEmailId,
+      toText: toText,
+      ccText: ccText,
+      subjectText: subjectText,
+      bodyText: bodyText,
+      updatedAt: DateTime.now(),
+    );
+    _drafts[draftId] = draft;
+    return draft;
+  }
+
+  @override
+  Future<SavedDraft?> findDraft({String? replyToEmailId}) async {
+    final matches = _drafts.values.where((d) {
+      if (replyToEmailId == null) return d.replyToEmailId == null;
+      return d.replyToEmailId == replyToEmailId;
+    }).toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return matches.isEmpty ? null : matches.first;
+  }
+
+  @override
+  Future<SavedDraft?> getDraft(int id) async => _drafts[id];
+
+  @override
+  Future<void> deleteDraft(int id) async => _drafts.remove(id);
 }
 
 class FakeMailboxRepository implements MailboxRepository {
@@ -262,6 +310,7 @@ List<Override> baseOverrides({
           .overrideWithValue(FakeAccountRepository(accounts)),
       mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository(mailboxes)),
       emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
       accountDiscoveryServiceProvider.overrideWithValue(
         FakeDiscoveryService(discovery ?? UnknownDiscovery()),
       ),

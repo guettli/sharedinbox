@@ -21,6 +21,8 @@ void main() {
               .overrideWithValue(FakeMailboxRepository()),
           emailRepositoryProvider
               .overrideWithValue(FakeEmailRepository()),
+          draftRepositoryProvider
+              .overrideWithValue(FakeDraftRepository()),
         ],
       ));
       await tester.pumpAndSettle();
@@ -45,6 +47,8 @@ void main() {
               .overrideWithValue(FakeMailboxRepository()),
           emailRepositoryProvider
               .overrideWithValue(FakeEmailRepository()),
+          draftRepositoryProvider
+              .overrideWithValue(FakeDraftRepository()),
         ],
       ));
       await tester.pumpAndSettle();
@@ -65,6 +69,8 @@ void main() {
               .overrideWithValue(FakeMailboxRepository()),
           emailRepositoryProvider
               .overrideWithValue(FakeEmailRepository()),
+          draftRepositoryProvider
+              .overrideWithValue(FakeDraftRepository()),
         ],
       ));
       await tester.pumpAndSettle();
@@ -90,11 +96,42 @@ void main() {
               .overrideWithValue(FakeMailboxRepository()),
           emailRepositoryProvider
               .overrideWithValue(FakeEmailRepository()),
+          draftRepositoryProvider
+              .overrideWithValue(FakeDraftRepository()),
         ],
       ));
       await tester.pumpAndSettle();
 
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
+    });
+
+    testWidgets('restores saved draft when no prefill is provided',
+        (tester) async {
+      final fakeDrafts = FakeDraftRepository();
+      await fakeDrafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        subjectText: 'Restored subject',
+        bodyText: 'Draft body',
+      );
+      await tester.pumpWidget(_buildDirect(
+        screen: const ComposeScreen(),
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository([kTestAccount])),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+          draftRepositoryProvider.overrideWithValue(fakeDrafts),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextFormField, 'carol@example.com'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Restored subject'),
+          findsOneWidget);
     });
   });
 }

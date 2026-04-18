@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import 'core/repositories/account_repository.dart';
+import 'core/repositories/draft_repository.dart';
 import 'core/repositories/email_repository.dart';
 import 'core/repositories/mailbox_repository.dart';
 import 'core/services/account_discovery_service.dart';
@@ -10,6 +11,7 @@ import 'core/storage/secure_storage.dart';
 import 'core/sync/account_sync_manager.dart';
 import 'data/db/database.dart';
 import 'data/repositories/account_repository_impl.dart';
+import 'data/repositories/draft_repository_impl.dart';
 import 'data/repositories/email_repository_impl.dart';
 import 'data/repositories/mailbox_repository_impl.dart';
 import 'data/storage/flutter_secure_storage_impl.dart';
@@ -42,6 +44,10 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
   );
+});
+
+final draftRepositoryProvider = Provider<DraftRepository>((ref) {
+  return DraftRepositoryImpl(ref.watch(dbProvider));
 });
 
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {

@@ -80,14 +80,27 @@ class EmailBodies extends Table {
   Set<Column> get primaryKey => {emailId};
 }
 
+/// Auto-saved compose drafts — persisted across app restarts.
+class Drafts extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId => text().nullable()();
+  /// Set for replies/reply-alls; null for new messages.
+  TextColumn get replyToEmailId => text().nullable()();
+  TextColumn get toText => text().withDefault(const Constant(''))();
+  TextColumn get ccText => text().withDefault(const Constant(''))();
+  TextColumn get subjectText => text().withDefault(const Constant(''))();
+  TextColumn get bodyText => text().withDefault(const Constant(''))();
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies])
+@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -98,6 +111,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 3) {
             await m.addColumn(accounts, accounts.username);
+          }
+          if (from < 4) {
+            await m.createTable(drafts);
           }
         },
       );
