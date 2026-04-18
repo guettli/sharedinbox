@@ -145,5 +145,27 @@ void main() {
 
       expect(find.text('Add account'), findsOneWidget);
     });
+
+    testWidgets('AppBar does not overflow at narrow window size', (tester) async {
+      tester.view.physicalSize = const Size(400, 300);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(buildApp(
+        initialLocation: '/accounts',
+        overrides: [
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository()),
+          mailboxRepositoryProvider
+              .overrideWithValue(FakeMailboxRepository()),
+          emailRepositoryProvider
+              .overrideWithValue(FakeEmailRepository()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
   });
 }
