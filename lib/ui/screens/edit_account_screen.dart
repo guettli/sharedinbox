@@ -26,7 +26,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _passwordCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController();
-  var _imapSsl = true;
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = false;
@@ -56,7 +55,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _usernameCtrl.text = account.username;
     _imapHostCtrl.text = account.imapHost;
     _imapPortCtrl.text = account.imapPort.toString();
-    _imapSsl = account.imapSsl;
     _smtpHostCtrl.text = account.smtpHost;
     _smtpPortCtrl.text = account.smtpPort.toString();
     _smtpSsl = account.smtpSsl;
@@ -91,7 +89,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       type: account.type,
       imapHost: _imapHostCtrl.text.trim(),
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
-      imapSsl: _imapSsl,
       smtpHost: _smtpHostCtrl.text.trim(),
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
       smtpSsl: _smtpSsl,
@@ -156,7 +153,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             type: updated.type,
             imapHost: updated.imapHost,
             imapPort: updated.imapPort,
-            imapSsl: updated.imapSsl,
             smtpHost: updated.smtpHost,
             smtpPort: updated.smtpPort,
             smtpSsl: updated.smtpSsl,
@@ -229,15 +225,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ],
             if (account.type == AccountType.imap) ...[
               const Divider(height: 32),
-              Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
+              Text('IMAP (SSL/TLS)', style: Theme.of(context).textTheme.titleSmall),
               _field(_imapHostCtrl, 'Host'),
               _field(_imapPortCtrl, 'Port',
                   keyboardType: TextInputType.number),
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _imapSsl,
-                onChanged: (v) => setState(() => _imapSsl = v),
-              ),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host'),

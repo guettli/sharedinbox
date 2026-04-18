@@ -27,7 +27,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _jmapApiUrlCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController(text: '993');
-  var _imapSsl = true;
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController(text: '587');
   var _smtpSsl = false;
@@ -80,14 +79,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         case ImapSmtpDiscovery(
             :final imapHost,
             :final imapPort,
-            :final imapSsl,
             :final smtpHost,
             :final smtpPort,
             :final smtpSsl,
           ):
           _imapHostCtrl.text = imapHost;
           _imapPortCtrl.text = imapPort.toString();
-          _imapSsl = imapSsl;
           _smtpHostCtrl.text = smtpHost;
           _smtpPortCtrl.text = smtpPort.toString();
           _smtpSsl = smtpSsl;
@@ -116,7 +113,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         username: _usernameCtrl.text.trim(),
         imapHost: _imapHostCtrl.text.trim(),
         imapPort: int.parse(_imapPortCtrl.text),
-        imapSsl: _imapSsl,
         smtpHost: _smtpHostCtrl.text.trim(),
         smtpPort: int.parse(_smtpPortCtrl.text),
         smtpSsl: _smtpSsl,
@@ -202,7 +198,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         username: account.username.isNotEmpty ? account.username : effective,
         imapHost: account.imapHost,
         imapPort: account.imapPort,
-        imapSsl: account.imapSsl,
         smtpHost: account.smtpHost,
         smtpPort: account.smtpPort,
         smtpSsl: account.smtpSsl,
@@ -314,7 +309,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             onPressed: () => setState(() {
               _imapHostCtrl.clear();
               _imapPortCtrl.text = '993';
-              _imapSsl = true;
               _smtpHostCtrl.clear();
               _smtpPortCtrl.text = '587';
               _smtpSsl = false;
@@ -384,15 +378,10 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
                 required: false),
             _field(_passwordCtrl, 'Password', obscure: true),
             const Divider(height: 32),
-            Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
+            Text('IMAP (SSL/TLS)', style: Theme.of(context).textTheme.titleSmall),
             _field(_imapHostCtrl, 'Host'),
             _field(_imapPortCtrl, 'Port',
                 keyboardType: TextInputType.number),
-            SwitchListTile(
-              title: const Text('SSL/TLS'),
-              value: _imapSsl,
-              onChanged: (v) => setState(() => _imapSsl = v),
-            ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host'),

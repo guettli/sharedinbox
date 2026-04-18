@@ -133,8 +133,8 @@ void main() {
       await tester.tap(find.text('IMAP / SMTP'));
       await tester.pumpAndSettle();
 
-      expect(find.text('IMAP'), findsWidgets);
-      expect(find.text('SMTP'), findsWidgets);
+      expect(find.text('IMAP (SSL/TLS)'), findsOneWidget);
+      expect(find.text('SMTP'), findsOneWidget);
     });
 
     testWidgets('successful JMAP save pops back to accounts list', (tester) async {
@@ -216,7 +216,7 @@ void main() {
       expect(find.text('No accounts yet.'), findsOneWidget);
     });
 
-    testWidgets('IMAP SSL is on by default', (tester) async {
+    testWidgets('IMAP form shows SSL/TLS label and SMTP toggle', (tester) async {
       await tester.pumpWidget(buildApp(
         initialLocation: '/accounts/add',
         overrides: baseOverrides(discovery: UnknownDiscovery()),
@@ -231,11 +231,9 @@ void main() {
       await tester.tap(find.text('IMAP / SMTP'));
       await tester.pumpAndSettle();
 
-      final tiles = tester
-          .widgetList<SwitchListTile>(find.byType(SwitchListTile))
-          .toList();
-      expect(tiles.first.value, isTrue, reason: 'IMAP SSL on by default');
-      expect(tiles.last.value, isFalse, reason: 'SMTP SSL off by default');
+      expect(find.text('IMAP (SSL/TLS)'), findsOneWidget);
+      // Only the SMTP SSL/TLS toggle remains; no IMAP toggle.
+      expect(find.byType(SwitchListTile), findsOneWidget);
     });
   });
 }

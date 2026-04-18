@@ -101,6 +101,10 @@ tasks:
     cmds:
       - fvm flutter run -d linux --no-pub
 
+  check-fast:
+    desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
+    deps: [analyze, test, test-widget]
+
   check:
-    desc: All fast checks — analyze + unit tests + widget tests + build-linux + integration in parallel
+    desc: Full check suite — analyze + unit tests + widget tests + build-linux + integration in parallel
     deps: [analyze, test, test-widget, build-linux, integration]

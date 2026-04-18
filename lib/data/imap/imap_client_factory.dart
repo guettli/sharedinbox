@@ -1,24 +1,26 @@
-import 'dart:io' show HandshakeException;
-
 import 'package:enough_mail/enough_mail.dart';
 
 import '../../core/models/account.dart';
-import '../../core/utils/logger.dart';
 
 /// Opens an authenticated IMAP client for [account] using [username].
+///
+/// Throws [Exception] if the account is not configured for SSL/TLS.
 Future<ImapClient> connectImap(
     Account account, String username, String password) async {
+  if (!account.imapSsl) {
+    throw Exception(
+        'Unencrypted IMAP connections are not allowed. Enable SSL/TLS.');
+  }
   final client = ImapClient();
-  await client.connectToServer(
-    account.imapHost,
-    account.imapPort,
-    isSecure: account.imapSsl,
-  );
+  await client.connectToServer(account.imapHost, account.imapPort);
   await client.login(username, password);
   return client;
 }
 
 /// Opens an authenticated SMTP client for [account] using [username].
+///
+/// When [account.smtpSsl] is false, STARTTLS is required and the connection
+/// fails if the server does not support it. Plaintext fallback is not allowed.
 ///
 /// Caller is responsible for calling [SmtpClient.quit] when done.
 Future<SmtpClient> connectSmtp(
@@ -29,7 +31,7 @@ Future<SmtpClient> connectSmtp(
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  var client = SmtpClient(clientDomain);
+  final client = SmtpClient(clientDomain);
   await client.connectToServer(
     account.smtpHost,
     account.smtpPort,
@@ -37,23 +39,8 @@ Future<SmtpClient> connectSmtp(
   );
   await client.ehlo();
   if (!account.smtpSsl) {
-    // Opportunistic TLS on submission port (587).
-    try {
-      await client.startTls();
-    } on HandshakeException catch (e) {
-      // TLS handshake failure (e.g. self-signed cert) breaks the socket.
-      // Reconnect plaintext so authenticate() can still proceed.
-      log('STARTTLS handshake failed on ${account.smtpHost}: $e — reconnecting without TLS');
-      client = SmtpClient(clientDomain);
-      await client.connectToServer(
-        account.smtpHost,
-        account.smtpPort,
-        isSecure: false,
-      );
-      await client.ehlo();
-    } catch (e) {
-      log('STARTTLS not available on ${account.smtpHost}: $e — continuing without TLS');
-    }
+    // STARTTLS required on submission port (587). No plaintext fallback.
+    await client.startTls();
   }
   await client.authenticate(username, password);
   return client;
