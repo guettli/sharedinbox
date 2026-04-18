@@ -1,5 +1,10 @@
 # Later
 
+make `task check` faster.
+It gets executed via pre-commit.... Must be fast.
+
+---
+
 Flutter best practices?
 
 ---

@@ -146,7 +146,7 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
     });
 
-    testWidgets('AppBar does not overflow at narrow window size', (tester) async {
+    testWidgets('AppBar does not overflow at minimum supported window size', (tester) async {
       tester.view.physicalSize = const Size(400, 300);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -166,6 +166,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
+      expect(find.text('SharedInbox'), findsOneWidget);
     });
   });
 }
