@@ -47,17 +47,25 @@ jobs:
 
       - uses: DeterminateSystems/magic-nix-cache-action@v8
 
-      - uses: subosito/flutter-action@v2
+      - name: Cache FVM Flutter SDK
+        uses: actions/cache@v4
         with:
-          flutter-version: "3.41.6"
-          channel: stable
-          cache: true
+          path: ~/.fvm
+          key: fvm-${{ hashFiles('.fvm/fvm_config.json') }}
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-
 
       - name: Run integration tests
         run: |
           nix develop --command bash -c "
-            flutter pub get &&
-            flutter pub run build_runner build --delete-conflicting-outputs &&
+            fvm install --skip-pub-get &&
+            fvm flutter pub get &&
+            fvm flutter pub run build_runner build --delete-conflicting-outputs &&
             stalwart-dev/test.sh
           "
 
@@ -80,17 +88,34 @@ jobs:
             libgtk-3-dev pkg-config cmake ninja-build clang \
             libsecret-1-dev
 
-      - uses: subosito/flutter-action@v2
+      - name: Cache FVM Flutter SDK
+        uses: actions/cache@v4
         with:
-          flutter-version: "3.41.6"
-          channel: stable
-          cache: true
+          path: ~/.fvm
+          key: fvm-${{ hashFiles('.fvm/fvm_config.json') }}
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-
+
+      - name: Cache Linux debug build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/linux
+            .dart_tool/flutter_build
+          key: linux-debug-${{ hashFiles('pubspec.lock', 'lib/**/*.dart', 'integration_test/**/*.dart') }}
+          restore-keys: linux-debug-
 
       - name: Run UI integration tests
         run: |
           nix develop --command bash -c "
-            flutter pub get &&
-            flutter pub run build_runner build --delete-conflicting-outputs &&
+            fvm install --skip-pub-get &&
+            fvm flutter pub get &&
+            fvm flutter pub run build_runner build --delete-conflicting-outputs &&
             stalwart-dev/integration_ui_test.sh
           "
 

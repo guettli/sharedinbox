@@ -6,6 +6,10 @@
 # Run inside nix develop: stalwart-dev/integration_ui_test.sh
 set -Eeuo pipefail
 
+# Timing helper: prints elapsed seconds since script start with a label.
+_SCRIPT_START=$(date +%s%3N)
+ts() { echo "[$(( $(date +%s%3N) - _SCRIPT_START ))ms] $*"; }
+
 export STALWART_USER_B="${STALWART_USER_B:-alice@localhost}"
 export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
 export STALWART_USER_C="${STALWART_USER_C:-bob@localhost}"
@@ -14,7 +18,7 @@ export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
 export STALWART_TMPDIR
 
-# Isolate the app database: fresh HOME → fresh path_provider directory.
+# Isolate path_provider app data from the developer's real data directory.
 TEST_HOME="$(mktemp -d /tmp/sharedinbox-test-home-XXXXXX)"
 
 cleanup() {
@@ -37,6 +41,8 @@ command -v xvfb-run >/dev/null || {
     exit 1
 }
 
+ts "script start"
+
 # Pre-seed spam-filter version so Stalwart does not fetch it on first boot.
 mkdir -p "$STALWART_TMPDIR"
 sqlite3 "${STALWART_TMPDIR}/data.sqlite" \
@@ -46,6 +52,7 @@ sqlite3 "${STALWART_TMPDIR}/data.sqlite" \
 LOGFILE="${STALWART_TMPDIR}/stalwart.log"
 rm -f "$LOGFILE"
 
+ts "stalwart start"
 "$(dirname "$0")/start" >"$LOGFILE" 2>&1 &
 STALWART_PID=$!
 
@@ -71,21 +78,22 @@ curl -s --max-time 1 -o /dev/null "${STALWART_URL}/.well-known/jmap" || {
     cat "$LOGFILE"; echo "Stalwart did not become ready"; exit 1
 }
 
-echo "Stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_PORT:-?}"
+ts "stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_PORT:-?}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
-export HOME="$TEST_HOME"
+# Isolate app data (path_provider uses XDG_DATA_HOME on Linux) without
+# overriding HOME — keeping the real HOME lets FVM reuse its cached SDK.
+export XDG_DATA_HOME="$TEST_HOME"
 
-START=$(date +%s)
+ts "flutter test start"
 
 # xvfb-run provides a virtual framebuffer so the Flutter Linux runner has a
 # display without requiring a real desktop session.  No D-Bus or keyring daemon
 # is needed because the integration tests inject an in-memory SecureStorage.
 xvfb-run --auto-servernum fvm flutter test integration_test/ -d linux
 
-END=$(date +%s)
-echo "ui-integration: $((END - START))s"
+ts "flutter test done"

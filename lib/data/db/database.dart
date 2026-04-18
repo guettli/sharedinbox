@@ -85,7 +85,7 @@ class AppDatabase extends _$AppDatabase {
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final file = File(p.join(dir.path, 'sharedinbox.db'));
     return NativeDatabase.createInBackground(file);
   });

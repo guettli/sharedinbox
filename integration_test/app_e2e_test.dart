@@ -36,6 +36,29 @@ class _InMemorySecureStorage implements SecureStorage {
   Future<void> delete({required String key}) async => _store.remove(key);
 }
 
+final _sw = Stopwatch()..start();
+void _log(String label) =>
+    debugPrint('[${_sw.elapsedMilliseconds}ms] $label');
+
+/// Pumps the widget tree at [interval] until [finder] matches at least one
+/// widget, or [timeout] elapses (which throws). Replaces fixed `pump(N)`
+/// waits — stops as soon as the UI is ready rather than burning the full budget.
+Future<void> pumpUntil(
+  WidgetTester tester,
+  Finder finder, {
+  Duration timeout = const Duration(seconds: 15),
+  Duration interval = const Duration(milliseconds: 200),
+}) async {
+  final deadline = tester.binding.clock.now().add(timeout);
+  while (!tester.any(finder)) {
+    if (tester.binding.clock.now().isAfter(deadline)) {
+      throw Exception('pumpUntil timed out waiting for $finder');
+    }
+    await tester.pump(interval);
+  }
+  await tester.pumpAndSettle();
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -65,10 +88,12 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
+      _log('app start');
       app.main(overrides: [
         secureStorageProvider.overrideWithValue(_InMemorySecureStorage()),
       ]);
       await tester.pumpAndSettle();
+      _log('app settled');
 
       // ── Add account ────────────────────────────────────────────────────────
       expect(find.text('No accounts yet.'), findsOneWidget);
@@ -118,10 +143,10 @@ void main() {
       expect(find.text(userEmail), findsOneWidget);
 
       // ── Navigate to mailboxes ──────────────────────────────────────────────
+      _log('navigate to mailboxes');
       await tester.tap(find.text('Alice'));
-      // Give the background sync time to populate mailboxes from IMAP.
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.text('INBOX'));
+      _log('mailboxes settled');
 
       expect(find.text('INBOX'), findsOneWidget);
 
@@ -143,10 +168,11 @@ void main() {
       await tester.ensureVisible(bodyField);
       await tester.enterText(bodyField, 'Hello from integration test!');
 
+      _log('send email');
       await tester.tap(find.byIcon(Icons.send));
-      // Wait for SMTP send + IMAP APPEND to complete.
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
+      // Wait for ComposeScreen to pop back to EmailListScreen after send.
+      await pumpUntil(tester, find.byIcon(Icons.edit));
+      _log('send done');
 
       // ComposeScreen pops back to EmailListScreen (INBOX) after send.
 
@@ -159,9 +185,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Sync Sent folder to fetch the appended message.
+      _log('sync Sent');
       await tester.tap(find.byIcon(Icons.sync));
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.text(subject));
+      _log('sync Sent done');
 
       expect(find.text(subject), findsOneWidget);
 
@@ -173,9 +200,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Sync INBOX — Stalwart delivers to self near-instantly.
+      _log('sync INBOX');
       await tester.tap(find.byIcon(Icons.sync));
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.text(subject));
+      _log('sync INBOX done');
 
       expect(find.text(subject), findsOneWidget);
 
@@ -184,10 +212,11 @@ void main() {
       await tester.pumpAndSettle();
 
       // Search by the 'E2E-' prefix — should match the message we just sent.
+      _log('search');
       await tester.enterText(find.byType(TextField), 'E2E-');
       await tester.testTextInput.receiveAction(TextInputAction.search);
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.text(subject));
+      _log('search done');
 
       expect(find.text(subject), findsOneWidget);
     },
