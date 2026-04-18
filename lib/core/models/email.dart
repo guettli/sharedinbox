@@ -62,11 +62,15 @@ class EmailAttachment {
   final String filename;
   final String contentType;
   final int size;
+  /// IMAP BODYSTRUCTURE part identifier (e.g. "2", "2.1") used for on-demand
+  /// download. Empty for attachments cached before this field was added.
+  final String fetchPartId;
 
   const EmailAttachment({
     required this.filename,
     required this.contentType,
     required this.size,
+    this.fetchPartId = '',
   });
 }
 
@@ -77,6 +81,8 @@ class EmailDraft {
   final List<EmailAddress> cc;
   final String subject;
   final String body;
+  /// Local file-system paths of files to attach when sending.
+  final List<String> attachmentFilePaths;
 
   const EmailDraft({
     required this.from,
@@ -84,5 +90,6 @@ class EmailDraft {
     required this.cc,
     required this.subject,
     required this.body,
+    this.attachmentFilePaths = const [],
   });
 }

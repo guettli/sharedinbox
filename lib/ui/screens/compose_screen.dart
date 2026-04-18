@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -36,6 +39,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _accountId;
   List<Account> _accounts = [];
   bool _sending = false;
+  final List<String> _attachmentPaths = [];
 
   @override
   void initState() {
@@ -67,6 +71,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     super.dispose();
   }
 
+  Future<void> _pickAttachments() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+    if (result == null) return;
+    final paths = result.files
+        .map((f) => f.path)
+        .whereType<String>()
+        .toList();
+    if (!mounted) return;
+    setState(() => _attachmentPaths.addAll(paths));
+  }
+
+  void _removeAttachment(int index) {
+    setState(() => _attachmentPaths.removeAt(index));
+  }
+
   Future<void> _send() async {
     if (_accountId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -94,6 +113,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             .toList(),
         subject: _subject.text,
         body: _body.text,
+        attachmentFilePaths: List.unmodifiable(_attachmentPaths),
       );
       await ref.read(emailRepositoryProvider).sendEmail(_accountId!, draft);
       if (mounted) context.pop();
@@ -112,6 +132,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       appBar: AppBar(
         title: const Text('Compose'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.attach_file),
+            tooltip: 'Add attachment',
+            onPressed: _sending ? null : _pickAttachments,
+          ),
           IconButton(
             icon: _sending
                 ? const SizedBox(
@@ -174,6 +199,27 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               alignLabelWithHint: true,
             ),
           ),
+          if (_attachmentPaths.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                'Attachments',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            for (var i = 0; i < _attachmentPaths.length; i++)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.attach_file),
+                title: Text(File(_attachmentPaths[i]).uri.pathSegments.last),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => _removeAttachment(i),
+                ),
+              ),
+          ],
         ],
       ),
     );

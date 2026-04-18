@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:open_file/open_file.dart';
 
 import '../../core/models/email.dart';
 import '../../core/utils/format_utils.dart';
@@ -21,6 +22,7 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   late final Future<(Email?, EmailBody)> _dataFuture;
   bool _isFlagged = false;
+  final Set<String> _downloading = {};
 
   @override
   void initState() {
@@ -133,10 +135,37 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               leading: const Icon(Icons.attach_file),
               title: Text(att.filename),
               subtitle: Text(fmtSize(att.size)),
+              trailing: _downloading.contains(att.filename)
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.download),
+                      tooltip: 'Download and open',
+                      onPressed: () => _downloadAndOpen(att),
+                    ),
             ),
         ],
       ],
     );
+  }
+
+  Future<void> _downloadAndOpen(EmailAttachment att) async {
+    setState(() => _downloading.add(att.filename));
+    try {
+      final path = await ref
+          .read(emailRepositoryProvider)
+          .downloadAttachment(widget.emailId, att);
+      await OpenFile.open(path);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    } finally {
+      if (mounted) setState(() => _downloading.remove(att.filename));
+    }
   }
 
   Widget _buildHeader(BuildContext ctx, Email email) {

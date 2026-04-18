@@ -196,6 +196,7 @@ class FakeSmtpClient extends imap.SmtpClient {
 
   bool messageSent = false;
   bool quitCalled = false;
+  imap.MimeMessage? lastSentMessage;
 
   @override
   Future<imap.SmtpResponse> sendMessage(
@@ -205,6 +206,7 @@ class FakeSmtpClient extends imap.SmtpClient {
     List<imap.MailAddress>? recipients,
   }) async {
     messageSent = true;
+    lastSentMessage = message;
     return imap.SmtpResponse(['250 OK']);
   }
 

@@ -124,6 +124,11 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> sendEmail(String accountId, EmailDraft draft) async {}
 
   @override
+  Future<String> downloadAttachment(
+          String emailId, EmailAttachment attachment) async =>
+      '/tmp/${attachment.filename}';
+
+  @override
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,

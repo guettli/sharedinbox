@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
@@ -51,16 +54,19 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   EmailRepositoryImpl emails,
   FakeImapClient fakeImap,
   FakeSmtpClient fakeSmtp,
+  Directory cacheDir,
 }) _makeReposWithFakes() {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
   final fakeImap = FakeImapClient();
   final fakeSmtp = FakeSmtpClient();
+  final cacheDir = Directory.systemTemp.createTempSync('test_attach_');
   final emails = EmailRepositoryImpl(
     db,
     accounts,
     imapConnect: (_, __, ___) async => fakeImap,
     smtpConnect: (_, __, ___) async => fakeSmtp,
+    getCacheDir: () async => cacheDir,
   );
   return (
     db: db,
@@ -68,6 +74,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     emails: emails,
     fakeImap: fakeImap,
     fakeSmtp: fakeSmtp,
+    cacheDir: cacheDir,
   );
 }
 
@@ -431,6 +438,130 @@ void main() {
           await r.emails.observeEmails('acc-1', 'INBOX').first;
       expect(emails, hasLength(1));
       expect(emails.first.uid, 42);
+    });
+
+    // ── Attachment tests ─────────────────────────────────────────────────────
+
+    test('sendEmail with attachment includes it in the SMTP message', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Create a temp file to attach.
+      final tmpFile = File('${r.cacheDir.path}/attach.txt');
+      await tmpFile.writeAsBytes(utf8.encode('hello attachment'));
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: const EmailAddress(name: 'Alice', email: 'alice@example.com'),
+          to: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          cc: const [],
+          subject: 'With attachment',
+          body: 'See attached',
+          attachmentFilePaths: [tmpFile.path],
+        ),
+      );
+
+      expect(r.fakeSmtp.messageSent, isTrue);
+      expect(r.fakeSmtp.lastSentMessage?.hasAttachments(), isTrue);
+      expect(r.fakeImap.appendCalls, 1);
+    });
+
+    test('downloadAttachment fetches part, writes file, returns path', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:1',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2024),
+          ));
+
+      // Multipart message with a text/plain body and one attachment.
+      // base64("Hello World") = SGVsbG8gV29ybGQ=
+      const rawMsg = 'MIME-Version: 1.0\r\n'
+          'From: test@example.com\r\n'
+          'To: to@example.com\r\n'
+          'Subject: Test\r\n'
+          'Content-Type: multipart/mixed; boundary="xyz"\r\n'
+          '\r\n'
+          '--xyz\r\n'
+          'Content-Type: text/plain\r\n'
+          '\r\n'
+          'Hello\r\n'
+          '--xyz\r\n'
+          'Content-Type: application/octet-stream\r\n'
+          'Content-Disposition: attachment; filename="data.bin"\r\n'
+          'Content-Transfer-Encoding: base64\r\n'
+          '\r\n'
+          'SGVsbG8gV29ybGQ=\r\n'
+          '--xyz--\r\n';
+
+      final msg = imap.MimeMessage.parseFromText(rawMsg);
+      msg.uid = 1;
+      r.fakeImap.fetchResults = [msg];
+
+      // getEmailBody populates attachment metadata (including fetchPartId).
+      final body = await r.emails.getEmailBody('acc-1:1');
+      expect(body.attachments, hasLength(1));
+      expect(body.attachments.first.filename, 'data.bin');
+      expect(body.attachments.first.fetchPartId, isNotEmpty);
+
+      // downloadAttachment fetches the part and writes to cache.
+      final path =
+          await r.emails.downloadAttachment('acc-1:1', body.attachments.first);
+
+      expect(File(path).existsSync(), isTrue);
+      expect(File(path).readAsBytesSync(),
+          equals(utf8.encode('Hello World')));
+      expect(r.fakeImap.logoutCalled, isTrue);
+    });
+
+    test('downloadAttachment returns cached file on second call', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:1',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2024),
+          ));
+
+      const rawMsg = 'MIME-Version: 1.0\r\n'
+          'From: test@example.com\r\n'
+          'To: to@example.com\r\n'
+          'Subject: Test\r\n'
+          'Content-Type: multipart/mixed; boundary="xyz"\r\n'
+          '\r\n'
+          '--xyz\r\n'
+          'Content-Type: text/plain\r\n'
+          '\r\n'
+          'Body\r\n'
+          '--xyz\r\n'
+          'Content-Type: application/octet-stream\r\n'
+          'Content-Disposition: attachment; filename="file.bin"\r\n'
+          'Content-Transfer-Encoding: base64\r\n'
+          '\r\n'
+          'dGVzdA==\r\n'
+          '--xyz--\r\n';
+
+      final msg = imap.MimeMessage.parseFromText(rawMsg);
+      msg.uid = 1;
+      r.fakeImap.fetchResults = [msg];
+
+      final body = await r.emails.getEmailBody('acc-1:1');
+      final att = body.attachments.first;
+
+      // First download.
+      final path1 = await r.emails.downloadAttachment('acc-1:1', att);
+      r.fakeImap.logoutCalled = false;
+
+      // Second download — must return same path without IMAP call.
+      final path2 = await r.emails.downloadAttachment('acc-1:1', att);
+      expect(path2, equals(path1));
+      expect(r.fakeImap.logoutCalled, isFalse);
     });
   });
 }

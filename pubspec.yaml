@@ -32,6 +32,10 @@ dependencies:
   # Date formatting
   intl: any
 
+  # File picking (compose attachments) and opening downloaded attachments
+  file_picker: ^8.0.0
+  open_file: ^3.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

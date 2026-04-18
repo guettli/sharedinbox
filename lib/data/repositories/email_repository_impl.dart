@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/models/account.dart' as account_model;
 import '../../core/models/email.dart' as model;
@@ -14,6 +17,7 @@ typedef ImapConnectFn = Future<imap.ImapClient> Function(
     account_model.Account account, String username, String password);
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
     account_model.Account account, String username, String password);
+typedef GetCacheDirFn = Future<Directory> Function();
 
 class EmailRepositoryImpl implements EmailRepository {
   EmailRepositoryImpl(
@@ -21,13 +25,16 @@ class EmailRepositoryImpl implements EmailRepository {
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     SmtpConnectFn smtpConnect = connectSmtp,
+    GetCacheDirFn getCacheDir = getTemporaryDirectory,
   })  : _imapConnect = imapConnect,
-        _smtpConnect = smtpConnect;
+        _smtpConnect = smtpConnect,
+        _getCacheDir = getCacheDir;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final SmtpConnectFn _smtpConnect;
+  final GetCacheDirFn _getCacheDir;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
@@ -88,6 +95,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 'filename': a.fileName ?? '',
                 'contentType': a.contentType?.mediaType.text ?? '',
                 'size': a.size ?? 0,
+                'fetchPartId': a.fetchId,
               },
             )
             .toList(),
@@ -243,6 +251,11 @@ class EmailRepositoryImpl implements EmailRepository {
       ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
       ..subject = draft.subject
       ..text = draft.body;
+    for (final filePath in draft.attachmentFilePaths) {
+      final file = File(filePath);
+      final mediaType = imap.MediaType.guessFromFileName(filePath);
+      await builder.addFile(file, mediaType);
+    }
     final mimeMessage = builder.buildMimeMessage();
     final smtpClient = await _smtpConnect(account, _effectiveUsername(account), password);
     try {
@@ -266,6 +279,59 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     } finally {
       await imapClient.logout();
+    }
+  }
+
+  @override
+  Future<String> downloadAttachment(
+    String emailId,
+    model.EmailAttachment attachment,
+  ) async {
+    final cacheDir = await _getCacheDir();
+    final dir = Directory(
+      p.join(
+        cacheDir.path,
+        'sharedinbox',
+        'attachments',
+        emailId.replaceAll(':', '_'),
+      ),
+    );
+    await dir.create(recursive: true);
+
+    final file = File(p.join(dir.path, attachment.filename));
+    if (await file.exists()) return file.path;
+
+    if (attachment.fetchPartId.isEmpty) {
+      throw StateError(
+        'Cannot download ${attachment.filename}: missing part ID. '
+        'Open the email again to refresh.',
+      );
+    }
+
+    final emailRow = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(emailId)))
+        .getSingle();
+    final account = (await _accounts.getAccount(emailRow.accountId))!;
+    final password = await _accounts.getPassword(account.id);
+    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    try {
+      await client.selectMailboxByPath(emailRow.mailboxPath);
+      final fetch = await client.uidFetchMessage(
+        emailRow.uid,
+        'BODY[${attachment.fetchPartId}]',
+      );
+      final msg = fetch.messages.first;
+      final part = msg.getPart(attachment.fetchPartId);
+      final bytes = part?.decodeContentBinary();
+      if (bytes == null) {
+        throw StateError(
+          'Failed to decode attachment ${attachment.filename}.',
+        );
+      }
+      await file.writeAsBytes(bytes);
+      return file.path;
+    } finally {
+      await client.logout();
     }
   }
 
@@ -382,6 +448,7 @@ class EmailRepositoryImpl implements EmailRepository {
             filename: (e as Map<String, dynamic>)['filename'] as String,
             contentType: e['contentType'] as String,
             size: e['size'] as int,
+            fetchPartId: (e['fetchPartId'] as String?) ?? '',
           ),
         )
         .toList();

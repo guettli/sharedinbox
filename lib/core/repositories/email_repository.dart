@@ -14,6 +14,11 @@ abstract class EmailRepository {
   Future<void> deleteEmail(String emailId);
   Future<void> sendEmail(String accountId, EmailDraft draft);
 
+  /// Downloads [attachment] bytes from the server (or local cache) and returns
+  /// the local file-system path.  Subsequent calls for the same attachment
+  /// return the cached path without a network round-trip.
+  Future<String> downloadAttachment(String emailId, EmailAttachment attachment);
+
   /// Returns emails in [mailboxPath] whose subject or body contain [query].
   /// Results come from the server (IMAP SEARCH) and are not cached.
   Future<List<Email>> searchEmails(
