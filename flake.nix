@@ -13,6 +13,9 @@
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            # Java JDK — required by Gradle for Android builds
+            jdk17
+
             # Task runner
             go-task
 

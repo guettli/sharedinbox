@@ -89,11 +89,35 @@ tasks:
     cmds:
       - fvm flutter build linux --debug --no-pub
 
+  _android-sdk-check:
+    internal: true
+    run: once
+    preconditions:
+      - sh: test -d "${ANDROID_HOME:-$HOME/Android/Sdk}"
+        msg: |
+          Android SDK not found. Install it with:
+            wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
+            mkdir -p ~/Android/Sdk/cmdline-tools
+            unzip /tmp/cmdtools.zip -d ~/Android/Sdk/cmdline-tools
+            mv ~/Android/Sdk/cmdline-tools/cmdline-tools ~/Android/Sdk/cmdline-tools/latest
+            ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+      - sh: ls "${ANDROID_HOME:-$HOME/Android/Sdk}/platforms/" 2>/dev/null | grep -qE '^android-([3-9][4-9]|[4-9][0-9]|[1-9][0-9]{2,})$'
+        msg: |
+          Android platform 34 or higher not found. Install it with:
+            ${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
-    deps: [_nix-check, _pub-get]
+    deps: [_nix-check, _android-sdk-check, _pub-get]
     cmds:
-      - fvm flutter build apk --release --no-pub
+      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub
+
+  deploy-android:
+    desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
+    deps: [build-android]
+    dotenv: [".env"]
+    cmds:
+      - scripts/deploy_android.sh
 
   run:
     desc: Run the app on Linux desktop
