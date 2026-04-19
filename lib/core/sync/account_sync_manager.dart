@@ -276,10 +276,24 @@ class _JmapAccountSync implements _SyncLoop {
   Future<void> _wait() async {
     if (!_running) return;
     _stopSignal = Completer<void>();
+    final password = await _accounts.getPassword(account.id);
+
+    // Try JMAP push (RFC 8887 EventSource). Falls back to poll timer when
+    // the server doesn't advertise an eventSourceUrl or the connection fails.
+    final pushReady = Completer<void>();
+    final pushSub = _emails
+        .watchJmapPush(account.id, password)
+        .listen((_) {
+          if (!pushReady.isCompleted) pushReady.complete();
+        }, onDone: () {}, onError: (_) {});
+
     await Future.any([
+      pushReady.future,
       Future.delayed(_pollInterval),
       _stopSignal!.future,
     ]);
+
+    await pushSub.cancel();
     _stopSignal = null;
   }
 

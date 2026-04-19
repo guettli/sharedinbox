@@ -30,4 +30,12 @@ abstract class EmailRepository {
   /// Sends any queued local mutations for [accountId] to the server.
   /// No-op for IMAP accounts (mutations are applied synchronously).
   Future<void> flushPendingChanges(String accountId, String password);
+
+  /// Returns a stream that emits once for each JMAP push event (RFC 8887
+  /// `StateChange`) received from the server's EventSource URL.
+  ///
+  /// Completes immediately — emitting nothing — if the account does not
+  /// support push (IMAP accounts, or JMAP servers without an eventSourceUrl).
+  /// Callers should fall back to polling when the stream ends.
+  Stream<void> watchJmapPush(String accountId, String password);
 }

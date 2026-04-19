@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -1635,4 +1636,114 @@ void main() {
       expect(em1Create['mailboxIds'], {'sentMbxJmapId': true});
     });
   });
+
+  group('JMAP watchJmapPush', () {
+    // A custom BaseClient that serves session JSON for well-known requests
+    // and an SSE stream for all other GET requests.
+    http.Client makeSseClient({
+      String? eventSourceUrl,
+      Stream<List<int>>? sseStream,
+    }) {
+      return _SseTestClient(
+        eventSourceUrl: eventSourceUrl,
+        sseStream: sseStream ?? const Stream.empty(),
+      );
+    }
+
+    test('returns empty stream when server has no eventSourceUrl', () async {
+      final r = _makeRepos(httpClient: makeSseClient());
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final events = await r.emails.watchJmapPush('jmap-1', 'pw').toList();
+      expect(events, isEmpty);
+    });
+
+    test('yields on StateChange event', () async {
+      final sseController = StreamController<List<int>>();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final emitted = <void>[];
+      final sub = r.emails
+          .watchJmapPush('jmap-1', 'pw')
+          .listen(emitted.add);
+
+      // Push a StateChange event
+      const event = 'data: {"@type":"StateChange","changed":{}}\n\n';
+      sseController.add(utf8.encode(event));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(emitted, hasLength(1));
+
+      await sub.cancel();
+      await sseController.close();
+    });
+
+    test('ignores non-StateChange SSE data lines', () async {
+      final sseController = StreamController<List<int>>();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final emitted = <void>[];
+      final sub = r.emails
+          .watchJmapPush('jmap-1', 'pw')
+          .listen(emitted.add);
+
+      const keepalive = ': keepalive\n\n';
+      const other = 'data: {"@type":"Something"}\n\n';
+      sseController.add(utf8.encode(keepalive + other));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(emitted, isEmpty);
+
+      await sub.cancel();
+      await sseController.close();
+    });
+  });
+}
+
+// ── SSE test helper ──────────────────────────────────────────────────────────
+
+class _SseTestClient extends http.BaseClient {
+  _SseTestClient({required this.eventSourceUrl, required this.sseStream});
+
+  final String? eventSourceUrl;
+  final Stream<List<int>> sseStream;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (request.url.path.contains('well-known')) {
+      final session = jsonEncode({
+        'apiUrl': 'https://jmap.example.com/api/',
+        'accounts': {'acct1': {}},
+        'primaryAccounts': {
+          'urn:ietf:params:jmap:core': 'acct1',
+          'urn:ietf:params:jmap:mail': 'acct1',
+        },
+        'capabilities': {
+          'urn:ietf:params:jmap:core': {},
+          'urn:ietf:params:jmap:mail': {},
+        },
+        'username': 'alice@example.com',
+        'state': 'sess1',
+        if (eventSourceUrl != null) 'eventSourceUrl': eventSourceUrl,
+      });
+      return http.StreamedResponse(
+          Stream.value(utf8.encode(session)), 200);
+    }
+    if (request.headers['Accept'] == 'text/event-stream') {
+      return http.StreamedResponse(sseStream, 200);
+    }
+    return http.StreamedResponse(Stream.value(utf8.encode('{}') ), 200);
+  }
 }

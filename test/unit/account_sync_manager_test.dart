@@ -100,6 +100,10 @@ class FakeEmailRepository implements EmailRepository {
     String query,
   ) async =>
       [];
+
+  @override
+  Stream<void> watchJmapPush(String accountId, String password) =>
+      const Stream.empty();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

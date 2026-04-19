@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -579,6 +580,103 @@ class EmailRepositoryImpl implements EmailRepository {
             syncedAt: DateTime.now(),
           ),
         );
+  }
+
+  // ── JMAP push ────────────────────────────────────────────────────────────
+
+  @override
+  Stream<void> watchJmapPush(String accountId, String password) {
+    final controller = StreamController<void>();
+    StreamSubscription<String>? innerSub;
+
+    controller.onCancel = () => innerSub?.cancel();
+
+    () async {
+      try {
+        final account = await _accounts.getAccount(accountId);
+        if (account == null ||
+            account.type != account_model.AccountType.jmap) {
+          await controller.close();
+          return;
+        }
+
+        final jmapUrl = account.jmapUrl;
+        if (jmapUrl == null || jmapUrl.isEmpty) {
+          await controller.close();
+          return;
+        }
+
+        final JmapClient jmap;
+        try {
+          jmap = await JmapClient.connect(
+            httpClient: _httpClient,
+            jmapUrl: Uri.parse(jmapUrl),
+            username: _effectiveUsername(account),
+            password: password,
+          );
+        } catch (_) {
+          await controller.close();
+          return;
+        }
+
+        final sseUrl = jmap.eventSourceUrl;
+        if (sseUrl == null) {
+          await controller.close();
+          return;
+        }
+
+        final credentials = base64
+            .encode(utf8.encode('${_effectiveUsername(account)}:$password'));
+
+        http.StreamedResponse response;
+        try {
+          final request = http.Request('GET', Uri.parse(sseUrl));
+          request.headers['Accept'] = 'text/event-stream';
+          request.headers['Authorization'] = 'Basic $credentials';
+          response = await _httpClient
+              .send(request)
+              .timeout(const Duration(seconds: 10));
+          if (response.statusCode != 200) {
+            await controller.close();
+            return;
+          }
+        } catch (_) {
+          await controller.close();
+          return;
+        }
+
+        var buffer = '';
+        innerSub = response.stream
+            .transform(utf8.decoder)
+            .timeout(const Duration(minutes: 25))
+            .listen(
+          (chunk) {
+            buffer += chunk;
+            final lines = buffer.split('\n');
+            buffer = lines.removeLast();
+            for (final line in lines) {
+              if (!line.startsWith('data:')) continue;
+              final data = line.substring(5).trim();
+              try {
+                final decoded = jsonDecode(data) as Map<String, dynamic>;
+                if (decoded['@type'] == 'StateChange') {
+                  controller.add(null);
+                }
+              } catch (_) {
+                // Malformed JSON — ignore line
+              }
+            }
+          },
+          onDone: () => controller.close(),
+          onError: (_) => controller.close(),
+          cancelOnError: true,
+        );
+      } catch (_) {
+        await controller.close();
+      }
+    }();
+
+    return controller.stream;
   }
 
   // ── JMAP helpers ─────────────────────────────────────────────────────────
