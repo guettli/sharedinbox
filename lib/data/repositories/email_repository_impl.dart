@@ -84,7 +84,13 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+
+    if (account.type == account_model.AccountType.jmap) {
+      return _getEmailBodyJmap(emailId, account, password);
+    }
+
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY[])');
@@ -123,6 +129,100 @@ class EmailRepositoryImpl implements EmailRepository {
     } finally {
       await client.logout();
     }
+  }
+
+  Future<model.EmailBody> _getEmailBodyJmap(
+    String emailId,
+    account_model.Account account,
+    String password,
+  ) async {
+    final jmapUrl = account.jmapUrl!;
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+
+    final jmapEmailId = emailId.contains(':')
+        ? emailId.substring(emailId.indexOf(':') + 1)
+        : emailId;
+
+    final responses = await jmap.call([
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          'ids': [jmapEmailId],
+          'properties': [
+            'id',
+            'textBody',
+            'htmlBody',
+            'bodyValues',
+            'attachments',
+          ],
+          'fetchHTMLBodyValues': true,
+          'fetchTextBodyValues': true,
+        },
+        '0',
+      ],
+    ]);
+
+    final result = _responseArgs(responses, 0, 'Email/get');
+    final emailData =
+        (result['list'] as List<dynamic>).first as Map<String, dynamic>;
+
+    final bodyValues =
+        emailData['bodyValues'] as Map<String, dynamic>? ?? {};
+    final textBodyParts = emailData['textBody'] as List<dynamic>? ?? [];
+    final htmlBodyParts = emailData['htmlBody'] as List<dynamic>? ?? [];
+    final jmapAttachments = emailData['attachments'] as List<dynamic>? ?? [];
+
+    String? textBody;
+    if (textBodyParts.isNotEmpty) {
+      final partId =
+          (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
+      if (partId != null) {
+        textBody =
+            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
+      }
+    }
+
+    String? htmlBody;
+    if (htmlBodyParts.isNotEmpty) {
+      final partId =
+          (htmlBodyParts.first as Map<String, dynamic>)['partId'] as String?;
+      if (partId != null) {
+        htmlBody =
+            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
+      }
+    }
+
+    final attachmentsJson = jsonEncode(jmapAttachments.map((a) {
+      final att = a as Map<String, dynamic>;
+      return {
+        'filename': att['name'] ?? '',
+        'contentType': att['type'] ?? '',
+        'size': att['size'] ?? 0,
+        'fetchPartId': att['blobId'] ?? '',
+      };
+    }).toList());
+
+    await _db.into(_db.emailBodies).insertOnConflictUpdate(
+          EmailBodiesCompanion.insert(
+            emailId: emailId,
+            textBody: Value(textBody),
+            htmlBody: Value(htmlBody),
+            attachmentsJson: Value(attachmentsJson),
+          ),
+        );
+
+    return model.EmailBody(
+      emailId: emailId,
+      textBody: textBody,
+      htmlBody: htmlBody,
+      attachments: _parseAttachments(attachmentsJson),
+    );
   }
 
   // ── Sync ───────────────────────────────────────────────────────────────────

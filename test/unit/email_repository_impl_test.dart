@@ -895,6 +895,148 @@ void main() {
     });
   });
 
+  group('JMAP getEmailBody', () {
+    http.Client mockBodyClient({
+      String text = 'Hello from JMAP',
+      String html = '<p>Hello from JMAP</p>',
+    }) =>
+        MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true}
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/get',
+                  {
+                    'accountId': 'acct1',
+                    'state': 'es1',
+                    'list': [
+                      {
+                        'id': 'e1',
+                        'textBody': [
+                          {'partId': '1', 'type': 'text/plain'}
+                        ],
+                        'htmlBody': [
+                          {'partId': '2', 'type': 'text/html'}
+                        ],
+                        'bodyValues': {
+                          '1': {'value': text, 'isTruncated': false},
+                          '2': {'value': html, 'isTruncated': false},
+                        },
+                        'attachments': [],
+                      }
+                    ],
+                  },
+                  '0',
+                ]
+              ],
+            }),
+            200,
+          );
+        });
+
+    test('fetches body via JMAP Email/get and caches it', () async {
+      final r = _makeRepos(httpClient: mockBodyClient());
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'jmap-1:e1',
+            accountId: 'jmap-1',
+            mailboxPath: 'mbx1',
+            uid: 0,
+            receivedAt: DateTime(2024),
+          ));
+
+      final body = await r.emails.getEmailBody('jmap-1:e1');
+
+      expect(body.textBody, 'Hello from JMAP');
+      expect(body.htmlBody, '<p>Hello from JMAP</p>');
+
+      // Second call should return cached body without HTTP call.
+      final cached = await r.emails.getEmailBody('jmap-1:e1');
+      expect(cached.textBody, body.textBody);
+    });
+
+    test('returns empty body when bodyValues is absent', () async {
+      final r = _makeRepos(
+        httpClient: MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true}
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/get',
+                  {
+                    'accountId': 'acct1',
+                    'state': 'es1',
+                    'list': [
+                      {
+                        'id': 'e1',
+                        'textBody': [],
+                        'htmlBody': [],
+                        'bodyValues': <String, dynamic>{},
+                        'attachments': [],
+                      }
+                    ],
+                  },
+                  '0',
+                ]
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'jmap-1:e1',
+            accountId: 'jmap-1',
+            mailboxPath: 'mbx1',
+            uid: 0,
+            receivedAt: DateTime(2024),
+          ));
+
+      final body = await r.emails.getEmailBody('jmap-1:e1');
+      expect(body.textBody, isNull);
+      expect(body.htmlBody, isNull);
+    });
+  });
+
   group('JMAP syncEmails', () {
     test('full sync upserts emails and persists state', () async {
       final r = _makeRepos(
