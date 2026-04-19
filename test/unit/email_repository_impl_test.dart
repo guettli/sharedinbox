@@ -533,6 +533,131 @@ void main() {
       expect(results, isEmpty);
     });
 
+    test('syncEmails saves IMAP checkpoint after full sync', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 1000;
+      r.fakeImap.fetchResults = [
+        buildEnvelopeMessage(uid: 10, subject: 'First'),
+        buildEnvelopeMessage(uid: 20, subject: 'Second'),
+      ];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states, hasLength(1));
+      final checkpoint =
+          jsonDecode(states.first.state) as Map<String, dynamic>;
+      expect(checkpoint['uidValidity'], 1000);
+      expect(checkpoint['lastUid'], 20);
+    });
+
+    test('syncEmails incremental sync fetches only messages newer than checkpoint',
+        () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 1000;
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode({'uidValidity': 1000, 'lastUid': 10}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:10',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 10,
+            receivedAt: DateTime(2024),
+          ));
+      // Call 1 (UID 11:*): returns uid 20; call 2 (ALL): returns [10, 20]
+      r.fakeImap.searchCallQueue = [
+        [20],
+        [10, 20]
+      ];
+      r.fakeImap.fetchResults = [buildEnvelopeMessage(uid: 20, subject: 'New')];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final emails =
+          await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(emails.map((e) => e.uid).toSet(), {10, 20});
+      final state = jsonDecode(
+              (await r.db.select(r.db.syncStates).get()).first.state)
+          as Map<String, dynamic>;
+      expect(state['lastUid'], 20);
+    });
+
+    test('syncEmails reconciliation removes emails deleted on server', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 1000;
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode({'uidValidity': 1000, 'lastUid': 20}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+      for (final uid in [10, 20]) {
+        await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+              id: 'acc-1:$uid',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: uid,
+              receivedAt: DateTime(2024),
+            ));
+      }
+      // No new UIDs; server only has uid=10 (uid=20 was deleted)
+      r.fakeImap.searchCallQueue = [[], [10]];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final emails =
+          await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(emails, hasLength(1));
+      expect(emails.first.uid, 10);
+    });
+
+    test('syncEmails full re-sync when UID validity changes', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 9999;
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode({'uidValidity': 1000, 'lastUid': 50}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:50',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 50,
+            receivedAt: DateTime(2024),
+          ));
+      r.fakeImap.fetchResults = [
+        buildEnvelopeMessage(uid: 1, subject: 'Fresh start'),
+      ];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final emails =
+          await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(emails, hasLength(1));
+      expect(emails.first.uid, 1);
+      final state = jsonDecode(
+              (await r.db.select(r.db.syncStates).get()).first.state)
+          as Map<String, dynamic>;
+      expect(state['uidValidity'], 9999);
+      expect(state['lastUid'], 1);
+    });
+
     test('syncEmails skips messages with no envelope or no uid', () async {
       final r = _makeReposWithFakes();
       await r.accounts.addAccount(_account, 'pw');

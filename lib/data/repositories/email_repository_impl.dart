@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -146,38 +147,124 @@ class EmailRepositoryImpl implements EmailRepository {
     final client =
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
-      await client.selectMailboxByPath(mailboxPath);
-      final fetch = await client.fetchMessages(
-        imap.MessageSequence.fromAll(),
-        '(UID FLAGS ENVELOPE BODYSTRUCTURE)',
-      );
-      for (final msg in fetch.messages) {
-        final envelope = msg.envelope;
-        if (envelope == null) continue;
-        final uid = msg.uid;
-        if (uid == null) continue;
-        final emailId = '${account.id}:$uid';
+      final selectedMailbox = await client.selectMailboxByPath(mailboxPath);
+      final uidValidity = selectedMailbox.uidValidity ?? 0;
+      final resourceType = 'IMAP:$mailboxPath';
+      final checkpoint = await _loadImapCheckpoint(account.id, resourceType);
 
-        await _db.into(_db.emails).insertOnConflictUpdate(
-              EmailsCompanion.insert(
-                id: emailId,
-                accountId: account.id,
-                mailboxPath: mailboxPath,
-                uid: uid,
-                subject: Value(envelope.subject),
-                sentAt: Value(envelope.date),
-                receivedAt: envelope.date ?? DateTime.now(),
-                fromJson: Value(_encodeAddresses(envelope.from)),
-                toAddresses: Value(_encodeAddresses(envelope.to)),
-                ccJson: Value(_encodeAddresses(envelope.cc)),
-                isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-                isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-                hasAttachment: Value(msg.hasAttachments()),
-              ),
-            );
+      if (checkpoint == null || checkpoint['uidValidity'] != uidValidity) {
+        // First run or UID validity changed — full sync.
+        if (checkpoint != null) {
+          // UID validity changed: remove stale local emails for this mailbox.
+          await (_db.delete(_db.emails)
+                ..where((t) =>
+                    t.accountId.equals(account.id) &
+                    t.mailboxPath.equals(mailboxPath)))
+              .go();
+        }
+        await _fetchAndUpsertImap(
+            client, account, mailboxPath, imap.MessageSequence.fromAll());
+        final maxUid = await _maxLocalUid(account.id, mailboxPath);
+        await _saveImapCheckpoint(
+            account.id, resourceType, uidValidity, maxUid);
+      } else {
+        // Incremental sync.
+        final lastUid = checkpoint['lastUid'] as int;
+        final newUids =
+            (await client.uidSearchMessages(searchCriteria: 'UID ${lastUid + 1}:*'))
+                    .matchingSequence
+                    ?.toList() ??
+                [];
+        if (newUids.isNotEmpty) {
+          await _fetchAndUpsertImap(client, account, mailboxPath,
+              imap.MessageSequence.fromIds(newUids, isUid: true));
+        }
+        // Detect remote deletions.
+        final serverUids =
+            (await client.uidSearchMessages(searchCriteria: 'ALL'))
+                    .matchingSequence
+                    ?.toList() ??
+                [];
+        await _reconcileDeletedImap(account.id, mailboxPath, serverUids);
+        final maxUid =
+            serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+        await _saveImapCheckpoint(
+            account.id, resourceType, uidValidity, maxUid);
       }
     } finally {
       await client.logout();
+    }
+  }
+
+  Future<void> _fetchAndUpsertImap(
+    imap.ImapClient client,
+    account_model.Account account,
+    String mailboxPath,
+    imap.MessageSequence sequence,
+  ) async {
+    final fetch = await client.fetchMessages(
+        sequence, '(UID FLAGS ENVELOPE BODYSTRUCTURE)');
+    for (final msg in fetch.messages) {
+      final envelope = msg.envelope;
+      if (envelope == null) continue;
+      final uid = msg.uid;
+      if (uid == null) continue;
+      final emailId = '${account.id}:$uid';
+      await _db.into(_db.emails).insertOnConflictUpdate(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: account.id,
+              mailboxPath: mailboxPath,
+              uid: uid,
+              subject: Value(envelope.subject),
+              sentAt: Value(envelope.date),
+              receivedAt: envelope.date ?? DateTime.now(),
+              fromJson: Value(_encodeAddresses(envelope.from)),
+              toAddresses: Value(_encodeAddresses(envelope.to)),
+              ccJson: Value(_encodeAddresses(envelope.cc)),
+              isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
+              isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+              hasAttachment: Value(msg.hasAttachments()),
+            ),
+          );
+    }
+  }
+
+  Future<int> _maxLocalUid(String accountId, String mailboxPath) async {
+    final rows = await (_db.select(_db.emails)
+          ..where((t) =>
+              t.accountId.equals(accountId) &
+              t.mailboxPath.equals(mailboxPath)))
+        .get();
+    if (rows.isEmpty) return 0;
+    return rows.map((r) => r.uid).reduce(math.max);
+  }
+
+  Future<Map<String, dynamic>?> _loadImapCheckpoint(
+      String accountId, String resourceType) async {
+    final raw = await _loadSyncState(accountId, resourceType);
+    if (raw == null) return null;
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  Future<void> _saveImapCheckpoint(String accountId, String resourceType,
+      int uidValidity, int lastUid) async {
+    await _saveSyncState(accountId, resourceType,
+        jsonEncode({'uidValidity': uidValidity, 'lastUid': lastUid}));
+  }
+
+  Future<void> _reconcileDeletedImap(
+      String accountId, String mailboxPath, List<int> serverUids) async {
+    final serverUidSet = serverUids.toSet();
+    final localRows = await (_db.select(_db.emails)
+          ..where((t) =>
+              t.accountId.equals(accountId) &
+              t.mailboxPath.equals(mailboxPath)))
+        .get();
+    for (final row in localRows) {
+      if (!serverUidSet.contains(row.uid)) {
+        await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+      }
     }
   }
 

@@ -8,6 +8,10 @@ class FakeImapClient extends imap.ImapClient {
   List<imap.MimeMessage> fetchResults = [];
   List<imap.Mailbox> listMailboxesResult = [];
   List<int> searchUids = [];
+  /// If set, each [uidSearchMessages] call pops the first element.
+  /// Falls back to [searchUids] when the queue is empty or null.
+  List<List<int>>? searchCallQueue;
+  int uidValidityResult = 0;
   bool logoutCalled = false;
   bool throwOnStatus = false;
   int markSeenCalls = 0;
@@ -32,6 +36,7 @@ class FakeImapClient extends imap.ImapClient {
         encodedPath: path,
         flags: [],
         pathSeparator: '/',
+        uidValidity: uidValidityResult,
       );
 
   @override
@@ -150,10 +155,13 @@ class FakeImapClient extends imap.ImapClient {
     List<imap.ReturnOption>? returnOptions,
     Duration? responseTimeout,
   }) async {
+    final uids = (searchCallQueue != null && searchCallQueue!.isNotEmpty)
+        ? searchCallQueue!.removeAt(0)
+        : searchUids;
     final result = imap.SearchImapResult();
-    if (searchUids.isNotEmpty) {
+    if (uids.isNotEmpty) {
       result.matchingSequence =
-          imap.MessageSequence.fromIds(searchUids, isUid: true);
+          imap.MessageSequence.fromIds(uids, isUid: true);
     }
     return result;
   }
