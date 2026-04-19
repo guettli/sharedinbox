@@ -115,6 +115,21 @@ class SyncStates extends Table {
   Set<Column> get primaryKey => {accountId, resourceType};
 }
 
+/// Lightweight audit trail for each sync cycle.
+/// Useful for debugging and surfacing "last synced" timestamps in the UI.
+@DataClassName('SyncLogRow')
+class SyncLogs extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // "ok" | "error"
+  TextColumn get result => text()();
+  TextColumn get errorMessage => text().nullable()();
+  IntColumn get itemsSynced => integer().withDefault(const Constant(0))();
+  DateTimeColumn get startedAt => dateTime()();
+  DateTimeColumn get finishedAt => dateTime()();
+}
+
 /// Auto-saved compose drafts — persisted across app restarts.
 class Drafts extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -130,12 +145,12 @@ class Drafts extends Table {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates, PendingChanges])
+@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates, PendingChanges, SyncLogs])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -155,6 +170,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 6) {
             await m.createTable(pendingChanges);
+          }
+          if (from < 7) {
+            await m.createTable(syncLogs);
           }
         },
       );

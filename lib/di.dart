@@ -14,6 +14,7 @@ import 'data/repositories/account_repository_impl.dart';
 import 'data/repositories/draft_repository_impl.dart';
 import 'data/repositories/email_repository_impl.dart';
 import 'data/repositories/mailbox_repository_impl.dart';
+import 'data/repositories/sync_log_repository_impl.dart';
 import 'data/storage/flutter_secure_storage_impl.dart';
 
 final dbProvider = Provider<AppDatabase>((ref) {
@@ -57,11 +58,16 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
   );
 });
 
+final syncLogRepositoryProvider = Provider((ref) {
+  return SyncLogRepositoryImpl(ref.watch(dbProvider));
+});
+
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {
   final manager = AccountSyncManager(
     ref.watch(accountRepositoryProvider),
     ref.watch(mailboxRepositoryProvider),
     ref.watch(emailRepositoryProvider),
+    syncLog: ref.watch(syncLogRepositoryProvider),
   );
   ref.onDispose(manager.dispose);
   return manager;

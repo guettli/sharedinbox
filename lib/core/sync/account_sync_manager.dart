@@ -6,6 +6,7 @@ import '../models/account.dart';
 import '../repositories/account_repository.dart';
 import '../repositories/email_repository.dart';
 import '../repositories/mailbox_repository.dart';
+import '../repositories/sync_log_repository.dart';
 import '../utils/logger.dart';
 import '../../data/imap/imap_client_factory.dart';
 
@@ -19,12 +20,15 @@ class AccountSyncManager {
     this._mailboxes,
     this._emails, {
     ImapConnectFn imapConnect = connectImap,
-  }) : _imapConnect = imapConnect;
+    SyncLogRepository syncLog = const NoOpSyncLogRepository(),
+  })  : _imapConnect = imapConnect,
+        _syncLog = syncLog;
 
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
+  final SyncLogRepository _syncLog;
 
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
@@ -36,10 +40,10 @@ class AccountSyncManager {
       for (final account in accounts) {
         if (_active.containsKey(account.id)) continue;
         final loop = switch (account.type) {
-          AccountType.imap =>
-            _AccountSync(account, _accounts, _mailboxes, _emails, _imapConnect),
-          AccountType.jmap =>
-            _JmapAccountSync(account, _mailboxes, _emails, _accounts),
+          AccountType.imap => _AccountSync(
+              account, _accounts, _mailboxes, _emails, _imapConnect, _syncLog),
+          AccountType.jmap => _JmapAccountSync(
+              account, _mailboxes, _emails, _accounts, _syncLog),
         };
         _active[account.id] = loop;
         loop.start();
@@ -73,13 +77,14 @@ abstract class _SyncLoop {
 
 class _AccountSync implements _SyncLoop {
   _AccountSync(this.account, this._accounts, this._mailboxes, this._emails,
-      this._imapConnect);
+      this._imapConnect, this._syncLog);
 
   final Account account;
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
+  final SyncLogRepository _syncLog;
 
   imap.ImapClient? _idleClient;
   bool _running = false;
@@ -104,11 +109,25 @@ class _AccountSync implements _SyncLoop {
 
   Future<void> _loop() async {
     while (_running) {
+      final startedAt = DateTime.now();
       try {
         await _sync();
+        await _syncLog.log(
+          accountId: account.id,
+          success: true,
+          startedAt: startedAt,
+          finishedAt: DateTime.now(),
+        );
         await _idle();
         _backoffSeconds = 5;
       } catch (e, st) {
+        await _syncLog.log(
+          accountId: account.id,
+          success: false,
+          errorMessage: e.toString(),
+          startedAt: startedAt,
+          finishedAt: DateTime.now(),
+        );
         log(
           'Sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
@@ -178,12 +197,14 @@ class _AccountSync implements _SyncLoop {
 // ── JMAP ──────────────────────────────────────────────────────────────────────
 
 class _JmapAccountSync implements _SyncLoop {
-  _JmapAccountSync(this.account, this._mailboxes, this._emails, this._accounts);
+  _JmapAccountSync(
+      this.account, this._mailboxes, this._emails, this._accounts, this._syncLog);
 
   final Account account;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final AccountRepository _accounts;
+  final SyncLogRepository _syncLog;
 
   bool _running = false;
   int _backoffSeconds = 5;
@@ -207,11 +228,25 @@ class _JmapAccountSync implements _SyncLoop {
 
   Future<void> _loop() async {
     while (_running) {
+      final startedAt = DateTime.now();
       try {
         await _sync();
+        await _syncLog.log(
+          accountId: account.id,
+          success: true,
+          startedAt: startedAt,
+          finishedAt: DateTime.now(),
+        );
         _backoffSeconds = 5;
         await _wait();
       } catch (e, st) {
+        await _syncLog.log(
+          accountId: account.id,
+          success: false,
+          errorMessage: e.toString(),
+          startedAt: startedAt,
+          finishedAt: DateTime.now(),
+        );
         log(
           'JMAP sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
