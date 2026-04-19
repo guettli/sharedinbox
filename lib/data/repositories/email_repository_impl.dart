@@ -370,6 +370,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── JMAP email sync ────────────────────────────────────────────────────────
 
+  static const _jmapPageSize = 500;
+
   static const _emailProperties = [
     'id', 'mailboxIds', 'subject', 'sentAt', 'receivedAt',
     'from', 'to', 'cc', 'keywords', 'hasAttachment', 'preview',
@@ -403,35 +405,47 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<void> _jmapFullEmailSync(
       String accountId, JmapClient jmap, String mailboxJmapId) async {
-    // Query IDs in this mailbox, newest first, up to 500.
-    final responses = await jmap.call([
-      [
-        'Email/query',
-        {
-          'accountId': jmap.accountId,
-          'filter': {'inMailbox': mailboxJmapId},
-          'sort': [{'property': 'receivedAt', 'isAscending': false}],
-          'limit': 500,
-        },
-        '0',
-      ],
-      [
-        'Email/get',
-        {
-          'accountId': jmap.accountId,
-          '#ids': {'resultOf': '0', 'name': 'Email/query', 'path': '/ids'},
-          'properties': _emailProperties,
-        },
-        '1',
-      ],
-    ]);
+    int position = 0;
+    String? firstState;
 
-    final getResult = _responseArgs(responses, 1, 'Email/get');
-    final emails = getResult['list'] as List<dynamic>;
-    final newState = getResult['state'] as String;
+    while (true) {
+      final responses = await jmap.call([
+        [
+          'Email/query',
+          {
+            'accountId': jmap.accountId,
+            'filter': {'inMailbox': mailboxJmapId},
+            'sort': [{'property': 'receivedAt', 'isAscending': false}],
+            'limit': _jmapPageSize,
+            'position': position,
+            'calculateTotal': true,
+          },
+          '0',
+        ],
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            '#ids': {'resultOf': '0', 'name': 'Email/query', 'path': '/ids'},
+            'properties': _emailProperties,
+          },
+          '1',
+        ],
+      ]);
 
-    await _upsertJmapEmails(accountId, emails);
-    await _saveSyncState(accountId, 'Email', newState);
+      final queryResult = _responseArgs(responses, 0, 'Email/query');
+      final ids = queryResult['ids'] as List<dynamic>;
+      final total = queryResult['total'] as int?;
+
+      final getResult = _responseArgs(responses, 1, 'Email/get');
+      firstState ??= getResult['state'] as String;
+      await _upsertJmapEmails(accountId, getResult['list'] as List<dynamic>);
+
+      position += ids.length;
+      if (ids.isEmpty || total == null || position >= total) break;
+    }
+
+    await _saveSyncState(accountId, 'Email', firstState);
   }
 
   Future<void> _jmapIncrementalEmailSync(

@@ -60,12 +60,23 @@ http.Client _mockJmapEmails({required List<Map<String, dynamic>> apiResponses}) 
   });
 }
 
-Map<String, dynamic> _emailGetResponse(
-    {required String state, required List<Map<String, dynamic>> list}) =>
+Map<String, dynamic> _emailGetResponse({
+  required String state,
+  required List<Map<String, dynamic>> list,
+  int? total,
+}) =>
     {
       'sessionState': 'sess1',
       'methodResponses': [
-        ['Email/query', {'accountId': 'acct1', 'ids': list.map((e) => e['id']).toList()}, '0'],
+        [
+          'Email/query',
+          {
+            'accountId': 'acct1',
+            'ids': list.map((e) => e['id']).toList(),
+            'total': total ?? list.length,
+          },
+          '0'
+        ],
         ['Email/get', {'accountId': 'acct1', 'state': state, 'list': list}, '1'],
       ],
     };
@@ -1113,6 +1124,33 @@ void main() {
       ));
 
       await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states.first.state, 'est1');
+    });
+
+    test('full sync paginates when total exceeds page size', () async {
+      final page1 = [
+        _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'Page1-A'),
+        _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Page1-B'),
+      ];
+      final page2 = [
+        _jmapEmail(id: 'e3', mailboxId: 'mbx1', subject: 'Page2-A'),
+        _jmapEmail(id: 'e4', mailboxId: 'mbx1', subject: 'Page2-B'),
+      ];
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          _emailGetResponse(state: 'est1', list: page1, total: 4),
+          _emailGetResponse(state: 'est1', list: page2, total: 4),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
+      expect(emails, hasLength(4));
+      expect(emails.map((e) => e.subject).toSet(),
+          {'Page1-A', 'Page1-B', 'Page2-A', 'Page2-B'});
 
       final states = await r.db.select(r.db.syncStates).get();
       expect(states.first.state, 'est1');
