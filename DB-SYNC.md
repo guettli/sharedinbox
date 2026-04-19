@@ -67,7 +67,7 @@ pending_changes (
 )
 ```
 
-### Step 3 — JMAP session client `[ ]`
+### Step 3 — JMAP session client `[x]`
 
 Implement `JmapSession`: parse the JMAP Session object from `GET {jmapUrl}`,
 extract `apiUrl`, primary `accountId`, and capabilities. Store nothing extra in the
