@@ -80,6 +80,25 @@ class EmailBodies extends Table {
   Set<Column> get primaryKey => {emailId};
 }
 
+/// Protocol-agnostic outbound change queue.
+/// Local mutations are written here before being sent to the server,
+/// enabling offline-first behaviour and durable retries.
+@DataClassName('PendingChangeRow')
+class PendingChanges extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get resourceType => text()();
+  TextColumn get resourceId => text()();
+  // "flag_seen" | "flag_flagged" | "move" | "delete"
+  TextColumn get changeType => text()();
+  // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
+  TextColumn get payload => text()();
+  DateTimeColumn get createdAt => dateTime()();
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+  TextColumn get lastError => text().nullable()();
+}
+
 /// Sync checkpoint per (account, resource type).
 /// Stores the server-side state token used for incremental sync.
 /// For JMAP: the opaque `state` string from Mailbox/get or Email/get.
@@ -111,12 +130,12 @@ class Drafts extends Table {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates])
+@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates, PendingChanges])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -133,6 +152,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 5) {
             await m.createTable(syncStates);
+          }
+          if (from < 6) {
+            await m.createTable(pendingChanges);
           }
         },
       );

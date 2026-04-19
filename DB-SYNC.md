@@ -46,7 +46,7 @@ sync_state (
 )
 ```
 
-### Step 2 — `pending_changes` table `[ ]`
+### Step 2 — `pending_changes` table `[x]`
 
 Protocol-agnostic outbound queue. Any local mutation (flag, move, delete) is written
 here first. A sync worker drains the queue and sends to server. Enables offline-first.
