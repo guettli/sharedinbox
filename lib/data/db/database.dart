@@ -80,6 +80,22 @@ class EmailBodies extends Table {
   Set<Column> get primaryKey => {emailId};
 }
 
+/// Sync checkpoint per (account, resource type).
+/// Stores the server-side state token used for incremental sync.
+/// For JMAP: the opaque `state` string from Mailbox/get or Email/get.
+/// For IMAP: a JSON object with last-synced UID / MODSEQ per mailbox.
+@DataClassName('SyncStateRow')
+class SyncStates extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get resourceType => text()();
+  TextColumn get state => text()();
+  DateTimeColumn get syncedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, resourceType};
+}
+
 /// Auto-saved compose drafts — persisted across app restarts.
 class Drafts extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -95,12 +111,12 @@ class Drafts extends Table {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts])
+@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -114,6 +130,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 4) {
             await m.createTable(drafts);
+          }
+          if (from < 5) {
+            await m.createTable(syncStates);
           }
         },
       );
