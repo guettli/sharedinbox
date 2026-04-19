@@ -2,6 +2,9 @@ import 'package:enough_mail/enough_mail.dart';
 
 import '../../core/models/account.dart';
 
+typedef ImapConnectFn = Future<ImapClient> Function(
+    Account account, String username, String password);
+
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// Throws [Exception] if the account is not configured for SSL/TLS.

@@ -16,8 +16,6 @@ import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 import '../jmap/jmap_client.dart';
 
-typedef ImapConnectFn = Future<imap.ImapClient> Function(
-    account_model.Account account, String username, String password);
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
     account_model.Account account, String username, String password);
 typedef GetCacheDirFn = Future<Directory> Function();

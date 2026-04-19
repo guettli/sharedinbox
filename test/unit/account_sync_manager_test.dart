@@ -137,6 +137,15 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
   Future<void> syncMailboxes(String accountId) async {}
 }
 
+class _CountingEmailRepository extends FakeEmailRepository {
+  final List<String> syncedPaths = [];
+
+  @override
+  Future<void> syncEmails(String accountId, String mailboxPath) async {
+    syncedPaths.add(mailboxPath);
+  }
+}
+
 class FailingJmapEmailRepository extends FakeEmailRepository {
   int syncCount = 0;
 
@@ -208,6 +217,27 @@ void main() {
 
       mgr.dispose();
       await pumpEventQueue(times: 10);
+    });
+
+    test('IMAP _sync iterates all mailboxes from mailbox repository', () {
+      fakeAsync((async) {
+        final accounts = FakeAccountRepository();
+        final emails = _CountingEmailRepository();
+        final mgr = AccountSyncManager(
+          accounts,
+          FakeMailboxRepositoryWithInbox(),
+          emails,
+          imapConnect: (_, __, ___) =>
+              Future.error(Exception('no IMAP in test')),
+        );
+        mgr.start();
+        accounts.push([_account]);
+        async.flushMicrotasks();
+        expect(emails.syncedPaths, contains('mbx1'));
+        mgr.dispose();
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+      });
     });
 
     group('JMAP accounts', () {

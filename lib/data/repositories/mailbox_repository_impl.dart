@@ -10,7 +10,6 @@ import '../../core/utils/logger.dart';
 import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 import '../jmap/jmap_client.dart';
-import 'email_repository_impl.dart' show ImapConnectFn;
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(

@@ -14,11 +14,17 @@ import '../../data/imap/imap_client_factory.dart';
 /// IMAP accounts get an IDLE-based sync loop (_AccountSync).
 /// JMAP accounts get a polling-based sync loop (_JmapAccountSync).
 class AccountSyncManager {
-  AccountSyncManager(this._accounts, this._mailboxes, this._emails);
+  AccountSyncManager(
+    this._accounts,
+    this._mailboxes,
+    this._emails, {
+    ImapConnectFn imapConnect = connectImap,
+  }) : _imapConnect = imapConnect;
 
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
+  final ImapConnectFn _imapConnect;
 
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
@@ -31,7 +37,7 @@ class AccountSyncManager {
         if (_active.containsKey(account.id)) continue;
         final loop = switch (account.type) {
           AccountType.imap =>
-            _AccountSync(account, _accounts, _mailboxes, _emails),
+            _AccountSync(account, _accounts, _mailboxes, _emails, _imapConnect),
           AccountType.jmap =>
             _JmapAccountSync(account, _mailboxes, _emails, _accounts),
         };
@@ -66,12 +72,14 @@ abstract class _SyncLoop {
 // ── IMAP ──────────────────────────────────────────────────────────────────────
 
 class _AccountSync implements _SyncLoop {
-  _AccountSync(this.account, this._accounts, this._mailboxes, this._emails);
+  _AccountSync(this.account, this._accounts, this._mailboxes, this._emails,
+      this._imapConnect);
 
   final Account account;
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
+  final ImapConnectFn _imapConnect;
 
   imap.ImapClient? _idleClient;
   bool _running = false;
@@ -114,7 +122,11 @@ class _AccountSync implements _SyncLoop {
 
   Future<void> _sync() async {
     await _mailboxes.syncMailboxes(account.id);
-    await _emails.syncEmails(account.id, 'INBOX');
+    final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
+    for (final mailbox in mailboxes) {
+      if (!_running) break;
+      await _emails.syncEmails(account.id, mailbox.path);
+    }
   }
 
   Future<void> _idle() async {
@@ -123,7 +135,7 @@ class _AccountSync implements _SyncLoop {
     final password = await _accounts.getPassword(account.id);
     final username =
         account.username.isNotEmpty ? account.username : account.email;
-    final client = await connectImap(account, username, password);
+    final client = await _imapConnect(account, username, password);
     _idleClient = client;
     try {
       await client.selectMailboxByPath('INBOX');
