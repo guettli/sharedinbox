@@ -74,7 +74,7 @@ extract `apiUrl`, primary `accountId`, and capabilities. Store nothing extra in 
 DB (re-fetch session on start). Provide a `call(methodCalls)` helper that POSTs to
 `apiUrl` and decodes responses.
 
-### Step 4 — JMAP Mailbox sync `[ ]`
+### Step 4 — JMAP Mailbox sync `[x]`
 
 Implement `syncMailboxes(accountId)` for JMAP:
 
