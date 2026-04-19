@@ -747,4 +747,167 @@ void main() {
       expect(states.first.state, 'est1');
     });
   });
+
+  group('JMAP setFlag / moveEmail / deleteEmail enqueue pending_changes', () {
+    Future<void> seedJmapEmail(
+        AppDatabase db, AccountRepositoryImpl accounts) async {
+      await accounts.addAccount(_jmapAccount, 'pw');
+      await db.into(db.emails).insert(EmailsCompanion.insert(
+        id: 'jmap-1:e1',
+        accountId: 'jmap-1',
+        mailboxPath: 'mbx1',
+        uid: 0,
+        receivedAt: DateTime(2024),
+      ));
+    }
+
+    test('setFlag seen enqueues flag_seen change and updates local DB', () async {
+      final r = _makeRepos();
+      await seedJmapEmail(r.db, r.accounts);
+
+      await r.emails.setFlag('jmap-1:e1', seen: true);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.changeType, 'flag_seen');
+      expect(changes.first.payload, contains('true'));
+
+      final email = await r.emails.getEmail('jmap-1:e1');
+      expect(email?.isSeen, isTrue);
+    });
+
+    test('setFlag flagged enqueues flag_flagged change', () async {
+      final r = _makeRepos();
+      await seedJmapEmail(r.db, r.accounts);
+
+      await r.emails.setFlag('jmap-1:e1', flagged: true);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'flag_flagged');
+    });
+
+    test('moveEmail enqueues move change and removes email from local DB', () async {
+      final r = _makeRepos();
+      await seedJmapEmail(r.db, r.accounts);
+
+      await r.emails.moveEmail('jmap-1:e1', 'mbx2');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'move');
+      expect(changes.first.payload, contains('mbx2'));
+
+      expect(await r.emails.getEmail('jmap-1:e1'), isNull);
+    });
+
+    test('deleteEmail enqueues delete change and removes email from local DB', () async {
+      final r = _makeRepos();
+      await seedJmapEmail(r.db, r.accounts);
+
+      await r.emails.deleteEmail('jmap-1:e1');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'delete');
+      expect(await r.emails.getEmail('jmap-1:e1'), isNull);
+    });
+  });
+
+  group('JMAP flushPendingChanges', () {
+    http.Client mockFlush(int apiStatus) {
+      return MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {'name': 'alice@example.com', 'isPersonal': true}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({'sessionState': 's1', 'methodResponses': [
+            ['Email/set', {'accountId': 'acct1', 'updated': {}, 'destroyed': []}, '0'],
+          ]}),
+          apiStatus,
+        );
+      });
+    }
+
+    Future<void> seedChange(AppDatabase db, AccountRepositoryImpl accounts,
+        {String changeType = 'flag_seen', String payload = '{"seen":true}'}) async {
+      await accounts.addAccount(_jmapAccount, 'pw');
+      await db.into(db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'jmap-1',
+        resourceType: 'Email',
+        resourceId: 'jmap-1:e1',
+        changeType: changeType,
+        payload: payload,
+        createdAt: DateTime.now(),
+      ));
+    }
+
+    test('no-op when no pending changes', () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('sends flag_seen and removes change on success', () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await seedChange(r.db, r.accounts);
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('sends flag_flagged and removes change on success', () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await seedChange(r.db, r.accounts,
+          changeType: 'flag_flagged', payload: '{"flagged":true}');
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('sends move and removes change on success', () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await seedChange(r.db, r.accounts,
+          changeType: 'move', payload: '{"dest":"mbx2"}');
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('sends delete and removes change on success', () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await seedChange(r.db, r.accounts,
+          changeType: 'delete', payload: '{}');
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('records attempt count and error on API failure', () async {
+      final r = _makeRepos(httpClient: mockFlush(500));
+      await seedChange(r.db, r.accounts);
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.attempts, 1);
+      expect(changes.first.lastError, isNotNull);
+    });
+  });
 }

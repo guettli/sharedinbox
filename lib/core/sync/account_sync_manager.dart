@@ -33,7 +33,7 @@ class AccountSyncManager {
           AccountType.imap =>
             _AccountSync(account, _accounts, _mailboxes, _emails),
           AccountType.jmap =>
-            _JmapAccountSync(account, _mailboxes, _emails),
+            _JmapAccountSync(account, _mailboxes, _emails, _accounts),
         };
         _active[account.id] = loop;
         loop.start();
@@ -164,11 +164,12 @@ class _AccountSync implements _SyncLoop {
 // ── JMAP ──────────────────────────────────────────────────────────────────────
 
 class _JmapAccountSync implements _SyncLoop {
-  _JmapAccountSync(this.account, this._mailboxes, this._emails);
+  _JmapAccountSync(this.account, this._mailboxes, this._emails, this._accounts);
 
   final Account account;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
+  final AccountRepository _accounts;
 
   bool _running = false;
   int _backoffSeconds = 5;
@@ -209,9 +210,13 @@ class _JmapAccountSync implements _SyncLoop {
   }
 
   Future<void> _sync() async {
+    final password = await _accounts.getPassword(account.id);
+
+    // Drain outbound queue before pulling from server.
+    await _emails.flushPendingChanges(account.id, password);
+
     await _mailboxes.syncMailboxes(account.id);
 
-    // Sync emails for each known mailbox.
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     for (final mailbox in mailboxes) {
       if (!_running) break;

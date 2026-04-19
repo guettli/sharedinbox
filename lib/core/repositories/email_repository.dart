@@ -26,4 +26,8 @@ abstract class EmailRepository {
     String mailboxPath,
     String query,
   );
+
+  /// Sends any queued local mutations for [accountId] to the server.
+  /// No-op for IMAP accounts (mutations are applied synchronously).
+  Future<void> flushPendingChanges(String accountId, String password);
 }

@@ -392,8 +392,29 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where((t) => t.id.equals(emailId)))
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
+
+    if (account.type == account_model.AccountType.jmap) {
+      if (seen != null) {
+        await _enqueueChange(account.id, emailId, 'flag_seen',
+            jsonEncode({'seen': seen}));
+      }
+      if (flagged != null) {
+        await _enqueueChange(account.id, emailId, 'flag_flagged',
+            jsonEncode({'flagged': flagged}));
+      }
+      // Optimistic local update.
+      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+        EmailsCompanion(
+          isSeen: seen != null ? Value(seen) : const Value.absent(),
+          isFlagged: flagged != null ? Value(flagged) : const Value.absent(),
+        ),
+      );
+      return;
+    }
+
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -425,8 +446,18 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where((t) => t.id.equals(emailId)))
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
+
+    if (account.type == account_model.AccountType.jmap) {
+      await _enqueueChange(account.id, emailId, 'move',
+          jsonEncode({'dest': destMailboxPath}));
+      // Optimistic: remove from current view; next sync will reconcile.
+      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+      return;
+    }
+
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       await client.uidMove(
@@ -445,8 +476,17 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where((t) => t.id.equals(emailId)))
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
+
+    if (account.type == account_model.AccountType.jmap) {
+      await _enqueueChange(
+          account.id, emailId, 'delete', jsonEncode(<String, dynamic>{}));
+      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+      return;
+    }
+
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(row.mailboxPath);
       final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
@@ -455,6 +495,140 @@ class EmailRepositoryImpl implements EmailRepository {
       await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
     } finally {
       await client.logout();
+    }
+  }
+
+  // ── pending_changes queue ──────────────────────────────────────────────────
+
+  Future<void> _enqueueChange(
+    String accountId,
+    String resourceId,
+    String changeType,
+    String payload,
+  ) async {
+    await _db.into(_db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: accountId,
+            resourceType: 'Email',
+            resourceId: resourceId,
+            changeType: changeType,
+            payload: payload,
+            createdAt: DateTime.now(),
+          ),
+        );
+  }
+
+  /// Drains pending changes for [accountId] via JMAP Email/set.
+  /// Called at the start of each JMAP sync cycle.
+  @override
+  Future<void> flushPendingChanges(
+      String accountId, String password) async {
+    final rows = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+    if (rows.isEmpty) return;
+
+    final account = (await _accounts.getAccount(accountId))!;
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) return;
+
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+
+    for (final row in rows) {
+      try {
+        await _applyPendingChange(jmap, row);
+        await (_db.delete(_db.pendingChanges)
+              ..where((t) => t.id.equals(row.id)))
+            .go();
+      } catch (e) {
+        await (_db.update(_db.pendingChanges)
+              ..where((t) => t.id.equals(row.id)))
+            .write(PendingChangesCompanion(
+          attempts: Value(row.attempts + 1),
+          lastError: Value(e.toString()),
+        ));
+      }
+    }
+  }
+
+  Future<void> _applyPendingChange(
+      JmapClient jmap, PendingChangeRow row) async {
+    final payload = jsonDecode(row.payload) as Map<String, dynamic>;
+    // Extract the JMAP email ID from the DB id (format: "accountId:jmapId").
+    final jmapEmailId = row.resourceId.contains(':')
+        ? row.resourceId.substring(row.resourceId.indexOf(':') + 1)
+        : row.resourceId;
+
+    switch (row.changeType) {
+      case 'flag_seen':
+        final seen = payload['seen'] as bool;
+        await jmap.call([
+          [
+            'Email/set',
+            {
+              'accountId': jmap.accountId,
+              'update': {
+                jmapEmailId: {
+                  'keywords/\$seen': seen,
+                },
+              },
+            },
+            '0',
+          ]
+        ]);
+
+      case 'flag_flagged':
+        final flagged = payload['flagged'] as bool;
+        await jmap.call([
+          [
+            'Email/set',
+            {
+              'accountId': jmap.accountId,
+              'update': {
+                jmapEmailId: {
+                  'keywords/\$flagged': flagged,
+                },
+              },
+            },
+            '0',
+          ]
+        ]);
+
+      case 'move':
+        final destMailboxId = payload['dest'] as String;
+        await jmap.call([
+          [
+            'Email/set',
+            {
+              'accountId': jmap.accountId,
+              'update': {
+                jmapEmailId: {
+                  'mailboxIds/$destMailboxId': true,
+                  'mailboxIds/${row.resourceId}': null,
+                },
+              },
+            },
+            '0',
+          ]
+        ]);
+
+      case 'delete':
+        await jmap.call([
+          [
+            'Email/set',
+            {
+              'accountId': jmap.accountId,
+              'destroy': [jmapEmailId],
+            },
+            '0',
+          ]
+        ]);
     }
   }
 

@@ -83,6 +83,9 @@ class _FakeEmails implements EmailRepository {
   Future<void> deleteEmail(String id) async {}
 
   @override
+  Future<void> flushPendingChanges(String accountId, String password) async {}
+
+  @override
   Future<void> sendEmail(String a, EmailDraft d) async {}
 
   @override

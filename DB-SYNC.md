@@ -104,7 +104,7 @@ Add JMAP handling to `AccountSyncManager`:
   EventSource if server supports it) → repeat.
 - Reuse the existing exponential backoff pattern from `_AccountSync`.
 
-### Step 7 — JMAP outbound changes `[ ]`
+### Step 7 — JMAP outbound changes `[x]`
 
 Wire local mutations (flag, move, delete) for JMAP accounts into `pending_changes`
 instead of direct server calls. Add a queue-draining step at the start of each sync
