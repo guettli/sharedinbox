@@ -953,6 +953,16 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> sendEmail(String accountId, model.EmailDraft draft) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        await _sendEmailImap(account, password, draft);
+      case account_model.AccountType.jmap:
+        await _sendEmailJmap(account, password, draft);
+    }
+  }
+
+  Future<void> _sendEmailImap(account_model.Account account, String password,
+      model.EmailDraft draft) async {
     final builder = imap.MessageBuilder()
       ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
       ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
@@ -965,7 +975,8 @@ class EmailRepositoryImpl implements EmailRepository {
       await builder.addFile(file, mediaType);
     }
     final mimeMessage = builder.buildMimeMessage();
-    final smtpClient = await _smtpConnect(account, _effectiveUsername(account), password);
+    final smtpClient =
+        await _smtpConnect(account, _effectiveUsername(account), password);
     try {
       await smtpClient.sendMessage(mimeMessage);
     } finally {
@@ -973,7 +984,8 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     // Save a copy to the Sent folder via IMAP APPEND.
     // Create the folder first — many servers don't pre-create it.
-    final imapClient = await _imapConnect(account, _effectiveUsername(account), password);
+    final imapClient =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       try {
         await imapClient.createMailbox('Sent');
@@ -987,6 +999,124 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     } finally {
       await imapClient.logout();
+    }
+  }
+
+  Future<void> _sendEmailJmap(account_model.Account account, String password,
+      model.EmailDraft draft) async {
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) {
+      throw Exception('JMAP account ${account.id} has no jmapUrl');
+    }
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+
+    // Upload any file attachments and collect their blobIds.
+    final attachments = <Map<String, dynamic>>[];
+    for (final filePath in draft.attachmentFilePaths) {
+      final file = File(filePath);
+      final bytes = await file.readAsBytes();
+      final contentType = imap.MediaType.guessFromFileName(filePath).text;
+      final blobId = await jmap.uploadBlob(bytes, contentType);
+      attachments.add({
+        'blobId': blobId,
+        'type': contentType,
+        'name': p.basename(filePath),
+        'size': bytes.length,
+        'disposition': 'attachment',
+      });
+    }
+
+    // Look up the Sent mailbox JMAP ID from the local DB.
+    final sentMailbox = await (_db.select(_db.mailboxes)
+          ..where((t) =>
+              t.accountId.equals(account.id) & t.role.equals('sent'))
+          ..limit(1))
+        .getSingleOrNull();
+    final sentJmapId = sentMailbox?.path;
+
+    // Build the email body.
+    const bodyPartId = '1';
+    final emailCreate = {
+      'from': [{'name': draft.from.name, 'email': draft.from.email}],
+      'to': draft.to.map((a) => {'name': a.name, 'email': a.email}).toList(),
+      if (draft.cc.isNotEmpty)
+        'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
+      'subject': draft.subject,
+      'bodyValues': {
+        bodyPartId: {
+          'value': draft.body,
+          'isEncodingProblem': false,
+          'isTruncated': false,
+        },
+      },
+      'textBody': [{'partId': bodyPartId, 'type': 'text/plain'}],
+      if (attachments.isNotEmpty) 'attachments': attachments,
+      'keywords': {r'$seen': true},
+      if (sentJmapId != null) 'mailboxIds': {sentJmapId: true},
+    };
+
+    // Build the recipient envelope for EmailSubmission.
+    final allRecipients = [
+      ...draft.to.map((a) => {'email': a.email}),
+      ...draft.cc.map((a) => {'email': a.email}),
+    ];
+
+    // Chain Email/set (create) + EmailSubmission/set (create) in one request.
+    final responses = await jmap.call(
+      [
+        [
+          'Email/set',
+          {
+            'accountId': jmap.accountId,
+            'create': {'em1': emailCreate},
+          },
+          '0',
+        ],
+        [
+          'EmailSubmission/set',
+          {
+            'accountId': jmap.accountId,
+            'create': {
+              'sub1': {
+                '#emailId': {
+                  'resultOf': '0',
+                  'name': 'Email/set',
+                  'path': '/created/em1/id',
+                },
+                'envelope': {
+                  'mailFrom': {'email': draft.from.email},
+                  'rcptTo': allRecipients,
+                },
+              },
+            },
+          },
+          '1',
+        ],
+      ],
+      withSubmission: true,
+    );
+
+    // Check Email/set for creation errors.
+    final setResult = _responseArgs(responses, 0, 'Email/set');
+    final notCreated =
+        setResult['notCreated'] as Map<String, dynamic>?;
+    if (notCreated != null && notCreated.containsKey('em1')) {
+      final err = notCreated['em1'] as Map<String, dynamic>;
+      throw JmapException('Email/set create failed: ${err['type']}');
+    }
+
+    // Check EmailSubmission/set for submission errors.
+    final subResult = _responseArgs(responses, 1, 'EmailSubmission/set');
+    final notSubmitted =
+        subResult['notCreated'] as Map<String, dynamic>?;
+    if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
+      final err = notSubmitted['sub1'] as Map<String, dynamic>;
+      throw JmapException('EmailSubmission/set failed: ${err['type']}');
     }
   }
 

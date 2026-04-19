@@ -1,11 +1,14 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-const _using = [
+const _coreUsing = [
   'urn:ietf:params:jmap:core',
   'urn:ietf:params:jmap:mail',
 ];
+
+const _submissionCapability = 'urn:ietf:params:jmap:submission';
 
 /// A connected JMAP session. Fetch via [JmapClient.connect].
 ///
@@ -17,17 +20,32 @@ class JmapClient {
     required String credentials,
     required Uri apiUrl,
     required String accountId,
+    required Set<String> capabilities,
+    String? uploadUrl,
+    String? eventSourceUrl,
   })  : _httpClient = httpClient,
         _credentials = credentials,
         _apiUrl = apiUrl,
-        _accountId = accountId;
+        _accountId = accountId,
+        _capabilities = capabilities,
+        _uploadUrl = uploadUrl,
+        _eventSourceUrl = eventSourceUrl;
 
   final http.Client _httpClient;
   final String _credentials;
   final Uri _apiUrl;
   final String _accountId;
+  final Set<String> _capabilities;
+  final String? _uploadUrl;
+  final String? _eventSourceUrl;
 
   String get accountId => _accountId;
+
+  /// Whether the server supports `EmailSubmission/set` (RFC 8621 §7).
+  bool get supportsSubmission => _capabilities.contains(_submissionCapability);
+
+  /// SSE push URL advertised by the server, or null if push is unsupported.
+  String? get eventSourceUrl => _eventSourceUrl;
 
   /// Fetches the JMAP Session object from [jmapUrl] and returns a connected
   /// client. Throws [JmapException] on HTTP errors or missing capabilities.
@@ -54,11 +72,18 @@ class JmapClient {
     final apiUrl = _extractApiUrl(session, jmapUrl);
     final accountId = _extractAccountId(session);
 
+    final capabilities = _extractCapabilities(session);
+    final uploadUrl = session['uploadUrl'] as String?;
+    final eventSourceUrl = session['eventSourceUrl'] as String?;
+
     return JmapClient._(
       httpClient: httpClient,
       credentials: credentials,
       apiUrl: apiUrl,
       accountId: accountId,
+      capabilities: capabilities,
+      uploadUrl: uploadUrl,
+      eventSourceUrl: eventSourceUrl,
     );
   }
 
@@ -67,10 +92,19 @@ class JmapClient {
   /// Each call is a triple `[methodName, arguments, callId]`.
   /// Returns the raw `methodResponses` list from the server.
   ///
+  /// Pass [withSubmission] to include `urn:ietf:params:jmap:submission` in
+  /// the `using` declaration (required for `EmailSubmission/set` calls).
+  ///
   /// Throws [JmapException] on HTTP errors or a top-level JMAP error response.
-  Future<List<dynamic>> call(List<List<dynamic>> methodCalls) async {
+  Future<List<dynamic>> call(
+    List<List<dynamic>> methodCalls, {
+    bool withSubmission = false,
+  }) async {
+    final using = withSubmission
+        ? [..._coreUsing, _submissionCapability]
+        : _coreUsing;
     final body = jsonEncode({
-      'using': _using,
+      'using': using,
       'methodCalls': methodCalls,
     });
 
@@ -100,6 +134,34 @@ class JmapClient {
     return decoded['methodResponses'] as List<dynamic>;
   }
 
+  /// Uploads [data] as a blob and returns the server-assigned `blobId`.
+  ///
+  /// Used to attach files to outgoing emails before calling `Email/set`.
+  Future<String> uploadBlob(Uint8List data, String contentType) async {
+    if (_uploadUrl == null) {
+      throw JmapException('Server does not advertise an uploadUrl');
+    }
+    final url = Uri.parse(
+        _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)));
+    final resp = await _httpClient
+        .post(
+          url,
+          headers: {
+            'Authorization': 'Basic $_credentials',
+            'Content-Type': contentType,
+          },
+          body: data,
+        )
+        .timeout(const Duration(seconds: 30));
+    if (resp.statusCode != 200 && resp.statusCode != 201) {
+      throw JmapException('Blob upload failed (HTTP ${resp.statusCode})');
+    }
+    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+    final blobId = decoded['blobId'] as String?;
+    if (blobId == null) throw JmapException('Blob upload: missing blobId');
+    return blobId;
+  }
+
   static Uri _extractApiUrl(Map<String, dynamic> session, Uri sessionUri) {
     final raw = session['apiUrl'] as String?;
     if (raw == null || raw.isEmpty) {
@@ -107,6 +169,11 @@ class JmapClient {
     }
     // apiUrl may be relative (RFC 8620 §2 allows it)
     return sessionUri.resolve(raw);
+  }
+
+  static Set<String> _extractCapabilities(Map<String, dynamic> session) {
+    final caps = session['capabilities'] as Map<String, dynamic>?;
+    return caps?.keys.toSet() ?? {};
   }
 
   static String _extractAccountId(Map<String, dynamic> session) {

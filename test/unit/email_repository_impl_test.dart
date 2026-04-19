@@ -10,6 +10,7 @@ import 'package:http/testing.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
@@ -1467,6 +1468,171 @@ void main() {
 
       final bodies = await r.db.select(r.db.emailBodies).get();
       expect(bodies, isEmpty);
+    });
+  });
+
+  group('JMAP sendEmail', () {
+    http.Client mockSend({
+      int sessionStatus = 200,
+      int apiStatus = 200,
+      Map<String, dynamic>? emailSetResult,
+      Map<String, dynamic>? submissionResult,
+    }) {
+      return MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {
+                'urn:ietf:params:jmap:core': {},
+                'urn:ietf:params:jmap:mail': {},
+                'urn:ietf:params:jmap:submission': {},
+              },
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            sessionStatus,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                emailSetResult ??
+                    {
+                      'accountId': 'acct1',
+                      'newState': 'est2',
+                      'created': {'em1': {'id': 'newEmailId1'}},
+                    },
+                '0',
+              ],
+              [
+                'EmailSubmission/set',
+                submissionResult ??
+                    {
+                      'accountId': 'acct1',
+                      'created': {'sub1': {'id': 'subId1'}},
+                    },
+                '1',
+              ],
+            ],
+          }),
+          apiStatus,
+        );
+      });
+    }
+
+    const draft = EmailDraft(
+      from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+      to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      cc: [],
+      subject: 'Hello',
+      body: 'World',
+    );
+
+    test('sends email via EmailSubmission/set for JMAP accounts', () async {
+      final r = _makeRepos(httpClient: mockSend());
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      await r.emails.sendEmail('jmap-1', draft);
+      // No exception = success; IMAP connections are not opened
+    });
+
+    test('throws when Email/set reports notCreated', () async {
+      final r = _makeRepos(
+        httpClient: mockSend(
+          emailSetResult: {
+            'accountId': 'acct1',
+            'notCreated': {'em1': {'type': 'invalidProperties'}},
+          },
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('jmap-1', draft),
+        throwsA(isA<JmapException>()),
+      );
+    });
+
+    test('throws when EmailSubmission/set reports notCreated', () async {
+      final r = _makeRepos(
+        httpClient: mockSend(
+          submissionResult: {
+            'accountId': 'acct1',
+            'notCreated': {'sub1': {'type': 'invalidRecipients'}},
+          },
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('jmap-1', draft),
+        throwsA(isA<JmapException>()),
+      );
+    });
+
+    test('uses Sent mailbox ID when role=sent mailbox exists in DB', () async {
+      late Map<String, dynamic> capturedBody;
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {
+                'urn:ietf:params:jmap:core': {},
+                'urn:ietf:params:jmap:mail': {},
+                'urn:ietf:params:jmap:submission': {},
+              },
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        capturedBody = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              ['Email/set', {'accountId': 'acct1', 'newState': 'est2',
+                'created': {'em1': {'id': 'newId'}}}, '0'],
+              ['EmailSubmission/set', {'accountId': 'acct1',
+                'created': {'sub1': {'id': 'subId'}}}, '1'],
+            ],
+          }),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      // Seed a Sent mailbox with role='sent'
+      await r.db.into(r.db.mailboxes).insert(MailboxesCompanion.insert(
+        id: 'jmap-1:sentMbx', accountId: 'jmap-1',
+        path: 'sentMbxJmapId', name: 'Sent',
+        role: const Value('sent'),
+      ));
+
+      await r.emails.sendEmail('jmap-1', draft);
+
+      final calls = capturedBody['methodCalls'] as List<dynamic>;
+      final emailSetArgs = (calls.first as List<dynamic>)[1] as Map<String, dynamic>;
+      final createMap = emailSetArgs['create'] as Map<String, dynamic>;
+      final em1Create = createMap['em1'] as Map<String, dynamic>;
+      expect(em1Create['mailboxIds'], {'sentMbxJmapId': true});
     });
   });
 }

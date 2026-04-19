@@ -27,6 +27,10 @@ This document covers the mail-to-database sync layer only, not the UI.
   at the start of each sync cycle.
 - Email bodies are fetched on demand via `Email/get` with `bodyValues` and cached in
   `email_bodies` so subsequent opens are instant.
+- `syncEmails` fetches `bodyValues` during the sync pass so bodies are cached without
+  a separate on-demand fetch.
+- `flushPendingChanges` passes `ifInState` to every `Email/set`; a `stateMismatch`
+  response clears the local checkpoint and triggers a full re-sync before retrying.
 
 ### IMAP
 
@@ -56,18 +60,15 @@ This document covers the mail-to-database sync layer only, not the UI.
 
 ### JMAP hardening
 
-- **Body caching during sync**: `syncEmails` currently syncs headers only. Include
-  `bodyValues` + `htmlBody`/`textBody` in the `Email/get` properties list so bodies
-  are written to `email_bodies` during the sync pass, not just on first open.
 - **JMAP send**: implement outgoing mail via `EmailSubmission/set` in addition to the
   current SMTP path.
 - **Push instead of polling**: upgrade `_JmapAccountSync._wait()` to use an
   `EventSource` connection to the JMAP push URL when the server advertises push
   capability. Fall back to 30 s polling when push is unavailable.
-- **Conflict handling**: pass `ifInState` to `Email/set` in `flushPendingChanges` so
-  the server can reject a stale mutation; retry the affected change after re-syncing.
 
 ### Shared / cross-protocol
 
-- **Explicit conflict-resolution strategy**: decide and document the policy (last-write-
-  wins vs. server-wins) and implement it consistently across both protocols.
+- **Conflict-resolution hardening**: document and enforce the server-wins policy
+  consistently — check `notUpdated`/`notDestroyed` per-item errors in JMAP `Email/set`
+  responses, handle IMAP `NO`/`BAD` gracefully, and evict changes that exceed a
+  maximum retry threshold (e.g. 5 attempts) to prevent queues from growing unboundedly.

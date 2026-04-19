@@ -39,6 +39,8 @@ class Mailboxes extends Table {
   TextColumn get name => text()();
   IntColumn get unreadCount => integer().withDefault(const Constant(0))();
   IntColumn get totalCount => integer().withDefault(const Constant(0))();
+  // Added in schema v8: JMAP role (e.g. "inbox", "sent", "trash").
+  TextColumn get role => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -150,7 +152,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -173,6 +175,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 7) {
             await m.createTable(syncLogs);
+          }
+          if (from < 8) {
+            await m.addColumn(mailboxes, mailboxes.role);
           }
         },
       );

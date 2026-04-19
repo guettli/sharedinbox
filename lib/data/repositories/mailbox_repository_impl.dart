@@ -195,6 +195,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               name: m['name'] as String? ?? jmapId,
               unreadCount: Value((m['unreadEmails'] as int?) ?? 0),
               totalCount: Value((m['totalEmails'] as int?) ?? 0),
+              role: Value(m['role'] as String?),
             ),
           );
     }
