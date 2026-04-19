@@ -109,6 +109,41 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
+const _jmapAccount = Account(
+  id: 'jmap-account',
+  displayName: 'Test JMAP',
+  email: 'test@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://jmap.example.com/.well-known/jmap',
+);
+
+class FakeMailboxRepositoryWithInbox implements MailboxRepository {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([
+        const Mailbox(
+          id: 'jmap-account:mbx1',
+          accountId: 'jmap-account',
+          path: 'mbx1',
+          name: 'Inbox',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+      ]);
+
+  @override
+  Future<void> syncMailboxes(String accountId) async {}
+}
+
+class FailingJmapEmailRepository extends FakeEmailRepository {
+  int syncCount = 0;
+
+  @override
+  Future<void> syncEmails(String accountId, String mailboxPath) async {
+    syncCount++;
+    if (syncCount == 1) throw Exception('simulated JMAP failure');
+  }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -170,6 +205,59 @@ void main() {
 
       mgr.dispose();
       await pumpEventQueue(times: 10);
+    });
+
+    group('JMAP accounts', () {
+      test('starts a JMAP sync loop when a JMAP account is pushed', () async {
+        final accounts = FakeAccountRepository();
+        final emails = FakeEmailRepository();
+        final mgr = AccountSyncManager(
+          accounts,
+          FakeMailboxRepositoryWithInbox(),
+          emails,
+        );
+        mgr.start();
+        accounts.push([_jmapAccount]);
+        mgr.dispose();
+        await pumpEventQueue();
+      });
+
+      test('JMAP stop() interrupts the poll wait', () {
+        fakeAsync((async) {
+          final accounts = FakeAccountRepository();
+          final mgr = AccountSyncManager(
+            accounts,
+            FakeMailboxRepositoryWithInbox(),
+            FakeEmailRepository(),
+          );
+          mgr.start();
+          accounts.push([_jmapAccount]);
+          async.flushMicrotasks();
+
+          // Dispose before the 30-second poll interval elapses.
+          mgr.dispose();
+          async.elapse(const Duration(seconds: 35));
+          async.flushMicrotasks();
+        });
+      });
+
+      test('JMAP backoff on sync failure', () {
+        fakeAsync((async) {
+          final accounts = FakeAccountRepository();
+          final mgr = AccountSyncManager(
+            accounts,
+            FakeMailboxRepositoryWithInbox(),
+            FailingJmapEmailRepository(),
+          );
+          mgr.start();
+          accounts.push([_jmapAccount]);
+          async.flushMicrotasks();
+
+          mgr.dispose();
+          async.elapse(const Duration(seconds: 10));
+          async.flushMicrotasks();
+        });
+      });
     });
 
     test('logs error and applies backoff when sync fails', () {

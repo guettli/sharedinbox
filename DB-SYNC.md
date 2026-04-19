@@ -95,7 +95,7 @@ Implement `syncEmails(accountId, mailboxId)` for JMAP:
 
 No new DB columns needed beyond `sync_state`.
 
-### Step 6 — JMAP background sync worker `[ ]`
+### Step 6 — JMAP background sync worker `[x]`
 
 Add JMAP handling to `AccountSyncManager`:
 
