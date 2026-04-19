@@ -121,6 +121,8 @@ class _AccountSync implements _SyncLoop {
   }
 
   Future<void> _sync() async {
+    final password = await _accounts.getPassword(account.id);
+    await _emails.flushPendingChanges(account.id, password);
     await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     for (final mailbox in mailboxes) {

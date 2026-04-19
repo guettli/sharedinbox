@@ -410,32 +410,20 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
 
-    final password = await _accounts.getPassword(account.id);
-    final client =
-        await _imapConnect(account, _effectiveUsername(account), password);
-    try {
-      await client.selectMailboxByPath(row.mailboxPath);
-      final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
-      if (seen != null) {
-        seen
-            ? await client.uidMarkSeen(seq)
-            : await client.uidMarkUnseen(seq);
-      }
-      if (flagged != null) {
-        flagged
-            ? await client.uidMarkFlagged(seq)
-            : await client.uidMarkUnflagged(seq);
-      }
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-          .write(
-        EmailsCompanion(
-          isSeen: seen != null ? Value(seen) : const Value.absent(),
-          isFlagged: flagged != null ? Value(flagged) : const Value.absent(),
-        ),
-      );
-    } finally {
-      await client.logout();
+    if (seen != null) {
+      await _enqueueChange(account.id, emailId, 'flag_seen',
+          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': seen}));
     }
+    if (flagged != null) {
+      await _enqueueChange(account.id, emailId, 'flag_flagged',
+          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'flagged': flagged}));
+    }
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        isSeen: seen != null ? Value(seen) : const Value.absent(),
+        isFlagged: flagged != null ? Value(flagged) : const Value.absent(),
+      ),
+    );
   }
 
   @override
@@ -453,19 +441,9 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
 
-    final password = await _accounts.getPassword(account.id);
-    final client =
-        await _imapConnect(account, _effectiveUsername(account), password);
-    try {
-      await client.selectMailboxByPath(row.mailboxPath);
-      await client.uidMove(
-        imap.MessageSequence.fromId(row.uid, isUid: true),
-        targetMailboxPath: destMailboxPath,
-      );
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
-    } finally {
-      await client.logout();
-    }
+    await _enqueueChange(account.id, emailId, 'move',
+        jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'dest': destMailboxPath}));
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
   }
 
   @override
@@ -482,18 +460,9 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
 
-    final password = await _accounts.getPassword(account.id);
-    final client =
-        await _imapConnect(account, _effectiveUsername(account), password);
-    try {
-      await client.selectMailboxByPath(row.mailboxPath);
-      final seq = imap.MessageSequence.fromId(row.uid, isUid: true);
-      await client.uidMarkDeleted(seq);
-      await client.uidExpunge(seq);
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
-    } finally {
-      await client.logout();
-    }
+    await _enqueueChange(account.id, emailId, 'delete',
+        jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}));
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
   }
 
   // ── pending_changes queue ──────────────────────────────────────────────────
@@ -516,8 +485,8 @@ class EmailRepositoryImpl implements EmailRepository {
         );
   }
 
-  /// Drains pending changes for [accountId] via JMAP Email/set.
-  /// Called at the start of each JMAP sync cycle.
+  /// Drains pending changes for [accountId] via the appropriate protocol.
+  /// Called at the start of each sync cycle.
   @override
   Future<void> flushPendingChanges(
       String accountId, String password) async {
@@ -528,6 +497,16 @@ class EmailRepositoryImpl implements EmailRepository {
     if (rows.isEmpty) return;
 
     final account = (await _accounts.getAccount(accountId))!;
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        await _flushPendingChangesImap(account, password, rows);
+      case account_model.AccountType.jmap:
+        await _flushPendingChangesJmap(account, password, rows);
+    }
+  }
+
+  Future<void> _flushPendingChangesJmap(account_model.Account account,
+      String password, List<PendingChangeRow> rows) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) return;
 
@@ -540,7 +519,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     for (final row in rows) {
       try {
-        await _applyPendingChange(jmap, row);
+        await _applyPendingChangeJmap(jmap, row);
         await (_db.delete(_db.pendingChanges)
               ..where((t) => t.id.equals(row.id)))
             .go();
@@ -555,7 +534,73 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _applyPendingChange(
+  Future<void> _flushPendingChangesImap(account_model.Account account,
+      String password, List<PendingChangeRow> rows) async {
+    imap.ImapClient? client;
+    try {
+      client =
+          await _imapConnect(account, _effectiveUsername(account), password);
+    } catch (e) {
+      for (final row in rows) {
+        await (_db.update(_db.pendingChanges)
+              ..where((t) => t.id.equals(row.id)))
+            .write(PendingChangesCompanion(
+          attempts: Value(row.attempts + 1),
+          lastError: Value(e.toString()),
+        ));
+      }
+      return;
+    }
+    try {
+      for (final row in rows) {
+        try {
+          await _applyPendingChangeImap(client, row);
+          await (_db.delete(_db.pendingChanges)
+                ..where((t) => t.id.equals(row.id)))
+              .go();
+        } catch (e) {
+          await (_db.update(_db.pendingChanges)
+                ..where((t) => t.id.equals(row.id)))
+              .write(PendingChangesCompanion(
+            attempts: Value(row.attempts + 1),
+            lastError: Value(e.toString()),
+          ));
+        }
+      }
+    } finally {
+      await client.logout();
+    }
+  }
+
+  Future<void> _applyPendingChangeImap(
+      imap.ImapClient client, PendingChangeRow row) async {
+    final payload = jsonDecode(row.payload) as Map<String, dynamic>;
+    final uid = payload['uid'] as int;
+    final mailboxPath = payload['mailboxPath'] as String;
+    final seq = imap.MessageSequence.fromId(uid, isUid: true);
+    await client.selectMailboxByPath(mailboxPath);
+
+    switch (row.changeType) {
+      case 'flag_seen':
+        final seen = payload['seen'] as bool;
+        seen
+            ? await client.uidMarkSeen(seq)
+            : await client.uidMarkUnseen(seq);
+      case 'flag_flagged':
+        final flagged = payload['flagged'] as bool;
+        flagged
+            ? await client.uidMarkFlagged(seq)
+            : await client.uidMarkUnflagged(seq);
+      case 'move':
+        await client.uidMove(seq,
+            targetMailboxPath: payload['dest'] as String);
+      case 'delete':
+        await client.uidMarkDeleted(seq);
+        await client.uidExpunge(seq);
+    }
+  }
+
+  Future<void> _applyPendingChangeJmap(
       JmapClient jmap, PendingChangeRow row) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     // Extract the JMAP email ID from the DB id (format: "accountId:jmapId").

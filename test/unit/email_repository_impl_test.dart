@@ -366,8 +366,8 @@ void main() {
       expect(r.fakeImap.logoutCalled, isTrue);
     });
 
-    test('setFlag seen=true calls uidMarkSeen and updates DB', () async {
-      final r = _makeReposWithFakes();
+    test('setFlag seen=true enqueues flag_seen change and updates local DB', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -379,15 +379,16 @@ void main() {
 
       await r.emails.setFlag('acc-1:5', seen: true);
 
-      expect(r.fakeImap.markSeenCalls, 1);
-      expect(r.fakeImap.markUnseenCalls, 0);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.changeType, 'flag_seen');
+      expect(changes.first.payload, contains('"seen":true'));
       final email = await r.emails.getEmail('acc-1:5');
       expect(email!.isSeen, isTrue);
-      expect(r.fakeImap.logoutCalled, isTrue);
     });
 
-    test('setFlag seen=false calls uidMarkUnseen', () async {
-      final r = _makeReposWithFakes();
+    test('setFlag seen=false enqueues flag_seen change with seen=false', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -395,17 +396,20 @@ void main() {
             mailboxPath: 'INBOX',
             uid: 5,
             receivedAt: DateTime(2024),
+            isSeen: const Value(true),
           ));
 
       await r.emails.setFlag('acc-1:5', seen: false);
 
-      expect(r.fakeImap.markUnseenCalls, 1);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'flag_seen');
+      expect(changes.first.payload, contains('"seen":false'));
       final email = await r.emails.getEmail('acc-1:5');
       expect(email!.isSeen, isFalse);
     });
 
-    test('setFlag flagged=true calls uidMarkFlagged', () async {
-      final r = _makeReposWithFakes();
+    test('setFlag flagged=true enqueues flag_flagged change', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -417,13 +421,14 @@ void main() {
 
       await r.emails.setFlag('acc-1:5', flagged: true);
 
-      expect(r.fakeImap.markFlaggedCalls, 1);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'flag_flagged');
       final email = await r.emails.getEmail('acc-1:5');
       expect(email!.isFlagged, isTrue);
     });
 
-    test('setFlag flagged=false calls uidMarkUnflagged', () async {
-      final r = _makeReposWithFakes();
+    test('setFlag flagged=false enqueues flag_flagged change with flagged=false', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -431,15 +436,18 @@ void main() {
             mailboxPath: 'INBOX',
             uid: 5,
             receivedAt: DateTime(2024),
+            isFlagged: const Value(true),
           ));
 
       await r.emails.setFlag('acc-1:5', flagged: false);
 
-      expect(r.fakeImap.markUnflaggedCalls, 1);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'flag_flagged');
+      expect(changes.first.payload, contains('"flagged":false'));
     });
 
-    test('moveEmail removes email from DB and calls uidMove', () async {
-      final r = _makeReposWithFakes();
+    test('moveEmail enqueues move change and removes email from local DB', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -451,13 +459,14 @@ void main() {
 
       await r.emails.moveEmail('acc-1:5', 'Archive');
 
-      expect(r.fakeImap.moveEmailCalls, 1);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'move');
+      expect(changes.first.payload, contains('Archive'));
       expect(await r.emails.getEmail('acc-1:5'), isNull);
-      expect(r.fakeImap.logoutCalled, isTrue);
     });
 
-    test('deleteEmail removes email from DB and marks deleted', () async {
-      final r = _makeReposWithFakes();
+    test('deleteEmail enqueues delete change and removes email from local DB', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
             id: 'acc-1:5',
@@ -469,10 +478,9 @@ void main() {
 
       await r.emails.deleteEmail('acc-1:5');
 
-      expect(r.fakeImap.markDeletedCalls, 1);
-      expect(r.fakeImap.expungeCalls, 1);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.changeType, 'delete');
       expect(await r.emails.getEmail('acc-1:5'), isNull);
-      expect(r.fakeImap.logoutCalled, isTrue);
     });
 
     test('sendEmail sends via SMTP and appends copy to Sent folder', () async {
@@ -663,6 +671,102 @@ void main() {
       final path2 = await r.emails.downloadAttachment('acc-1:1', att);
       expect(path2, equals(path1));
       expect(r.fakeImap.logoutCalled, isFalse);
+    });
+  });
+
+  group('IMAP flushPendingChanges', () {
+    Future<void> seedImapChange(
+      AppDatabase db,
+      AccountRepositoryImpl accounts, {
+      String changeType = 'flag_seen',
+      String payload = '{"uid":5,"mailboxPath":"INBOX","seen":true}',
+    }) async {
+      await accounts.addAccount(_account, 'pw');
+      await db.into(db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'acc-1',
+        resourceType: 'Email',
+        resourceId: 'acc-1:5',
+        changeType: changeType,
+        payload: payload,
+        createdAt: DateTime.now(),
+      ));
+    }
+
+    test('flag_seen sends uidMarkSeen and removes change', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts);
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.markSeenCalls, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(r.fakeImap.logoutCalled, isTrue);
+    });
+
+    test('flag_seen false sends uidMarkUnseen and removes change', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts,
+          payload: '{"uid":5,"mailboxPath":"INBOX","seen":false}');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.markUnseenCalls, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('flag_flagged sends uidMarkFlagged and removes change', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts,
+          changeType: 'flag_flagged',
+          payload: '{"uid":5,"mailboxPath":"INBOX","flagged":true}');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.markFlaggedCalls, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('flag_flagged false sends uidMarkUnflagged', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts,
+          changeType: 'flag_flagged',
+          payload: '{"uid":5,"mailboxPath":"INBOX","flagged":false}');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.markUnflaggedCalls, 1);
+    });
+
+    test('move sends uidMove and removes change', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts,
+          changeType: 'move',
+          payload: '{"uid":5,"mailboxPath":"INBOX","dest":"Archive"}');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.moveEmailCalls, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('delete sends uidMarkDeleted + uidExpunge and removes change', () async {
+      final r = _makeReposWithFakes();
+      await seedImapChange(r.db, r.accounts,
+          changeType: 'delete',
+          payload: '{"uid":5,"mailboxPath":"INBOX"}');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(r.fakeImap.markDeletedCalls, 1);
+      expect(r.fakeImap.expungeCalls, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('records attempt and error when IMAP throws', () async {
+      final r = _makeRepos();
+      // _makeRepos uses _noImapConnect which throws UnsupportedError
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'acc-1',
+        resourceType: 'Email',
+        resourceId: 'acc-1:5',
+        changeType: 'flag_seen',
+        payload: '{"uid":5,"mailboxPath":"INBOX","seen":true}',
+        createdAt: DateTime.now(),
+      ));
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.attempts, 1);
+      expect(changes.first.lastError, isNotNull);
     });
   });
 
