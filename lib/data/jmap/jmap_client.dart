@@ -132,3 +132,12 @@ class JmapException implements Exception {
   @override
   String toString() => 'JmapException: $message';
 }
+
+/// Thrown when the server rejects an `Email/set` because our `ifInState`
+/// token no longer matches the server's current state (RFC 8620 §5.3).
+class JmapStateMismatchException implements Exception {
+  const JmapStateMismatchException();
+
+  @override
+  String toString() => 'JmapStateMismatchException: state token is stale';
+}

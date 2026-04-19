@@ -1318,5 +1318,155 @@ void main() {
       expect(changes.first.attempts, 1);
       expect(changes.first.lastError, isNotNull);
     });
+
+    test('passes ifInState when sync_state exists', () async {
+      late Map<String, dynamic> capturedBody;
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        capturedBody = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({'sessionState': 's1', 'methodResponses': [
+            ['Email/set', {'accountId': 'acct1', 'newState': 'est2', 'updated': {}}, '0'],
+          ]}),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(SyncStatesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email',
+        state: 'est1', syncedAt: DateTime.now(),
+      ));
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email', resourceId: 'jmap-1:e1',
+        changeType: 'flag_seen', payload: '{"seen":true}', createdAt: DateTime.now(),
+      ));
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      final firstCall = (capturedBody['methodCalls'] as List<dynamic>).first as List<dynamic>;
+      final args = firstCall[1] as Map<String, dynamic>;
+      expect(args['ifInState'], 'est1');
+
+      // newState returned by server should update our checkpoint
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states.first.state, 'est2');
+    });
+
+    test('stateMismatch clears sync state and marks change as failed', () async {
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        // Server responds with stateMismatch error inside Email/set
+        return http.Response(
+          jsonEncode({'sessionState': 's1', 'methodResponses': [
+            ['Email/set', {'accountId': 'acct1', 'type': 'stateMismatch'}, '0'],
+          ]}),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(SyncStatesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email',
+        state: 'est1', syncedAt: DateTime.now(),
+      ));
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email', resourceId: 'jmap-1:e1',
+        changeType: 'flag_seen', payload: '{"seen":true}', createdAt: DateTime.now(),
+      ));
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // Sync state should be cleared so next cycle does a full re-sync
+      expect(await r.db.select(r.db.syncStates).get(), isEmpty);
+
+      // Change should still be present but with attempt count bumped
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.first.attempts, 1);
+    });
+  });
+
+  group('JMAP syncEmails body caching', () {
+    Map<String, dynamic> jmapEmailWithBody({
+      required String id,
+      required String mailboxId,
+      String? textContent,
+      String? htmlContent,
+    }) =>
+        {
+          ..._jmapEmail(id: id, mailboxId: mailboxId),
+          'textBody': [if (textContent != null) {'partId': 'text1', 'type': 'text/plain'}],
+          'htmlBody': [if (htmlContent != null) {'partId': 'html1', 'type': 'text/html'}],
+          'bodyValues': {
+            if (textContent != null) 'text1': {'value': textContent, 'isEncodingProblem': false, 'isTruncated': false},
+            if (htmlContent != null) 'html1': {'value': htmlContent, 'isEncodingProblem': false, 'isTruncated': false},
+          },
+          'attachments': [],
+        };
+
+    test('full sync caches bodies when bodyValues are present', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          _emailGetResponse(state: 'est1', list: [
+            jmapEmailWithBody(id: 'e1', mailboxId: 'mbx1',
+                textContent: 'Hello text', htmlContent: '<p>Hello</p>'),
+          ]),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final bodies = await r.db.select(r.db.emailBodies).get();
+      expect(bodies, hasLength(1));
+      expect(bodies.first.textBody, 'Hello text');
+      expect(bodies.first.htmlBody, '<p>Hello</p>');
+    });
+
+    test('full sync does not write body row when bodyValues absent', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          _emailGetResponse(state: 'est1', list: [
+            _jmapEmail(id: 'e1', mailboxId: 'mbx1'),
+          ]),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final bodies = await r.db.select(r.db.emailBodies).get();
+      expect(bodies, isEmpty);
+    });
   });
 }

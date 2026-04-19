@@ -172,41 +172,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailData =
         (result['list'] as List<dynamic>).first as Map<String, dynamic>;
 
-    final bodyValues =
-        emailData['bodyValues'] as Map<String, dynamic>? ?? {};
-    final textBodyParts = emailData['textBody'] as List<dynamic>? ?? [];
-    final htmlBodyParts = emailData['htmlBody'] as List<dynamic>? ?? [];
-    final jmapAttachments = emailData['attachments'] as List<dynamic>? ?? [];
-
-    String? textBody;
-    if (textBodyParts.isNotEmpty) {
-      final partId =
-          (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
-      if (partId != null) {
-        textBody =
-            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
-      }
-    }
-
-    String? htmlBody;
-    if (htmlBodyParts.isNotEmpty) {
-      final partId =
-          (htmlBodyParts.first as Map<String, dynamic>)['partId'] as String?;
-      if (partId != null) {
-        htmlBody =
-            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
-      }
-    }
-
-    final attachmentsJson = jsonEncode(jmapAttachments.map((a) {
-      final att = a as Map<String, dynamic>;
-      return {
-        'filename': att['name'] ?? '',
-        'contentType': att['type'] ?? '',
-        'size': att['size'] ?? 0,
-        'fetchPartId': att['blobId'] ?? '',
-      };
-    }).toList());
+    final (textBody, htmlBody, attachmentsJson) = _parseJmapBody(emailData);
 
     await _db.into(_db.emailBodies).insertOnConflictUpdate(
           EmailBodiesCompanion.insert(
@@ -375,7 +341,13 @@ class EmailRepositoryImpl implements EmailRepository {
   static const _emailProperties = [
     'id', 'mailboxIds', 'subject', 'sentAt', 'receivedAt',
     'from', 'to', 'cc', 'keywords', 'hasAttachment', 'preview',
+    'textBody', 'htmlBody', 'bodyValues', 'attachments',
   ];
+
+  static const _emailGetBodyOptions = {
+    'fetchHTMLBodyValues': true,
+    'fetchTextBodyValues': true,
+  };
 
   Future<void> _syncEmailsJmap(
     account_model.Account account,
@@ -428,6 +400,7 @@ class EmailRepositoryImpl implements EmailRepository {
             'accountId': jmap.accountId,
             '#ids': {'resultOf': '0', 'name': 'Email/query', 'path': '/ids'},
             'properties': _emailProperties,
+            ..._emailGetBodyOptions,
           },
           '1',
         ],
@@ -473,6 +446,7 @@ class EmailRepositoryImpl implements EmailRepository {
             'accountId': jmap.accountId,
             'ids': toFetch,
             'properties': _emailProperties,
+            ..._emailGetBodyOptions,
           },
           '1',
         ]
@@ -526,7 +500,62 @@ class EmailRepositoryImpl implements EmailRepository {
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
             ),
           );
+
+      // Cache body if the server included bodyValues in this response.
+      if (m.containsKey('bodyValues')) {
+        final (textBody, htmlBody, attachmentsJson) = _parseJmapBody(m);
+        await _db.into(_db.emailBodies).insertOnConflictUpdate(
+              EmailBodiesCompanion.insert(
+                emailId: dbId,
+                textBody: Value(textBody),
+                htmlBody: Value(htmlBody),
+                attachmentsJson: Value(attachmentsJson),
+              ),
+            );
+      }
     }
+  }
+
+  /// Extracts text body, HTML body, and attachments JSON from a JMAP Email object
+  /// that was fetched with fetchHTMLBodyValues/fetchTextBodyValues.
+  (String? textBody, String? htmlBody, String attachmentsJson) _parseJmapBody(
+      Map<String, dynamic> m) {
+    final bodyValues = m['bodyValues'] as Map<String, dynamic>? ?? {};
+    final textBodyParts = m['textBody'] as List<dynamic>? ?? [];
+    final htmlBodyParts = m['htmlBody'] as List<dynamic>? ?? [];
+    final jmapAttachments = m['attachments'] as List<dynamic>? ?? [];
+
+    String? textBody;
+    if (textBodyParts.isNotEmpty) {
+      final partId =
+          (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
+      if (partId != null) {
+        textBody =
+            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
+      }
+    }
+
+    String? htmlBody;
+    if (htmlBodyParts.isNotEmpty) {
+      final partId =
+          (htmlBodyParts.first as Map<String, dynamic>)['partId'] as String?;
+      if (partId != null) {
+        htmlBody =
+            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
+      }
+    }
+
+    final attachmentsJson = jsonEncode(jmapAttachments.map((a) {
+      final att = a as Map<String, dynamic>;
+      return {
+        'filename': att['name'] ?? '',
+        'contentType': att['type'] ?? '',
+        'size': att['size'] ?? 0,
+        'fetchPartId': att['blobId'] ?? '',
+      };
+    }).toList());
+
+    return (textBody, htmlBody, attachmentsJson);
   }
 
   // ── sync_state helpers ────────────────────────────────────────────────────
@@ -718,12 +747,36 @@ class EmailRepositoryImpl implements EmailRepository {
       password: password,
     );
 
+    final ifInState = await _loadSyncState(account.id, 'Email');
+
     for (final row in rows) {
       try {
-        await _applyPendingChangeJmap(jmap, row);
+        final newState =
+            await _applyPendingChangeJmap(jmap, row, ifInState: ifInState);
         await (_db.delete(_db.pendingChanges)
               ..where((t) => t.id.equals(row.id)))
             .go();
+        // Keep our checkpoint in sync with whatever the server returned.
+        if (newState != null) {
+          await _saveSyncState(account.id, 'Email', newState);
+        }
+      } on JmapStateMismatchException {
+        // Server rejected the mutation because our state token is stale.
+        // Drop the cached state so the next sync cycle does a full re-fetch,
+        // after which this change will be retried with a fresh token.
+        await (_db.delete(_db.syncStates)
+              ..where((t) =>
+                  t.accountId.equals(account.id) &
+                  t.resourceType.equals('Email')))
+            .go();
+        await (_db.update(_db.pendingChanges)
+              ..where((t) => t.id.equals(row.id)))
+            .write(PendingChangesCompanion(
+          attempts: Value(row.attempts + 1),
+          lastError: const Value('stateMismatch — will retry after re-sync'),
+        ));
+        // State is now stale for all remaining rows too; stop processing.
+        break;
       } catch (e) {
         await (_db.update(_db.pendingChanges)
               ..where((t) => t.id.equals(row.id)))
@@ -801,79 +854,99 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _applyPendingChangeJmap(
-      JmapClient jmap, PendingChangeRow row) async {
+  /// Applies a single pending change to the JMAP server.
+  ///
+  /// Returns the `newState` from the server's `Email/set` response so the
+  /// caller can keep the local checkpoint in sync.
+  ///
+  /// Throws [JmapStateMismatchException] when the server rejects the request
+  /// because [ifInState] is stale (RFC 8620 §5.3 `stateMismatch`).
+  Future<String?> _applyPendingChangeJmap(
+    JmapClient jmap,
+    PendingChangeRow row, {
+    String? ifInState,
+  }) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     // Extract the JMAP email ID from the DB id (format: "accountId:jmapId").
     final jmapEmailId = row.resourceId.contains(':')
         ? row.resourceId.substring(row.resourceId.indexOf(':') + 1)
         : row.resourceId;
 
+    Map<String, dynamic> setArgs(Map<String, dynamic> extra) => {
+          'accountId': jmap.accountId,
+          if (ifInState != null) 'ifInState': ifInState,
+          ...extra,
+        };
+
+    List<dynamic> responses;
     switch (row.changeType) {
       case 'flag_seen':
         final seen = payload['seen'] as bool;
-        await jmap.call([
+        responses = await jmap.call([
           [
             'Email/set',
-            {
-              'accountId': jmap.accountId,
+            setArgs({
               'update': {
-                jmapEmailId: {
-                  'keywords/\$seen': seen,
-                },
+                jmapEmailId: {'keywords/\$seen': seen},
               },
-            },
+            }),
             '0',
           ]
         ]);
 
       case 'flag_flagged':
         final flagged = payload['flagged'] as bool;
-        await jmap.call([
+        responses = await jmap.call([
           [
             'Email/set',
-            {
-              'accountId': jmap.accountId,
+            setArgs({
               'update': {
-                jmapEmailId: {
-                  'keywords/\$flagged': flagged,
-                },
+                jmapEmailId: {'keywords/\$flagged': flagged},
               },
-            },
+            }),
             '0',
           ]
         ]);
 
       case 'move':
         final destMailboxId = payload['dest'] as String;
-        await jmap.call([
+        responses = await jmap.call([
           [
             'Email/set',
-            {
-              'accountId': jmap.accountId,
+            setArgs({
               'update': {
                 jmapEmailId: {
                   'mailboxIds/$destMailboxId': true,
                   'mailboxIds/${row.resourceId}': null,
                 },
               },
-            },
+            }),
             '0',
           ]
         ]);
 
       case 'delete':
-        await jmap.call([
+        responses = await jmap.call([
           [
             'Email/set',
-            {
-              'accountId': jmap.accountId,
-              'destroy': [jmapEmailId],
-            },
+            setArgs({'destroy': jmapEmailId}),
             '0',
           ]
         ]);
+
+      default:
+        return null;
     }
+
+    final result = _responseArgs(responses, 0, 'Email/set');
+
+    // stateMismatch is returned as a top-level error in the Email/set response
+    // (not the per-method error handled by _responseArgs).
+    if (result['type'] == 'stateMismatch') {
+      throw const JmapStateMismatchException();
+    }
+
+    return result['newState'] as String?;
   }
 
   @override
