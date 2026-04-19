@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -25,6 +27,104 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
+const _jmapAccount = Account(
+  id: 'jmap-1',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://jmap.example.com/.well-known/jmap',
+);
+
+http.Client _mockJmapEmails({required List<Map<String, dynamic>> apiResponses}) {
+  var callIndex = 0;
+  return MockClient((req) async {
+    if (req.url.path.contains('well-known')) {
+      return http.Response(
+        jsonEncode({
+          'apiUrl': 'https://jmap.example.com/api/',
+          'accounts': {'acct1': {'name': 'alice@example.com', 'isPersonal': true}},
+          'primaryAccounts': {
+            'urn:ietf:params:jmap:core': 'acct1',
+            'urn:ietf:params:jmap:mail': 'acct1',
+          },
+          'capabilities': {},
+          'username': 'alice@example.com',
+          'state': 'sess1',
+        }),
+        200,
+      );
+    }
+    final resp = apiResponses[callIndex % apiResponses.length];
+    callIndex++;
+    return http.Response(jsonEncode(resp), 200);
+  });
+}
+
+Map<String, dynamic> _emailGetResponse(
+    {required String state, required List<Map<String, dynamic>> list}) =>
+    {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        ['Email/query', {'accountId': 'acct1', 'ids': list.map((e) => e['id']).toList()}, '0'],
+        ['Email/get', {'accountId': 'acct1', 'state': state, 'list': list}, '1'],
+      ],
+    };
+
+Map<String, dynamic> _emailChangesResponse({
+  required String oldState,
+  required String newState,
+  List<String> created = const [],
+  List<String> updated = const [],
+  List<String> destroyed = const [],
+}) =>
+    {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'Email/changes',
+          {
+            'accountId': 'acct1',
+            'oldState': oldState,
+            'newState': newState,
+            'hasMoreChanges': false,
+            'created': created,
+            'updated': updated,
+            'destroyed': destroyed,
+          },
+          '0',
+        ],
+      ],
+    };
+
+Map<String, dynamic> _emailGetOnly(
+    {required String state, required List<Map<String, dynamic>> list}) =>
+    {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        ['Email/get', {'accountId': 'acct1', 'state': state, 'list': list}, '1'],
+      ],
+    };
+
+Map<String, dynamic> _jmapEmail({
+  required String id,
+  required String mailboxId,
+  String subject = 'Hello',
+  bool seen = false,
+}) =>
+    {
+      'id': id,
+      'mailboxIds': {mailboxId: true},
+      'subject': subject,
+      'sentAt': '2024-01-01T10:00:00Z',
+      'receivedAt': '2024-01-01T10:00:01Z',
+      'from': [{'name': 'Sender', 'email': 'sender@example.com'}],
+      'to': [{'name': 'Alice', 'email': 'alice@example.com'}],
+      'cc': [],
+      'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
+      'hasAttachment': false,
+      'preview': 'Hello world',
+    };
+
 Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
 
@@ -35,7 +135,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   AppDatabase db,
   AccountRepositoryImpl accounts,
   EmailRepositoryImpl emails,
-}) _makeRepos() {
+}) _makeRepos({http.Client? httpClient}) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
   final accounts = AccountRepositoryImpl(db, storage);
@@ -44,6 +144,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     accounts,
     imapConnect: _noImapConnect,
     smtpConnect: _noSmtpConnect,
+    httpClient: httpClient,
   );
   return (db: db, accounts: accounts, emails: emails);
 }
@@ -562,6 +663,88 @@ void main() {
       final path2 = await r.emails.downloadAttachment('acc-1:1', att);
       expect(path2, equals(path1));
       expect(r.fakeImap.logoutCalled, isFalse);
+    });
+  });
+
+  group('JMAP syncEmails', () {
+    test('full sync upserts emails and persists state', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          _emailGetResponse(state: 'est1', list: [
+            _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
+            _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Second', seen: true),
+          ]),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
+      expect(emails, hasLength(2));
+      expect(emails.map((e) => e.subject).toSet(), {'First', 'Second'});
+      expect(emails.firstWhere((e) => e.subject == 'Second').isSeen, isTrue);
+
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states, hasLength(1));
+      expect(states.first.state, 'est1');
+    });
+
+    test('incremental sync applies created, updated, destroyed', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          // Call 1: Email/changes
+          _emailChangesResponse(
+            oldState: 'est1', newState: 'est2',
+            created: ['e3'], updated: ['e1'], destroyed: ['e2'],
+          ),
+          // Call 2: Email/get for created + updated
+          _emailGetOnly(state: 'est2', list: [
+            _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First updated'),
+            _jmapEmail(id: 'e3', mailboxId: 'mbx1', subject: 'Third'),
+          ]),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      // Pre-populate
+      await r.db.into(r.db.emails).insertOnConflictUpdate(EmailsCompanion.insert(
+        id: 'jmap-1:e1', accountId: 'jmap-1', mailboxPath: 'mbx1', uid: 0,
+        subject: const Value('First'), receivedAt: DateTime(2024),
+      ));
+      await r.db.into(r.db.emails).insertOnConflictUpdate(EmailsCompanion.insert(
+        id: 'jmap-1:e2', accountId: 'jmap-1', mailboxPath: 'mbx1', uid: 0,
+        subject: const Value('Second'), receivedAt: DateTime(2024),
+      ));
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(SyncStatesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email',
+        state: 'est1', syncedAt: DateTime.now(),
+      ));
+
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
+      expect(emails.map((e) => e.subject).toSet(), {'First updated', 'Third'});
+
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states.first.state, 'est2');
+    });
+
+    test('incremental sync with no changes updates state only', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(apiResponses: [
+          _emailChangesResponse(oldState: 'est1', newState: 'est1'),
+        ]),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(SyncStatesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email',
+        state: 'est1', syncedAt: DateTime.now(),
+      ));
+
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final states = await r.db.select(r.db.syncStates).get();
+      expect(states.first.state, 'est1');
     });
   });
 }

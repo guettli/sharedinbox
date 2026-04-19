@@ -84,7 +84,7 @@ Implement `syncMailboxes(accountId)` for JMAP:
 
 Reuse the existing `Mailboxes` table. No new DB columns needed.
 
-### Step 5 — JMAP Email sync `[ ]`
+### Step 5 — JMAP Email sync `[x]`
 
 Implement `syncEmails(accountId, mailboxId)` for JMAP:
 

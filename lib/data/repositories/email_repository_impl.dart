@@ -6,12 +6,15 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:http/http.dart' as http;
+
 import '../../core/models/account.dart' as account_model;
 import '../../core/models/email.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/email_repository.dart';
 import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
+import '../jmap/jmap_client.dart';
 
 typedef ImapConnectFn = Future<imap.ImapClient> Function(
     account_model.Account account, String username, String password);
@@ -26,15 +29,18 @@ class EmailRepositoryImpl implements EmailRepository {
     ImapConnectFn imapConnect = connectImap,
     SmtpConnectFn smtpConnect = connectSmtp,
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
+    http.Client? httpClient,
   })  : _imapConnect = imapConnect,
         _smtpConnect = smtpConnect,
-        _getCacheDir = getCacheDir;
+        _getCacheDir = getCacheDir,
+        _httpClient = httpClient ?? http.Client();
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final SmtpConnectFn _smtpConnect;
   final GetCacheDirFn _getCacheDir;
+  final http.Client _httpClient;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
@@ -126,7 +132,21 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> syncEmails(String accountId, String mailboxPath) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        await _syncEmailsImap(account, password, mailboxPath);
+      case account_model.AccountType.jmap:
+        await _syncEmailsJmap(account, password, mailboxPath);
+    }
+  }
+
+  Future<void> _syncEmailsImap(
+    account_model.Account account,
+    String password,
+    String mailboxPath,
+  ) async {
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final fetch = await client.fetchMessages(
@@ -138,12 +158,12 @@ class EmailRepositoryImpl implements EmailRepository {
         if (envelope == null) continue;
         final uid = msg.uid;
         if (uid == null) continue;
-        final emailId = '$accountId:$uid';
+        final emailId = '${account.id}:$uid';
 
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
-                accountId: accountId,
+                accountId: account.id,
                 mailboxPath: mailboxPath,
                 uid: uid,
                 subject: Value(envelope.subject),
@@ -162,6 +182,203 @@ class EmailRepositoryImpl implements EmailRepository {
       await client.logout();
     }
   }
+
+  // ── JMAP email sync ────────────────────────────────────────────────────────
+
+  static const _emailProperties = [
+    'id', 'mailboxIds', 'subject', 'sentAt', 'receivedAt',
+    'from', 'to', 'cc', 'keywords', 'hasAttachment', 'preview',
+  ];
+
+  Future<void> _syncEmailsJmap(
+    account_model.Account account,
+    String password,
+    String mailboxJmapId,
+  ) async {
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) {
+      throw Exception('JMAP account ${account.id} has no jmapUrl');
+    }
+
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+
+    final storedState = await _loadSyncState(account.id, 'Email');
+
+    if (storedState == null) {
+      await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
+    } else {
+      await _jmapIncrementalEmailSync(account.id, jmap, storedState);
+    }
+  }
+
+  Future<void> _jmapFullEmailSync(
+      String accountId, JmapClient jmap, String mailboxJmapId) async {
+    // Query IDs in this mailbox, newest first, up to 500.
+    final responses = await jmap.call([
+      [
+        'Email/query',
+        {
+          'accountId': jmap.accountId,
+          'filter': {'inMailbox': mailboxJmapId},
+          'sort': [{'property': 'receivedAt', 'isAscending': false}],
+          'limit': 500,
+        },
+        '0',
+      ],
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          '#ids': {'resultOf': '0', 'name': 'Email/query', 'path': '/ids'},
+          'properties': _emailProperties,
+        },
+        '1',
+      ],
+    ]);
+
+    final getResult = _responseArgs(responses, 1, 'Email/get');
+    final emails = getResult['list'] as List<dynamic>;
+    final newState = getResult['state'] as String;
+
+    await _upsertJmapEmails(accountId, emails);
+    await _saveSyncState(accountId, 'Email', newState);
+  }
+
+  Future<void> _jmapIncrementalEmailSync(
+      String accountId, JmapClient jmap, String sinceState) async {
+    final responses = await jmap.call([
+      [
+        'Email/changes',
+        {'accountId': jmap.accountId, 'sinceState': sinceState},
+        '0',
+      ]
+    ]);
+
+    final changes = _responseArgs(responses, 0, 'Email/changes');
+    final newState = changes['newState'] as String;
+    final created = List<String>.from(changes['created'] as List? ?? []);
+    final updated = List<String>.from(changes['updated'] as List? ?? []);
+    final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
+
+    final toFetch = [...created, ...updated];
+    if (toFetch.isNotEmpty) {
+      final getResponses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': toFetch,
+            'properties': _emailProperties,
+          },
+          '1',
+        ]
+      ]);
+      final getResult = _responseArgs(getResponses, 0, 'Email/get');
+      await _upsertJmapEmails(accountId, getResult['list'] as List<dynamic>);
+    }
+
+    for (final jmapId in destroyed) {
+      await (_db.delete(_db.emails)
+            ..where((t) => t.id.equals('$accountId:$jmapId')))
+          .go();
+    }
+
+    await _saveSyncState(accountId, 'Email', newState);
+  }
+
+  Future<void> _upsertJmapEmails(
+      String accountId, List<dynamic> emails) async {
+    for (final e in emails) {
+      final m = e as Map<String, dynamic>;
+      final jmapId = m['id'] as String;
+      final dbId = '$accountId:$jmapId';
+
+      // Use first mailbox ID as the primary mailboxPath.
+      final mailboxIds = m['mailboxIds'] as Map<String, dynamic>?;
+      final mailboxPath = mailboxIds?.keys.firstOrNull ?? '';
+
+      final keywords = m['keywords'] as Map<String, dynamic>? ?? {};
+      final from = _encodeJmapAddresses(m['from']);
+      final to = _encodeJmapAddresses(m['to']);
+      final cc = _encodeJmapAddresses(m['cc']);
+      final sentAt = _parseDate(m['sentAt'] as String?);
+      final receivedAt = _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
+
+      await _db.into(_db.emails).insertOnConflictUpdate(
+            EmailsCompanion.insert(
+              id: dbId,
+              accountId: accountId,
+              mailboxPath: mailboxPath,
+              uid: 0, // not used for JMAP accounts
+              subject: Value(m['subject'] as String?),
+              sentAt: Value(sentAt),
+              receivedAt: receivedAt,
+              fromJson: Value(from),
+              toAddresses: Value(to),
+              ccJson: Value(cc),
+              preview: Value(m['preview'] as String?),
+              isSeen: Value(keywords.containsKey(r'$seen')),
+              isFlagged: Value(keywords.containsKey(r'$flagged')),
+              hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
+            ),
+          );
+    }
+  }
+
+  // ── sync_state helpers ────────────────────────────────────────────────────
+
+  Future<String?> _loadSyncState(String accountId, String resourceType) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where((t) =>
+              t.accountId.equals(accountId) &
+              t.resourceType.equals(resourceType)))
+        .getSingleOrNull();
+    return row?.state;
+  }
+
+  Future<void> _saveSyncState(
+      String accountId, String resourceType, String state) async {
+    await _db.into(_db.syncStates).insertOnConflictUpdate(
+          SyncStatesCompanion.insert(
+            accountId: accountId,
+            resourceType: resourceType,
+            state: state,
+            syncedAt: DateTime.now(),
+          ),
+        );
+  }
+
+  // ── JMAP helpers ─────────────────────────────────────────────────────────
+
+  Map<String, dynamic> _responseArgs(
+      List<dynamic> responses, int index, String expectedMethod) {
+    final triple = responses[index] as List<dynamic>;
+    final method = triple[0] as String;
+    if (method == 'error') {
+      final err = triple[1] as Map<String, dynamic>;
+      throw JmapException('$expectedMethod error: ${err['type']}');
+    }
+    return triple[1] as Map<String, dynamic>;
+  }
+
+  String _encodeJmapAddresses(dynamic addressList) {
+    if (addressList == null) return '[]';
+    final list = addressList as List<dynamic>;
+    return jsonEncode(list
+        .map((a) => {
+              'name': (a as Map<String, dynamic>)['name'],
+              'email': a['email'],
+            })
+        .toList());
+  }
+
+  DateTime? _parseDate(String? iso) =>
+      iso == null ? null : DateTime.tryParse(iso);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
