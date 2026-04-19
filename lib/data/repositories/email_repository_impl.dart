@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/models/account.dart' as account_model;
+import '../../core/utils/logger.dart';
 import '../../core/models/email.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/email_repository.dart';
@@ -339,6 +340,10 @@ class EmailRepositoryImpl implements EmailRepository {
 
   static const _jmapPageSize = 500;
 
+  /// Pending changes exceeding this attempt count are evicted rather than
+  /// retried, preventing unbounded queue growth from permanent server errors.
+  static const _maxChangeAttempts = 5;
+
   static const _emailProperties = [
     'id', 'mailboxIds', 'subject', 'sentAt', 'receivedAt',
     'from', 'to', 'cc', 'keywords', 'hasAttachment', 'preview',
@@ -557,6 +562,27 @@ class EmailRepositoryImpl implements EmailRepository {
     }).toList());
 
     return (textBody, htmlBody, attachmentsJson);
+  }
+
+  // ── Pending-change helpers ────────────────────────────────────────────────
+
+  /// Records a failure for [row]: increments attempt count and stores the
+  /// error message. When attempts reach [_maxChangeAttempts] the row is
+  /// deleted instead — the change is permanently abandoned.
+  Future<void> _recordChangeError(PendingChangeRow row, Object error) async {
+    final next = row.attempts + 1;
+    if (next >= _maxChangeAttempts) {
+      await (_db.delete(_db.pendingChanges)
+            ..where((t) => t.id.equals(row.id)))
+          .go();
+    } else {
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.id.equals(row.id)))
+          .write(PendingChangesCompanion(
+        attempts: Value(next),
+        lastError: Value(error.toString()),
+      ));
+    }
   }
 
   // ── sync_state helpers ────────────────────────────────────────────────────
@@ -867,21 +893,19 @@ class EmailRepositoryImpl implements EmailRepository {
                   t.accountId.equals(account.id) &
                   t.resourceType.equals('Email')))
             .go();
-        await (_db.update(_db.pendingChanges)
-              ..where((t) => t.id.equals(row.id)))
-            .write(PendingChangesCompanion(
-          attempts: Value(row.attempts + 1),
-          lastError: const Value('stateMismatch — will retry after re-sync'),
-        ));
+        await _recordChangeError(
+            row, 'stateMismatch — will retry after re-sync');
         // State is now stale for all remaining rows too; stop processing.
         break;
-      } catch (e) {
-        await (_db.update(_db.pendingChanges)
+      } on JmapSetItemException catch (e) {
+        // Permanent per-item rejection (e.g. notFound, forbidden) — discard
+        // the change so the queue doesn't grow unboundedly.
+        await (_db.delete(_db.pendingChanges)
               ..where((t) => t.id.equals(row.id)))
-            .write(PendingChangesCompanion(
-          attempts: Value(row.attempts + 1),
-          lastError: Value(e.toString()),
-        ));
+            .go();
+        log('JMAP permanent error for change ${row.id}: $e');
+      } catch (e) {
+        await _recordChangeError(row, e);
       }
     }
   }
@@ -893,13 +917,9 @@ class EmailRepositoryImpl implements EmailRepository {
       client =
           await _imapConnect(account, _effectiveUsername(account), password);
     } catch (e) {
+      // Connection-level failure — bump all rows, they'll retry next cycle.
       for (final row in rows) {
-        await (_db.update(_db.pendingChanges)
-              ..where((t) => t.id.equals(row.id)))
-            .write(PendingChangesCompanion(
-          attempts: Value(row.attempts + 1),
-          lastError: Value(e.toString()),
-        ));
+        await _recordChangeError(row, e);
       }
       return;
     }
@@ -911,12 +931,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 ..where((t) => t.id.equals(row.id)))
               .go();
         } catch (e) {
-          await (_db.update(_db.pendingChanges)
-                ..where((t) => t.id.equals(row.id)))
-              .write(PendingChangesCompanion(
-            attempts: Value(row.attempts + 1),
-            lastError: Value(e.toString()),
-          ));
+          await _recordChangeError(row, e);
         }
       }
     } finally {
@@ -1042,6 +1057,24 @@ class EmailRepositoryImpl implements EmailRepository {
     // (not the per-method error handled by _responseArgs).
     if (result['type'] == 'stateMismatch') {
       throw const JmapStateMismatchException();
+    }
+
+    // Check for per-item rejection (notUpdated / notDestroyed).
+    final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
+    if (notUpdated != null && notUpdated.containsKey(jmapEmailId)) {
+      final err = notUpdated[jmapEmailId] as Map<String, dynamic>;
+      throw JmapSetItemException(
+        err['type'] as String? ?? 'unknown',
+        err['description'] as String?,
+      );
+    }
+    final notDestroyed = result['notDestroyed'] as Map<String, dynamic>?;
+    if (notDestroyed != null && notDestroyed.containsKey(jmapEmailId)) {
+      final err = notDestroyed[jmapEmailId] as Map<String, dynamic>;
+      throw JmapSetItemException(
+        err['type'] as String? ?? 'unknown',
+        err['description'] as String?,
+      );
     }
 
     return result['newState'] as String?;

@@ -68,7 +68,11 @@ This document covers the mail-to-database sync layer only, not the UI.
 
 ### Shared / cross-protocol
 
-- **Conflict-resolution hardening**: document and enforce the server-wins policy
-  consistently — check `notUpdated`/`notDestroyed` per-item errors in JMAP `Email/set`
-  responses, handle IMAP `NO`/`BAD` gracefully, and evict changes that exceed a
-  maximum retry threshold (e.g. 5 attempts) to prevent queues from growing unboundedly.
+- Conflict-resolution policy: **server-wins**. The next sync cycle always
+  overwrites local state with server values. Outbound mutations in
+  `pending_changes` are retried up to 5 times before being evicted, preventing
+  unbounded queue growth. Permanent per-item JMAP errors (`notFound`,
+  `forbidden`) are discarded immediately; transient errors (network, 500)
+  are retried up to the limit.
+- `ifInState` guard on every JMAP `Email/set` call; `notUpdated`/`notDestroyed`
+  per-item errors are detected and treated as permanent failures.

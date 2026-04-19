@@ -906,6 +906,34 @@ void main() {
       expect(changes.first.attempts, 1);
       expect(changes.first.lastError, isNotNull);
     });
+
+    test('evicts IMAP change after max attempts (5)', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      // Pre-seed a flag_seen at attempts=4
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: _account.id,
+        resourceType: 'Email',
+        resourceId: '${_account.id}:1',
+        changeType: 'flag_seen',
+        payload: '{"uid":1,"mailboxPath":"INBOX","seen":true}',
+        createdAt: DateTime.now(),
+        attempts: const Value(4),
+      ));
+
+      // Force connection failure so the attempt counter increments
+      final failingEmails = EmailRepositoryImpl(
+        r.db,
+        r.accounts,
+        imapConnect: (_, __, ___) => Future.error(Exception('forced failure')),
+        smtpConnect: _noSmtpConnect,
+      );
+
+      await failingEmails.flushPendingChanges(_account.id, 'pw');
+
+      // 4+1 = 5 = _maxChangeAttempts → evicted
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
   });
 
   group('JMAP getEmailBody', () {
@@ -1417,6 +1445,65 @@ void main() {
       // Change should still be present but with attempt count bumped
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes.first.attempts, 1);
+    });
+
+    test('discards change immediately on notUpdated (permanent error)', () async {
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        // Server responds with notUpdated — permanent per-item error
+        return http.Response(
+          jsonEncode({'sessionState': 's1', 'methodResponses': [
+            ['Email/set', {
+              'accountId': 'acct1',
+              'notUpdated': {'e1': {'type': 'notFound'}},
+            }, '0'],
+          ]}),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email', resourceId: 'jmap-1:e1',
+        changeType: 'flag_seen', payload: '{"seen":true}', createdAt: DateTime.now(),
+      ));
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // Permanent error — change is immediately evicted
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('evicts change after max attempts (5)', () async {
+      final r = _makeRepos(httpClient: mockFlush(500));
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      // Seed a change already at attempts=4 (one below the eviction threshold)
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+        accountId: 'jmap-1', resourceType: 'Email', resourceId: 'jmap-1:e1',
+        changeType: 'flag_seen', payload: '{"seen":true}', createdAt: DateTime.now(),
+        attempts: const Value(4),
+      ));
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // 4+1 = 5 = _maxChangeAttempts → evicted
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     });
   });
 

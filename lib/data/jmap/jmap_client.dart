@@ -208,3 +208,19 @@ class JmapStateMismatchException implements Exception {
   @override
   String toString() => 'JmapStateMismatchException: state token is stale';
 }
+
+/// Thrown when an individual email update or destroy inside an `Email/set`
+/// is rejected by the server (RFC 8620 §5.3 `notUpdated` / `notDestroyed`).
+///
+/// This is a permanent per-item error (e.g. `notFound`, `forbidden`) rather
+/// than a transient transport failure, so the pending change should be
+/// discarded rather than retried indefinitely.
+class JmapSetItemException implements Exception {
+  JmapSetItemException(this.type, this.description);
+  final String type;
+  final String? description;
+
+  @override
+  String toString() =>
+      'JmapSetItemException: $type${description != null ? ' — $description' : ''}';
+}
