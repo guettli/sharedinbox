@@ -62,6 +62,7 @@ class EmailAttachment {
   final String filename;
   final String contentType;
   final int size;
+
   /// IMAP BODYSTRUCTURE part identifier (e.g. "2", "2.1") used for on-demand
   /// download. Empty for attachments cached before this field was added.
   final String fetchPartId;
@@ -79,6 +80,7 @@ class EmailAttachment {
 class FailedMutation {
   final int id;
   final String accountId;
+
   /// "flag_seen" | "flag_flagged" | "move" | "delete"
   final String changeType;
   final String resourceId;
@@ -104,6 +106,7 @@ class EmailDraft {
   final List<EmailAddress> cc;
   final String subject;
   final String body;
+
   /// Local file-system paths of files to attach when sending.
   final List<String> attachmentFilePaths;
 

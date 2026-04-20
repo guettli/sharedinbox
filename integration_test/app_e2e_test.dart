@@ -37,8 +37,7 @@ class _InMemorySecureStorage implements SecureStorage {
 }
 
 final _sw = Stopwatch()..start();
-void _log(String label) =>
-    debugPrint('[${_sw.elapsedMilliseconds}ms] $label');
+void _log(String label) => debugPrint('[${_sw.elapsedMilliseconds}ms] $label');
 
 /// Pumps the widget tree at [interval] until [finder] matches at least one
 /// widget, or [timeout] elapses (which throws). Replaces fixed `pump(N)`
@@ -89,9 +88,11 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       _log('app start');
-      app.main(overrides: [
-        secureStorageProvider.overrideWithValue(_InMemorySecureStorage()),
-      ]);
+      app.main(
+        overrides: [
+          secureStorageProvider.overrideWithValue(_InMemorySecureStorage()),
+        ],
+      );
       await tester.pumpAndSettle();
       _log('app settled');
 
@@ -104,17 +105,24 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
 
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'Display name'), 'Alice');
+        find.widgetWithText(TextFormField, 'Display name'),
+        'Alice',
+      );
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'Email address'), userEmail);
+        find.widgetWithText(TextFormField, 'Email address'),
+        userEmail,
+      );
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'Password'), userPass);
+        find.widgetWithText(TextFormField, 'Password'),
+        userPass,
+      );
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'IMAP host'), imapHost);
+        find.widgetWithText(TextFormField, 'IMAP host'),
+        imapHost,
+      );
 
       // The form has two "Port" fields: index 0 = IMAP, index 1 = SMTP.
-      final imapPortField =
-          find.widgetWithText(TextFormField, 'Port').at(0);
+      final imapPortField = find.widgetWithText(TextFormField, 'Port').at(0);
       await tester.ensureVisible(imapPortField);
       await tester.enterText(imapPortField, imapPort.toString());
 
@@ -126,10 +134,11 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'SMTP host'), smtpHost);
+        find.widgetWithText(TextFormField, 'SMTP host'),
+        smtpHost,
+      );
 
-      final smtpPortField =
-          find.widgetWithText(TextFormField, 'Port').at(1);
+      final smtpPortField = find.widgetWithText(TextFormField, 'Port').at(1);
       await tester.ensureVisible(smtpPortField);
       await tester.enterText(smtpPortField, smtpPort.toString());
 
@@ -160,9 +169,13 @@ void main() {
       final subject = 'E2E-${DateTime.now().millisecondsSinceEpoch}';
 
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'), userEmail);
+        find.widgetWithText(TextFormField, 'To'),
+        userEmail,
+      );
       await tester.enterText(
-          find.widgetWithText(TextFormField, 'Subject'), subject);
+        find.widgetWithText(TextFormField, 'Subject'),
+        subject,
+      );
 
       final bodyField = find.widgetWithText(TextFormField, 'Body');
       await tester.ensureVisible(bodyField);

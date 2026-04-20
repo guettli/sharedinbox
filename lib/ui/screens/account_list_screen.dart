@@ -135,7 +135,8 @@ class _AccountTile extends ConsumerWidget {
           builder: (ctx) => AlertDialog(
             title: const Text('Delete account'),
             content: Text(
-                'Remove "${account.displayName}" (${account.email})? This cannot be undone.'),
+              'Remove "${account.displayName}" (${account.email})? This cannot be undone.',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),

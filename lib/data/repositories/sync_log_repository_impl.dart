@@ -16,12 +16,14 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     required DateTime startedAt,
     required DateTime finishedAt,
   }) async {
-    await _db.into(_db.syncLogs).insert(SyncLogsCompanion.insert(
-          accountId: accountId,
-          result: success ? 'ok' : 'error',
-          errorMessage: Value(errorMessage),
-          startedAt: startedAt,
-          finishedAt: finishedAt,
-        ));
+    await _db.into(_db.syncLogs).insert(
+          SyncLogsCompanion.insert(
+            accountId: accountId,
+            result: success ? 'ok' : 'error',
+            errorMessage: Value(errorMessage),
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+          ),
+        );
   }
 }

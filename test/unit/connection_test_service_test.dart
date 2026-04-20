@@ -20,15 +20,26 @@ const _jmapAccount = Account(
   displayName: 'Alice',
   email: 'alice@example.com',
   type: AccountType.jmap,
-  jmapUrl: 'https://example.com/jmap',
+  jmapUrl: 'https://example.com/jmap/session',
 );
+
+const _jmapSessionJson = '{'
+    '"capabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{}},'
+    '"accounts":{},"primaryAccounts":{},"username":"alice@example.com",'
+    '"apiUrl":"https://example.com/jmap/","downloadUrl":"","uploadUrl":"","state":"0"'
+    '}';
 
 ConnectionTestServiceImpl _makeService({
   required int httpStatus,
   FakeImapClient? fakeImap,
   Exception? imapError,
 }) {
-  final mockHttp = MockClient((_) async => http.Response('', httpStatus));
+  final mockHttp = MockClient(
+    (_) async => http.Response(
+      httpStatus == 200 ? _jmapSessionJson : '',
+      httpStatus,
+    ),
+  );
   return ConnectionTestServiceImpl(
     mockHttp,
     imapConnect: (account, username, password) async {
@@ -132,12 +143,38 @@ void main() {
       final svc = ConnectionTestServiceImpl(
         MockClient((_) async {
           callCount++;
-          return http.Response('', callCount == 1 ? 401 : 200);
+          return http.Response(
+            callCount == 1 ? '' : _jmapSessionJson,
+            callCount == 1 ? 401 : 200,
+          );
         }),
       );
       final result = await svc.testConnection(_jmapAccount, 'pw');
       expect(result, 'alice');
       expect(callCount, 2);
+    });
+
+    test('throws when response is not JSON', () async {
+      final svc = ConnectionTestServiceImpl(
+        MockClient((_) async => http.Response('<html>admin</html>', 200)),
+      );
+      expect(
+        () => svc.testConnection(_jmapAccount, 'pw'),
+        throwsA(predicate((e) => e.toString().contains('Not a JMAP server'))),
+      );
+    });
+
+    test('throws when response lacks JMAP core capability', () async {
+      final svc = ConnectionTestServiceImpl(
+        MockClient(
+          (_) async =>
+              http.Response('{"capabilities":{"something:else":{}}}', 200),
+        ),
+      );
+      expect(
+        () => svc.testConnection(_jmapAccount, 'pw'),
+        throwsA(predicate((e) => e.toString().contains('Not a JMAP server'))),
+      );
     });
 
     test('_usernamesFor returns explicit username only when set', () async {
@@ -147,13 +184,13 @@ void main() {
         email: 'a@b.com',
         username: 'mylogin',
         type: AccountType.jmap,
-        jmapUrl: 'https://b.com/jmap',
+        jmapUrl: 'https://b.com/jmap/session',
       );
       var requestCount = 0;
       final svc = ConnectionTestServiceImpl(
         MockClient((_) async {
           requestCount++;
-          return http.Response('', 200);
+          return http.Response(_jmapSessionJson, 200);
         }),
       );
       final result = await svc.testConnection(account, 'pw');

@@ -47,3 +47,12 @@ linter:
     - hash_and_equals
     - use_rethrow_when_possible
     - valid_regexps
+
+    # Async
+    - discarded_futures
+    - unnecessary_await_in_return
+
+    # Imports and style
+    - directives_ordering
+    - curly_braces_in_flow_control_structures
+    - require_trailing_commas

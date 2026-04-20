@@ -3,16 +3,23 @@ import 'package:enough_mail/enough_mail.dart';
 import '../../core/models/account.dart';
 
 typedef ImapConnectFn = Future<ImapClient> Function(
-    Account account, String username, String password);
+  Account account,
+  String username,
+  String password,
+);
 
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// Throws [Exception] if the account is not configured for SSL/TLS.
 Future<ImapClient> connectImap(
-    Account account, String username, String password) async {
+  Account account,
+  String username,
+  String password,
+) async {
   if (!account.imapSsl) {
     throw Exception(
-        'Unencrypted IMAP connections are not allowed. Enable SSL/TLS.');
+      'Unencrypted IMAP connections are not allowed. Enable SSL/TLS.',
+    );
   }
   final client = ImapClient();
   await client.connectToServer(account.imapHost, account.imapPort);
@@ -27,7 +34,10 @@ Future<ImapClient> connectImap(
 ///
 /// Caller is responsible for calling [SmtpClient.quit] when done.
 Future<SmtpClient> connectSmtp(
-    Account account, String username, String password) async {
+  Account account,
+  String username,
+  String password,
+) async {
   // clientDomain is the sending domain advertised in EHLO — use the host part
   // of the sender email, falling back to the SMTP host.
   final atIndex = account.email.lastIndexOf('@');

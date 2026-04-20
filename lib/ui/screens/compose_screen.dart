@@ -61,13 +61,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;
-    _loadAccounts();
+    unawaited(_loadAccounts());
     // Only restore if no prefill fields were provided (avoids overwriting a
     // fresh reply with an old draft from a previous reply to the same email).
     final hasPrefill = widget.prefillTo != null ||
         widget.prefillSubject != null ||
         widget.prefillBody != null;
-    if (!hasPrefill) _restoreDraft();
+    if (!hasPrefill) unawaited(_restoreDraft());
 
     for (final c in [_to, _cc, _subject, _body]) {
       c.addListener(_onTextChanged);
@@ -109,14 +109,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!_draftDirty || !mounted) return;
     _draftDirty = false;
     final saved = await _draftRepo.saveDraft(
-          id: _draftId,
-          accountId: _accountId,
-          replyToEmailId: widget.replyToEmailId,
-          toText: _to.text,
-          ccText: _cc.text,
-          subjectText: _subject.text,
-          bodyText: _body.text,
-        );
+      id: _draftId,
+      accountId: _accountId,
+      replyToEmailId: widget.replyToEmailId,
+      toText: _to.text,
+      ccText: _cc.text,
+      subjectText: _subject.text,
+      bodyText: _body.text,
+    );
     if (!mounted) return;
     setState(() {
       _draftId = saved.id;
@@ -140,14 +140,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (_draftDirty) {
       unawaited(
         _draftRepo.saveDraft(
-              id: _draftId,
-              accountId: _accountId,
-              replyToEmailId: widget.replyToEmailId,
-              toText: _to.text,
-              ccText: _cc.text,
-              subjectText: _subject.text,
-              bodyText: _body.text,
-            ),
+          id: _draftId,
+          accountId: _accountId,
+          replyToEmailId: widget.replyToEmailId,
+          toText: _to.text,
+          ccText: _cc.text,
+          subjectText: _subject.text,
+          bodyText: _body.text,
+        ),
       );
     }
     super.dispose();
@@ -156,8 +156,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   Future<void> _pickAttachments() async {
     final result = await FilePicker.platform.pickFiles(allowMultiple: true);
     if (result == null) return;
-    final paths =
-        result.files.map((f) => f.path).whereType<String>().toList();
+    final paths = result.files.map((f) => f.path).whereType<String>().toList();
     if (!mounted) return;
     setState(() => _attachmentPaths.addAll(paths));
   }

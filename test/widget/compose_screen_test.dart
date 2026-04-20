@@ -12,19 +12,19 @@ import 'helpers.dart';
 void main() {
   group('ComposeScreen', () {
     testWidgets('renders To, Cc, Subject and Body fields', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/compose',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-          draftRepositoryProvider
-              .overrideWithValue(FakeDraftRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('To'), findsOneWidget);
@@ -35,44 +35,46 @@ void main() {
 
     testWidgets('prefills To and Subject when provided as constructor params',
         (tester) async {
-      await tester.pumpWidget(_buildDirect(
-        screen: const ComposeScreen(
-          prefillTo: 'bob@example.com',
-          prefillSubject: 'Re: Hello',
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(
+            prefillTo: 'bob@example.com',
+            prefillSubject: 'Re: Hello',
+          ),
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
         ),
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-          draftRepositoryProvider
-              .overrideWithValue(FakeDraftRepository()),
-        ],
-      ));
+      );
       await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(TextFormField, 'bob@example.com'),
-          findsOneWidget);
+      expect(
+        find.widgetWithText(TextFormField, 'bob@example.com'),
+        findsOneWidget,
+      );
       expect(find.widgetWithText(TextFormField, 'Re: Hello'), findsOneWidget);
     });
 
     testWidgets('shows static From field when one account is loaded',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/compose',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-          draftRepositoryProvider
-              .overrideWithValue(FakeDraftRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Alice <alice@example.com>'), findsOneWidget);
@@ -87,19 +89,20 @@ void main() {
         imapHost: 'imap.example.com',
         smtpHost: 'smtp.example.com',
       );
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/compose',
-        overrides: [
-          accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount, second])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-          draftRepositoryProvider
-              .overrideWithValue(FakeDraftRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount, second]),
+            ),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
@@ -114,24 +117,29 @@ void main() {
         subjectText: 'Restored subject',
         bodyText: 'Draft body',
       );
-      await tester.pumpWidget(_buildDirect(
-        screen: const ComposeScreen(),
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-          draftRepositoryProvider.overrideWithValue(fakeDrafts),
-        ],
-      ));
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(),
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(fakeDrafts),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(TextFormField, 'carol@example.com'),
-          findsOneWidget);
-      expect(find.widgetWithText(TextFormField, 'Restored subject'),
-          findsOneWidget);
+      expect(
+        find.widgetWithText(TextFormField, 'carol@example.com'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        findsOneWidget,
+      );
     });
   });
 }

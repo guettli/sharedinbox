@@ -78,8 +78,7 @@ final accountDiscoveryServiceProvider =
   return AccountDiscoveryServiceImpl(ref.watch(httpClientProvider));
 });
 
-final connectionTestServiceProvider =
-    Provider<ConnectionTestService>((ref) {
+final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
   return ConnectionTestServiceImpl(ref.watch(httpClientProvider));
 });
 
@@ -89,5 +88,7 @@ final accountConnectionStatusProvider =
   final account = await repo.getAccount(accountId);
   if (account == null) throw Exception('Account not found');
   final password = await repo.getPassword(accountId);
-  await ref.read(connectionTestServiceProvider).testConnection(account, password);
+  await ref
+      .read(connectionTestServiceProvider)
+      .testConnection(account, password);
 });

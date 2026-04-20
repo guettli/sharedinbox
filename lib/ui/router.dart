@@ -2,11 +2,11 @@ import 'package:go_router/go_router.dart';
 
 import 'screens/account_list_screen.dart';
 import 'screens/add_account_screen.dart';
-import 'screens/edit_account_screen.dart';
-import 'screens/mailbox_list_screen.dart';
-import 'screens/email_list_screen.dart';
-import 'screens/email_detail_screen.dart';
 import 'screens/compose_screen.dart';
+import 'screens/edit_account_screen.dart';
+import 'screens/email_detail_screen.dart';
+import 'screens/email_list_screen.dart';
+import 'screens/mailbox_list_screen.dart';
 import 'screens/settings_screen.dart';
 
 final router = GoRouter(

@@ -2,13 +2,13 @@ import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 
+import '../../data/imap/imap_client_factory.dart';
 import '../models/account.dart';
 import '../repositories/account_repository.dart';
 import '../repositories/email_repository.dart';
 import '../repositories/mailbox_repository.dart';
 import '../repositories/sync_log_repository.dart';
 import '../utils/logger.dart';
-import '../../data/imap/imap_client_factory.dart';
 
 /// Manages background sync for all accounts.
 ///
@@ -41,9 +41,15 @@ class AccountSyncManager {
         if (_active.containsKey(account.id)) continue;
         final loop = switch (account.type) {
           AccountType.imap => _AccountSync(
-              account, _accounts, _mailboxes, _emails, _imapConnect, _syncLog),
-          AccountType.jmap => _JmapAccountSync(
-              account, _mailboxes, _emails, _accounts, _syncLog),
+              account,
+              _accounts,
+              _mailboxes,
+              _emails,
+              _imapConnect,
+              _syncLog,
+            ),
+          AccountType.jmap =>
+            _JmapAccountSync(account, _mailboxes, _emails, _accounts, _syncLog),
         };
         _active[account.id] = loop;
         loop.start();
@@ -58,7 +64,7 @@ class AccountSyncManager {
   }
 
   void dispose() {
-    _accountsSub?.cancel();
+    unawaited(_accountsSub?.cancel());
     for (final s in _active.values) {
       s.stop();
     }
@@ -76,8 +82,14 @@ abstract class _SyncLoop {
 // ── IMAP ──────────────────────────────────────────────────────────────────────
 
 class _AccountSync implements _SyncLoop {
-  _AccountSync(this.account, this._accounts, this._mailboxes, this._emails,
-      this._imapConnect, this._syncLog);
+  _AccountSync(
+    this.account,
+    this._accounts,
+    this._mailboxes,
+    this._emails,
+    this._imapConnect,
+    this._syncLog,
+  );
 
   final Account account;
   final AccountRepository _accounts;
@@ -94,7 +106,7 @@ class _AccountSync implements _SyncLoop {
   @override
   void start() {
     _running = true;
-    _loop();
+    unawaited(_loop());
   }
 
   @override
@@ -167,8 +179,7 @@ class _AccountSync implements _SyncLoop {
           .on<imap.ImapEvent>()
           .where(
             (e) =>
-                e is imap.ImapMessagesExistEvent ||
-                e is imap.ImapExpungeEvent,
+                e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
           )
           .listen((_) {
         if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
@@ -198,7 +209,12 @@ class _AccountSync implements _SyncLoop {
 
 class _JmapAccountSync implements _SyncLoop {
   _JmapAccountSync(
-      this.account, this._mailboxes, this._emails, this._accounts, this._syncLog);
+    this.account,
+    this._mailboxes,
+    this._emails,
+    this._accounts,
+    this._syncLog,
+  );
 
   final Account account;
   final MailboxRepository _mailboxes;
@@ -215,7 +231,7 @@ class _JmapAccountSync implements _SyncLoop {
   @override
   void start() {
     _running = true;
-    _loop();
+    unawaited(_loop());
   }
 
   @override
@@ -281,11 +297,13 @@ class _JmapAccountSync implements _SyncLoop {
     // Try JMAP push (RFC 8887 EventSource). Falls back to poll timer when
     // the server doesn't advertise an eventSourceUrl or the connection fails.
     final pushReady = Completer<void>();
-    final pushSub = _emails
-        .watchJmapPush(account.id, password)
-        .listen((_) {
-          if (!pushReady.isCompleted) pushReady.complete();
-        }, onDone: () {}, onError: (_) {});
+    final pushSub = _emails.watchJmapPush(account.id, password).listen(
+      (_) {
+        if (!pushReady.isCompleted) pushReady.complete();
+      },
+      onDone: () {},
+      onError: (_) {},
+    );
 
     await Future.any([
       pushReady.future,

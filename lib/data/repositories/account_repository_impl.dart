@@ -20,8 +20,7 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Future<model.Account?> getAccount(String id) async {
-    final row = await (_db.select(_db.accounts)
-          ..where((t) => t.id.equals(id)))
+    final row = await (_db.select(_db.accounts)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
@@ -50,19 +49,21 @@ class AccountRepositoryImpl implements AccountRepository {
   @override
   Future<void> updateAccount(model.Account account, {String? password}) async {
     await (_db.update(_db.accounts)..where((t) => t.id.equals(account.id)))
-        .write(AccountsCompanion(
-      displayName: Value(account.displayName),
-      email: Value(account.email),
-      imapHost: Value(account.imapHost),
-      imapPort: Value(account.imapPort),
-      imapSsl: Value(account.imapSsl),
-      smtpHost: Value(account.smtpHost),
-      smtpPort: Value(account.smtpPort),
-      smtpSsl: Value(account.smtpSsl),
-      accountType: Value(account.type.name),
-      jmapUrl: Value(account.jmapUrl),
-      username: Value(account.username),
-    ));
+        .write(
+      AccountsCompanion(
+        displayName: Value(account.displayName),
+        email: Value(account.email),
+        imapHost: Value(account.imapHost),
+        imapPort: Value(account.imapPort),
+        imapSsl: Value(account.imapSsl),
+        smtpHost: Value(account.smtpHost),
+        smtpPort: Value(account.smtpPort),
+        smtpSsl: Value(account.smtpSsl),
+        accountType: Value(account.type.name),
+        jmapUrl: Value(account.jmapUrl),
+        username: Value(account.username),
+      ),
+    );
     if (password != null) {
       await _storage.write(key: _passwordKey(account.id), value: password);
     }

@@ -90,7 +90,9 @@ class _FakeEmails implements EmailRepository {
 
   @override
   Future<String> downloadAttachment(
-          String emailId, EmailAttachment attachment) async =>
+    String emailId,
+    EmailAttachment attachment,
+  ) async =>
       '/tmp/${attachment.filename}';
 
   @override

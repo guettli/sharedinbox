@@ -38,15 +38,20 @@ http.Client _sessionClient({
   return MockClient((req) async {
     if (req.url.path.contains('well-known')) {
       return http.Response(
-          jsonEncode(sessionBody ?? _sessionBody()), sessionStatus);
+        jsonEncode(sessionBody ?? _sessionBody()),
+        sessionStatus,
+      );
     }
     return http.Response(
-        jsonEncode(apiBody ??
+      jsonEncode(
+        apiBody ??
             {
               'sessionState': 'st1',
               'methodResponses': [],
-            }),
-        apiStatus);
+            },
+      ),
+      apiStatus,
+    );
   });
 }
 
@@ -145,12 +150,21 @@ void main() {
 
     test('returns methodResponses on success', () async {
       final responses = [
-        ['Mailbox/get', <String, dynamic>{'state': 'st2', 'list': []}, '0']
+        [
+          'Mailbox/get',
+          <String, dynamic>{'state': 'st2', 'list': []},
+          '0',
+        ]
       ];
       final client = await connected(
-          apiBody: {'sessionState': 'st1', 'methodResponses': responses});
+        apiBody: {'sessionState': 'st1', 'methodResponses': responses},
+      );
       final result = await client.call([
-        ['Mailbox/get', {'accountId': _accountId, 'ids': null}, '0']
+        [
+          'Mailbox/get',
+          {'accountId': _accountId, 'ids': null},
+          '0',
+        ]
       ]);
       expect(result, hasLength(1));
       expect((result[0] as List<dynamic>)[0], 'Mailbox/get');
@@ -160,7 +174,11 @@ void main() {
       final client = await connected(apiStatus: 500);
       expect(
         () => client.call([
-          ['Mailbox/get', {'accountId': _accountId}, '0']
+          [
+            'Mailbox/get',
+            {'accountId': _accountId},
+            '0',
+          ]
         ]),
         throwsA(isA<JmapException>()),
       );
@@ -168,10 +186,15 @@ void main() {
 
     test('throws JmapException on top-level JMAP error', () async {
       final client = await connected(
-          apiBody: {'type': 'unknownCapability', 'description': 'oops'});
+        apiBody: {'type': 'unknownCapability', 'description': 'oops'},
+      );
       expect(
         () => client.call([
-          ['Mailbox/get', {'accountId': _accountId}, '0']
+          [
+            'Mailbox/get',
+            {'accountId': _accountId},
+            '0',
+          ]
         ]),
         throwsA(isA<JmapException>()),
       );

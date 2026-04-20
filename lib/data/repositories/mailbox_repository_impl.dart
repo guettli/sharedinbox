@@ -52,7 +52,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
   // ── IMAP ──────────────────────────────────────────────────────────────────
 
   Future<void> _syncMailboxesImap(
-      account_model.Account account, String password) async {
+    account_model.Account account,
+    String password,
+  ) async {
     final client =
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
@@ -93,7 +95,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
   // ── JMAP ──────────────────────────────────────────────────────────────────
 
   Future<void> _syncMailboxesJmap(
-      account_model.Account account, String password) async {
+    account_model.Account account,
+    String password,
+  ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
       throw Exception('JMAP account ${account.id} has no jmapUrl');
@@ -116,8 +120,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   /// First-time sync: fetch all mailboxes and persist state.
-  Future<void> _jmapFullMailboxSync(
-      String accountId, JmapClient jmap) async {
+  Future<void> _jmapFullMailboxSync(String accountId, JmapClient jmap) async {
     final responses = await jmap.call([
       [
         'Mailbox/get',
@@ -137,7 +140,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   /// Incremental sync using Mailbox/changes since [sinceState].
   Future<void> _jmapIncrementalMailboxSync(
-      String accountId, JmapClient jmap, String sinceState) async {
+    String accountId,
+    JmapClient jmap,
+    String sinceState,
+  ) async {
     final responses = await jmap.call([
       [
         'Mailbox/changes',
@@ -163,8 +169,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         ]
       ]);
       final getResult = _responseArgs(getResponses, 0, 'Mailbox/get');
-      await _upsertJmapMailboxes(
-          accountId, getResult['list'] as List<dynamic>);
+      await _upsertJmapMailboxes(accountId, getResult['list'] as List<dynamic>);
     }
 
     // Remove destroyed mailboxes
@@ -180,7 +185,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   Future<void> _upsertJmapMailboxes(
-      String accountId, List<dynamic> mailboxes) async {
+    String accountId,
+    List<dynamic> mailboxes,
+  ) async {
     for (final mb in mailboxes) {
       final m = mb as Map<String, dynamic>;
       final jmapId = m['id'] as String;
@@ -205,15 +212,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   Future<String?> _loadSyncState(String accountId, String resourceType) async {
     final row = await (_db.select(_db.syncStates)
-          ..where((t) =>
-              t.accountId.equals(accountId) &
-              t.resourceType.equals(resourceType)))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
         .getSingleOrNull();
     return row?.state;
   }
 
   Future<void> _saveSyncState(
-      String accountId, String resourceType, String state) async {
+    String accountId,
+    String resourceType,
+    String state,
+  ) async {
     await _db.into(_db.syncStates).insertOnConflictUpdate(
           SyncStatesCompanion.insert(
             accountId: accountId,
@@ -229,7 +241,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// Extracts the argument map from a methodResponse at [index].
   /// Throws [JmapException] if the response is an error.
   Map<String, dynamic> _responseArgs(
-      List<dynamic> responses, int index, String expectedMethod) {
+    List<dynamic> responses,
+    int index,
+    String expectedMethod,
+  ) {
     final triple = responses[index] as List<dynamic>;
     final method = triple[0] as String;
     if (method == 'error') {

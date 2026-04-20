@@ -5,22 +5,24 @@ import 'dart:math' as math;
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:http/http.dart' as http;
-
 import '../../core/models/account.dart' as account_model;
-import '../../core/utils/logger.dart';
 import '../../core/models/email.dart' as model;
 import '../../core/repositories/account_repository.dart';
 import '../../core/repositories/email_repository.dart';
+import '../../core/utils/logger.dart';
 import '../db/database.dart';
 import '../imap/imap_client_factory.dart';
 import '../jmap/jmap_client.dart';
 
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
-    account_model.Account account, String username, String password);
+  account_model.Account account,
+  String username,
+  String password,
+);
 typedef GetCacheDirFn = Future<Directory> Function();
 
 class EmailRepositoryImpl implements EmailRepository {
@@ -227,8 +229,8 @@ class EmailRepositoryImpl implements EmailRepository {
     try {
       // Enable CONDSTORE so the server returns HIGHESTMODSEQ in SELECT and
       // honours CHANGEDSINCE modifiers on FETCH (RFC 7162).
-      final selectedMailbox = await client.selectMailboxByPath(
-          mailboxPath, enableCondStore: true);
+      final selectedMailbox =
+          await client.selectMailboxByPath(mailboxPath, enableCondStore: true);
       final uidValidity = selectedMailbox.uidValidity ?? 0;
       final serverModSeq = selectedMailbox.highestModSequence;
       final resourceType = 'IMAP:$mailboxPath';
@@ -239,17 +241,27 @@ class EmailRepositoryImpl implements EmailRepository {
         if (checkpoint != null) {
           // UID validity changed: remove stale local emails for this mailbox.
           await (_db.delete(_db.emails)
-                ..where((t) =>
-                    t.accountId.equals(account.id) &
-                    t.mailboxPath.equals(mailboxPath)))
+                ..where(
+                  (t) =>
+                      t.accountId.equals(account.id) &
+                      t.mailboxPath.equals(mailboxPath),
+                ))
               .go();
         }
         await _fetchAndUpsertImap(
-            client, account, mailboxPath, imap.MessageSequence.fromAll());
+          client,
+          account,
+          mailboxPath,
+          imap.MessageSequence.fromAll(),
+        );
         final maxUid = await _maxLocalUid(account.id, mailboxPath);
         await _saveImapCheckpoint(
-            account.id, resourceType, uidValidity, maxUid,
-            highestModSeq: serverModSeq);
+          account.id,
+          resourceType,
+          uidValidity,
+          maxUid,
+          highestModSeq: serverModSeq,
+        );
       } else {
         // Incremental sync.
         final lastUid = checkpoint['lastUid'] as int;
@@ -263,21 +275,24 @@ class EmailRepositoryImpl implements EmailRepository {
         }
 
         // Fetch new messages.
-        final newUids =
-            (await client.uidSearchMessages(
-                    searchCriteria: 'UID ${lastUid + 1}:*'))
+        final newUids = (await client.uidSearchMessages(
+              searchCriteria: 'UID ${lastUid + 1}:*',
+            ))
                 .matchingSequence
                 ?.toList() ??
             [];
         if (newUids.isNotEmpty) {
-          await _fetchAndUpsertImap(client, account, mailboxPath,
-              imap.MessageSequence.fromIds(newUids, isUid: true));
+          await _fetchAndUpsertImap(
+            client,
+            account,
+            mailboxPath,
+            imap.MessageSequence.fromIds(newUids, isUid: true),
+          );
         }
 
         // CONDSTORE flag update: refresh flags only for messages that changed.
         if (serverModSeq != null && storedModSeq != null) {
-          await _refreshFlagsImap(
-              client, account, mailboxPath, storedModSeq);
+          await _refreshFlagsImap(client, account, mailboxPath, storedModSeq);
         }
 
         // Detect remote deletions.
@@ -290,8 +305,12 @@ class EmailRepositoryImpl implements EmailRepository {
         final maxUid =
             serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
         await _saveImapCheckpoint(
-            account.id, resourceType, uidValidity, maxUid,
-            highestModSeq: serverModSeq);
+          account.id,
+          resourceType,
+          uidValidity,
+          maxUid,
+          highestModSeq: serverModSeq,
+        );
       }
     } finally {
       await client.logout();
@@ -316,11 +335,12 @@ class EmailRepositoryImpl implements EmailRepository {
       final uid = msg.uid;
       if (uid == null) continue;
       final emailId = '${account.id}:$uid';
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-          .write(EmailsCompanion(
-        isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-        isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-      ));
+      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+        EmailsCompanion(
+          isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
+          isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+        ),
+      );
     }
   }
 
@@ -330,13 +350,26 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     imap.MessageSequence sequence,
   ) async {
-    final fetch = await client.fetchMessages(
-        sequence, '(UID FLAGS ENVELOPE BODYSTRUCTURE)');
+    final fetch = sequence.isUidSequence
+        ? await client.uidFetchMessages(
+            sequence,
+            '(UID FLAGS ENVELOPE BODYSTRUCTURE)',
+          )
+        : await client.fetchMessages(
+            sequence,
+            '(UID FLAGS ENVELOPE BODYSTRUCTURE)',
+          );
     for (final msg in fetch.messages) {
       final envelope = msg.envelope;
-      if (envelope == null) continue;
+      if (envelope == null) {
+        log('IMAP: skipping message with no envelope (uid=${msg.uid}, mailbox=$mailboxPath)');
+        continue;
+      }
       final uid = msg.uid;
-      if (uid == null) continue;
+      if (uid == null) {
+        log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
+        continue;
+      }
       final emailId = '${account.id}:$uid';
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -360,16 +393,20 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<int> _maxLocalUid(String accountId, String mailboxPath) async {
     final rows = await (_db.select(_db.emails)
-          ..where((t) =>
-              t.accountId.equals(accountId) &
-              t.mailboxPath.equals(mailboxPath)))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
         .get();
     if (rows.isEmpty) return 0;
     return rows.map((r) => r.uid).reduce(math.max);
   }
 
   Future<Map<String, dynamic>?> _loadImapCheckpoint(
-      String accountId, String resourceType) async {
+    String accountId,
+    String resourceType,
+  ) async {
     final raw = await _loadSyncState(accountId, resourceType);
     if (raw == null) return null;
     return jsonDecode(raw) as Map<String, dynamic>;
@@ -391,12 +428,17 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   Future<void> _reconcileDeletedImap(
-      String accountId, String mailboxPath, List<int> serverUids) async {
+    String accountId,
+    String mailboxPath,
+    List<int> serverUids,
+  ) async {
     final serverUidSet = serverUids.toSet();
     final localRows = await (_db.select(_db.emails)
-          ..where((t) =>
-              t.accountId.equals(accountId) &
-              t.mailboxPath.equals(mailboxPath)))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
         .get();
     for (final row in localRows) {
       if (!serverUidSet.contains(row.uid)) {
@@ -414,9 +456,21 @@ class EmailRepositoryImpl implements EmailRepository {
   static const _maxChangeAttempts = 5;
 
   static const _emailProperties = [
-    'id', 'mailboxIds', 'subject', 'sentAt', 'receivedAt',
-    'from', 'to', 'cc', 'keywords', 'hasAttachment', 'preview',
-    'textBody', 'htmlBody', 'bodyValues', 'attachments',
+    'id',
+    'mailboxIds',
+    'subject',
+    'sentAt',
+    'receivedAt',
+    'from',
+    'to',
+    'cc',
+    'keywords',
+    'hasAttachment',
+    'preview',
+    'textBody',
+    'htmlBody',
+    'bodyValues',
+    'attachments',
   ];
 
   static const _emailGetBodyOptions = {
@@ -451,7 +505,10 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   Future<void> _jmapFullEmailSync(
-      String accountId, JmapClient jmap, String mailboxJmapId) async {
+    String accountId,
+    JmapClient jmap,
+    String mailboxJmapId,
+  ) async {
     int position = 0;
     String? firstState;
 
@@ -462,7 +519,9 @@ class EmailRepositoryImpl implements EmailRepository {
           {
             'accountId': jmap.accountId,
             'filter': {'inMailbox': mailboxJmapId},
-            'sort': [{'property': 'receivedAt', 'isAscending': false}],
+            'sort': [
+              {'property': 'receivedAt', 'isAscending': false},
+            ],
             'limit': _jmapPageSize,
             'position': position,
             'calculateTotal': true,
@@ -497,7 +556,10 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   Future<void> _jmapIncrementalEmailSync(
-      String accountId, JmapClient jmap, String sinceState) async {
+    String accountId,
+    JmapClient jmap,
+    String sinceState,
+  ) async {
     final responses = await jmap.call([
       [
         'Email/changes',
@@ -539,8 +601,7 @@ class EmailRepositoryImpl implements EmailRepository {
     await _saveSyncState(accountId, 'Email', newState);
   }
 
-  Future<void> _upsertJmapEmails(
-      String accountId, List<dynamic> emails) async {
+  Future<void> _upsertJmapEmails(String accountId, List<dynamic> emails) async {
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
@@ -555,7 +616,8 @@ class EmailRepositoryImpl implements EmailRepository {
       final to = _encodeJmapAddresses(m['to']);
       final cc = _encodeJmapAddresses(m['cc']);
       final sentAt = _parseDate(m['sentAt'] as String?);
-      final receivedAt = _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
+      final receivedAt =
+          _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
 
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -595,7 +657,8 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Extracts text body, HTML body, and attachments JSON from a JMAP Email object
   /// that was fetched with fetchHTMLBodyValues/fetchTextBodyValues.
   (String? textBody, String? htmlBody, String attachmentsJson) _parseJmapBody(
-      Map<String, dynamic> m) {
+    Map<String, dynamic> m,
+  ) {
     final bodyValues = m['bodyValues'] as Map<String, dynamic>? ?? {};
     final textBodyParts = m['textBody'] as List<dynamic>? ?? [];
     final htmlBodyParts = m['htmlBody'] as List<dynamic>? ?? [];
@@ -621,15 +684,17 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
-    final attachmentsJson = jsonEncode(jmapAttachments.map((a) {
-      final att = a as Map<String, dynamic>;
-      return {
-        'filename': att['name'] ?? '',
-        'contentType': att['type'] ?? '',
-        'size': att['size'] ?? 0,
-        'fetchPartId': att['blobId'] ?? '',
-      };
-    }).toList());
+    final attachmentsJson = jsonEncode(
+      jmapAttachments.map((a) {
+        final att = a as Map<String, dynamic>;
+        return {
+          'filename': att['name'] ?? '',
+          'contentType': att['type'] ?? '',
+          'size': att['size'] ?? 0,
+          'fetchPartId': att['blobId'] ?? '',
+        };
+      }).toList(),
+    );
 
     return (textBody, htmlBody, attachmentsJson);
   }
@@ -642,16 +707,16 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> _recordChangeError(PendingChangeRow row, Object error) async {
     final next = row.attempts + 1;
     if (next >= _maxChangeAttempts) {
-      await (_db.delete(_db.pendingChanges)
-            ..where((t) => t.id.equals(row.id)))
+      await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
           .go();
     } else {
-      await (_db.update(_db.pendingChanges)
-            ..where((t) => t.id.equals(row.id)))
-          .write(PendingChangesCompanion(
-        attempts: Value(next),
-        lastError: Value(error.toString()),
-      ));
+      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+          .write(
+        PendingChangesCompanion(
+          attempts: Value(next),
+          lastError: Value(error.toString()),
+        ),
+      );
     }
   }
 
@@ -659,15 +724,20 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<String?> _loadSyncState(String accountId, String resourceType) async {
     final row = await (_db.select(_db.syncStates)
-          ..where((t) =>
-              t.accountId.equals(accountId) &
-              t.resourceType.equals(resourceType)))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
         .getSingleOrNull();
     return row?.state;
   }
 
   Future<void> _saveSyncState(
-      String accountId, String resourceType, String state) async {
+    String accountId,
+    String resourceType,
+    String state,
+  ) async {
     await _db.into(_db.syncStates).insertOnConflictUpdate(
           SyncStatesCompanion.insert(
             accountId: accountId,
@@ -687,11 +757,10 @@ class EmailRepositoryImpl implements EmailRepository {
 
     controller.onCancel = () => innerSub?.cancel();
 
-    () async {
+    unawaited(() async {
       try {
         final account = await _accounts.getAccount(accountId);
-        if (account == null ||
-            account.type != account_model.AccountType.jmap) {
+        if (account == null || account.type != account_model.AccountType.jmap) {
           await controller.close();
           return;
         }
@@ -770,7 +839,7 @@ class EmailRepositoryImpl implements EmailRepository {
       } catch (_) {
         await controller.close();
       }
-    }();
+    }());
 
     return controller.stream;
   }
@@ -778,7 +847,10 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── JMAP helpers ─────────────────────────────────────────────────────────
 
   Map<String, dynamic> _responseArgs(
-      List<dynamic> responses, int index, String expectedMethod) {
+    List<dynamic> responses,
+    int index,
+    String expectedMethod,
+  ) {
     final triple = responses[index] as List<dynamic>;
     final method = triple[0] as String;
     if (method == 'error') {
@@ -791,12 +863,16 @@ class EmailRepositoryImpl implements EmailRepository {
   String _encodeJmapAddresses(dynamic addressList) {
     if (addressList == null) return '[]';
     final list = addressList as List<dynamic>;
-    return jsonEncode(list
-        .map((a) => {
+    return jsonEncode(
+      list
+          .map(
+            (a) => {
               'name': (a as Map<String, dynamic>)['name'],
               'email': a['email'],
-            })
-        .toList());
+            },
+          )
+          .toList(),
+    );
   }
 
   DateTime? _parseDate(String? iso) =>
@@ -817,12 +893,20 @@ class EmailRepositoryImpl implements EmailRepository {
 
     if (account.type == account_model.AccountType.jmap) {
       if (seen != null) {
-        await _enqueueChange(account.id, emailId, 'flag_seen',
-            jsonEncode({'seen': seen}));
+        await _enqueueChange(
+          account.id,
+          emailId,
+          'flag_seen',
+          jsonEncode({'seen': seen}),
+        );
       }
       if (flagged != null) {
-        await _enqueueChange(account.id, emailId, 'flag_flagged',
-            jsonEncode({'flagged': flagged}));
+        await _enqueueChange(
+          account.id,
+          emailId,
+          'flag_flagged',
+          jsonEncode({'flagged': flagged}),
+        );
       }
       // Optimistic local update.
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
@@ -835,12 +919,26 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     if (seen != null) {
-      await _enqueueChange(account.id, emailId, 'flag_seen',
-          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': seen}));
+      await _enqueueChange(
+        account.id,
+        emailId,
+        'flag_seen',
+        jsonEncode(
+          {'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': seen},
+        ),
+      );
     }
     if (flagged != null) {
-      await _enqueueChange(account.id, emailId, 'flag_flagged',
-          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'flagged': flagged}));
+      await _enqueueChange(
+        account.id,
+        emailId,
+        'flag_flagged',
+        jsonEncode({
+          'uid': row.uid,
+          'mailboxPath': row.mailboxPath,
+          'flagged': flagged,
+        }),
+      );
     }
     await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
       EmailsCompanion(
@@ -858,15 +956,27 @@ class EmailRepositoryImpl implements EmailRepository {
     final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
-      await _enqueueChange(account.id, emailId, 'move',
-          jsonEncode({'dest': destMailboxPath}));
+      await _enqueueChange(
+        account.id,
+        emailId,
+        'move',
+        jsonEncode({'dest': destMailboxPath}),
+      );
       // Optimistic: remove from current view; next sync will reconcile.
       await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
       return;
     }
 
-    await _enqueueChange(account.id, emailId, 'move',
-        jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath, 'dest': destMailboxPath}));
+    await _enqueueChange(
+      account.id,
+      emailId,
+      'move',
+      jsonEncode({
+        'uid': row.uid,
+        'mailboxPath': row.mailboxPath,
+        'dest': destMailboxPath,
+      }),
+    );
     await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
   }
 
@@ -879,13 +989,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
-          account.id, emailId, 'delete', jsonEncode(<String, dynamic>{}));
+        account.id,
+        emailId,
+        'delete',
+        jsonEncode(<String, dynamic>{}),
+      );
       await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
       return;
     }
 
-    await _enqueueChange(account.id, emailId, 'delete',
-        jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}));
+    await _enqueueChange(
+      account.id,
+      emailId,
+      'delete',
+      jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
+    );
     await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
   }
 
@@ -912,8 +1030,7 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Drains pending changes for [accountId] via the appropriate protocol.
   /// Called at the start of each sync cycle.
   @override
-  Future<void> flushPendingChanges(
-      String accountId, String password) async {
+  Future<void> flushPendingChanges(String accountId, String password) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
@@ -929,8 +1046,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _flushPendingChangesJmap(account_model.Account account,
-      String password, List<PendingChangeRow> rows) async {
+  Future<void> _flushPendingChangesJmap(
+    account_model.Account account,
+    String password,
+    List<PendingChangeRow> rows,
+  ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) return;
 
@@ -959,12 +1079,16 @@ class EmailRepositoryImpl implements EmailRepository {
         // Drop the cached state so the next sync cycle does a full re-fetch,
         // after which this change will be retried with a fresh token.
         await (_db.delete(_db.syncStates)
-              ..where((t) =>
-                  t.accountId.equals(account.id) &
-                  t.resourceType.equals('Email')))
+              ..where(
+                (t) =>
+                    t.accountId.equals(account.id) &
+                    t.resourceType.equals('Email'),
+              ))
             .go();
         await _recordChangeError(
-            row, 'stateMismatch — will retry after re-sync');
+          row,
+          'stateMismatch — will retry after re-sync',
+        );
         // State is now stale for all remaining rows too; stop processing.
         break;
       } on JmapSetItemException catch (e) {
@@ -980,8 +1104,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _flushPendingChangesImap(account_model.Account account,
-      String password, List<PendingChangeRow> rows) async {
+  Future<void> _flushPendingChangesImap(
+    account_model.Account account,
+    String password,
+    List<PendingChangeRow> rows,
+  ) async {
     imap.ImapClient? client;
     try {
       client =
@@ -1010,7 +1137,9 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   Future<void> _applyPendingChangeImap(
-      imap.ImapClient client, PendingChangeRow row) async {
+    imap.ImapClient client,
+    PendingChangeRow row,
+  ) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     final uid = payload['uid'] as int;
     final mailboxPath = payload['mailboxPath'] as String;
@@ -1020,17 +1149,14 @@ class EmailRepositoryImpl implements EmailRepository {
     switch (row.changeType) {
       case 'flag_seen':
         final seen = payload['seen'] as bool;
-        seen
-            ? await client.uidMarkSeen(seq)
-            : await client.uidMarkUnseen(seq);
+        seen ? await client.uidMarkSeen(seq) : await client.uidMarkUnseen(seq);
       case 'flag_flagged':
         final flagged = payload['flagged'] as bool;
         flagged
             ? await client.uidMarkFlagged(seq)
             : await client.uidMarkUnflagged(seq);
       case 'move':
-        await client.uidMove(seq,
-            targetMailboxPath: payload['dest'] as String);
+        await client.uidMove(seq, targetMailboxPath: payload['dest'] as String);
       case 'delete':
         await client.uidMarkDeleted(seq);
         await client.uidExpunge(seq);
@@ -1162,8 +1288,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _sendEmailImap(account_model.Account account, String password,
-      model.EmailDraft draft) async {
+  Future<void> _sendEmailImap(
+    account_model.Account account,
+    String password,
+    model.EmailDraft draft,
+  ) async {
     final builder = imap.MessageBuilder()
       ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
       ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
@@ -1203,8 +1332,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _sendEmailJmap(account_model.Account account, String password,
-      model.EmailDraft draft) async {
+  Future<void> _sendEmailJmap(
+    account_model.Account account,
+    String password,
+    model.EmailDraft draft,
+  ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
       throw Exception('JMAP account ${account.id} has no jmapUrl');
@@ -1234,8 +1366,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // Look up the Sent mailbox JMAP ID from the local DB.
     final sentMailbox = await (_db.select(_db.mailboxes)
-          ..where((t) =>
-              t.accountId.equals(account.id) & t.role.equals('sent'))
+          ..where((t) => t.accountId.equals(account.id) & t.role.equals('sent'))
           ..limit(1))
         .getSingleOrNull();
     final sentJmapId = sentMailbox?.path;
@@ -1243,7 +1374,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // Build the email body.
     const bodyPartId = '1';
     final emailCreate = {
-      'from': [{'name': draft.from.name, 'email': draft.from.email}],
+      'from': [
+        {'name': draft.from.name, 'email': draft.from.email},
+      ],
       'to': draft.to.map((a) => {'name': a.name, 'email': a.email}).toList(),
       if (draft.cc.isNotEmpty)
         'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
@@ -1255,7 +1388,9 @@ class EmailRepositoryImpl implements EmailRepository {
           'isTruncated': false,
         },
       },
-      'textBody': [{'partId': bodyPartId, 'type': 'text/plain'}],
+      'textBody': [
+        {'partId': bodyPartId, 'type': 'text/plain'},
+      ],
       if (attachments.isNotEmpty) 'attachments': attachments,
       'keywords': {r'$seen': true},
       if (sentJmapId != null) 'mailboxIds': {sentJmapId: true},
@@ -1304,8 +1439,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // Check Email/set for creation errors.
     final setResult = _responseArgs(responses, 0, 'Email/set');
-    final notCreated =
-        setResult['notCreated'] as Map<String, dynamic>?;
+    final notCreated = setResult['notCreated'] as Map<String, dynamic>?;
     if (notCreated != null && notCreated.containsKey('em1')) {
       final err = notCreated['em1'] as Map<String, dynamic>;
       throw JmapException('Email/set create failed: ${err['type']}');
@@ -1313,8 +1447,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // Check EmailSubmission/set for submission errors.
     final subResult = _responseArgs(responses, 1, 'EmailSubmission/set');
-    final notSubmitted =
-        subResult['notCreated'] as Map<String, dynamic>?;
+    final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
     if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
       final err = notSubmitted['sub1'] as Map<String, dynamic>;
       throw JmapException('EmailSubmission/set failed: ${err['type']}');
@@ -1352,7 +1485,8 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(
@@ -1382,7 +1516,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    final client = await _imapConnect(account, _effectiveUsername(account), password);
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(mailboxPath);
       final escaped = query.replaceAll('"', '\\"');
@@ -1392,7 +1527,7 @@ class EmailRepositoryImpl implements EmailRepository {
       final uids = result.matchingSequence?.toList() ?? [];
       if (uids.isEmpty) return [];
 
-      final fetch = await client.fetchMessages(
+      final fetch = await client.uidFetchMessages(
         imap.MessageSequence.fromIds(uids, isUid: true),
         '(UID FLAGS ENVELOPE)',
       );
@@ -1496,15 +1631,17 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Failed mutations (offline compose queue) ─────────────────────────────
 
   @override
-  Stream<List<model.FailedMutation>> observeFailedMutations(
-      String accountId) {
+  Stream<List<model.FailedMutation>> observeFailedMutations(String accountId) {
     return (_db.select(_db.pendingChanges)
-          ..where((t) =>
-              t.accountId.equals(accountId) & t.lastError.isNotNull())
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.lastError.isNotNull(),
+          )
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .watch()
-        .map((rows) => rows
-            .map((r) => model.FailedMutation(
+        .map(
+          (rows) => rows
+              .map(
+                (r) => model.FailedMutation(
                   id: r.id,
                   accountId: r.accountId,
                   changeType: r.changeType,
@@ -1512,8 +1649,10 @@ class EmailRepositoryImpl implements EmailRepository {
                   lastError: r.lastError!,
                   attempts: r.attempts,
                   createdAt: r.createdAt,
-                ))
-            .toList());
+                ),
+              )
+              .toList(),
+        );
   }
 
   @override
@@ -1523,10 +1662,11 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<void> retryMutation(int id) async {
-    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id)))
-        .write(const PendingChangesCompanion(
-      attempts: Value(0),
-      lastError: Value(null),
-    ));
+    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id))).write(
+      const PendingChangesCompanion(
+        attempts: Value(0),
+        lastError: Value(null),
+      ),
+    );
   }
 }

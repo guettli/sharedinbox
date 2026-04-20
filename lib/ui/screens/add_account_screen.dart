@@ -73,8 +73,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           .discover(_emailCtrl.text.trim());
       if (!mounted) return;
       switch (result) {
-        case JmapDiscovery(:final apiUrl):
-          _jmapApiUrlCtrl.text = apiUrl;
+        case JmapDiscovery(:final sessionUrl):
+          _jmapApiUrlCtrl.text = sessionUrl;
           setState(() => _step = _Step.jmapForm);
         case ImapSmtpDiscovery(
             :final imapHost,
@@ -119,7 +119,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       );
 
   Future<void> _tryConnection(
-      GlobalKey<FormState> formKey, Account Function() buildAccount) async {
+    GlobalKey<FormState> formKey,
+    Account Function() buildAccount,
+  ) async {
     if (!formKey.currentState!.validate()) return;
     setState(() {
       _tryTesting = true;
@@ -224,8 +226,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       appBar: AppBar(title: const Text('Add account')),
       body: switch (_step) {
         _Step.email => _buildEmailStep(),
-        _Step.detecting =>
-          _buildSpinner('Detecting account settings\u2026'),
+        _Step.detecting => _buildSpinner('Detecting account settings\u2026'),
         _Step.chooseType => _buildChooseTypeStep(),
         _Step.jmapForm => _buildJmapForm(),
         _Step.imapForm => _buildImapForm(),
@@ -332,10 +333,16 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _emailHeader('JMAP'),
             if (_errorMessage != null) _errorBanner(),
             _field(_displayNameCtrl, 'Display name'),
-            _field(_jmapApiUrlCtrl, 'JMAP API URL',
-                keyboardType: TextInputType.url),
-            _field(_usernameCtrl, 'Username (leave blank to use email)',
-                required: false),
+            _field(
+              _jmapApiUrlCtrl,
+              'JMAP API URL',
+              keyboardType: TextInputType.url,
+            ),
+            _field(
+              _usernameCtrl,
+              'Username (leave blank to use email)',
+              required: false,
+            ),
             _field(_passwordCtrl, 'Password', obscure: true),
             _tryResultBanner(),
             const SizedBox(height: 12),
@@ -374,19 +381,23 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _emailHeader('IMAP / SMTP'),
             if (_errorMessage != null) _errorBanner(),
             _field(_displayNameCtrl, 'Display name'),
-            _field(_usernameCtrl, 'Username (leave blank to use email)',
-                required: false),
+            _field(
+              _usernameCtrl,
+              'Username (leave blank to use email)',
+              required: false,
+            ),
             _field(_passwordCtrl, 'Password', obscure: true),
             const Divider(height: 32),
-            Text('IMAP (SSL/TLS)', style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              'IMAP (SSL/TLS)',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             _field(_imapHostCtrl, 'Host'),
-            _field(_imapPortCtrl, 'Port',
-                keyboardType: TextInputType.number),
+            _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host'),
-            _field(_smtpPortCtrl, 'Port',
-                keyboardType: TextInputType.number),
+            _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
             SwitchListTile(
               title: const Text('SSL/TLS'),
               value: _smtpSsl,

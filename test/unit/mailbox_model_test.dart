@@ -1,8 +1,7 @@
-import 'package:test/test.dart';
-
 import 'package:sharedinbox/core/models/mailbox.dart';
 // Import the abstract interface so it appears in coverage.
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart'; // ignore: unused_import
+import 'package:test/test.dart';
 
 void main() {
   group('Mailbox', () {

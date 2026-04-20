@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -38,7 +40,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       }
       return (email, results[1] as EmailBody);
     });
-    repo.setFlag(widget.emailId, seen: true);
+    unawaited(repo.setFlag(widget.emailId, seen: true));
   }
 
   @override
@@ -86,7 +88,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               IconButton(
                 icon: const Icon(Icons.drive_file_move_outline),
                 tooltip: 'Move to folder',
-                onPressed: header == null ? null : () => _moveTo(context, header),
+                onPressed:
+                    header == null ? null : () => _moveTo(context, header),
               ),
               IconButton(
                 icon: const Icon(Icons.delete),
@@ -202,12 +205,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
     final cc = replyAll ? header.to.map((a) => a.email).join(', ') : '';
-    context.push('/compose', extra: {
-      'replyToEmailId': widget.emailId,
-      'prefillTo': to,
-      'prefillSubject': subject,
-      if (cc.isNotEmpty) 'prefillCc': cc,
-    });
+    unawaited(
+      context.push(
+        '/compose',
+        extra: {
+          'replyToEmailId': widget.emailId,
+          'prefillTo': to,
+          'prefillSubject': subject,
+          if (cc.isNotEmpty) 'prefillCc': cc,
+        },
+      ),
+    );
   }
 
   Future<void> _moveTo(BuildContext context, Email header) async {
@@ -216,9 +224,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         await mailboxRepo.observeMailboxes(header.accountId).first;
 
     // Remove the current mailbox from the list.
-    final destinations = mailboxes
-        .where((m) => m.path != header.mailboxPath)
-        .toList();
+    final destinations =
+        mailboxes.where((m) => m.path != header.mailboxPath).toList();
 
     if (!context.mounted) return;
 

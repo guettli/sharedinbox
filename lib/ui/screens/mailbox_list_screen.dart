@@ -91,15 +91,18 @@ class _FailedMutationBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
           children: [
-            Icon(Icons.warning_amber,
-                color: Theme.of(context).colorScheme.onErrorContainer,
-                size: 20),
+            Icon(
+              Icons.warning_amber,
+              color: Theme.of(context).colorScheme.onErrorContainer,
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 _label(mutations.first),
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer),
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
               ),
             ),
             TextButton(
@@ -111,7 +114,8 @@ class _FailedMutationBanner extends StatelessWidget {
               child: Text(
                 'Retry',
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer),
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
               ),
             ),
             TextButton(
@@ -123,7 +127,8 @@ class _FailedMutationBanner extends StatelessWidget {
               child: Text(
                 'Discard',
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer),
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
               ),
             ),
           ],

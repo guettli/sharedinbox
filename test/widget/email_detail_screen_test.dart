@@ -13,17 +13,18 @@ void main() {
     testWidgets('shows loading spinner before data arrives', (tester) async {
       // Use a Completer-backed repo so data never arrives during this test.
       final neverRepo = _NeverEmailRepository();
-      await tester.pumpWidget(buildApp(
-        initialLocation:
-            '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider.overrideWithValue(neverRepo),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(neverRepo),
+          ],
+        ),
+      );
       // One pump to build the widget tree; future not resolved yet.
       await tester.pump();
 
@@ -37,19 +38,20 @@ void main() {
         textBody: 'See attached slides.',
         attachments: [],
       );
-      await tester.pumpWidget(buildApp(
-        initialLocation:
-            '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider.overrideWithValue(
-            FakeEmailRepository(emailDetail: email, emailBody: body),
-          ),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emailDetail: email, emailBody: body),
+            ),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       // Subject appears in both the app bar and the email header section.
@@ -61,19 +63,20 @@ void main() {
       final email = testEmail();
       const body =
           EmailBody(emailId: 'acc-1:42', textBody: 'Hi', attachments: []);
-      await tester.pumpWidget(buildApp(
-        initialLocation:
-            '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider.overrideWithValue(
-            FakeEmailRepository(emailDetail: email, emailBody: body),
-          ),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emailDetail: email, emailBody: body),
+            ),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.textContaining('bob@example.com'), findsOneWidget);
@@ -93,19 +96,20 @@ void main() {
           ),
         ],
       );
-      await tester.pumpWidget(buildApp(
-        initialLocation:
-            '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider.overrideWithValue(
-            FakeEmailRepository(emailDetail: email, emailBody: body),
-          ),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emailDetail: email, emailBody: body),
+            ),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Attachments'), findsOneWidget);

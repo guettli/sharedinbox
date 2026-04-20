@@ -63,12 +63,18 @@ http.Client _mockJmap({required List<Map<String, dynamic>> apiResponses}) {
   });
 }
 
-Map<String, dynamic> _mailboxGetResponse(
-    {required String state, required List<Map<String, dynamic>> list}) =>
+Map<String, dynamic> _mailboxGetResponse({
+  required String state,
+  required List<Map<String, dynamic>> list,
+}) =>
     {
       'sessionState': 'sess1',
       'methodResponses': [
-        ['Mailbox/get', {'accountId': 'acct1', 'state': state, 'list': list}, '0'],
+        [
+          'Mailbox/get',
+          {'accountId': 'acct1', 'state': state, 'list': list},
+          '0',
+        ],
       ],
     };
 
@@ -167,7 +173,10 @@ void main() {
       }
 
       final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
-      expect(mailboxes.map((m) => m.path).toList(), ['Drafts', 'INBOX', 'Sent']);
+      expect(
+        mailboxes.map((m) => m.path).toList(),
+        ['Drafts', 'INBOX', 'Sent'],
+      );
     });
 
     test('observeMailboxes only returns mailboxes for the given account',
@@ -255,8 +264,7 @@ void main() {
 
       await r.mailboxes.syncMailboxes('acc-1');
 
-      final mailboxes =
-          await r.mailboxes.observeMailboxes('acc-1').first;
+      final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
       expect(mailboxes, hasLength(2));
       expect(mailboxes.map((m) => m.path).toSet(), {'INBOX', 'Sent'});
       // statusMailbox fake returns 3 unread / 10 total for all mailboxes
@@ -265,7 +273,8 @@ void main() {
       expect(r.fakeImap.logoutCalled, isTrue);
     });
 
-    test('syncMailboxes still stores mailbox when statusMailbox throws', () async {
+    test('syncMailboxes still stores mailbox when statusMailbox throws',
+        () async {
       final r = _makeReposWithFake();
       await r.accounts.addAccount(_account, 'pw');
       r.fakeImap.throwOnStatus = true;
@@ -280,8 +289,7 @@ void main() {
 
       await r.mailboxes.syncMailboxes('acc-1');
 
-      final mailboxes =
-          await r.mailboxes.observeMailboxes('acc-1').first;
+      final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
       // Mailbox is stored even though STATUS failed; counts default to 0.
       expect(mailboxes, hasLength(1));
       expect(mailboxes.first.unreadCount, 0);
@@ -291,12 +299,27 @@ void main() {
     group('JMAP syncMailboxes', () {
       test('full sync: upserts all mailboxes and persists state', () async {
         final r = _makeRepos(
-          httpClient: _mockJmap(apiResponses: [
-            _mailboxGetResponse(state: 'st1', list: [
-              {'id': 'mbx1', 'name': 'Inbox', 'unreadEmails': 3, 'totalEmails': 10},
-              {'id': 'mbx2', 'name': 'Sent', 'unreadEmails': 0, 'totalEmails': 5},
-            ]),
-          ]),
+          httpClient: _mockJmap(
+            apiResponses: [
+              _mailboxGetResponse(
+                state: 'st1',
+                list: [
+                  {
+                    'id': 'mbx1',
+                    'name': 'Inbox',
+                    'unreadEmails': 3,
+                    'totalEmails': 10,
+                  },
+                  {
+                    'id': 'mbx2',
+                    'name': 'Sent',
+                    'unreadEmails': 0,
+                    'totalEmails': 5,
+                  },
+                ],
+              ),
+            ],
+          ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
         await r.mailboxes.syncMailboxes('jmap-1');
@@ -314,38 +337,66 @@ void main() {
 
       test('incremental sync: applies created, updated, destroyed', () async {
         final r = _makeRepos(
-          httpClient: _mockJmap(apiResponses: [
-            // First call: Mailbox/changes
-            _mailboxChangesResponse(
-              oldState: 'st1',
-              newState: 'st2',
-              created: ['mbx3'],
-              updated: ['mbx1'],
-              destroyed: ['mbx2'],
-            ),
-            // Second call: Mailbox/get for created + updated
-            _mailboxGetResponse(state: 'st2', list: [
-              {'id': 'mbx1', 'name': 'Inbox', 'unreadEmails': 1, 'totalEmails': 8},
-              {'id': 'mbx3', 'name': 'Archive', 'unreadEmails': 0, 'totalEmails': 2},
-            ]),
-          ]),
+          httpClient: _mockJmap(
+            apiResponses: [
+              // First call: Mailbox/changes
+              _mailboxChangesResponse(
+                oldState: 'st1',
+                newState: 'st2',
+                created: ['mbx3'],
+                updated: ['mbx1'],
+                destroyed: ['mbx2'],
+              ),
+              // Second call: Mailbox/get for created + updated
+              _mailboxGetResponse(
+                state: 'st2',
+                list: [
+                  {
+                    'id': 'mbx1',
+                    'name': 'Inbox',
+                    'unreadEmails': 1,
+                    'totalEmails': 8,
+                  },
+                  {
+                    'id': 'mbx3',
+                    'name': 'Archive',
+                    'unreadEmails': 0,
+                    'totalEmails': 2,
+                  },
+                ],
+              ),
+            ],
+          ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
 
         // Pre-populate DB with existing mailboxes and state
         await r.db.into(r.db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
-                id: 'jmap-1:mbx1', accountId: 'jmap-1', path: 'mbx1', name: 'Inbox',
-                unreadCount: const Value(5), totalCount: const Value(10),
-              ));
+                id: 'jmap-1:mbx1',
+                accountId: 'jmap-1',
+                path: 'mbx1',
+                name: 'Inbox',
+                unreadCount: const Value(5),
+                totalCount: const Value(10),
+              ),
+            );
         await r.db.into(r.db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
-                id: 'jmap-1:mbx2', accountId: 'jmap-1', path: 'mbx2', name: 'Sent'));
+                id: 'jmap-1:mbx2',
+                accountId: 'jmap-1',
+                path: 'mbx2',
+                name: 'Sent',
+              ),
+            );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
               SyncStatesCompanion.insert(
-                accountId: 'jmap-1', resourceType: 'Mailbox',
-                state: 'st1', syncedAt: DateTime.now(),
-              ));
+                accountId: 'jmap-1',
+                resourceType: 'Mailbox',
+                state: 'st1',
+                syncedAt: DateTime.now(),
+              ),
+            );
 
         await r.mailboxes.syncMailboxes('jmap-1');
 
@@ -359,16 +410,21 @@ void main() {
 
       test('incremental sync with no changes updates state only', () async {
         final r = _makeRepos(
-          httpClient: _mockJmap(apiResponses: [
-            _mailboxChangesResponse(oldState: 'st1', newState: 'st1'),
-          ]),
+          httpClient: _mockJmap(
+            apiResponses: [
+              _mailboxChangesResponse(oldState: 'st1', newState: 'st1'),
+            ],
+          ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
               SyncStatesCompanion.insert(
-                accountId: 'jmap-1', resourceType: 'Mailbox',
-                state: 'st1', syncedAt: DateTime.now(),
-              ));
+                accountId: 'jmap-1',
+                resourceType: 'Mailbox',
+                state: 'st1',
+                syncedAt: DateTime.now(),
+              ),
+            );
 
         await r.mailboxes.syncMailboxes('jmap-1');
 

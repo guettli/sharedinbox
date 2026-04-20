@@ -1,11 +1,8 @@
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:test/test.dart';
-
 import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
-
-const _jmapJson = '{"apiUrl":"https://mail.example.com/jmap/api/"}';
+import 'package:test/test.dart';
 
 const _autoconfigXml = '''<?xml version="1.0"?>
 <clientConfig>
@@ -26,8 +23,7 @@ const _autoconfigXml = '''<?xml version="1.0"?>
 http.Client _clientFor(Map<String, http.Response> responses) {
   return MockClient((request) async {
     final key = request.url.toString();
-    return responses[key] ??
-        http.Response('Not found', 404);
+    return responses[key] ?? http.Response('Not found', 404);
   });
 }
 
@@ -42,21 +38,41 @@ void main() {
       expect(result, isA<UnknownDiscovery>());
     });
 
-    test('returns JmapDiscovery when well-known/jmap responds with apiUrl',
+    test(
+        'returns JmapDiscovery with session URL when well-known/jmap returns 200',
         () async {
       final svc = _service({
-        'https://example.com/.well-known/jmap':
-            http.Response(_jmapJson, 200),
+        'https://example.com/.well-known/jmap': http.Response('{}', 200),
       });
       final result = await svc.discover('user@example.com');
       expect(result, isA<JmapDiscovery>());
-      expect((result as JmapDiscovery).apiUrl,
-          'https://mail.example.com/jmap/api/');
+      expect(
+        (result as JmapDiscovery).sessionUrl,
+        'https://example.com/.well-known/jmap',
+      );
     });
 
-    test('returns UnknownDiscovery when JMAP response has no apiUrl', () async {
+    test(
+        'returns JmapDiscovery with redirect target when well-known/jmap returns 307',
+        () async {
       final svc = _service({
-        'https://example.com/.well-known/jmap': http.Response('{}', 200),
+        'https://example.com/.well-known/jmap': http.Response(
+          '',
+          307,
+          headers: {'location': '/jmap/session'},
+        ),
+      });
+      final result = await svc.discover('user@example.com');
+      expect(result, isA<JmapDiscovery>());
+      expect(
+        (result as JmapDiscovery).sessionUrl,
+        'https://example.com/jmap/session',
+      );
+    });
+
+    test('returns UnknownDiscovery when well-known/jmap returns 404', () async {
+      final svc = _service({
+        'https://example.com/.well-known/jmap': http.Response('', 404),
       });
       final result = await svc.discover('user@example.com');
       expect(result, isA<UnknownDiscovery>());
@@ -90,8 +106,7 @@ void main() {
 
     test('prefers JMAP over IMAP when both respond', () async {
       final svc = _service({
-        'https://example.com/.well-known/jmap':
-            http.Response(_jmapJson, 200),
+        'https://example.com/.well-known/jmap': http.Response('{}', 200),
         'https://autoconfig.example.com/mail/config-v1.1.xml':
             http.Response(_autoconfigXml, 200),
       });

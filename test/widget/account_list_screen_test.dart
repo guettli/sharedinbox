@@ -8,7 +8,8 @@ void main() {
     testWidgets('shows "No accounts yet." when repository is empty',
         (tester) async {
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('No accounts yet.'), findsOneWidget);
@@ -17,10 +18,12 @@ void main() {
 
     testWidgets('shows account tile when repository has an account',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Alice'), findsOneWidget);
@@ -29,10 +32,12 @@ void main() {
     });
 
     testWidgets('shows IMAP type label for IMAP account', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('IMAP'), findsOneWidget);
@@ -40,10 +45,12 @@ void main() {
 
     testWidgets('shows check icon after successful connection test',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
 
       // Before settling: connection test is in-flight → spinner visible.
       await tester.pump();
@@ -55,13 +62,15 @@ void main() {
     });
 
     testWidgets('shows error icon when connection test fails', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts',
-        overrides: baseOverrides(
-          accounts: [kTestAccount],
-          connectionError: Exception('auth failed'),
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            connectionError: Exception('auth failed'),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.error_outline), findsOneWidget);
@@ -69,16 +78,17 @@ void main() {
 
     testWidgets('app bar shows "SharedInbox" title', (tester) async {
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('SharedInbox'), findsOneWidget);
     });
 
-    testWidgets('tapping settings icon navigates to /settings',
-        (tester) async {
+    testWidgets('tapping settings icon navigates to /settings', (tester) async {
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.settings));
@@ -91,7 +101,8 @@ void main() {
         '"Add account" button in empty state navigates to add-account screen',
         (tester) async {
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Add account'));
@@ -102,13 +113,15 @@ void main() {
 
     testWidgets('tapping an account tile navigates to its mailboxes',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts',
-        overrides: baseOverrides(
-          accounts: [kTestAccount],
-          mailboxes: [kTestMailbox],
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            mailboxes: [kTestMailbox],
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Alice'));
@@ -119,7 +132,8 @@ void main() {
 
     testWidgets('tapping FAB navigates to add-account screen', (tester) async {
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byType(FloatingActionButton));
@@ -136,7 +150,8 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       await tester.pumpWidget(
-          buildApp(initialLocation: '/accounts', overrides: baseOverrides()));
+        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+      );
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);

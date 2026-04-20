@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:http/http.dart' as http;
 
 import '../models/discovery_result.dart';
@@ -31,13 +29,22 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
   Future<JmapDiscovery?> _tryJmap(String domain) async {
     try {
       final url = Uri.https(domain, '/.well-known/jmap');
-      final resp =
-          await _client.get(url).timeout(const Duration(seconds: 5));
-      if (resp.statusCode != 200) return null;
-      final json = jsonDecode(resp.body) as Map<String, dynamic>;
-      final apiUrl = json['apiUrl'] as String?;
-      if (apiUrl == null || apiUrl.isEmpty) return null;
-      return JmapDiscovery(apiUrl: apiUrl);
+      final request = http.Request('GET', url)..followRedirects = false;
+      final streamed =
+          await _client.send(request).timeout(const Duration(seconds: 5));
+
+      String sessionUrl;
+      if (streamed.statusCode >= 300 && streamed.statusCode < 400) {
+        final location = streamed.headers['location'];
+        if (location == null) return null;
+        sessionUrl = url.resolve(location).toString();
+      } else if (streamed.statusCode == 200) {
+        sessionUrl = url.toString();
+      } else {
+        return null;
+      }
+
+      return JmapDiscovery(sessionUrl: sessionUrl);
     } catch (_) {
       return null;
     }
@@ -50,8 +57,7 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
     ];
     for (final url in urls) {
       try {
-        final resp =
-            await _client.get(url).timeout(const Duration(seconds: 5));
+        final resp = await _client.get(url).timeout(const Duration(seconds: 5));
         if (resp.statusCode != 200) continue;
         final result = _parseAutoconfig(resp.body);
         if (result != null) return result;

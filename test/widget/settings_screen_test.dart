@@ -8,34 +8,36 @@ import 'helpers.dart';
 void main() {
   group('SettingsScreen', () {
     testWidgets('shows "Accounts" section header', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/settings',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository()),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/settings',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository()),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Accounts'), findsOneWidget);
     });
 
     testWidgets('shows account tile when an account exists', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/settings',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/settings',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Alice'), findsOneWidget);
@@ -44,17 +46,18 @@ void main() {
 
     testWidgets('tapping delete icon shows confirmation dialog',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/settings',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/settings',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.delete));
@@ -67,17 +70,18 @@ void main() {
 
     testWidgets('tapping Remove in the confirmation dialog calls removeAccount',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/settings',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/settings',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.delete));
@@ -91,17 +95,18 @@ void main() {
 
     testWidgets('tapping Cancel in the confirmation dialog dismisses it',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/settings',
-        overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(FakeAccountRepository([kTestAccount])),
-          mailboxRepositoryProvider
-              .overrideWithValue(FakeMailboxRepository()),
-          emailRepositoryProvider
-              .overrideWithValue(FakeEmailRepository()),
-        ],
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/settings',
+          overrides: [
+            accountRepositoryProvider
+                .overrideWithValue(FakeAccountRepository([kTestAccount])),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+          ],
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.delete));

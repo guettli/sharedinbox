@@ -7,10 +7,12 @@ void main() {
   group('EditAccountScreen', () {
     testWidgets('shows account email and type label after loading',
         (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('alice@example.com'), findsOneWidget);
@@ -19,20 +21,24 @@ void main() {
     });
 
     testWidgets('pre-fills display name field', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.widgetWithText(TextFormField, 'Alice'), findsOneWidget);
     });
 
     testWidgets('shows Save button', (tester) async {
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Save'), findsOneWidget);
@@ -44,10 +50,12 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Save'));
@@ -57,19 +65,25 @@ void main() {
       expect(find.text('No accounts yet.'), findsNothing);
     });
 
-    testWidgets('saving with new password runs connection test', (tester) async {
+    testWidgets('saving with new password runs connection test',
+        (tester) async {
       tester.view.physicalSize = const Size(800, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(accounts: [kTestAccount]),
-      ));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('editPasswordField')), 'newsecret');
+      await tester.enterText(
+        find.byKey(const Key('editPasswordField')),
+        'newsecret',
+      );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
@@ -83,16 +97,21 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(buildApp(
-        initialLocation: '/accounts/acc-1/edit',
-        overrides: baseOverrides(
-          accounts: [kTestAccount],
-          connectionError: Exception('auth failed'),
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            connectionError: Exception('auth failed'),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('editPasswordField')), 'wrongpassword');
+      await tester.enterText(
+        find.byKey(const Key('editPasswordField')),
+        'wrongpassword',
+      );
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 

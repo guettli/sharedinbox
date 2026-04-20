@@ -1,8 +1,8 @@
 sealed class DiscoveryResult {}
 
 final class JmapDiscovery extends DiscoveryResult {
-  final String apiUrl;
-  JmapDiscovery({required this.apiUrl});
+  final String sessionUrl;
+  JmapDiscovery({required this.sessionUrl});
 }
 
 final class ImapSmtpDiscovery extends DiscoveryResult {

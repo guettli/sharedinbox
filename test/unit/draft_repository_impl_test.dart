@@ -76,7 +76,8 @@ void main() {
       expect(found?.subjectText, 'Newer');
     });
 
-    test('findDraft with null replyToEmailId finds new-message drafts', () async {
+    test('findDraft with null replyToEmailId finds new-message drafts',
+        () async {
       final repo = DraftRepositoryImpl(openTestDatabase());
       // This draft is a reply and should NOT be returned.
       await repo.saveDraft(

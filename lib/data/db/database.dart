@@ -20,8 +20,7 @@ class Accounts extends Table {
   IntColumn get smtpPort => integer()();
   BoolColumn get smtpSsl => boolean()();
   // Added in schema v2:
-  TextColumn get accountType =>
-      text().withDefault(const Constant('imap'))();
+  TextColumn get accountType => text().withDefault(const Constant('imap'))();
   TextColumn get jmapUrl => text().nullable()();
   // Added in schema v3:
   TextColumn get username => text().withDefault(const Constant(''))();
@@ -75,8 +74,7 @@ class EmailBodies extends Table {
   TextColumn get textBody => text().nullable()();
   TextColumn get htmlBody => text().nullable()();
   // JSON-encoded List<{filename,contentType,size}>
-  TextColumn get attachmentsJson =>
-      text().withDefault(const Constant('[]'))();
+  TextColumn get attachmentsJson => text().withDefault(const Constant('[]'))();
   // Added in schema v9: when the body was last fetched from the server.
   // Null for rows cached before this column was added (treated as expired).
   DateTimeColumn get cachedAt => dateTime().nullable()();
@@ -139,6 +137,7 @@ class SyncLogs extends Table {
 class Drafts extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get accountId => text().nullable()();
+
   /// Set for replies/reply-alls; null for new messages.
   TextColumn get replyToEmailId => text().nullable()();
   TextColumn get toText => text().withDefault(const Constant(''))();
@@ -150,7 +149,18 @@ class Drafts extends Table {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@DriftDatabase(tables: [Accounts, Mailboxes, Emails, EmailBodies, Drafts, SyncStates, PendingChanges, SyncLogs])
+@DriftDatabase(
+  tables: [
+    Accounts,
+    Mailboxes,
+    Emails,
+    EmailBodies,
+    Drafts,
+    SyncStates,
+    PendingChanges,
+    SyncLogs,
+  ],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 

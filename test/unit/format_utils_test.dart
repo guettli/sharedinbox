@@ -1,6 +1,5 @@
-import 'package:test/test.dart';
-
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:test/test.dart';
 
 void main() {
   group('fmtSize', () {

@@ -68,6 +68,13 @@ class JmapClient {
       throw JmapException('Session fetch failed (HTTP ${resp.statusCode})');
     }
 
+    final contentType = resp.headers['content-type'] ?? '';
+    if (contentType.isNotEmpty && !contentType.contains('json')) {
+      throw JmapException(
+        'Expected JSON session but got $contentType — is the JMAP URL correct? ($jmapUrl)',
+      );
+    }
+
     final session = jsonDecode(resp.body) as Map<String, dynamic>;
     final apiUrl = _extractApiUrl(session, jmapUrl);
     final accountId = _extractAccountId(session);
@@ -100,9 +107,8 @@ class JmapClient {
     List<List<dynamic>> methodCalls, {
     bool withSubmission = false,
   }) async {
-    final using = withSubmission
-        ? [..._coreUsing, _submissionCapability]
-        : _coreUsing;
+    final using =
+        withSubmission ? [..._coreUsing, _submissionCapability] : _coreUsing;
     final body = jsonEncode({
       'using': using,
       'methodCalls': methodCalls,
@@ -128,7 +134,8 @@ class JmapClient {
     // Top-level error (e.g. unknownCapability)
     if (decoded.containsKey('type')) {
       throw JmapException(
-          'JMAP error: ${decoded['type']} — ${decoded['description'] ?? ''}');
+        'JMAP error: ${decoded['type']} — ${decoded['description'] ?? ''}',
+      );
     }
 
     return decoded['methodResponses'] as List<dynamic>;
@@ -142,7 +149,8 @@ class JmapClient {
       throw JmapException('Server does not advertise an uploadUrl');
     }
     final url = Uri.parse(
-        _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)));
+      _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)),
+    );
     final resp = await _httpClient
         .post(
           url,
@@ -177,8 +185,7 @@ class JmapClient {
   }
 
   static String _extractAccountId(Map<String, dynamic> session) {
-    final primaryAccounts =
-        session['primaryAccounts'] as Map<String, dynamic>?;
+    final primaryAccounts = session['primaryAccounts'] as Map<String, dynamic>?;
     final id = primaryAccounts?['urn:ietf:params:jmap:mail'] as String? ??
         primaryAccounts?['urn:ietf:params:jmap:core'] as String?;
     if (id != null) return id;

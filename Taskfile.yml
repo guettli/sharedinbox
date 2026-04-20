@@ -53,6 +53,12 @@ tasks:
     cmds:
       - scripts/run_analyze.sh
 
+  format:
+    desc: Format all Dart source files
+    deps: [_nix-check]
+    cmds:
+      - fvm dart format .
+
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply
     deps: [_nix-check]

@@ -10,17 +10,19 @@ void main() {
   late final db = openTestDatabase();
 
   setUpAll(() async {
-    await db.into(db.accounts).insert(AccountsCompanion.insert(
-          id: 'acc1',
-          displayName: 'Test',
-          email: 'test@example.com',
-          imapHost: 'imap.example.com',
-          imapPort: 993,
-          imapSsl: true,
-          smtpHost: 'smtp.example.com',
-          smtpPort: 587,
-          smtpSsl: true,
-        ));
+    await db.into(db.accounts).insert(
+          AccountsCompanion.insert(
+            id: 'acc1',
+            displayName: 'Test',
+            email: 'test@example.com',
+            imapHost: 'imap.example.com',
+            imapPort: 993,
+            imapSsl: true,
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpSsl: true,
+          ),
+        );
   });
 
   tearDownAll(() => db.close());

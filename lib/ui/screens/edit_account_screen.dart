@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,7 +41,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load());
   }
 
   Future<void> _load() async {
@@ -101,7 +103,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     if (!_formKey.currentState!.validate()) return;
     final password = _passwordCtrl.text.isNotEmpty
         ? _passwordCtrl.text
-        : await ref.read(accountRepositoryProvider).getPassword(widget.accountId);
+        : await ref
+            .read(accountRepositoryProvider)
+            .getPassword(widget.accountId);
     setState(() {
       _tryTesting = true;
       _tryOk = null;
@@ -129,8 +133,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final password =
-        _passwordCtrl.text.isNotEmpty ? _passwordCtrl.text : null;
+    final password = _passwordCtrl.text.isNotEmpty ? _passwordCtrl.text : null;
 
     setState(() {
       _saving = true;
@@ -195,8 +198,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(account.email,
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(account.email, style: Theme.of(context).textTheme.titleMedium),
             Text(
               account.type == AccountType.jmap ? 'JMAP' : 'IMAP',
               style: Theme.of(context).textTheme.bodySmall,
@@ -207,33 +209,42 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
                   _errorMessage!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
             _field(_displayNameCtrl, 'Display name'),
-            _field(_usernameCtrl, 'Username (leave blank to use email)',
-                required: false),
-            _field(_passwordCtrl, 'New password (leave blank to keep)',
-                key: const Key('editPasswordField'),
-                obscure: true,
-                required: false),
+            _field(
+              _usernameCtrl,
+              'Username (leave blank to use email)',
+              required: false,
+            ),
+            _field(
+              _passwordCtrl,
+              'New password (leave blank to keep)',
+              key: const Key('editPasswordField'),
+              obscure: true,
+              required: false,
+            ),
             if (account.type == AccountType.jmap) ...[
               const Divider(height: 32),
-              _field(_jmapUrlCtrl, 'JMAP API URL',
-                  keyboardType: TextInputType.url),
+              _field(
+                _jmapUrlCtrl,
+                'JMAP API URL',
+                keyboardType: TextInputType.url,
+              ),
             ],
             if (account.type == AccountType.imap) ...[
               const Divider(height: 32),
-              Text('IMAP (SSL/TLS)', style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                'IMAP (SSL/TLS)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               _field(_imapHostCtrl, 'Host'),
-              _field(_imapPortCtrl, 'Port',
-                  keyboardType: TextInputType.number),
+              _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host'),
-              _field(_smtpPortCtrl, 'Port',
-                  keyboardType: TextInputType.number),
+              _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
               SwitchListTile(
                 title: const Text('SSL/TLS'),
                 value: _smtpSsl,
@@ -245,8 +256,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   _tryOk!,
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary),
+                  style:
+                      TextStyle(color: Theme.of(context).colorScheme.primary),
                 ),
               ),
             if (_tryErr != null)
@@ -254,8 +265,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   _tryErr!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
             const SizedBox(height: 12),

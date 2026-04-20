@@ -143,8 +143,7 @@ class FakeEmailRepository implements EmailRepository {
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
-        _emailBody =
-            emailBody ?? const EmailBody(emailId: '', attachments: []);
+        _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
 
   @override
   Stream<List<Email>> observeEmails(String accountId, String mailboxPath) =>
@@ -176,7 +175,9 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<String> downloadAttachment(
-          String emailId, EmailAttachment attachment) async =>
+    String emailId,
+    EmailAttachment attachment,
+  ) async =>
       '/tmp/${attachment.filename}';
 
   @override
@@ -325,7 +326,8 @@ List<Override> baseOverrides({
     [
       accountRepositoryProvider
           .overrideWithValue(FakeAccountRepository(accounts)),
-      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository(mailboxes)),
+      mailboxRepositoryProvider
+          .overrideWithValue(FakeMailboxRepository(mailboxes)),
       emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
       draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
       accountDiscoveryServiceProvider.overrideWithValue(

@@ -9,6 +9,7 @@ class FakeImapClient extends imap.ImapClient {
   List<imap.MimeMessage> uidFetchResults = [];
   List<imap.Mailbox> listMailboxesResult = [];
   List<int> searchUids = [];
+
   /// If set, each [uidSearchMessages] call pops the first element.
   /// Falls back to [searchUids] when the queue is empty or null.
   List<List<int>>? searchCallQueue;
@@ -177,8 +178,7 @@ class FakeImapClient extends imap.ImapClient {
         : searchUids;
     final result = imap.SearchImapResult();
     if (uids.isNotEmpty) {
-      result.matchingSequence =
-          imap.MessageSequence.fromIds(uids, isUid: true);
+      result.matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
     }
     return result;
   }

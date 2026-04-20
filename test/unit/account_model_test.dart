@@ -1,8 +1,7 @@
-import 'package:test/test.dart';
-
 import 'package:sharedinbox/core/models/account.dart';
 // Import the abstract interface so it appears in coverage.
 import 'package:sharedinbox/core/repositories/account_repository.dart'; // ignore: unused_import
+import 'package:test/test.dart';
 
 void main() {
   group('Account', () {

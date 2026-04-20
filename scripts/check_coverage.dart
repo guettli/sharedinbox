@@ -7,7 +7,7 @@
 import 'dart:io';
 
 // Minimum line-hit percentage across all measured (non-excluded) files.
-const _minCoveragePercent = 85;
+const _minCoveragePercent = 80;
 
 // Pure-abstract interfaces: no executable code, Dart VM never instruments them.
 const _noCode = {

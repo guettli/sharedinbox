@@ -168,7 +168,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ),
           title: Text(
             sender,
-            style: e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
+            style:
+                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
           ),
           subtitle: Text(
             e.subject ?? '(no subject)',
@@ -180,8 +181,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             children: [
               if (e.isFlagged)
                 const Icon(Icons.star, color: Colors.amber, size: 16),
-              if (e.hasAttachment)
-                const Icon(Icons.attach_file, size: 16),
+              if (e.hasAttachment) const Icon(Icons.attach_file, size: 16),
               const SizedBox(width: 4),
               Text(
                 e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
