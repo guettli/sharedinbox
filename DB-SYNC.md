@@ -31,6 +31,13 @@ This document covers the mail-to-database sync layer only, not the UI.
   a separate on-demand fetch.
 - `flushPendingChanges` passes `ifInState` to every `Email/set`; a `stateMismatch`
   response clears the local checkpoint and triggers a full re-sync before retrying.
+- **JMAP send**: outgoing mail uses `EmailSubmission/set` when the server advertises
+  the submission capability; falls back to SMTP otherwise.
+- **JMAP push**: `_JmapAccountSync._wait()` subscribes to the server's SSE
+  `eventSourceUrl` via `watchJmapPush`; falls back to 30 s polling when push
+  is unavailable or the server does not advertise the URL.
+- `notUpdated`/`notDestroyed` per-item errors from `Email/set` are treated as
+  permanent failures and discarded immediately (no retry).
 
 ### IMAP
 
@@ -53,26 +60,26 @@ This document covers the mail-to-database sync layer only, not the UI.
 
 - `sync_log` table records each sync cycle's account, result (ok / error), error
   message, start time, and finish time. Used for debugging and "last synced" UI.
-
----
-
-## Next steps
-
-### JMAP hardening
-
-- **JMAP send**: implement outgoing mail via `EmailSubmission/set` in addition to the
-  current SMTP path.
-- **Push instead of polling**: upgrade `_JmapAccountSync._wait()` to use an
-  `EventSource` connection to the JMAP push URL when the server advertises push
-  capability. Fall back to 30 s polling when push is unavailable.
-
-### Shared / cross-protocol
-
-- Conflict-resolution policy: **server-wins**. The next sync cycle always
+- **Conflict-resolution policy: server-wins.** The next sync cycle always
   overwrites local state with server values. Outbound mutations in
   `pending_changes` are retried up to 5 times before being evicted, preventing
   unbounded queue growth. Permanent per-item JMAP errors (`notFound`,
   `forbidden`) are discarded immediately; transient errors (network, 500)
   are retried up to the limit.
-- `ifInState` guard on every JMAP `Email/set` call; `notUpdated`/`notDestroyed`
-  per-item errors are detected and treated as permanent failures.
+- Integration test (`test/integration/concurrent_sync_test.dart`) concurrently
+  syncs an IMAP account (alice) and a JMAP account (bob) against a real Stalwart
+  server and verifies the Drift DB cache is consistent (no duplicates, correct
+  counts, no pending changes).
+
+---
+
+## Next steps
+
+All planned sync-layer features are implemented. Possible future work:
+
+- **IMAP CONDSTORE / QRESYNC**: use `MODSEQ` for faster incremental sync on
+  servers that support RFC 7162.
+- **JMAP blob expiry**: detect and re-fetch body blobs that the server has
+  purged (currently the cache is assumed permanent).
+- **Offline compose queue**: surface `pending_changes` failures in the UI so
+  the user can retry or discard stuck outbound mutations.
