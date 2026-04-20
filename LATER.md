@@ -1,6 +1,10 @@
 # Later
 
-Push to guettli@thomas-guettler via ssh+git
+LINTING.md
+
+---
+
+Sieve: JMAP, easy. Per IMAP...
 
 ---
 

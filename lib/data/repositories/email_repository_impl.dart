@@ -74,12 +74,20 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Body (on-demand) ───────────────────────────────────────────────────────
 
+  static const _bodyCacheTtl = Duration(days: 7);
+
   @override
   Future<model.EmailBody> getEmailBody(String emailId) async {
     final cached = await (_db.select(_db.emailBodies)
           ..where((t) => t.emailId.equals(emailId)))
         .getSingleOrNull();
-    if (cached != null) return _bodyRowToModel(cached);
+    if (cached != null) {
+      // Re-fetch if cachedAt is null (legacy row) or older than the TTL.
+      final age = cached.cachedAt == null
+          ? _bodyCacheTtl + const Duration(seconds: 1)
+          : DateTime.now().difference(cached.cachedAt!);
+      if (age <= _bodyCacheTtl) return _bodyRowToModel(cached);
+    }
 
     final emailRow = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
@@ -120,6 +128,7 @@ class EmailRepositoryImpl implements EmailRepository {
               textBody: Value(textBody),
               htmlBody: Value(htmlBody),
               attachmentsJson: Value(attachmentsJson),
+              cachedAt: Value(DateTime.now()),
             ),
           );
       return model.EmailBody(
@@ -182,6 +191,7 @@ class EmailRepositoryImpl implements EmailRepository {
             textBody: Value(textBody),
             htmlBody: Value(htmlBody),
             attachmentsJson: Value(attachmentsJson),
+            cachedAt: Value(DateTime.now()),
           ),
         );
 
@@ -215,8 +225,12 @@ class EmailRepositoryImpl implements EmailRepository {
     final client =
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
-      final selectedMailbox = await client.selectMailboxByPath(mailboxPath);
+      // Enable CONDSTORE so the server returns HIGHESTMODSEQ in SELECT and
+      // honours CHANGEDSINCE modifiers on FETCH (RFC 7162).
+      final selectedMailbox = await client.selectMailboxByPath(
+          mailboxPath, enableCondStore: true);
       final uidValidity = selectedMailbox.uidValidity ?? 0;
+      final serverModSeq = selectedMailbox.highestModSequence;
       final resourceType = 'IMAP:$mailboxPath';
       final checkpoint = await _loadImapCheckpoint(account.id, resourceType);
 
@@ -234,19 +248,38 @@ class EmailRepositoryImpl implements EmailRepository {
             client, account, mailboxPath, imap.MessageSequence.fromAll());
         final maxUid = await _maxLocalUid(account.id, mailboxPath);
         await _saveImapCheckpoint(
-            account.id, resourceType, uidValidity, maxUid);
+            account.id, resourceType, uidValidity, maxUid,
+            highestModSeq: serverModSeq);
       } else {
         // Incremental sync.
         final lastUid = checkpoint['lastUid'] as int;
+        final storedModSeq = checkpoint['highestModSeq'] as int?;
+
+        // CONDSTORE fast-path: nothing has changed on the server.
+        if (serverModSeq != null &&
+            storedModSeq != null &&
+            serverModSeq == storedModSeq) {
+          return;
+        }
+
+        // Fetch new messages.
         final newUids =
-            (await client.uidSearchMessages(searchCriteria: 'UID ${lastUid + 1}:*'))
-                    .matchingSequence
-                    ?.toList() ??
-                [];
+            (await client.uidSearchMessages(
+                    searchCriteria: 'UID ${lastUid + 1}:*'))
+                .matchingSequence
+                ?.toList() ??
+            [];
         if (newUids.isNotEmpty) {
           await _fetchAndUpsertImap(client, account, mailboxPath,
               imap.MessageSequence.fromIds(newUids, isUid: true));
         }
+
+        // CONDSTORE flag update: refresh flags only for messages that changed.
+        if (serverModSeq != null && storedModSeq != null) {
+          await _refreshFlagsImap(
+              client, account, mailboxPath, storedModSeq);
+        }
+
         // Detect remote deletions.
         final serverUids =
             (await client.uidSearchMessages(searchCriteria: 'ALL'))
@@ -257,10 +290,37 @@ class EmailRepositoryImpl implements EmailRepository {
         final maxUid =
             serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
         await _saveImapCheckpoint(
-            account.id, resourceType, uidValidity, maxUid);
+            account.id, resourceType, uidValidity, maxUid,
+            highestModSeq: serverModSeq);
       }
     } finally {
       await client.logout();
+    }
+  }
+
+  /// Fetches FLAGS for all messages modified since [sinceModSeq] and updates
+  /// the local DB. Only messages whose modseq is > [sinceModSeq] are returned
+  /// by the server (RFC 7162 §3.2).
+  Future<void> _refreshFlagsImap(
+    imap.ImapClient client,
+    account_model.Account account,
+    String mailboxPath,
+    int sinceModSeq,
+  ) async {
+    final result = await client.uidFetchMessages(
+      imap.MessageSequence.fromAll(),
+      'FLAGS',
+      changedSinceModSequence: sinceModSeq,
+    );
+    for (final msg in result.messages) {
+      final uid = msg.uid;
+      if (uid == null) continue;
+      final emailId = '${account.id}:$uid';
+      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+          .write(EmailsCompanion(
+        isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
+        isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+      ));
     }
   }
 
@@ -315,10 +375,19 @@ class EmailRepositoryImpl implements EmailRepository {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  Future<void> _saveImapCheckpoint(String accountId, String resourceType,
-      int uidValidity, int lastUid) async {
-    await _saveSyncState(accountId, resourceType,
-        jsonEncode({'uidValidity': uidValidity, 'lastUid': lastUid}));
+  Future<void> _saveImapCheckpoint(
+    String accountId,
+    String resourceType,
+    int uidValidity,
+    int lastUid, {
+    int? highestModSeq,
+  }) async {
+    final data = <String, dynamic>{
+      'uidValidity': uidValidity,
+      'lastUid': lastUid,
+    };
+    if (highestModSeq != null) data['highestModSeq'] = highestModSeq;
+    await _saveSyncState(accountId, resourceType, jsonEncode(data));
   }
 
   Future<void> _reconcileDeletedImap(
@@ -516,6 +585,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 textBody: Value(textBody),
                 htmlBody: Value(htmlBody),
                 attachmentsJson: Value(attachmentsJson),
+                cachedAt: Value(DateTime.now()),
               ),
             );
       }
@@ -1421,5 +1491,42 @@ class EmailRepositoryImpl implements EmailRepository {
           ),
         )
         .toList();
+  }
+
+  // ── Failed mutations (offline compose queue) ─────────────────────────────
+
+  @override
+  Stream<List<model.FailedMutation>> observeFailedMutations(
+      String accountId) {
+    return (_db.select(_db.pendingChanges)
+          ..where((t) =>
+              t.accountId.equals(accountId) & t.lastError.isNotNull())
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows
+            .map((r) => model.FailedMutation(
+                  id: r.id,
+                  accountId: r.accountId,
+                  changeType: r.changeType,
+                  resourceId: r.resourceId,
+                  lastError: r.lastError!,
+                  attempts: r.attempts,
+                  createdAt: r.createdAt,
+                ))
+            .toList());
+  }
+
+  @override
+  Future<void> discardMutation(int id) async {
+    await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(id))).go();
+  }
+
+  @override
+  Future<void> retryMutation(int id) async {
+    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id)))
+        .write(const PendingChangesCompanion(
+      attempts: Value(0),
+      lastError: Value(null),
+    ));
   }
 }

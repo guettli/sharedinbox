@@ -31,6 +31,17 @@ abstract class EmailRepository {
   /// No-op for IMAP accounts (mutations are applied synchronously).
   Future<void> flushPendingChanges(String accountId, String password);
 
+  /// Emits the list of pending mutations that have failed at least once for
+  /// [accountId]. Updates live whenever the queue changes.
+  Stream<List<FailedMutation>> observeFailedMutations(String accountId);
+
+  /// Permanently removes the pending mutation with [id] from the queue.
+  Future<void> discardMutation(int id);
+
+  /// Resets the attempt counter for mutation [id] so the next sync cycle
+  /// retries it.
+  Future<void> retryMutation(int id);
+
   /// Returns a stream that emits once for each JMAP push event (RFC 8887
   /// `StateChange`) received from the server's EventSource URL.
   ///

@@ -104,6 +104,16 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Stream<void> watchJmapPush(String accountId, String password) =>
       const Stream.empty();
+
+  @override
+  Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
+      Stream.value([]);
+
+  @override
+  Future<void> discardMutation(int id) async {}
+
+  @override
+  Future<void> retryMutation(int id) async {}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

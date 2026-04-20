@@ -6,12 +6,14 @@ class FakeImapClient extends imap.ImapClient {
   FakeImapClient() : super();
 
   List<imap.MimeMessage> fetchResults = [];
+  List<imap.MimeMessage> uidFetchResults = [];
   List<imap.Mailbox> listMailboxesResult = [];
   List<int> searchUids = [];
   /// If set, each [uidSearchMessages] call pops the first element.
   /// Falls back to [searchUids] when the queue is empty or null.
   List<List<int>>? searchCallQueue;
   int uidValidityResult = 0;
+  int? highestModSequenceResult;
   bool logoutCalled = false;
   bool throwOnStatus = false;
   int markSeenCalls = 0;
@@ -24,6 +26,8 @@ class FakeImapClient extends imap.ImapClient {
   int appendCalls = 0;
   String? lastAppendMailboxPath;
   int createMailboxCalls = 0;
+  int uidFetchMessagesCalls = 0;
+  int? lastChangedSinceModSequence;
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(
@@ -37,7 +41,20 @@ class FakeImapClient extends imap.ImapClient {
         flags: [],
         pathSeparator: '/',
         uidValidity: uidValidityResult,
+        highestModSequence: highestModSequenceResult,
       );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    uidFetchMessagesCalls++;
+    lastChangedSinceModSequence = changedSinceModSequence;
+    return imap.FetchImapResult(List.of(uidFetchResults), null);
+  }
 
   @override
   Future<imap.FetchImapResult> fetchMessages(

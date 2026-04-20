@@ -77,6 +77,9 @@ class EmailBodies extends Table {
   // JSON-encoded List<{filename,contentType,size}>
   TextColumn get attachmentsJson =>
       text().withDefault(const Constant('[]'))();
+  // Added in schema v9: when the body was last fetched from the server.
+  // Null for rows cached before this column was added (treated as expired).
+  DateTimeColumn get cachedAt => dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {emailId};
@@ -152,7 +155,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -178,6 +181,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 8) {
             await m.addColumn(mailboxes, mailboxes.role);
+          }
+          if (from < 9) {
+            await m.addColumn(emailBodies, emailBodies.cachedAt);
           }
         },
       );

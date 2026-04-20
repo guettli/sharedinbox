@@ -318,6 +318,7 @@ void main() {
               emailId: 'acc-1:1',
               textBody: const Value('Hello'),
               htmlBody: const Value('<p>Hello</p>'),
+              cachedAt: Value(DateTime.now()),
             ),
           );
 
@@ -1795,6 +1796,264 @@ void main() {
 
       await sub.cancel();
       await sseController.close();
+    });
+  });
+
+  // ── CONDSTORE tests ──────────────────────────────────────────────────────────
+
+  group('CONDSTORE', () {
+    test('fast-path: skips search/fetch when modseq is unchanged', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 1000;
+      r.fakeImap.highestModSequenceResult = 42;
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode(
+                  {'uidValidity': 1000, 'lastUid': 5, 'highestModSeq': 42}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // No search or fetch calls because modseq is unchanged.
+      expect(r.fakeImap.uidFetchMessagesCalls, 0);
+      expect(r.fakeImap.logoutCalled, isTrue);
+    });
+
+    test('flag refresh: calls uidFetchMessages with changedSince when modseq changes',
+        () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      r.fakeImap.uidValidityResult = 1000;
+      r.fakeImap.highestModSequenceResult = 55; // server advanced from 42 → 55
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode(
+                  {'uidValidity': 1000, 'lastUid': 5, 'highestModSeq': 42}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+      // No new UIDs; server returns [5] for both UID search calls.
+      r.fakeImap.searchCallQueue = [[], [5]];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(r.fakeImap.uidFetchMessagesCalls, 1);
+      expect(r.fakeImap.lastChangedSinceModSequence, 42);
+
+      // Checkpoint updated with new modseq.
+      final state = jsonDecode(
+              (await r.db.select(r.db.syncStates).get()).first.state)
+          as Map<String, dynamic>;
+      expect(state['highestModSeq'], 55);
+    });
+
+    test('flag refresh: updates flags in local DB', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:5',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 5,
+            receivedAt: DateTime(2024),
+          ));
+      r.fakeImap.uidValidityResult = 1000;
+      r.fakeImap.highestModSequenceResult = 55;
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode(
+                  {'uidValidity': 1000, 'lastUid': 5, 'highestModSeq': 42}),
+              syncedAt: DateTime.now(),
+            ),
+          );
+      r.fakeImap.searchCallQueue = [[], [5]];
+      // Server says uid=5 is now \Seen.
+      r.fakeImap.uidFetchResults = [
+        buildEnvelopeMessage(uid: 5, flags: [r'\Seen']),
+      ];
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final email = await r.emails.getEmail('acc-1:5');
+      expect(email!.isSeen, isTrue);
+    });
+  });
+
+  // ── Blob expiry (TTL) tests ───────────────────────────────────────────────────
+
+  group('blob expiry', () {
+    test('returns cached body when cachedAt is recent', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:1',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2024),
+          ));
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('cached text'),
+              cachedAt: Value(DateTime.now()),
+            ),
+          );
+
+      final body = await r.emails.getEmailBody('acc-1:1');
+
+      expect(body.textBody, 'cached text');
+      expect(r.fakeImap.logoutCalled, isFalse);
+    });
+
+    test('re-fetches body when cachedAt is null (legacy row)', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:1',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2024),
+          ));
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('stale text'),
+              // cachedAt omitted → null
+            ),
+          );
+
+      final msg = imap.MimeMessage.parseFromText(
+        'Subject: Hi\r\nContent-Type: text/plain\r\n\r\nfresh from IMAP',
+      );
+      msg.uid = 1;
+      r.fakeImap.fetchResults = [msg];
+
+      final body = await r.emails.getEmailBody('acc-1:1');
+
+      expect(body.textBody, contains('fresh from IMAP'));
+      expect(r.fakeImap.logoutCalled, isTrue);
+    });
+
+    test('re-fetches body when cachedAt is older than 7 days', () async {
+      final r = _makeReposWithFakes();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(EmailsCompanion.insert(
+            id: 'acc-1:1',
+            accountId: 'acc-1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2024),
+          ));
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('old text'),
+              cachedAt: Value(DateTime.now().subtract(const Duration(days: 8))),
+            ),
+          );
+
+      final msg = imap.MimeMessage.parseFromText(
+        'Subject: Hi\r\nContent-Type: text/plain\r\n\r\nnew body',
+      );
+      msg.uid = 1;
+      r.fakeImap.fetchResults = [msg];
+
+      final body = await r.emails.getEmailBody('acc-1:1');
+
+      expect(body.textBody, contains('new body'));
+      expect(r.fakeImap.logoutCalled, isTrue);
+    });
+  });
+
+  // ── Failed mutations tests ────────────────────────────────────────────────────
+
+  group('failed mutations', () {
+    test('observeFailedMutations emits only rows with lastError set', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+            accountId: 'acc-1',
+            resourceType: 'email',
+            resourceId: 'acc-1:10',
+            changeType: 'flag_seen',
+            payload: '{"seen":true}',
+            createdAt: DateTime.now(),
+            attempts: const Value(1),
+            lastError: const Value('network error'),
+          ));
+      await r.db.into(r.db.pendingChanges).insert(PendingChangesCompanion.insert(
+            accountId: 'acc-1',
+            resourceType: 'email',
+            resourceId: 'acc-1:11',
+            changeType: 'move',
+            payload: '{"dest":"Archive"}',
+            createdAt: DateTime.now(),
+            // lastError not set → pending, not failed
+          ));
+
+      final mutations =
+          await r.emails.observeFailedMutations('acc-1').first;
+
+      expect(mutations, hasLength(1));
+      expect(mutations.first.resourceId, 'acc-1:10');
+      expect(mutations.first.changeType, 'flag_seen');
+      expect(mutations.first.lastError, 'network error');
+    });
+
+    test('discardMutation removes the row', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final rowId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'email',
+              resourceId: 'acc-1:10',
+              changeType: 'delete',
+              payload: '{}',
+              createdAt: DateTime.now(),
+              attempts: const Value(3),
+              lastError: const Value('timeout'),
+            ),
+          );
+
+      await r.emails.discardMutation(rowId);
+
+      final rows = await r.db.select(r.db.pendingChanges).get();
+      expect(rows, isEmpty);
+    });
+
+    test('retryMutation resets attempts and clears lastError', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final rowId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'email',
+              resourceId: 'acc-1:10',
+              changeType: 'move',
+              payload: '{"dest":"Trash"}',
+              createdAt: DateTime.now(),
+              attempts: const Value(5),
+              lastError: const Value('connection refused'),
+            ),
+          );
+
+      await r.emails.retryMutation(rowId);
+
+      final row = (await r.db.select(r.db.pendingChanges).get()).first;
+      expect(row.attempts, 0);
+      expect(row.lastError, isNull);
     });
   });
 }

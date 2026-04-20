@@ -74,6 +74,29 @@ class EmailAttachment {
   });
 }
 
+/// A pending local mutation (flag, move, delete) that has failed at least once
+/// and may be stuck in the outbound queue.
+class FailedMutation {
+  final int id;
+  final String accountId;
+  /// "flag_seen" | "flag_flagged" | "move" | "delete"
+  final String changeType;
+  final String resourceId;
+  final String lastError;
+  final int attempts;
+  final DateTime createdAt;
+
+  const FailedMutation({
+    required this.id,
+    required this.accountId,
+    required this.changeType,
+    required this.resourceId,
+    required this.lastError,
+    required this.attempts,
+    required this.createdAt,
+  });
+}
+
 /// Outgoing email — used for compose / reply.
 class EmailDraft {
   final EmailAddress from;
