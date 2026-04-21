@@ -27,7 +27,6 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
-import 'package:sharedinbox/ui/screens/settings_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Fake repositories
@@ -297,10 +296,6 @@ Widget buildApp({
             prefillBody: extra?['prefillBody'] as String?,
           );
         },
-      ),
-      GoRoute(
-        path: '/settings',
-        builder: (ctx, state) => const SettingsScreen(),
       ),
     ],
   );

@@ -85,18 +85,6 @@ void main() {
       expect(find.text('SharedInbox'), findsOneWidget);
     });
 
-    testWidgets('tapping settings icon navigates to /settings', (tester) async {
-      await tester.pumpWidget(
-        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Settings'), findsOneWidget);
-    });
-
     testWidgets(
         '"Add account" button in empty state navigates to add-account screen',
         (tester) async {

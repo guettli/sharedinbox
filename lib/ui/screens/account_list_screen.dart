@@ -11,15 +11,7 @@ class AccountListScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('SharedInbox'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('SharedInbox')),
       body: StreamBuilder(
         stream: ref.watch(accountRepositoryProvider).observeAccounts(),
         builder: (ctx, snap) {
@@ -105,6 +97,10 @@ class _AccountTile extends ConsumerWidget {
                 child: Text('All mailboxes'),
               ),
               PopupMenuItem(
+                value: _AccountAction.syncLog,
+                child: Text('Sync log'),
+              ),
+              PopupMenuItem(
                 value: _AccountAction.edit,
                 child: Text('Edit'),
               ),
@@ -127,6 +123,8 @@ class _AccountTile extends ConsumerWidget {
     switch (action) {
       case _AccountAction.allMailboxes:
         await context.push('/accounts/${account.id}/mailboxes');
+      case _AccountAction.syncLog:
+        await context.push('/accounts/${account.id}/sync-log');
       case _AccountAction.edit:
         await context.push('/accounts/${account.id}/edit');
       case _AccountAction.delete:
@@ -158,4 +156,4 @@ class _AccountTile extends ConsumerWidget {
   }
 }
 
-enum _AccountAction { allMailboxes, edit, delete }
+enum _AccountAction { allMailboxes, syncLog, edit, delete }
