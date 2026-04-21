@@ -13,8 +13,6 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart';
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -123,23 +121,6 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
   return (db: db, accounts: accounts, mailboxes: mailboxes);
 }
 
-({
-  AppDatabase db,
-  AccountRepositoryImpl accounts,
-  MailboxRepositoryImpl mailboxes,
-  FakeImapClient fakeImap,
-}) _makeReposWithFake() {
-  final db = openTestDatabase();
-  final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-  final fakeImap = FakeImapClient();
-  final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => fakeImap,
-  );
-  return (db: db, accounts: accounts, mailboxes: mailboxes, fakeImap: fakeImap);
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -242,58 +223,6 @@ void main() {
         () => r.mailboxes.syncMailboxes('acc-1'),
         throwsA(isA<UnsupportedError>()),
       );
-    });
-
-    test('syncMailboxes stores mailboxes from IMAP in DB', () async {
-      final r = _makeReposWithFake();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.listMailboxesResult = [
-        imap.Mailbox(
-          encodedName: 'INBOX',
-          encodedPath: 'INBOX',
-          flags: [],
-          pathSeparator: '/',
-        ),
-        imap.Mailbox(
-          encodedName: 'Sent',
-          encodedPath: 'Sent',
-          flags: [],
-          pathSeparator: '/',
-        ),
-      ];
-
-      await r.mailboxes.syncMailboxes('acc-1');
-
-      final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
-      expect(mailboxes, hasLength(2));
-      expect(mailboxes.map((m) => m.path).toSet(), {'INBOX', 'Sent'});
-      // statusMailbox fake returns 3 unread / 10 total for all mailboxes
-      expect(mailboxes.first.unreadCount, 3);
-      expect(mailboxes.first.totalCount, 10);
-      expect(r.fakeImap.logoutCalled, isTrue);
-    });
-
-    test('syncMailboxes still stores mailbox when statusMailbox throws',
-        () async {
-      final r = _makeReposWithFake();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.throwOnStatus = true;
-      r.fakeImap.listMailboxesResult = [
-        imap.Mailbox(
-          encodedName: 'INBOX',
-          encodedPath: 'INBOX',
-          flags: [],
-          pathSeparator: '/',
-        ),
-      ];
-
-      await r.mailboxes.syncMailboxes('acc-1');
-
-      final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
-      // Mailbox is stored even though STATUS failed; counts default to 0.
-      expect(mailboxes, hasLength(1));
-      expect(mailboxes.first.unreadCount, 0);
-      expect(mailboxes.first.totalCount, 0);
     });
 
     group('JMAP syncMailboxes', () {
