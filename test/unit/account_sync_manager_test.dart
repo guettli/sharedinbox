@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 
 // ── Fakes ─────────────────────────────────────────────────────────────────────
@@ -184,6 +185,45 @@ class FailingJmapEmailRepository extends FakeEmailRepository {
   }
 }
 
+class _CapturingSyncLogRepository implements SyncLogRepository {
+  final List<SyncLogEntry> entries = [];
+
+  @override
+  Future<void> log({
+    required String accountId,
+    required bool success,
+    String? errorMessage,
+    required String protocol,
+    required int emailsFetched,
+    required int emailsSkipped,
+    required int mailboxesSynced,
+    required int pendingFlushed,
+    required int bytesTransferred,
+    required DateTime startedAt,
+    required DateTime finishedAt,
+  }) async {
+    entries.add(
+      SyncLogEntry(
+        id: entries.length,
+        result: success ? 'ok' : 'error',
+        errorMessage: errorMessage,
+        protocol: protocol,
+        emailsFetched: emailsFetched,
+        emailsSkipped: emailsSkipped,
+        mailboxesSynced: mailboxesSynced,
+        pendingFlushed: pendingFlushed,
+        bytesTransferred: bytesTransferred,
+        startedAt: startedAt,
+        finishedAt: finishedAt,
+      ),
+    );
+  }
+
+  @override
+  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
+      Stream.value(List.of(entries));
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -347,6 +387,58 @@ void main() {
         // the _backoffSeconds update (line 97) is executed.
         async.elapse(const Duration(seconds: 10));
         async.flushMicrotasks();
+      });
+    });
+
+    group('sync errors are visible in the sync log', () {
+      test('IMAP sync failure writes an error entry to the sync log', () {
+        fakeAsync((async) {
+          final accounts = FakeAccountRepository();
+          final syncLog = _CapturingSyncLogRepository();
+          final mgr = AccountSyncManager(
+            accounts,
+            FailingMailboxRepository(),
+            FakeEmailRepository(),
+            syncLog: syncLog,
+          );
+          mgr.start();
+          accounts.push([_account]);
+          async.flushMicrotasks();
+
+          expect(syncLog.entries, hasLength(1));
+          expect(syncLog.entries.first.isOk, isFalse);
+          expect(syncLog.entries.first.errorMessage, isNotEmpty);
+          expect(syncLog.entries.first.protocol, 'imap');
+
+          mgr.dispose();
+          async.elapse(const Duration(seconds: 10));
+          async.flushMicrotasks();
+        });
+      });
+
+      test('JMAP sync failure writes an error entry to the sync log', () {
+        fakeAsync((async) {
+          final accounts = FakeAccountRepository();
+          final syncLog = _CapturingSyncLogRepository();
+          final mgr = AccountSyncManager(
+            accounts,
+            FakeMailboxRepositoryWithInbox(),
+            FailingJmapEmailRepository(),
+            syncLog: syncLog,
+          );
+          mgr.start();
+          accounts.push([_jmapAccount]);
+          async.flushMicrotasks();
+
+          expect(syncLog.entries, hasLength(1));
+          expect(syncLog.entries.first.isOk, isFalse);
+          expect(syncLog.entries.first.errorMessage, isNotEmpty);
+          expect(syncLog.entries.first.protocol, 'jmap');
+
+          mgr.dispose();
+          async.elapse(const Duration(seconds: 10));
+          async.flushMicrotasks();
+        });
       });
     });
   });

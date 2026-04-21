@@ -140,21 +140,23 @@ class _AccountSync implements _SyncLoop {
         await _idle();
         _backoffSeconds = 5;
       } catch (e, st) {
-        _syncLog
-            .log(
-              accountId: account.id,
-              success: false,
-              errorMessage: e.toString(),
-              protocol: 'imap',
-              emailsFetched: 0,
-              emailsSkipped: 0,
-              mailboxesSynced: 0,
-              pendingFlushed: 0,
-              bytesTransferred: 0,
-              startedAt: startedAt,
-              finishedAt: DateTime.now(),
-            )
-            .ignore();
+        try {
+          await _syncLog.log(
+            accountId: account.id,
+            success: false,
+            errorMessage: e.toString(),
+            protocol: 'imap',
+            emailsFetched: 0,
+            emailsSkipped: 0,
+            mailboxesSynced: 0,
+            pendingFlushed: 0,
+            bytesTransferred: 0,
+            startedAt: startedAt,
+            finishedAt: DateTime.now(),
+          );
+        } catch (logErr) {
+          log('Failed to write IMAP sync log entry: $logErr');
+        }
         log(
           'Sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
@@ -286,21 +288,23 @@ class _JmapAccountSync implements _SyncLoop {
         _backoffSeconds = 5;
         await _wait();
       } catch (e, st) {
-        _syncLog
-            .log(
-              accountId: account.id,
-              success: false,
-              errorMessage: e.toString(),
-              protocol: 'jmap',
-              emailsFetched: 0,
-              emailsSkipped: 0,
-              mailboxesSynced: 0,
-              pendingFlushed: 0,
-              bytesTransferred: 0,
-              startedAt: startedAt,
-              finishedAt: DateTime.now(),
-            )
-            .ignore();
+        try {
+          await _syncLog.log(
+            accountId: account.id,
+            success: false,
+            errorMessage: e.toString(),
+            protocol: 'jmap',
+            emailsFetched: 0,
+            emailsSkipped: 0,
+            mailboxesSynced: 0,
+            pendingFlushed: 0,
+            bytesTransferred: 0,
+            startedAt: startedAt,
+            finishedAt: DateTime.now(),
+          );
+        } catch (logErr) {
+          log('Failed to write JMAP sync log entry: $logErr');
+        }
         log(
           'JMAP sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
