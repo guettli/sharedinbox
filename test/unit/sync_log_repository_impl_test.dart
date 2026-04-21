@@ -35,6 +35,10 @@ void main() {
     await repo.log(
       accountId: 'acc1',
       success: true,
+      protocol: 'imap',
+      emailsFetched: 5,
+      mailboxesSynced: 3,
+      pendingFlushed: 0,
       startedAt: start,
       finishedAt: end,
     );
@@ -44,6 +48,10 @@ void main() {
     expect(rows.first.result, 'ok');
     expect(rows.first.errorMessage, null);
     expect(rows.first.accountId, 'acc1');
+    expect(rows.first.protocol, 'imap');
+    expect(rows.first.itemsSynced, 5);
+    expect(rows.first.mailboxesSynced, 3);
+    expect(rows.first.pendingFlushed, 0);
   });
 
   test('logs error entry with message', () async {
@@ -55,6 +63,10 @@ void main() {
       accountId: 'acc1',
       success: false,
       errorMessage: 'Connection refused',
+      protocol: 'imap',
+      emailsFetched: 0,
+      mailboxesSynced: 0,
+      pendingFlushed: 0,
       startedAt: start,
       finishedAt: end,
     );

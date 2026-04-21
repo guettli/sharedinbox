@@ -46,7 +46,7 @@ class FakeMailboxRepository implements MailboxRepository {
   Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([]);
 
   @override
-  Future<void> syncMailboxes(String accountId) async {}
+  Future<int> syncMailboxes(String accountId) async => 0;
 }
 
 class FailingMailboxRepository implements MailboxRepository {
@@ -54,7 +54,7 @@ class FailingMailboxRepository implements MailboxRepository {
   Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([]);
 
   @override
-  Future<void> syncMailboxes(String accountId) async =>
+  Future<int> syncMailboxes(String accountId) async =>
       throw Exception('simulated sync failure');
 }
 
@@ -71,7 +71,7 @@ class FakeEmailRepository implements EmailRepository {
       const EmailBody(emailId: '', attachments: []);
 
   @override
-  Future<void> syncEmails(String accountId, String mailboxPath) async {}
+  Future<int> syncEmails(String accountId, String mailboxPath) async => 0;
 
   @override
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
@@ -83,7 +83,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> deleteEmail(String emailId) async {}
 
   @override
-  Future<void> flushPendingChanges(String accountId, String password) async {}
+  Future<int> flushPendingChanges(String accountId, String password) async => 0;
 
   @override
   Future<void> sendEmail(String accountId, EmailDraft draft) async {}
@@ -150,15 +150,16 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
       ]);
 
   @override
-  Future<void> syncMailboxes(String accountId) async {}
+  Future<int> syncMailboxes(String accountId) async => 0;
 }
 
 class _CountingEmailRepository extends FakeEmailRepository {
   final List<String> syncedPaths = [];
 
   @override
-  Future<void> syncEmails(String accountId, String mailboxPath) async {
+  Future<int> syncEmails(String accountId, String mailboxPath) async {
     syncedPaths.add(mailboxPath);
+    return 0;
   }
 }
 
@@ -166,9 +167,10 @@ class FailingJmapEmailRepository extends FakeEmailRepository {
   int syncCount = 0;
 
   @override
-  Future<void> syncEmails(String accountId, String mailboxPath) async {
+  Future<int> syncEmails(String accountId, String mailboxPath) async {
     syncCount++;
     if (syncCount == 1) throw Exception('simulated JMAP failure');
+    return 0;
   }
 }
 

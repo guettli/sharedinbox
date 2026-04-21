@@ -4,7 +4,7 @@ abstract class EmailRepository {
   Stream<List<Email>> observeEmails(String accountId, String mailboxPath);
   Future<Email?> getEmail(String emailId);
   Future<EmailBody> getEmailBody(String emailId);
-  Future<void> syncEmails(String accountId, String mailboxPath);
+  Future<int> syncEmails(String accountId, String mailboxPath);
   Future<void> setFlag(
     String emailId, {
     bool? seen,
@@ -28,8 +28,8 @@ abstract class EmailRepository {
   );
 
   /// Sends any queued local mutations for [accountId] to the server.
-  /// No-op for IMAP accounts (mutations are applied synchronously).
-  Future<void> flushPendingChanges(String accountId, String password);
+  /// Returns the number of changes successfully applied.
+  Future<int> flushPendingChanges(String accountId, String password);
 
   /// Emits the list of pending mutations that have failed at least once for
   /// [accountId]. Updates live whenever the queue changes.

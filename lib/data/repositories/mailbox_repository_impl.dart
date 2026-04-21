@@ -38,20 +38,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
-  Future<void> syncMailboxes(String accountId) async {
+  Future<int> syncMailboxes(String accountId) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _syncMailboxesImap(account, password);
+        return _syncMailboxesImap(account, password);
       case account_model.AccountType.jmap:
-        await _syncMailboxesJmap(account, password);
+        return _syncMailboxesJmap(account, password);
     }
   }
 
   // ── IMAP ──────────────────────────────────────────────────────────────────
 
-  Future<void> _syncMailboxesImap(
+  Future<int> _syncMailboxesImap(
     account_model.Account account,
     String password,
   ) async {
@@ -87,6 +87,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               ),
             );
       }
+      return mailboxes.length;
     } finally {
       await client.logout();
     }
@@ -94,7 +95,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   // ── JMAP ──────────────────────────────────────────────────────────────────
 
-  Future<void> _syncMailboxesJmap(
+  Future<int> _syncMailboxesJmap(
     account_model.Account account,
     String password,
   ) async {
@@ -113,14 +114,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final storedState = await _loadSyncState(account.id, 'Mailbox');
 
     if (storedState == null) {
-      await _jmapFullMailboxSync(account.id, jmap);
+      return _jmapFullMailboxSync(account.id, jmap);
     } else {
-      await _jmapIncrementalMailboxSync(account.id, jmap, storedState);
+      return _jmapIncrementalMailboxSync(account.id, jmap, storedState);
     }
   }
 
   /// First-time sync: fetch all mailboxes and persist state.
-  Future<void> _jmapFullMailboxSync(String accountId, JmapClient jmap) async {
+  Future<int> _jmapFullMailboxSync(String accountId, JmapClient jmap) async {
     final responses = await jmap.call([
       [
         'Mailbox/get',
@@ -136,10 +137,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     await _upsertJmapMailboxes(accountId, mailboxes);
     await _saveSyncState(accountId, 'Mailbox', newState);
     log('JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState');
+    return mailboxes.length;
   }
 
   /// Incremental sync using Mailbox/changes since [sinceState].
-  Future<void> _jmapIncrementalMailboxSync(
+  Future<int> _jmapIncrementalMailboxSync(
     String accountId,
     JmapClient jmap,
     String sinceState,
@@ -182,6 +184,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     await _saveSyncState(accountId, 'Mailbox', newState);
     log('JMAP incremental mailbox sync: +${created.length} '
         '~${updated.length} -${destroyed.length}, state=$newState');
+    return toFetch.length + destroyed.length;
   }
 
   Future<void> _upsertJmapMailboxes(

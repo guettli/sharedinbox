@@ -208,18 +208,18 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Sync ───────────────────────────────────────────────────────────────────
 
   @override
-  Future<void> syncEmails(String accountId, String mailboxPath) async {
+  Future<int> syncEmails(String accountId, String mailboxPath) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _syncEmailsImap(account, password, mailboxPath);
+        return _syncEmailsImap(account, password, mailboxPath);
       case account_model.AccountType.jmap:
-        await _syncEmailsJmap(account, password, mailboxPath);
+        return _syncEmailsJmap(account, password, mailboxPath);
     }
   }
 
-  Future<void> _syncEmailsImap(
+  Future<int> _syncEmailsImap(
     account_model.Account account,
     String password,
     String mailboxPath,
@@ -274,6 +274,7 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
+        return allUids.length;
       } else {
         // Incremental sync.
         final lastUid = checkpoint['lastUid'] as int;
@@ -283,7 +284,7 @@ class EmailRepositoryImpl implements EmailRepository {
         if (serverModSeq != null &&
             storedModSeq != null &&
             serverModSeq == storedModSeq) {
-          return;
+          return 0;
         }
 
         // Fetch new messages.
@@ -323,6 +324,7 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
+        return newUids.length;
       }
     } finally {
       await client.logout();
@@ -478,7 +480,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'fetchTextBodyValues': true,
   };
 
-  Future<void> _syncEmailsJmap(
+  Future<int> _syncEmailsJmap(
     account_model.Account account,
     String password,
     String mailboxJmapId,
@@ -498,19 +500,20 @@ class EmailRepositoryImpl implements EmailRepository {
     final storedState = await _loadSyncState(account.id, 'Email');
 
     if (storedState == null) {
-      await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
+      return _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
     } else {
-      await _jmapIncrementalEmailSync(account.id, jmap, storedState);
+      return _jmapIncrementalEmailSync(account.id, jmap, storedState);
     }
   }
 
-  Future<void> _jmapFullEmailSync(
+  Future<int> _jmapFullEmailSync(
     String accountId,
     JmapClient jmap,
     String mailboxJmapId,
   ) async {
     int position = 0;
     String? firstState;
+    var fetched = 0;
 
     while (true) {
       final responses = await jmap.call([
@@ -546,16 +549,19 @@ class EmailRepositoryImpl implements EmailRepository {
 
       final getResult = _responseArgs(responses, 1, 'Email/get');
       firstState ??= getResult['state'] as String;
-      await _upsertJmapEmails(accountId, getResult['list'] as List<dynamic>);
+      final list = getResult['list'] as List<dynamic>;
+      await _upsertJmapEmails(accountId, list);
+      fetched += list.length;
 
       position += ids.length;
       if (ids.isEmpty || total == null || position >= total) break;
     }
 
     await _saveSyncState(accountId, 'Email', firstState);
+    return fetched;
   }
 
-  Future<void> _jmapIncrementalEmailSync(
+  Future<int> _jmapIncrementalEmailSync(
     String accountId,
     JmapClient jmap,
     String sinceState,
@@ -574,6 +580,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final updated = List<String>.from(changes['updated'] as List? ?? []);
     final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
 
+    var fetched = 0;
     final toFetch = [...created, ...updated];
     if (toFetch.isNotEmpty) {
       final getResponses = await jmap.call([
@@ -589,7 +596,9 @@ class EmailRepositoryImpl implements EmailRepository {
         ]
       ]);
       final getResult = _responseArgs(getResponses, 0, 'Email/get');
-      await _upsertJmapEmails(accountId, getResult['list'] as List<dynamic>);
+      final list = getResult['list'] as List<dynamic>;
+      await _upsertJmapEmails(accountId, list);
+      fetched += list.length;
     }
 
     for (final jmapId in destroyed) {
@@ -599,6 +608,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     await _saveSyncState(accountId, 'Email', newState);
+    return fetched;
   }
 
   Future<void> _upsertJmapEmails(String accountId, List<dynamic> emails) async {
@@ -1028,31 +1038,31 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Drains pending changes for [accountId] via the appropriate protocol.
-  /// Called at the start of each sync cycle.
+  /// Called at the start of each sync cycle. Returns count of applied changes.
   @override
-  Future<void> flushPendingChanges(String accountId, String password) async {
+  Future<int> flushPendingChanges(String accountId, String password) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .get();
-    if (rows.isEmpty) return;
+    if (rows.isEmpty) return 0;
 
     final account = (await _accounts.getAccount(accountId))!;
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _flushPendingChangesImap(account, password, rows);
+        return _flushPendingChangesImap(account, password, rows);
       case account_model.AccountType.jmap:
-        await _flushPendingChangesJmap(account, password, rows);
+        return _flushPendingChangesJmap(account, password, rows);
     }
   }
 
-  Future<void> _flushPendingChangesJmap(
+  Future<int> _flushPendingChangesJmap(
     account_model.Account account,
     String password,
     List<PendingChangeRow> rows,
   ) async {
     final jmapUrl = account.jmapUrl;
-    if (jmapUrl == null || jmapUrl.isEmpty) return;
+    if (jmapUrl == null || jmapUrl.isEmpty) return 0;
 
     final jmap = await JmapClient.connect(
       httpClient: _httpClient,
@@ -1062,6 +1072,7 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final ifInState = await _loadSyncState(account.id, 'Email');
+    var applied = 0;
 
     for (final row in rows) {
       try {
@@ -1070,6 +1081,7 @@ class EmailRepositoryImpl implements EmailRepository {
         await (_db.delete(_db.pendingChanges)
               ..where((t) => t.id.equals(row.id)))
             .go();
+        applied++;
         // Keep our checkpoint in sync with whatever the server returned.
         if (newState != null) {
           await _saveSyncState(account.id, 'Email', newState);
@@ -1102,9 +1114,10 @@ class EmailRepositoryImpl implements EmailRepository {
         await _recordChangeError(row, e);
       }
     }
+    return applied;
   }
 
-  Future<void> _flushPendingChangesImap(
+  Future<int> _flushPendingChangesImap(
     account_model.Account account,
     String password,
     List<PendingChangeRow> rows,
@@ -1118,8 +1131,9 @@ class EmailRepositoryImpl implements EmailRepository {
       for (final row in rows) {
         await _recordChangeError(row, e);
       }
-      return;
+      return 0;
     }
+    var applied = 0;
     try {
       for (final row in rows) {
         try {
@@ -1127,6 +1141,7 @@ class EmailRepositoryImpl implements EmailRepository {
           await (_db.delete(_db.pendingChanges)
                 ..where((t) => t.id.equals(row.id)))
               .go();
+          applied++;
         } catch (e) {
           await _recordChangeError(row, e);
         }
@@ -1134,6 +1149,7 @@ class EmailRepositoryImpl implements EmailRepository {
     } finally {
       await client.logout();
     }
+    return applied;
   }
 
   Future<void> _applyPendingChangeImap(

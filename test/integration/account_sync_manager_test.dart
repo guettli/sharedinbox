@@ -56,7 +56,7 @@ class _FakeMailboxes implements MailboxRepository {
   Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([]);
 
   @override
-  Future<void> syncMailboxes(String accountId) async {}
+  Future<int> syncMailboxes(String accountId) async => 0;
 }
 
 class _FakeEmails implements EmailRepository {
@@ -71,7 +71,7 @@ class _FakeEmails implements EmailRepository {
       const EmailBody(emailId: '', attachments: []);
 
   @override
-  Future<void> syncEmails(String a, String m) async {}
+  Future<int> syncEmails(String a, String m) async => 0;
 
   @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
@@ -83,7 +83,7 @@ class _FakeEmails implements EmailRepository {
   Future<void> deleteEmail(String id) async {}
 
   @override
-  Future<void> flushPendingChanges(String accountId, String password) async {}
+  Future<int> flushPendingChanges(String accountId, String password) async => 0;
 
   @override
   Future<void> sendEmail(String a, EmailDraft d) async {}

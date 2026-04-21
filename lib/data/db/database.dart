@@ -128,7 +128,11 @@ class SyncLogs extends Table {
   // "ok" | "error"
   TextColumn get result => text()();
   TextColumn get errorMessage => text().nullable()();
+  // "imap" | "jmap"
+  TextColumn get protocol => text().withDefault(const Constant(''))();
   IntColumn get itemsSynced => integer().withDefault(const Constant(0))();
+  IntColumn get mailboxesSynced => integer().withDefault(const Constant(0))();
+  IntColumn get pendingFlushed => integer().withDefault(const Constant(0))();
   DateTimeColumn get startedAt => dateTime()();
   DateTimeColumn get finishedAt => dateTime()();
 }
@@ -165,7 +169,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -194,6 +198,11 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 9) {
             await m.addColumn(emailBodies, emailBodies.cachedAt);
+          }
+          if (from < 10) {
+            await m.addColumn(syncLogs, syncLogs.protocol);
+            await m.addColumn(syncLogs, syncLogs.mailboxesSynced);
+            await m.addColumn(syncLogs, syncLogs.pendingFlushed);
           }
         },
       );

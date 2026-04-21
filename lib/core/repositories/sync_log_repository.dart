@@ -3,6 +3,10 @@ class SyncLogEntry {
     required this.id,
     required this.result,
     this.errorMessage,
+    required this.protocol,
+    required this.emailsFetched,
+    required this.mailboxesSynced,
+    required this.pendingFlushed,
     required this.startedAt,
     required this.finishedAt,
   });
@@ -10,6 +14,10 @@ class SyncLogEntry {
   final int id;
   final String result; // 'ok' or 'error'
   final String? errorMessage;
+  final String protocol; // 'imap' or 'jmap'
+  final int emailsFetched;
+  final int mailboxesSynced;
+  final int pendingFlushed;
   final DateTime startedAt;
   final DateTime finishedAt;
 
@@ -22,6 +30,10 @@ abstract class SyncLogRepository {
     required String accountId,
     required bool success,
     String? errorMessage,
+    required String protocol,
+    required int emailsFetched,
+    required int mailboxesSynced,
+    required int pendingFlushed,
     required DateTime startedAt,
     required DateTime finishedAt,
   });
@@ -37,6 +49,10 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     required String accountId,
     required bool success,
     String? errorMessage,
+    required String protocol,
+    required int emailsFetched,
+    required int mailboxesSynced,
+    required int pendingFlushed,
     required DateTime startedAt,
     required DateTime finishedAt,
   }) async {}

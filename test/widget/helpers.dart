@@ -125,7 +125,7 @@ class FakeMailboxRepository implements MailboxRepository {
       Stream.value(List.of(_mailboxes));
 
   @override
-  Future<void> syncMailboxes(String accountId) async {}
+  Future<int> syncMailboxes(String accountId) async => 0;
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -156,7 +156,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<EmailBody> getEmailBody(String emailId) async => _emailBody;
 
   @override
-  Future<void> syncEmails(String accountId, String mailboxPath) async {}
+  Future<int> syncEmails(String accountId, String mailboxPath) async => 0;
 
   @override
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
@@ -168,7 +168,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> deleteEmail(String emailId) async {}
 
   @override
-  Future<void> flushPendingChanges(String accountId, String password) async {}
+  Future<int> flushPendingChanges(String accountId, String password) async => 0;
 
   @override
   Future<void> sendEmail(String accountId, EmailDraft draft) async {}

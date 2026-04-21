@@ -29,47 +29,91 @@ class SyncLogScreen extends ConsumerWidget {
           }
           return ListView.builder(
             itemCount: entries.length,
-            itemBuilder: (ctx, i) {
-              final e = entries[i];
-              final ms = e.duration.inMilliseconds;
-              final durationLabel =
-                  ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';
-              return ListTile(
-                leading: Icon(
-                  e.isOk ? Icons.check_circle : Icons.error_outline,
-                  color:
-                      e.isOk ? Colors.green : Theme.of(ctx).colorScheme.error,
-                ),
-                title: Text(
-                  e.isOk ? 'OK' : 'Error',
-                  style: e.isOk
-                      ? null
-                      : TextStyle(color: Theme.of(ctx).colorScheme.error),
-                ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_timeFmt.format(e.startedAt)),
-                    Text('took $durationLabel'),
-                    if (e.errorMessage != null)
-                      Text(
-                        e.errorMessage!,
-                        style: TextStyle(
-                          color: Theme.of(ctx).colorScheme.error,
-                          fontSize: 12,
-                        ),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                  ],
-                ),
-                isThreeLine: e.errorMessage != null,
-              );
-            },
+            itemBuilder: (ctx, i) => _SyncLogTile(entry: entries[i]),
           );
         },
       ),
     );
   }
+}
+
+class _SyncLogTile extends StatelessWidget {
+  const _SyncLogTile({required this.entry});
+
+  final SyncLogEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ms = entry.duration.inMilliseconds;
+    final durationLabel =
+        ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';
+    final proto =
+        entry.protocol.isEmpty ? '' : ' · ${entry.protocol.toUpperCase()}';
+    final theme = Theme.of(context);
+    final errorColor = theme.colorScheme.error;
+
+    return ExpansionTile(
+      leading: Icon(
+        entry.isOk ? Icons.check_circle : Icons.error_outline,
+        color: entry.isOk ? Colors.green : errorColor,
+      ),
+      title: Text(
+        '${_timeFmt.format(entry.startedAt)}$proto',
+        style: entry.isOk ? null : TextStyle(color: errorColor),
+      ),
+      subtitle: Text(
+        entry.isOk
+            ? '${entry.emailsFetched} emails · ${entry.mailboxesSynced} mailboxes · took $durationLabel'
+            : 'Error · took $durationLabel',
+        style: TextStyle(
+          fontSize: 12,
+          color: entry.isOk ? null : errorColor,
+        ),
+      ),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _row('Started', _timeFmt.format(entry.startedAt)),
+              _row('Finished', _timeFmt.format(entry.finishedAt)),
+              _row('Duration', durationLabel),
+              if (entry.protocol.isNotEmpty)
+                _row('Protocol', entry.protocol.toUpperCase()),
+              _row('Emails fetched', '${entry.emailsFetched}'),
+              _row('Mailboxes synced', '${entry.mailboxesSynced}'),
+              _row('Pending changes flushed', '${entry.pendingFlushed}'),
+              if (entry.errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    entry.errorMessage!,
+                    style: TextStyle(color: errorColor, fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 180,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            Expanded(
+              child: Text(value, style: const TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+      );
 }

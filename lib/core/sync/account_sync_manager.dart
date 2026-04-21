@@ -123,10 +123,14 @@ class _AccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        await _sync();
+        final stats = await _sync();
         await _syncLog.log(
           accountId: account.id,
           success: true,
+          protocol: 'imap',
+          emailsFetched: stats.emailsFetched,
+          mailboxesSynced: stats.mailboxesSynced,
+          pendingFlushed: stats.pendingFlushed,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -137,6 +141,10 @@ class _AccountSync implements _SyncLoop {
           accountId: account.id,
           success: false,
           errorMessage: e.toString(),
+          protocol: 'imap',
+          emailsFetched: 0,
+          mailboxesSynced: 0,
+          pendingFlushed: 0,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -151,15 +159,22 @@ class _AccountSync implements _SyncLoop {
     }
   }
 
-  Future<void> _sync() async {
+  Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
-    await _emails.flushPendingChanges(account.id, password);
-    await _mailboxes.syncMailboxes(account.id);
+    final pendingFlushed =
+        await _emails.flushPendingChanges(account.id, password);
+    final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
+    var emailsFetched = 0;
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      await _emails.syncEmails(account.id, mailbox.path);
+      emailsFetched += await _emails.syncEmails(account.id, mailbox.path);
     }
+    return _SyncStats(
+      emailsFetched: emailsFetched,
+      mailboxesSynced: mailboxesSynced,
+      pendingFlushed: pendingFlushed,
+    );
   }
 
   Future<void> _idle() async {
@@ -246,10 +261,14 @@ class _JmapAccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        await _sync();
+        final stats = await _sync();
         await _syncLog.log(
           accountId: account.id,
           success: true,
+          protocol: 'jmap',
+          emailsFetched: stats.emailsFetched,
+          mailboxesSynced: stats.mailboxesSynced,
+          pendingFlushed: stats.pendingFlushed,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -260,6 +279,10 @@ class _JmapAccountSync implements _SyncLoop {
           accountId: account.id,
           success: false,
           errorMessage: e.toString(),
+          protocol: 'jmap',
+          emailsFetched: 0,
+          mailboxesSynced: 0,
+          pendingFlushed: 0,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -274,19 +297,26 @@ class _JmapAccountSync implements _SyncLoop {
     }
   }
 
-  Future<void> _sync() async {
+  Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
 
     // Drain outbound queue before pulling from server.
-    await _emails.flushPendingChanges(account.id, password);
+    final pendingFlushed =
+        await _emails.flushPendingChanges(account.id, password);
 
-    await _mailboxes.syncMailboxes(account.id);
+    final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
 
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
+    var emailsFetched = 0;
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      await _emails.syncEmails(account.id, mailbox.path);
+      emailsFetched += await _emails.syncEmails(account.id, mailbox.path);
     }
+    return _SyncStats(
+      emailsFetched: emailsFetched,
+      mailboxesSynced: mailboxesSynced,
+      pendingFlushed: pendingFlushed,
+    );
   }
 
   Future<void> _wait() async {
@@ -324,4 +354,16 @@ class _JmapAccountSync implements _SyncLoop {
     ]);
     _stopSignal = null;
   }
+}
+
+class _SyncStats {
+  const _SyncStats({
+    required this.emailsFetched,
+    required this.mailboxesSynced,
+    required this.pendingFlushed,
+  });
+
+  final int emailsFetched;
+  final int mailboxesSynced;
+  final int pendingFlushed;
 }
