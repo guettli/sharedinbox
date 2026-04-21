@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
+import 'core/models/account.dart' as model;
 import 'core/repositories/account_repository.dart';
 import 'core/repositories/draft_repository.dart';
 import 'core/repositories/email_repository.dart';
@@ -80,6 +81,16 @@ final accountDiscoveryServiceProvider =
 
 final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
   return ConnectionTestServiceImpl(ref.watch(httpClientProvider));
+});
+
+final accountByIdProvider =
+    StreamProvider.autoDispose.family<model.Account?, String>((ref, accountId) {
+  return ref.watch(accountRepositoryProvider).observeAccounts().map(
+        (accounts) => accounts.cast<model.Account?>().firstWhere(
+              (a) => a?.id == accountId,
+              orElse: () => null,
+            ),
+      );
 });
 
 final accountConnectionStatusProvider =

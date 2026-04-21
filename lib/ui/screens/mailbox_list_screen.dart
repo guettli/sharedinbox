@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/models/email.dart';
-import '../../core/models/mailbox.dart';
 import '../../core/repositories/email_repository.dart';
 import '../../di.dart';
+import '../widgets/folder_drawer.dart';
 
 class MailboxListScreen extends ConsumerWidget {
   const MailboxListScreen({super.key, required this.accountId});
@@ -15,8 +15,27 @@ class MailboxListScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final mailboxRepo = ref.watch(mailboxRepositoryProvider);
     final emailRepo = ref.watch(emailRepositoryProvider);
+    final accountAsync = ref.watch(accountByIdProvider(accountId));
     return Scaffold(
-      appBar: AppBar(title: const Text('Mailboxes')),
+      appBar: AppBar(
+        title: const Text('Folders'),
+        actions: [
+          accountAsync.when(
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+            data: (account) => Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  account?.displayName ?? '',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      drawer: FolderDrawer(accountId: accountId),
       body: Column(
         children: [
           // ── Failed-mutation banner ───────────────────────────────────────
@@ -39,7 +58,7 @@ class MailboxListScreen extends ConsumerWidget {
                 if (!snap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final mailboxes = List.of(snap.data!)..sort(_compareMailboxes);
+                final mailboxes = List.of(snap.data!)..sort(compareMailboxes);
                 return ListView.builder(
                   itemCount: mailboxes.length,
                   itemBuilder: (ctx, i) {
@@ -143,18 +162,4 @@ class _FailedMutationBanner extends StatelessWidget {
       ),
     );
   }
-}
-
-int _mailboxPriority(Mailbox mb) {
-  final upper = mb.path.toUpperCase();
-  if (upper == 'INBOX') return 0;
-  if (upper.contains('DRAFT')) return 1;
-  return 2;
-}
-
-int _compareMailboxes(Mailbox a, Mailbox b) {
-  final pa = _mailboxPriority(a);
-  final pb = _mailboxPriority(b);
-  if (pa != pb) return pa.compareTo(pb);
-  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
 }

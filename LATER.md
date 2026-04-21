@@ -1,8 +1,16 @@
 # Later
 
+Thread view (group by `References` / `In-Reply-To`)
+
+---
+
+Attachment download + open
+
+---
+
 mail-loop.com (anstatt shared inbox).
 
-Create a re-usable JMAP package.
+---
 
 ---
 

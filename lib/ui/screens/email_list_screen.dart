@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/models/account.dart';
 import '../../core/models/email.dart';
 import '../../core/repositories/email_repository.dart';
 import '../../di.dart';
+import '../widgets/folder_drawer.dart';
 
 final _dateFmt = DateFormat('MMM d');
 
@@ -64,16 +66,39 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
+    final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
     return Scaffold(
-      appBar: _searching ? _searchBar() : _normalBar(repo),
+      appBar: _searching ? _searchBar() : _normalBar(repo, accountAsync),
+      drawer: _searching
+          ? null
+          : FolderDrawer(
+              accountId: widget.accountId,
+              currentMailboxPath: widget.mailboxPath,
+            ),
       body: _searching ? _buildSearchBody() : _buildStreamBody(repo),
     );
   }
 
-  AppBar _normalBar(EmailRepository emailRepo) {
+  AppBar _normalBar(
+    EmailRepository emailRepo,
+    AsyncValue<Account?> accountAsync,
+  ) {
     return AppBar(
       title: Text(widget.mailboxPath),
       actions: [
+        accountAsync.when(
+          loading: () => const SizedBox.shrink(),
+          error: (_, __) => const SizedBox.shrink(),
+          data: (account) => Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Center(
+              child: Text(
+                account?.displayName ?? '',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
+        ),
         IconButton(
           icon: const Icon(Icons.search),
           tooltip: 'Search',
