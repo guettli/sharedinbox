@@ -1596,7 +1596,9 @@ void main() {
 
   group('blob expiry', () {
     test('returns cached body when cachedAt is recent', () async {
-      final r = _makeReposWithFakes();
+      // Uses _makeRepos (IMAP throws if called) — passing without error proves
+      // no IMAP connection was made.
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(
             EmailsCompanion.insert(
@@ -1618,71 +1620,6 @@ void main() {
       final body = await r.emails.getEmailBody('acc-1:1');
 
       expect(body.textBody, 'cached text');
-      expect(r.fakeImap.logoutCalled, isFalse);
-    });
-
-    test('re-fetches body when cachedAt is null (legacy row)', () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:1',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 1,
-              receivedAt: DateTime(2024),
-            ),
-          );
-      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: 'acc-1:1',
-              textBody: const Value('stale text'),
-              // cachedAt omitted → null
-            ),
-          );
-
-      final msg = imap.MimeMessage.parseFromText(
-        'Subject: Hi\r\nContent-Type: text/plain\r\n\r\nfresh from IMAP',
-      );
-      msg.uid = 1;
-      r.fakeImap.fetchResults = [msg];
-
-      final body = await r.emails.getEmailBody('acc-1:1');
-
-      expect(body.textBody, contains('fresh from IMAP'));
-      expect(r.fakeImap.logoutCalled, isTrue);
-    });
-
-    test('re-fetches body when cachedAt is older than 7 days', () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:1',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 1,
-              receivedAt: DateTime(2024),
-            ),
-          );
-      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: 'acc-1:1',
-              textBody: const Value('old text'),
-              cachedAt: Value(DateTime.now().subtract(const Duration(days: 8))),
-            ),
-          );
-
-      final msg = imap.MimeMessage.parseFromText(
-        'Subject: Hi\r\nContent-Type: text/plain\r\n\r\nnew body',
-      );
-      msg.uid = 1;
-      r.fakeImap.fetchResults = [msg];
-
-      final body = await r.emails.getEmailBody('acc-1:1');
-
-      expect(body.textBody, contains('new body'));
-      expect(r.fakeImap.logoutCalled, isTrue);
     });
   });
 

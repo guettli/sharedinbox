@@ -9,6 +9,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -327,6 +328,54 @@ void main() {
     // We verify by checking the body is identical (no error = no IMAP call).
     final cached = await r.emails.getEmailBody(emailId);
     expect(cached.textBody, body.textBody);
+  });
+
+  test('blob expiry: re-fetches body when cachedAt is null (legacy row)',
+      () async {
+    await appendToInbox('legacy-body-test', body: 'Fresh from server');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    final emailId = emails.first.id;
+
+    // Simulate a legacy row with no cachedAt.
+    await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+          EmailBodiesCompanion.insert(
+            emailId: emailId,
+            textBody: const Value('stale text'),
+            cachedAt: const Value(null),
+          ),
+        );
+
+    final body = await r.emails.getEmailBody(emailId);
+    expect(body.textBody, contains('Fresh from server'));
+  });
+
+  test('blob expiry: re-fetches body when cachedAt is older than 7 days',
+      () async {
+    await appendToInbox('old-body-test', body: 'Current content');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    final emailId = emails.first.id;
+
+    // Simulate a row cached 8 days ago.
+    await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+          EmailBodiesCompanion.insert(
+            emailId: emailId,
+            textBody: const Value('old text'),
+            cachedAt: Value(DateTime.now().subtract(const Duration(days: 8))),
+          ),
+        );
+
+    final body = await r.emails.getEmailBody(emailId);
+    expect(body.textBody, contains('Current content'));
   });
 
   test('sendEmail delivers via SMTP and appends copy to Sent folder', () async {
