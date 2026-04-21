@@ -218,6 +218,15 @@ LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final dir = await getApplicationSupportDirectory();
     final file = File(p.join(dir.path, 'sharedinbox.db'));
-    return NativeDatabase.createInBackground(file);
+    return NativeDatabase.createInBackground(
+      file,
+      setup: (db) {
+        // WAL lets readers and writers proceed concurrently (different account
+        // sync loops share the same DB).  busy_timeout makes SQLite retry for
+        // up to 5 s instead of immediately returning SQLITE_BUSY.
+        db.execute('PRAGMA journal_mode = WAL;');
+        db.execute('PRAGMA busy_timeout = 5000;');
+      },
+    );
   });
 }
