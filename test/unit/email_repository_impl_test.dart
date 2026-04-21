@@ -481,43 +481,6 @@ void main() {
       expect(await r.emails.getEmail('acc-1:5'), isNull);
     });
 
-    test('syncEmails reconciliation removes emails deleted on server',
-        () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.uidValidityResult = 1000;
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'IMAP:INBOX',
-              state: jsonEncode({'uidValidity': 1000, 'lastUid': 20}),
-              syncedAt: DateTime.now(),
-            ),
-          );
-      for (final uid in [10, 20]) {
-        await r.db.into(r.db.emails).insert(
-              EmailsCompanion.insert(
-                id: 'acc-1:$uid',
-                accountId: 'acc-1',
-                mailboxPath: 'INBOX',
-                uid: uid,
-                receivedAt: DateTime(2024),
-              ),
-            );
-      }
-      // No new UIDs; server only has uid=10 (uid=20 was deleted)
-      r.fakeImap.searchCallQueue = [
-        [],
-        [10],
-      ];
-
-      await r.emails.syncEmails('acc-1', 'INBOX');
-
-      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(emails, hasLength(1));
-      expect(emails.first.uid, 10);
-    });
-
     test('syncEmails full re-sync when UID validity changes', () async {
       final r = _makeReposWithFakes();
       await r.accounts.addAccount(_account, 'pw');

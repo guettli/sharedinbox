@@ -219,6 +219,43 @@ void main() {
     expect(afterSecond.map((e) => e.subject).toSet(), {'first', 'second'});
   });
 
+  test('syncEmails reconciliation removes emails deleted on server', () async {
+    await appendToInbox('keep');
+    await appendToInbox('delete-me');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+    expect(await r.emails.observeEmails('test', 'INBOX').first, hasLength(2));
+
+    // Delete second message directly on the server.
+    final imap = await _imapConnect(
+      host: imapHost,
+      port: imapPort,
+      user: userEmail,
+      pass: userPass,
+    );
+    try {
+      await imap.selectMailboxByPath('INBOX');
+      final search = await imap.uidSearchMessages(
+        searchCriteria: 'SUBJECT "delete-me"',
+      );
+      final uids = search.matchingSequence?.toList() ?? [];
+      expect(uids, hasLength(1));
+      final seq = MessageSequence.fromIds(uids, isUid: true);
+      await imap.uidMarkDeleted(seq);
+      await imap.uidExpunge(seq);
+    } finally {
+      await imap.logout();
+    }
+
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final remaining = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(remaining, hasLength(1));
+    expect(remaining.first.subject, 'keep');
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 
