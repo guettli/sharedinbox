@@ -393,37 +393,39 @@ class EmailRepositoryImpl implements EmailRepository {
             '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE)',
           );
     var bytes = 0;
-    for (final msg in fetch.messages) {
-      final envelope = msg.envelope;
-      if (envelope == null) {
-        log('IMAP: skipping message with no envelope (uid=${msg.uid}, mailbox=$mailboxPath)');
-        continue;
+    await _db.transaction(() async {
+      for (final msg in fetch.messages) {
+        final envelope = msg.envelope;
+        if (envelope == null) {
+          log('IMAP: skipping message with no envelope (uid=${msg.uid}, mailbox=$mailboxPath)');
+          continue;
+        }
+        final uid = msg.uid;
+        if (uid == null) {
+          log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
+          continue;
+        }
+        bytes += msg.size ?? 0;
+        final emailId = '${account.id}:$uid';
+        await _db.into(_db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: emailId,
+                accountId: account.id,
+                mailboxPath: mailboxPath,
+                uid: uid,
+                subject: Value(envelope.subject),
+                sentAt: Value(envelope.date),
+                receivedAt: envelope.date ?? DateTime.now(),
+                fromJson: Value(_encodeAddresses(envelope.from)),
+                toAddresses: Value(_encodeAddresses(envelope.to)),
+                ccJson: Value(_encodeAddresses(envelope.cc)),
+                isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
+                isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+                hasAttachment: Value(msg.hasAttachments()),
+              ),
+            );
       }
-      final uid = msg.uid;
-      if (uid == null) {
-        log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
-        continue;
-      }
-      bytes += msg.size ?? 0;
-      final emailId = '${account.id}:$uid';
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: emailId,
-              accountId: account.id,
-              mailboxPath: mailboxPath,
-              uid: uid,
-              subject: Value(envelope.subject),
-              sentAt: Value(envelope.date),
-              receivedAt: envelope.date ?? DateTime.now(),
-              fromJson: Value(_encodeAddresses(envelope.from)),
-              toAddresses: Value(_encodeAddresses(envelope.to)),
-              ccJson: Value(_encodeAddresses(envelope.cc)),
-              isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-              isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-              hasAttachment: Value(msg.hasAttachments()),
-            ),
-          );
-    }
+    });
     return bytes;
   }
 
