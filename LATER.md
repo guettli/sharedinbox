@@ -1,5 +1,7 @@
 # Later
 
+mail-loop.com (anstatt shared inbox).
+
 Create a re-usable JMAP package.
 
 ---
