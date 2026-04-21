@@ -1563,6 +1563,43 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<List<model.Email>> searchEmailsGlobal(
+    String accountId,
+    String query,
+  ) async {
+    final pattern = '%${query.toLowerCase()}%';
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.subject.like(pattern) | t.preview.like(pattern)),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..limit(50))
+        .get();
+    return rows.map(_toModel).toList();
+  }
+
+  @override
+  Future<List<model.Email>> getEmailsByAddress(
+    String accountId,
+    String address,
+  ) async {
+    final pattern = '%${address.toLowerCase()}%';
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.fromJson.like(pattern) |
+                    t.toAddresses.like(pattern) |
+                    t.ccJson.like(pattern)),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
+        .get();
+    return rows.map(_toModel).toList();
+  }
+
+  @override
   Future<List<model.Email>> searchEmails(
     String accountId,
     String mailboxPath,

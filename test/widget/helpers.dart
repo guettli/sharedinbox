@@ -22,11 +22,13 @@ import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
+import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/search_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Fake repositories
@@ -192,6 +194,20 @@ class FakeEmailRepository implements EmailRepository {
       _searchResults;
 
   @override
+  Future<List<Email>> searchEmailsGlobal(
+    String accountId,
+    String query,
+  ) async =>
+      _searchResults;
+
+  @override
+  Future<List<Email>> getEmailsByAddress(
+    String accountId,
+    String address,
+  ) async =>
+      [];
+
+  @override
   Stream<void> watchJmapPush(String accountId, String password) =>
       const Stream.empty();
 
@@ -256,6 +272,19 @@ Widget buildApp({
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
               accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/search',
+            builder: (ctx, state) => SearchScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/emails/by-address/:address',
+            builder: (ctx, state) => AddressEmailsScreen(
+              accountId: state.pathParameters['accountId']!,
+              address: state.pathParameters['address']!,
             ),
           ),
           GoRoute(

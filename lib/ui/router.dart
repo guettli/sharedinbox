@@ -2,11 +2,13 @@ import 'package:go_router/go_router.dart';
 
 import 'screens/account_list_screen.dart';
 import 'screens/add_account_screen.dart';
+import 'screens/address_emails_screen.dart';
 import 'screens/compose_screen.dart';
 import 'screens/edit_account_screen.dart';
 import 'screens/email_detail_screen.dart';
 import 'screens/email_list_screen.dart';
 import 'screens/mailbox_list_screen.dart';
+import 'screens/search_screen.dart';
 import 'screens/sync_log_screen.dart';
 
 final router = GoRouter(
@@ -30,6 +32,19 @@ final router = GoRouter(
           path: ':accountId/sync-log',
           builder: (ctx, state) => SyncLogScreen(
             accountId: state.pathParameters['accountId']!,
+          ),
+        ),
+        GoRoute(
+          path: ':accountId/search',
+          builder: (ctx, state) => SearchScreen(
+            accountId: state.pathParameters['accountId']!,
+          ),
+        ),
+        GoRoute(
+          path: ':accountId/emails/by-address/:address',
+          builder: (ctx, state) => AddressEmailsScreen(
+            accountId: state.pathParameters['accountId']!,
+            address: state.pathParameters['address']!,
           ),
         ),
         GoRoute(

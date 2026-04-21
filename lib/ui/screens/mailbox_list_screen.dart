@@ -20,6 +20,11 @@ class MailboxListScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Folders'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Search everywhere',
+            onPressed: () => context.push('/accounts/$accountId/search'),
+          ),
           accountAsync.when(
             loading: () => const SizedBox.shrink(),
             error: (_, __) => const SizedBox.shrink(),
