@@ -25,6 +25,7 @@ class JmapClient {
     required String accountId,
     required Set<String> capabilities,
     String? uploadUrl,
+    String? downloadUrl,
     String? eventSourceUrl,
   })  : _httpClient = httpClient,
         _credentials = credentials,
@@ -32,6 +33,7 @@ class JmapClient {
         _accountId = accountId,
         _capabilities = capabilities,
         _uploadUrl = uploadUrl,
+        _downloadUrl = downloadUrl,
         _eventSourceUrl = eventSourceUrl;
 
   final http.Client _httpClient;
@@ -40,6 +42,7 @@ class JmapClient {
   final String _accountId;
   final Set<String> _capabilities;
   final String? _uploadUrl;
+  final String? _downloadUrl;
   final String? _eventSourceUrl;
 
   String get accountId => _accountId;
@@ -84,6 +87,7 @@ class JmapClient {
 
     final capabilities = _extractCapabilities(session);
     final uploadUrl = session['uploadUrl'] as String?;
+    final downloadUrl = session['downloadUrl'] as String?;
     final eventSourceUrl = session['eventSourceUrl'] as String?;
 
     return JmapClient._(
@@ -93,6 +97,7 @@ class JmapClient {
       accountId: accountId,
       capabilities: capabilities,
       uploadUrl: uploadUrl,
+      downloadUrl: downloadUrl,
       eventSourceUrl: eventSourceUrl,
     );
   }
@@ -179,6 +184,34 @@ class JmapClient {
     final blobId = decoded['blobId'] as String?;
     if (blobId == null) throw JmapException('Blob upload: missing blobId');
     return blobId;
+  }
+
+  /// Downloads a blob by [blobId] and returns its raw bytes.
+  ///
+  /// Uses the `downloadUrl` URI template from the Session object (RFC 8620 §6).
+  Future<Uint8List> downloadBlob(
+    String blobId, {
+    String name = 'attachment',
+    String type = 'application/octet-stream',
+  }) async {
+    if (_downloadUrl == null) {
+      throw JmapException('Server does not advertise a downloadUrl');
+    }
+    final url = Uri.parse(
+      _downloadUrl
+          .replaceAll('{accountId}', Uri.encodeComponent(_accountId))
+          .replaceAll('{blobId}', Uri.encodeComponent(blobId))
+          .replaceAll('{name}', Uri.encodeComponent(name))
+          .replaceAll('{type}', Uri.encodeComponent(type)),
+    );
+    final resp = await _httpClient.get(
+      url,
+      headers: {'Authorization': 'Basic $_credentials'},
+    ).timeout(const Duration(seconds: 30));
+    if (resp.statusCode != 200) {
+      throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
+    }
+    return resp.bodyBytes;
   }
 
   static Uri _extractApiUrl(Map<String, dynamic> session, Uri sessionUri) {

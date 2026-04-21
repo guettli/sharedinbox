@@ -1539,6 +1539,23 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
+
+    if (account.type == account_model.AccountType.jmap) {
+      final jmap = await JmapClient.connect(
+        httpClient: _httpClient,
+        jmapUrl: Uri.parse(account.jmapUrl!),
+        username: _effectiveUsername(account),
+        password: password,
+      );
+      final bytes = await jmap.downloadBlob(
+        attachment.fetchPartId,
+        name: attachment.filename,
+        type: attachment.contentType,
+      );
+      await file.writeAsBytes(bytes);
+      return file.path;
+    }
+
     final client =
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
