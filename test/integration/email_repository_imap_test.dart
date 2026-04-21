@@ -6,11 +6,13 @@
 //   STALWART_SMTP_HOST, STALWART_SMTP_PORT
 //   STALWART_USER_B / STALWART_PASS_B  (alice@localhost)
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:test/test.dart';
@@ -131,7 +133,8 @@ void main() {
     return client;
   }
 
-  ({AccountRepositoryImpl accounts, EmailRepositoryImpl emails}) makeRepo() {
+  ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
+      makeRepo() {
     final db = openTestDatabase();
     final storage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, storage);
@@ -142,7 +145,7 @@ void main() {
       smtpConnect: testSmtpConnect,
       getCacheDir: () async => cacheDir,
     );
-    return (accounts: accounts, emails: emails);
+    return (db: db, accounts: accounts, emails: emails);
   }
 
   Future<void> appendToInbox(String subject, {String body = 'Body'}) async {
@@ -179,6 +182,20 @@ void main() {
     expect(emails, hasLength(1));
     expect(emails.first.subject, subject);
     expect(emails.first.isSeen, isFalse);
+  });
+
+  test('syncEmails saves IMAP checkpoint after full sync', () async {
+    await appendToInbox('checkpoint-test');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final states = await r.db.select(r.db.syncStates).get();
+    expect(states, hasLength(1));
+    final checkpoint = jsonDecode(states.first.state) as Map<String, dynamic>;
+    expect(checkpoint['uidValidity'], isA<int>());
+    expect((checkpoint['lastUid'] as int), greaterThan(0));
   });
 
   test('getEmailBody fetches body from IMAP and caches it', () async {

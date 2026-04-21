@@ -1,5 +1,9 @@
 # Later
 
+Create a re-usable JMAP package.
+
+---
+
 done?
 
 think about that: Maybe we should not mock jmap/imap/smtp. We  have a temproary Stalwart.

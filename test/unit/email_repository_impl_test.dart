@@ -481,26 +481,6 @@ void main() {
       expect(await r.emails.getEmail('acc-1:5'), isNull);
     });
 
-    test('syncEmails saves IMAP checkpoint after full sync', () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.uidValidityResult = 1000;
-      // Full sync now uses UID SEARCH ALL then UID FETCH.
-      r.fakeImap.searchUids = [10, 20];
-      r.fakeImap.uidFetchResults = [
-        buildEnvelopeMessage(uid: 10, subject: 'First'),
-        buildEnvelopeMessage(uid: 20, subject: 'Second'),
-      ];
-
-      await r.emails.syncEmails('acc-1', 'INBOX');
-
-      final states = await r.db.select(r.db.syncStates).get();
-      expect(states, hasLength(1));
-      final checkpoint = jsonDecode(states.first.state) as Map<String, dynamic>;
-      expect(checkpoint['uidValidity'], 1000);
-      expect(checkpoint['lastUid'], 20);
-    });
-
     test(
         'syncEmails incremental sync fetches only messages newer than checkpoint',
         () async {
