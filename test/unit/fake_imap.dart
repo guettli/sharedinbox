@@ -225,33 +225,6 @@ class FakeImapClient extends imap.ImapClient {
   }
 }
 
-/// Configurable fake SMTP client.
-class FakeSmtpClient extends imap.SmtpClient {
-  FakeSmtpClient() : super('fake.domain');
-
-  bool messageSent = false;
-  bool quitCalled = false;
-  imap.MimeMessage? lastSentMessage;
-
-  @override
-  Future<imap.SmtpResponse> sendMessage(
-    imap.MimeMessage message, {
-    bool use8BitEncoding = false,
-    imap.MailAddress? from,
-    List<imap.MailAddress>? recipients,
-  }) async {
-    messageSent = true;
-    lastSentMessage = message;
-    return imap.SmtpResponse(['250 OK']);
-  }
-
-  @override
-  Future<imap.SmtpResponse> quit() async {
-    quitCalled = true;
-    return imap.SmtpResponse(['221 Bye']);
-  }
-}
-
 /// Builds a [MimeMessage] with no envelope (simulates a malformed FETCH row
 /// that should be skipped by the repository).
 imap.MimeMessage buildMessageWithoutEnvelope() => imap.MimeMessage()..uid = 99;
