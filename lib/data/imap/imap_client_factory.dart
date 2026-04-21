@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart';
-import 'package:flutter/foundation.dart';
 
 import '../../core/models/account.dart';
 
@@ -36,7 +35,7 @@ Future<ImapClient> connectImap(
   final verboseBuffer = Zone.current[verboseLogKey] as StringBuffer?;
   final client = ImapClient(
     defaultResponseTimeout: const Duration(seconds: 20),
-    isLogEnabled: kDebugMode || verboseBuffer != null,
+    isLogEnabled: verboseBuffer != null,
   );
   await client.connectToServer(account.imapHost, account.imapPort);
   await client.login(username, password);
