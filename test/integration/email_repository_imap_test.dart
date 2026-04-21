@@ -219,6 +219,60 @@ void main() {
     expect(afterSecond.map((e) => e.subject).toSet(), {'first', 'second'});
   });
 
+  test('CONDSTORE fast-path: second sync skips fetch when nothing changed',
+      () async {
+    await appendToInbox('condstore-test');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+
+    // First sync — full sync, saves modseq checkpoint.
+    await r.emails.syncEmails('test', 'INBOX');
+    final stateAfterFirst = await r.db.select(r.db.syncStates).get();
+    expect(stateAfterFirst, hasLength(1));
+
+    // Second sync with no server changes — CONDSTORE fast-path should skip
+    // fetching. DB email count must stay the same.
+    await r.emails.syncEmails('test', 'INBOX');
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(emails, hasLength(1));
+  });
+
+  test('CONDSTORE flag refresh updates flags in local DB', () async {
+    await appendToInbox('flag-refresh-test');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(emails.first.isSeen, isFalse);
+
+    // Mark seen directly on server, advancing modseq.
+    final imap = await _imapConnect(
+      host: imapHost,
+      port: imapPort,
+      user: userEmail,
+      pass: userPass,
+    );
+    try {
+      await imap.selectMailboxByPath('INBOX');
+      final seq = MessageSequence.fromIds(
+        [emails.first.uid],
+        isUid: true,
+      );
+      await imap.uidMarkSeen(seq);
+    } finally {
+      await imap.logout();
+    }
+
+    // Second sync — modseq changed, should refresh flags.
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final refreshed = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(refreshed.first.isSeen, isTrue);
+  });
+
   test('syncEmails reconciliation removes emails deleted on server', () async {
     await appendToInbox('keep');
     await appendToInbox('delete-me');
