@@ -93,10 +93,6 @@ class _AccountTile extends ConsumerWidget {
             onSelected: (action) => _onAction(context, action),
             itemBuilder: (_) => const [
               PopupMenuItem(
-                value: _AccountAction.allMailboxes,
-                child: Text('All mailboxes'),
-              ),
-              PopupMenuItem(
                 value: _AccountAction.syncLog,
                 child: Text('Sync log'),
               ),
@@ -113,16 +109,12 @@ class _AccountTile extends ConsumerWidget {
           ),
         ],
       ),
-      onTap: () => context.push(
-        '/accounts/${account.id}/mailboxes/${Uri.encodeComponent('INBOX')}/emails',
-      ),
+      onTap: () => context.push('/accounts/${account.id}/mailboxes'),
     );
   }
 
   Future<void> _onAction(BuildContext context, _AccountAction action) async {
     switch (action) {
-      case _AccountAction.allMailboxes:
-        await context.push('/accounts/${account.id}/mailboxes');
       case _AccountAction.syncLog:
         await context.push('/accounts/${account.id}/sync-log');
       case _AccountAction.edit:
@@ -156,4 +148,4 @@ class _AccountTile extends ConsumerWidget {
   }
 }
 
-enum _AccountAction { allMailboxes, syncLog, edit, delete }
+enum _AccountAction { syncLog, edit, delete }
