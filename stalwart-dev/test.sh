@@ -62,6 +62,6 @@ export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
 
 START=$(date +%s)
-fvm flutter test test/integration/
+fvm flutter test --concurrency=1 test/integration/
 END=$(date +%s)
 echo "integration: $((END - START))s"

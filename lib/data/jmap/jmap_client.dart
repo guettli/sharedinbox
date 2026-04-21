@@ -123,7 +123,7 @@ class JmapClient {
           },
           body: body,
         )
-        .timeout(const Duration(seconds: 30));
+        .timeout(const Duration(seconds: 10));
 
     if (resp.statusCode != 200) {
       throw JmapException('API call failed (HTTP ${resp.statusCode})');
@@ -160,7 +160,7 @@ class JmapClient {
           },
           body: data,
         )
-        .timeout(const Duration(seconds: 30));
+        .timeout(const Duration(seconds: 10));
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw JmapException('Blob upload failed (HTTP ${resp.statusCode})');
     }

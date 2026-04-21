@@ -61,7 +61,9 @@ Future<enough_mail.ImapClient> _connectImapPlaintext(
   String username,
   String password,
 ) async {
-  final client = enough_mail.ImapClient();
+  final client = enough_mail.ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
   await client.connectToServer(
     account.imapHost,
     account.imapPort,
@@ -125,7 +127,7 @@ void main() {
   });
 
   test('concurrent IMAP + JMAP sync caches all emails without errors',
-      timeout: const Timeout(Duration(minutes: 2)), () async {
+      timeout: const Timeout(Duration(seconds: 30)), () async {
     final ts = DateTime.now().millisecondsSinceEpoch;
     const msgCount = 2;
 

@@ -27,7 +27,8 @@ Future<ImapClient> _imapConnect({
   required String user,
   required String pass,
 }) async {
-  final client = ImapClient();
+  final client =
+      ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
   await client.connectToServer(host, port, isSecure: false);
   await client.login(user, pass);
   return client;
@@ -109,7 +110,8 @@ void main() {
     String username,
     String password,
   ) async {
-    final client = ImapClient();
+    final client =
+        ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
     await client.connectToServer(a.imapHost, a.imapPort, isSecure: false);
     await client.login(username, password);
     return client;
