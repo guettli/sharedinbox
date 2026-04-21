@@ -21,6 +21,11 @@ class Account {
   /// then to the local part of [email] (the part before '@').
   final String username;
 
+  /// When true, raw protocol traffic is captured and written to the sync log.
+  /// Never enable in production — logs contain sensitive data even after
+  /// credential redaction.
+  final bool verbose;
+
   const Account({
     required this.id,
     required this.displayName,
@@ -34,5 +39,6 @@ class Account {
     this.smtpPort = 587,
     this.smtpSsl = false,
     this.jmapUrl,
+    this.verbose = false,
   });
 }

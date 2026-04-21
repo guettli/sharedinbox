@@ -115,6 +115,31 @@ class _SyncLogTile extends StatelessWidget {
                     style: TextStyle(color: errorColor, fontSize: 12),
                   ),
                 ),
+              if (entry.protocolLog != null) ...[
+                const Padding(
+                  padding: EdgeInsets.only(top: 6, bottom: 2),
+                  child: Text(
+                    'Protocol log',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    entry.protocolLog!,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontFamily: 'monospace',
+                      color: Colors.greenAccent,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

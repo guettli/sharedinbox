@@ -24,6 +24,8 @@ class Accounts extends Table {
   TextColumn get jmapUrl => text().nullable()();
   // Added in schema v3:
   TextColumn get username => text().withDefault(const Constant(''))();
+  // Added in schema v13:
+  BoolColumn get verbose => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -137,6 +139,8 @@ class SyncLogs extends Table {
   IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
   DateTimeColumn get startedAt => dateTime()();
   DateTimeColumn get finishedAt => dateTime()();
+  // Added in schema v13: raw protocol log when account.verbose == true.
+  TextColumn get protocolLog => text().nullable()();
 }
 
 /// Per-mailbox breakdown for a single sync cycle.
@@ -185,7 +189,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -226,6 +230,10 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 12) {
             await m.createTable(syncLogMailboxes);
+          }
+          if (from < 13) {
+            await m.addColumn(accounts, accounts.verbose);
+            await m.addColumn(syncLogs, syncLogs.protocolLog);
           }
         },
       );

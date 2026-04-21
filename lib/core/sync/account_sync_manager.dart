@@ -2,7 +2,8 @@ import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 
-import '../../data/imap/imap_client_factory.dart';
+import '../../data/imap/imap_client_factory.dart'
+    show ImapConnectFn, connectImap, verboseLogKey;
 import '../models/account.dart';
 import '../models/email.dart' show SyncEmailsResult;
 import '../repositories/account_repository.dart';
@@ -124,7 +125,8 @@ class _AccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        final stats = await _sync();
+        final (_SyncStats stats, String? capturedLog) =
+            await _runSync(account.verbose);
         await _syncLog.log(
           accountId: account.id,
           success: true,
@@ -137,6 +139,7 @@ class _AccountSync implements _SyncLoop {
           startedAt: startedAt,
           finishedAt: DateTime.now(),
           mailboxStats: stats.mailboxStats,
+          protocolLog: capturedLog,
         );
         await _idle();
         _backoffSeconds = 5;
@@ -167,6 +170,19 @@ class _AccountSync implements _SyncLoop {
         _backoffSeconds = (_backoffSeconds * 2).clamp(5, 300);
       }
     }
+  }
+
+  Future<(_SyncStats, String?)> _runSync(bool verbose) async {
+    if (!verbose) return (await _sync(), null);
+    final buffer = StringBuffer();
+    final stats = await runZoned(
+      _sync,
+      zoneValues: {verboseLogKey: buffer},
+      zoneSpecification: ZoneSpecification(
+        print: (_, __, ___, line) => buffer.writeln(line),
+      ),
+    );
+    return (stats, _redactCredentials(buffer.toString()));
   }
 
   Future<_SyncStats> _sync() async {
@@ -284,7 +300,8 @@ class _JmapAccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        final stats = await _sync();
+        final (_SyncStats stats, String? capturedLog) =
+            await _runSync(account.verbose);
         await _syncLog.log(
           accountId: account.id,
           success: true,
@@ -297,6 +314,7 @@ class _JmapAccountSync implements _SyncLoop {
           startedAt: startedAt,
           finishedAt: DateTime.now(),
           mailboxStats: stats.mailboxStats,
+          protocolLog: capturedLog,
         );
         _backoffSeconds = 5;
         await _wait();
@@ -327,6 +345,19 @@ class _JmapAccountSync implements _SyncLoop {
         _backoffSeconds = (_backoffSeconds * 2).clamp(5, 300);
       }
     }
+  }
+
+  Future<(_SyncStats, String?)> _runSync(bool verbose) async {
+    if (!verbose) return (await _sync(), null);
+    final buffer = StringBuffer();
+    final stats = await runZoned(
+      _sync,
+      zoneValues: {verboseLogKey: buffer},
+      zoneSpecification: ZoneSpecification(
+        print: (_, __, ___, line) => buffer.writeln(line),
+      ),
+    );
+    return (stats, buffer.toString());
   }
 
   Future<_SyncStats> _sync() async {
@@ -417,4 +448,20 @@ class _SyncStats {
   final int pendingFlushed;
   final int bytesTransferred;
   final List<MailboxSyncStats> mailboxStats;
+}
+
+/// Replaces credentials in a captured IMAP protocol log.
+///
+/// Redacts the password argument from LOGIN commands and the base64 payload
+/// from AUTHENTICATE commands. Other lines pass through unchanged.
+String _redactCredentials(String log) {
+  return log
+      .replaceAllMapped(
+        RegExp(r'(LOGIN\s+\S+\s+)\S+', caseSensitive: false),
+        (m) => '${m.group(1)}[REDACTED]',
+      )
+      .replaceAllMapped(
+        RegExp(r'(AUTHENTICATE\s+\w+\s+)\S+', caseSensitive: false),
+        (m) => '${m.group(1)}[REDACTED]',
+      );
 }

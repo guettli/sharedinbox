@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+
+import '../imap/imap_client_factory.dart' show verboseLogKey;
 
 const _coreUsing = [
   'urn:ietf:params:jmap:core',
@@ -124,6 +127,14 @@ class JmapClient {
           body: body,
         )
         .timeout(const Duration(seconds: 10));
+
+    final log = Zone.current[verboseLogKey] as StringBuffer?;
+    if (log != null) {
+      log.writeln('JMAP → POST $_apiUrl');
+      log.writeln(body);
+      log.writeln('JMAP ← ${resp.statusCode}');
+      log.writeln(resp.body);
+    }
 
     if (resp.statusCode != 200) {
       throw JmapException('API call failed (HTTP ${resp.statusCode})');

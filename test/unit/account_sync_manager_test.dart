@@ -202,6 +202,7 @@ class _CapturingSyncLogRepository implements SyncLogRepository {
     required DateTime startedAt,
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
+    String? protocolLog,
   }) async {
     entries.add(
       SyncLogEntry(

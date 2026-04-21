@@ -22,6 +22,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     required DateTime startedAt,
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
+    String? protocolLog,
   }) async {
     await _db.transaction(() async {
       final logId = await _db.into(_db.syncLogs).insert(
@@ -37,6 +38,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
               bytesTransferred: Value(bytesTransferred),
               startedAt: startedAt,
               finishedAt: finishedAt,
+              protocolLog: Value(protocolLog),
             ),
           );
       for (final s in mailboxStats) {
@@ -80,6 +82,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
             bytesTransferred: r.bytesTransferred,
             startedAt: r.startedAt,
             finishedAt: r.finishedAt,
+            protocolLog: r.protocolLog,
             mailboxStats: mailboxRows
                 .map(
                   (m) => MailboxSyncStats(

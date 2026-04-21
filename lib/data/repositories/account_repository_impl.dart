@@ -41,6 +41,7 @@ class AccountRepositoryImpl implements AccountRepository {
             accountType: Value(account.type.name),
             jmapUrl: Value(account.jmapUrl),
             username: Value(account.username),
+            verbose: Value(account.verbose),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
@@ -62,6 +63,7 @@ class AccountRepositoryImpl implements AccountRepository {
         accountType: Value(account.type.name),
         jmapUrl: Value(account.jmapUrl),
         username: Value(account.username),
+        verbose: Value(account.verbose),
       ),
     );
     if (password != null) {
@@ -99,5 +101,6 @@ class AccountRepositoryImpl implements AccountRepository {
         smtpPort: row.smtpPort,
         smtpSsl: row.smtpSsl,
         jmapUrl: row.jmapUrl,
+        verbose: row.verbose,
       );
 }

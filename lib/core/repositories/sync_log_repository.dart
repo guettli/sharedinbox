@@ -26,6 +26,7 @@ class SyncLogEntry {
     required this.startedAt,
     required this.finishedAt,
     this.mailboxStats = const [],
+    this.protocolLog,
   });
 
   final int id;
@@ -40,6 +41,7 @@ class SyncLogEntry {
   final DateTime startedAt;
   final DateTime finishedAt;
   final List<MailboxSyncStats> mailboxStats;
+  final String? protocolLog;
 
   Duration get duration => finishedAt.difference(startedAt);
   bool get isOk => result == 'ok';
@@ -59,6 +61,7 @@ abstract class SyncLogRepository {
     required DateTime startedAt,
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
+    String? protocolLog,
   });
 
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId);
@@ -81,6 +84,7 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     required DateTime startedAt,
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
+    String? protocolLog,
   }) async {}
 
   @override

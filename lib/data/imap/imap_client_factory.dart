@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:enough_mail/enough_mail.dart';
 import 'package:flutter/foundation.dart';
 
@@ -9,9 +11,18 @@ typedef ImapConnectFn = Future<ImapClient> Function(
   String password,
 );
 
+/// Zone value key signalling that a [StringBuffer] for protocol logging is
+/// active. When this key is non-null in the current zone, [connectImap]
+/// enables IMAP trace logging so the output is captured by the zone's
+/// print override.
+const verboseLogKey = #verboseProtocolLog;
+
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// Throws [Exception] if the account is not configured for SSL/TLS.
+///
+/// When the current [Zone] carries a [StringBuffer] under [verboseLogKey],
+/// IMAP trace logging is enabled so each command/response is captured there.
 Future<ImapClient> connectImap(
   Account account,
   String username,
@@ -22,9 +33,10 @@ Future<ImapClient> connectImap(
       'Unencrypted IMAP connections are not allowed. Enable SSL/TLS.',
     );
   }
+  final verboseBuffer = Zone.current[verboseLogKey] as StringBuffer?;
   final client = ImapClient(
     defaultResponseTimeout: const Duration(seconds: 20),
-    isLogEnabled: kDebugMode,
+    isLogEnabled: kDebugMode || verboseBuffer != null,
   );
   await client.connectToServer(account.imapHost, account.imapPort);
   await client.login(username, password);

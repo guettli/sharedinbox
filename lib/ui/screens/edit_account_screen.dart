@@ -31,6 +31,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = false;
+  var _verbose = false;
   final _jmapUrlCtrl = TextEditingController();
 
   // -- "Try connection" state ------------------------------------------------
@@ -60,6 +61,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _smtpHostCtrl.text = account.smtpHost;
     _smtpPortCtrl.text = account.smtpPort.toString();
     _smtpSsl = account.smtpSsl;
+    _verbose = account.verbose;
     _jmapUrlCtrl.text = account.jmapUrl ?? '';
     setState(() => _loading = false);
   }
@@ -96,6 +98,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       smtpSsl: _smtpSsl,
       jmapUrl:
           _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
+      verbose: _verbose,
     );
   }
 
@@ -160,6 +163,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             smtpPort: updated.smtpPort,
             smtpSsl: updated.smtpSsl,
             jmapUrl: updated.jmapUrl,
+            verbose: updated.verbose,
           );
         }
       }
@@ -251,6 +255,16 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 onChanged: (v) => setState(() => _smtpSsl = v),
               ),
             ],
+            const Divider(height: 32),
+            SwitchListTile(
+              title: const Text('Verbose protocol logging'),
+              subtitle: const Text(
+                'Writes raw protocol traffic to the sync log. '
+                'Disable when not debugging.',
+              ),
+              value: _verbose,
+              onChanged: (v) => setState(() => _verbose = v),
+            ),
             if (_tryOk != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
