@@ -41,6 +41,7 @@ const _excluded = {
   'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/compose_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
+  'lib/ui/screens/sync_log_screen.dart',
 };
 
 void main() {

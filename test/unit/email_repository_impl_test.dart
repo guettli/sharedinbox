@@ -485,7 +485,9 @@ void main() {
       final r = _makeReposWithFakes();
       await r.accounts.addAccount(_account, 'pw');
       r.fakeImap.uidValidityResult = 1000;
-      r.fakeImap.fetchResults = [
+      // Full sync now uses UID SEARCH ALL then UID FETCH.
+      r.fakeImap.searchUids = [10, 20];
+      r.fakeImap.uidFetchResults = [
         buildEnvelopeMessage(uid: 10, subject: 'First'),
         buildEnvelopeMessage(uid: 20, subject: 'Second'),
       ];
@@ -599,7 +601,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      r.fakeImap.fetchResults = [
+      // Full sync (UID validity reset) uses UID SEARCH ALL then UID FETCH.
+      r.fakeImap.searchUids = [1];
+      r.fakeImap.uidFetchResults = [
         buildEnvelopeMessage(uid: 1, subject: 'Fresh start'),
       ];
 
@@ -618,7 +622,9 @@ void main() {
     test('syncEmails skips messages with no envelope or no uid', () async {
       final r = _makeReposWithFakes();
       await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.fetchResults = [
+      // Full sync uses UID SEARCH ALL then UID FETCH.
+      r.fakeImap.searchUids = [99, 42]; // 99 = buildMessageWithoutEnvelope uid
+      r.fakeImap.uidFetchResults = [
         buildMessageWithoutEnvelope(), // no envelope → skip
         buildEnvelopeMessage(uid: 42, subject: 'Valid'),
       ];

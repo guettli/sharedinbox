@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../di.dart';
 
@@ -28,32 +29,42 @@ class SettingsScreen extends ConsumerWidget {
                   leading: const Icon(Icons.account_circle),
                   title: Text(a.displayName),
                   subtitle: Text(a.email),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: () async {
-                      final confirm = await showDialog<bool>(
-                        context: ctx,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Remove account?'),
-                          content: Text(
-                            'Remove ${a.displayName}? Local data will be deleted.',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: const Text('Cancel'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.history),
+                        tooltip: 'Sync log',
+                        onPressed: () => ctx.push('/accounts/${a.id}/sync-log'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete),
+                        onPressed: () async {
+                          final confirm = await showDialog<bool>(
+                            context: ctx,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Remove account?'),
+                              content: Text(
+                                'Remove ${a.displayName}? Local data will be deleted.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('Remove'),
+                                ),
+                              ],
                             ),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: const Text('Remove'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirm == true) {
-                        await repo.removeAccount(a.id);
-                      }
-                    },
+                          );
+                          if (confirm == true) {
+                            await repo.removeAccount(a.id);
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ),
             ],

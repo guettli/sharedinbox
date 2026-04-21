@@ -8,6 +8,7 @@ import 'screens/email_detail_screen.dart';
 import 'screens/email_list_screen.dart';
 import 'screens/mailbox_list_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/sync_log_screen.dart';
 
 final router = GoRouter(
   initialLocation: '/accounts',
@@ -23,6 +24,12 @@ final router = GoRouter(
         GoRoute(
           path: ':accountId/edit',
           builder: (ctx, state) => EditAccountScreen(
+            accountId: state.pathParameters['accountId']!,
+          ),
+        ),
+        GoRoute(
+          path: ':accountId/sync-log',
+          builder: (ctx, state) => SyncLogScreen(
             accountId: state.pathParameters['accountId']!,
           ),
         ),

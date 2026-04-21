@@ -227,10 +227,14 @@ class EmailRepositoryImpl implements EmailRepository {
     final client =
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
-      // Enable CONDSTORE so the server returns HIGHESTMODSEQ in SELECT and
-      // honours CHANGEDSINCE modifiers on FETCH (RFC 7162).
-      final selectedMailbox =
-          await client.selectMailboxByPath(mailboxPath, enableCondStore: true);
+      // Only request CONDSTORE if the server advertises it. Servers that don't
+      // support the extension may reject SELECT with (CONDSTORE) with BAD.
+      final supportsCondStore = client.serverInfo.supports('CONDSTORE') ||
+          client.serverInfo.supports('QRESYNC');
+      final selectedMailbox = await client.selectMailboxByPath(
+        mailboxPath,
+        enableCondStore: supportsCondStore,
+      );
       final uidValidity = selectedMailbox.uidValidity ?? 0;
       final serverModSeq = selectedMailbox.highestModSequence;
       final resourceType = 'IMAP:$mailboxPath';
@@ -248,13 +252,21 @@ class EmailRepositoryImpl implements EmailRepository {
                 ))
               .go();
         }
-        await _fetchAndUpsertImap(
-          client,
-          account,
-          mailboxPath,
-          imap.MessageSequence.fromAll(),
-        );
-        final maxUid = await _maxLocalUid(account.id, mailboxPath);
+        // Use UID SEARCH ALL + UID FETCH so every message gets a reliable UID.
+        // Regular FETCH 1:* may not populate msg.uid on all servers.
+        final allUids = (await client.uidSearchMessages(searchCriteria: 'ALL'))
+                .matchingSequence
+                ?.toList() ??
+            [];
+        if (allUids.isNotEmpty) {
+          await _fetchAndUpsertImap(
+            client,
+            account,
+            mailboxPath,
+            imap.MessageSequence.fromIds(allUids, isUid: true),
+          );
+        }
+        final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
         await _saveImapCheckpoint(
           account.id,
           resourceType,
@@ -389,18 +401,6 @@ class EmailRepositoryImpl implements EmailRepository {
             ),
           );
     }
-  }
-
-  Future<int> _maxLocalUid(String accountId, String mailboxPath) async {
-    final rows = await (_db.select(_db.emails)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.mailboxPath.equals(mailboxPath),
-          ))
-        .get();
-    if (rows.isEmpty) return 0;
-    return rows.map((r) => r.uid).reduce(math.max);
   }
 
   Future<Map<String, dynamic>?> _loadImapCheckpoint(

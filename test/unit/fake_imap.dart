@@ -1,9 +1,19 @@
 import 'package:enough_mail/enough_mail.dart' as imap;
+// ignore: implementation_imports
+import 'package:enough_mail/src/private/util/client_base.dart'
+    show ConnectionInfo;
 
 /// Configurable fake IMAP client that extends the real ImapClient but
 /// overrides every network method to return pre-set data.
 class FakeImapClient extends imap.ImapClient {
   FakeImapClient() : super();
+
+  /// Override serverInfo with a pre-built instance so tests can access
+  /// capabilities without going through the real (uninitialized) late field.
+  @override
+  final imap.ImapServerInfo serverInfo = imap.ImapServerInfo(
+    const ConnectionInfo('fake.host', 993, isSecure: true),
+  )..capabilities = [const imap.Capability('CONDSTORE')];
 
   List<imap.MimeMessage> fetchResults = [];
   List<imap.MimeMessage> uidFetchResults = [];

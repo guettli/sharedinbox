@@ -26,4 +26,26 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
           ),
         );
   }
+
+  @override
+  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) {
+    return (_db.select(_db.syncLogs)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.desc(t.startedAt)])
+          ..limit(100))
+        .watch()
+        .map(
+          (rows) => rows
+              .map(
+                (r) => SyncLogEntry(
+                  id: r.id,
+                  result: r.result,
+                  errorMessage: r.errorMessage,
+                  startedAt: r.startedAt,
+                  finishedAt: r.finishedAt,
+                ),
+              )
+              .toList(),
+        );
+  }
 }
