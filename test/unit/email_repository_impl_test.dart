@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -17,8 +16,6 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart';
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -178,36 +175,6 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     httpClient: httpClient,
   );
   return (db: db, accounts: accounts, emails: emails);
-}
-
-({
-  AppDatabase db,
-  AccountRepositoryImpl accounts,
-  EmailRepositoryImpl emails,
-  FakeImapClient fakeImap,
-  FakeSmtpClient fakeSmtp,
-  Directory cacheDir,
-}) _makeReposWithFakes() {
-  final db = openTestDatabase();
-  final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-  final fakeImap = FakeImapClient();
-  final fakeSmtp = FakeSmtpClient();
-  final cacheDir = Directory.systemTemp.createTempSync('test_attach_');
-  final emails = EmailRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => fakeImap,
-    smtpConnect: (_, __, ___) async => fakeSmtp,
-    getCacheDir: () async => cacheDir,
-  );
-  return (
-    db: db,
-    accounts: accounts,
-    emails: emails,
-    fakeImap: fakeImap,
-    fakeSmtp: fakeSmtp,
-    cacheDir: cacheDir,
-  );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -505,7 +472,7 @@ void main() {
     });
 
     test('evicts IMAP change after max attempts (5)', () async {
-      final r = _makeReposWithFakes();
+      final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       // Pre-seed a flag_seen at attempts=4
       await r.db.into(r.db.pendingChanges).insert(
