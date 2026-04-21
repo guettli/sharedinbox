@@ -62,6 +62,14 @@ export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
 
 START=$(date +%s)
-fvm flutter test --concurrency=1 test/integration/
+# If unit tests already produced a coverage baseline, merge integration coverage
+# into it so the final gate reflects both suites.
+if [ -f coverage/lcov.info ]; then
+  cp coverage/lcov.info coverage/lcov.base.info
+  fvm flutter test --concurrency=1 --coverage --merge-coverage test/integration/
+  rm -f coverage/lcov.base.info
+else
+  fvm flutter test --concurrency=1 test/integration/
+fi
 END=$(date +%s)
 echo "integration: $((END - START))s"

@@ -28,6 +28,9 @@
             # Headless display for UI integration tests
             xvfb-run          # wraps Xvfb; xvfb-run --auto-servernum ...
 
+            # Coverage merging (flutter test --merge-coverage requires lcov)
+            lcov
+
             # Utilities
             git
             curl

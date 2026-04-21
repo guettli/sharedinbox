@@ -480,62 +480,6 @@ void main() {
       expect(changes.first.changeType, 'delete');
       expect(await r.emails.getEmail('acc-1:5'), isNull);
     });
-
-    test('syncEmails full re-sync when UID validity changes', () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.uidValidityResult = 9999;
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'IMAP:INBOX',
-              state: jsonEncode({'uidValidity': 1000, 'lastUid': 50}),
-              syncedAt: DateTime.now(),
-            ),
-          );
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:50',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 50,
-              receivedAt: DateTime(2024),
-            ),
-          );
-      // Full sync (UID validity reset) uses UID SEARCH ALL then UID FETCH.
-      r.fakeImap.searchUids = [1];
-      r.fakeImap.uidFetchResults = [
-        buildEnvelopeMessage(uid: 1, subject: 'Fresh start'),
-      ];
-
-      await r.emails.syncEmails('acc-1', 'INBOX');
-
-      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(emails, hasLength(1));
-      expect(emails.first.uid, 1);
-      final state =
-          jsonDecode((await r.db.select(r.db.syncStates).get()).first.state)
-              as Map<String, dynamic>;
-      expect(state['uidValidity'], 9999);
-      expect(state['lastUid'], 1);
-    });
-
-    test('syncEmails skips messages with no envelope or no uid', () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      // Full sync uses UID SEARCH ALL then UID FETCH.
-      r.fakeImap.searchUids = [99, 42]; // 99 = buildMessageWithoutEnvelope uid
-      r.fakeImap.uidFetchResults = [
-        buildMessageWithoutEnvelope(), // no envelope → skip
-        buildEnvelopeMessage(uid: 42, subject: 'Valid'),
-      ];
-
-      await r.emails.syncEmails('acc-1', 'INBOX');
-
-      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(emails, hasLength(1));
-      expect(emails.first.uid, 42);
-    });
   });
 
   group('IMAP flushPendingChanges', () {

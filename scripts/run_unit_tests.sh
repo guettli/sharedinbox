@@ -11,6 +11,5 @@ else
   cat "$tmp"
   exit 1
 fi
-fvm dart run scripts/check_coverage.dart
 END=$(date +%s)
 echo "test: $((END - START))s"

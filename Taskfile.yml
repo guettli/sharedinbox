@@ -131,10 +131,19 @@ tasks:
     cmds:
       - fvm flutter run -d linux --no-pub
 
+  coverage:
+    desc: Coverage gate — run after test (and optionally integration) have written lcov.info
+    deps: [_nix-check]
+    cmds:
+      - fvm dart run scripts/check_coverage.dart
+
   check-fast:
     desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
     deps: [analyze, test, test-widget]
 
   check:
-    desc: Full check suite — analyze + unit tests + widget tests + build-linux + integration in parallel
-    deps: [analyze, test, test-widget, build-linux, integration]
+    desc: Full check suite — unit tests first, then integration (merges coverage), then gate
+    deps: [analyze, test-widget, build-linux, test]
+    cmds:
+      - task: integration
+      - task: coverage
