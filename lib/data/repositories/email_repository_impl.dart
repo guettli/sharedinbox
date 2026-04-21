@@ -1292,7 +1292,9 @@ class EmailRepositoryImpl implements EmailRepository {
         responses = await jmap.call([
           [
             'Email/set',
-            setArgs({'destroy': jmapEmailId}),
+            setArgs({
+              'destroy': [jmapEmailId],
+            }),
             '0',
           ]
         ]);
