@@ -139,6 +139,19 @@ class SyncLogs extends Table {
   DateTimeColumn get finishedAt => dateTime()();
 }
 
+/// Per-mailbox breakdown for a single sync cycle.
+/// Each row is a child of one SyncLogs row.
+@DataClassName('SyncLogMailboxRow')
+class SyncLogMailboxes extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get syncLogId =>
+      integer().references(SyncLogs, #id, onDelete: KeyAction.cascade)();
+  TextColumn get mailboxPath => text()();
+  IntColumn get fetched => integer().withDefault(const Constant(0))();
+  IntColumn get skipped => integer().withDefault(const Constant(0))();
+  IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
+}
+
 /// Auto-saved compose drafts — persisted across app restarts.
 class Drafts extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -165,13 +178,14 @@ class Drafts extends Table {
     SyncStates,
     PendingChanges,
     SyncLogs,
+    SyncLogMailboxes,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -209,6 +223,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 11) {
             await m.addColumn(syncLogs, syncLogs.emailsSkipped);
             await m.addColumn(syncLogs, syncLogs.bytesTransferred);
+          }
+          if (from < 12) {
+            await m.createTable(syncLogMailboxes);
           }
         },
       );

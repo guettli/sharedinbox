@@ -201,6 +201,7 @@ class _CapturingSyncLogRepository implements SyncLogRepository {
     required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
+    List<MailboxSyncStats> mailboxStats = const [],
   }) async {
     entries.add(
       SyncLogEntry(

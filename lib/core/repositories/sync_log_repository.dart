@@ -1,3 +1,17 @@
+class MailboxSyncStats {
+  const MailboxSyncStats({
+    required this.mailboxPath,
+    required this.fetched,
+    required this.skipped,
+    required this.bytesTransferred,
+  });
+
+  final String mailboxPath;
+  final int fetched;
+  final int skipped;
+  final int bytesTransferred;
+}
+
 class SyncLogEntry {
   const SyncLogEntry({
     required this.id,
@@ -11,6 +25,7 @@ class SyncLogEntry {
     required this.bytesTransferred,
     required this.startedAt,
     required this.finishedAt,
+    this.mailboxStats = const [],
   });
 
   final int id;
@@ -24,6 +39,7 @@ class SyncLogEntry {
   final int bytesTransferred;
   final DateTime startedAt;
   final DateTime finishedAt;
+  final List<MailboxSyncStats> mailboxStats;
 
   Duration get duration => finishedAt.difference(startedAt);
   bool get isOk => result == 'ok';
@@ -42,6 +58,7 @@ abstract class SyncLogRepository {
     required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
+    List<MailboxSyncStats> mailboxStats = const [],
   });
 
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId);
@@ -63,6 +80,7 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
+    List<MailboxSyncStats> mailboxStats = const [],
   }) async {}
 
   @override

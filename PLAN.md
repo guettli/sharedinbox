@@ -14,22 +14,9 @@ IMAP/SMTP server
 
 UI never touches the network. The sync layer runs independently.
 
-## Phases
+## Next
 
-| Phase | Scope | Status |
-| --- | --- | --- |
-| 0 — Scaffold | pubspec, Drift schema, DI, router, enough_mail from pub.dev | Done |
-| 1 — Core models | `Account`, `Mailbox`, `Email`, `EmailBody`, repository interfaces | Done |
-| 2 — DB layer | Drift tables, `AccountRepositoryImpl`, `MailboxRepositoryImpl`, `EmailRepositoryImpl` | Done |
-| 3 — IMAP sync | `connectImap`, `MailboxRepositoryImpl.syncMailboxes`, `EmailRepositoryImpl.syncEmails` | Done |
-| 4 — IMAP IDLE | `AccountSyncManager` with exponential-backoff reconnect | Done |
-| 5 — SMTP send | `connectSmtp`, `EmailRepositoryImpl.sendEmail` | Done |
-| 6 — UI | AccountList, AddAccount, MailboxList, EmailList, EmailDetail, Compose, Settings | Done |
-| 7 — Dev tooling | Nix flake, Taskfile, Stalwart dev server, unit + integration tests, CI, pre-commit | Done |
-| 8 — UI gaps | Account picker in compose, flag/unflag, move-to-folder, attachment indicators | Done |
-
-## Next candidates
-
-- Thread view (group by `References` / `In-Reply-To`)
-- Attachment download + open
-- Draft auto-save
+- [ ] Per-mailbox sync log — current log aggregates all mailboxes; break down fetched/skipped per mailbox path so a stale checkpoint for one folder is immediately visible
+- [ ] IMAP trace logging — add `logRequests`/`logResponses` to `connectImap` for debug builds; essential to verify what `UID SEARCH ALL` actually returns from the server
+- [ ] Thread view (group by `References` / `In-Reply-To`)
+- [ ] Attachment download + open

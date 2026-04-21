@@ -136,6 +136,7 @@ class _AccountSync implements _SyncLoop {
           bytesTransferred: stats.bytesTransferred,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
+          mailboxStats: stats.mailboxStats,
         );
         await _idle();
         _backoffSeconds = 5;
@@ -175,9 +176,19 @@ class _AccountSync implements _SyncLoop {
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
+    final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      emailResult += await _emails.syncEmails(account.id, mailbox.path);
+      final r = await _emails.syncEmails(account.id, mailbox.path);
+      emailResult += r;
+      mailboxStats.add(
+        MailboxSyncStats(
+          mailboxPath: mailbox.path,
+          fetched: r.fetched,
+          skipped: r.skipped,
+          bytesTransferred: r.bytesTransferred,
+        ),
+      );
     }
     return _SyncStats(
       emailsFetched: emailResult.fetched,
@@ -185,6 +196,7 @@ class _AccountSync implements _SyncLoop {
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
       bytesTransferred: emailResult.bytesTransferred,
+      mailboxStats: mailboxStats,
     );
   }
 
@@ -284,6 +296,7 @@ class _JmapAccountSync implements _SyncLoop {
           bytesTransferred: stats.bytesTransferred,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
+          mailboxStats: stats.mailboxStats,
         );
         _backoffSeconds = 5;
         await _wait();
@@ -327,9 +340,19 @@ class _JmapAccountSync implements _SyncLoop {
 
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
+    final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      emailResult += await _emails.syncEmails(account.id, mailbox.path);
+      final r = await _emails.syncEmails(account.id, mailbox.path);
+      emailResult += r;
+      mailboxStats.add(
+        MailboxSyncStats(
+          mailboxPath: mailbox.path,
+          fetched: r.fetched,
+          skipped: r.skipped,
+          bytesTransferred: r.bytesTransferred,
+        ),
+      );
     }
     return _SyncStats(
       emailsFetched: emailResult.fetched,
@@ -337,6 +360,7 @@ class _JmapAccountSync implements _SyncLoop {
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
       bytesTransferred: emailResult.bytesTransferred,
+      mailboxStats: mailboxStats,
     );
   }
 
@@ -384,6 +408,7 @@ class _SyncStats {
     required this.mailboxesSynced,
     required this.pendingFlushed,
     required this.bytesTransferred,
+    required this.mailboxStats,
   });
 
   final int emailsFetched;
@@ -391,4 +416,5 @@ class _SyncStats {
   final int mailboxesSynced;
   final int pendingFlushed;
   final int bytesTransferred;
+  final List<MailboxSyncStats> mailboxStats;
 }

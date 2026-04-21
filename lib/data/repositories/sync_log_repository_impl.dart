@@ -21,49 +21,79 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
+    List<MailboxSyncStats> mailboxStats = const [],
   }) async {
-    await _db.into(_db.syncLogs).insert(
-          SyncLogsCompanion.insert(
-            accountId: accountId,
-            result: success ? 'ok' : 'error',
-            errorMessage: Value(errorMessage),
-            protocol: Value(protocol),
-            itemsSynced: Value(emailsFetched),
-            emailsSkipped: Value(emailsSkipped),
-            mailboxesSynced: Value(mailboxesSynced),
-            pendingFlushed: Value(pendingFlushed),
-            bytesTransferred: Value(bytesTransferred),
-            startedAt: startedAt,
-            finishedAt: finishedAt,
-          ),
-        );
+    await _db.transaction(() async {
+      final logId = await _db.into(_db.syncLogs).insert(
+            SyncLogsCompanion.insert(
+              accountId: accountId,
+              result: success ? 'ok' : 'error',
+              errorMessage: Value(errorMessage),
+              protocol: Value(protocol),
+              itemsSynced: Value(emailsFetched),
+              emailsSkipped: Value(emailsSkipped),
+              mailboxesSynced: Value(mailboxesSynced),
+              pendingFlushed: Value(pendingFlushed),
+              bytesTransferred: Value(bytesTransferred),
+              startedAt: startedAt,
+              finishedAt: finishedAt,
+            ),
+          );
+      for (final s in mailboxStats) {
+        await _db.into(_db.syncLogMailboxes).insert(
+              SyncLogMailboxesCompanion.insert(
+                syncLogId: logId,
+                mailboxPath: s.mailboxPath,
+                fetched: Value(s.fetched),
+                skipped: Value(s.skipped),
+                bytesTransferred: Value(s.bytesTransferred),
+              ),
+            );
+      }
+    });
   }
 
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) {
-    return (_db.select(_db.syncLogs)
-          ..where((t) => t.accountId.equals(accountId))
-          ..orderBy([(t) => OrderingTerm.desc(t.startedAt)])
-          ..limit(100))
-        .watch()
-        .map(
-          (rows) => rows
-              .map(
-                (r) => SyncLogEntry(
-                  id: r.id,
-                  result: r.result,
-                  errorMessage: r.errorMessage,
-                  protocol: r.protocol,
-                  emailsFetched: r.itemsSynced,
-                  emailsSkipped: r.emailsSkipped,
-                  mailboxesSynced: r.mailboxesSynced,
-                  pendingFlushed: r.pendingFlushed,
-                  bytesTransferred: r.bytesTransferred,
-                  startedAt: r.startedAt,
-                  finishedAt: r.finishedAt,
-                ),
-              )
-              .toList(),
+    final logsQuery = _db.select(_db.syncLogs)
+      ..where((t) => t.accountId.equals(accountId))
+      ..orderBy([(t) => OrderingTerm.desc(t.startedAt)])
+      ..limit(100);
+
+    return logsQuery.watch().asyncMap((rows) async {
+      final entries = <SyncLogEntry>[];
+      for (final r in rows) {
+        final mailboxRows = await (_db.select(_db.syncLogMailboxes)
+              ..where((t) => t.syncLogId.equals(r.id))
+              ..orderBy([(t) => OrderingTerm.asc(t.mailboxPath)]))
+            .get();
+        entries.add(
+          SyncLogEntry(
+            id: r.id,
+            result: r.result,
+            errorMessage: r.errorMessage,
+            protocol: r.protocol,
+            emailsFetched: r.itemsSynced,
+            emailsSkipped: r.emailsSkipped,
+            mailboxesSynced: r.mailboxesSynced,
+            pendingFlushed: r.pendingFlushed,
+            bytesTransferred: r.bytesTransferred,
+            startedAt: r.startedAt,
+            finishedAt: r.finishedAt,
+            mailboxStats: mailboxRows
+                .map(
+                  (m) => MailboxSyncStats(
+                    mailboxPath: m.mailboxPath,
+                    fetched: m.fetched,
+                    skipped: m.skipped,
+                    bytesTransferred: m.bytesTransferred,
+                  ),
+                )
+                .toList(),
+          ),
         );
+      }
+      return entries;
+    });
   }
 }

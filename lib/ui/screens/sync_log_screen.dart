@@ -93,6 +93,20 @@ class _SyncLogTile extends StatelessWidget {
               _row('Mailboxes synced', '${entry.mailboxesSynced}'),
               _row('Pending changes flushed', '${entry.pendingFlushed}'),
               _row('Data transferred', _fmtBytes(entry.bytesTransferred)),
+              if (entry.mailboxStats.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.only(top: 6, bottom: 2),
+                  child: Text(
+                    'Per mailbox',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                for (final m in entry.mailboxStats)
+                  _row(
+                    '  ${m.mailboxPath}',
+                    '${m.fetched} new · ${m.skipped} up-to-date',
+                  ),
+              ],
               if (entry.errorMessage != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
