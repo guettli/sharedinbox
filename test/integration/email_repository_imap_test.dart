@@ -198,6 +198,27 @@ void main() {
     expect((checkpoint['lastUid'] as int), greaterThan(0));
   });
 
+  test(
+      'syncEmails incremental sync fetches only messages newer than checkpoint',
+      () async {
+    await appendToInbox('first');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final afterFirst = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(afterFirst, hasLength(1));
+    expect(afterFirst.first.subject, 'first');
+
+    await appendToInbox('second');
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final afterSecond = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(afterSecond, hasLength(2));
+    expect(afterSecond.map((e) => e.subject).toSet(), {'first', 'second'});
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 

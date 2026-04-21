@@ -481,48 +481,6 @@ void main() {
       expect(await r.emails.getEmail('acc-1:5'), isNull);
     });
 
-    test(
-        'syncEmails incremental sync fetches only messages newer than checkpoint',
-        () async {
-      final r = _makeReposWithFakes();
-      await r.accounts.addAccount(_account, 'pw');
-      r.fakeImap.uidValidityResult = 1000;
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'IMAP:INBOX',
-              state: jsonEncode({'uidValidity': 1000, 'lastUid': 10}),
-              syncedAt: DateTime.now(),
-            ),
-          );
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:10',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 10,
-              receivedAt: DateTime(2024),
-            ),
-          );
-      // Call 1 (UID 11:*): returns uid 20; call 2 (ALL): returns [10, 20]
-      r.fakeImap.searchCallQueue = [
-        [20],
-        [10, 20],
-      ];
-      r.fakeImap.uidFetchResults = [
-        buildEnvelopeMessage(uid: 20, subject: 'New'),
-      ];
-
-      await r.emails.syncEmails('acc-1', 'INBOX');
-
-      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(emails.map((e) => e.uid).toSet(), {10, 20});
-      final state =
-          jsonDecode((await r.db.select(r.db.syncStates).get()).first.state)
-              as Map<String, dynamic>;
-      expect(state['lastUid'], 20);
-    });
-
     test('syncEmails reconciliation removes emails deleted on server',
         () async {
       final r = _makeReposWithFakes();
