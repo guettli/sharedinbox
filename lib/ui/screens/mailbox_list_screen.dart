@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/models/email.dart';
+import '../../core/models/mailbox.dart';
 import '../../core/repositories/email_repository.dart';
 import '../../di.dart';
 
@@ -38,15 +39,21 @@ class MailboxListScreen extends ConsumerWidget {
                 if (!snap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final mailboxes = snap.data!;
+                final mailboxes = List.of(snap.data!)..sort(_compareMailboxes);
                 return ListView.builder(
                   itemCount: mailboxes.length,
                   itemBuilder: (ctx, i) {
                     final mb = mailboxes[i];
+                    final hasUnread = mb.unreadCount > 0;
                     return ListTile(
                       leading: const Icon(Icons.folder),
-                      title: Text(mb.name),
-                      trailing: mb.unreadCount > 0
+                      title: Text(
+                        mb.name,
+                        style: hasUnread
+                            ? const TextStyle(fontWeight: FontWeight.bold)
+                            : null,
+                      ),
+                      trailing: hasUnread
                           ? Badge(label: Text('${mb.unreadCount}'))
                           : null,
                       onTap: () => context.push(
@@ -136,4 +143,18 @@ class _FailedMutationBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+int _mailboxPriority(Mailbox mb) {
+  final upper = mb.path.toUpperCase();
+  if (upper == 'INBOX') return 0;
+  if (upper.contains('DRAFT')) return 1;
+  return 2;
+}
+
+int _compareMailboxes(Mailbox a, Mailbox b) {
+  final pa = _mailboxPriority(a);
+  final pb = _mailboxPriority(b);
+  if (pa != pb) return pa.compareTo(pb);
+  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
 }
