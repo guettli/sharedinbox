@@ -4,6 +4,7 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 
 import '../../data/imap/imap_client_factory.dart';
 import '../models/account.dart';
+import '../models/email.dart' show SyncEmailsResult;
 import '../repositories/account_repository.dart';
 import '../repositories/email_repository.dart';
 import '../repositories/mailbox_repository.dart';
@@ -129,8 +130,10 @@ class _AccountSync implements _SyncLoop {
           success: true,
           protocol: 'imap',
           emailsFetched: stats.emailsFetched,
+          emailsSkipped: stats.emailsSkipped,
           mailboxesSynced: stats.mailboxesSynced,
           pendingFlushed: stats.pendingFlushed,
+          bytesTransferred: stats.bytesTransferred,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -143,8 +146,10 @@ class _AccountSync implements _SyncLoop {
           errorMessage: e.toString(),
           protocol: 'imap',
           emailsFetched: 0,
+          emailsSkipped: 0,
           mailboxesSynced: 0,
           pendingFlushed: 0,
+          bytesTransferred: 0,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -165,15 +170,17 @@ class _AccountSync implements _SyncLoop {
         await _emails.flushPendingChanges(account.id, password);
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
-    var emailsFetched = 0;
+    var emailResult = SyncEmailsResult.zero;
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      emailsFetched += await _emails.syncEmails(account.id, mailbox.path);
+      emailResult += await _emails.syncEmails(account.id, mailbox.path);
     }
     return _SyncStats(
-      emailsFetched: emailsFetched,
+      emailsFetched: emailResult.fetched,
+      emailsSkipped: emailResult.skipped,
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
+      bytesTransferred: emailResult.bytesTransferred,
     );
   }
 
@@ -267,8 +274,10 @@ class _JmapAccountSync implements _SyncLoop {
           success: true,
           protocol: 'jmap',
           emailsFetched: stats.emailsFetched,
+          emailsSkipped: stats.emailsSkipped,
           mailboxesSynced: stats.mailboxesSynced,
           pendingFlushed: stats.pendingFlushed,
+          bytesTransferred: stats.bytesTransferred,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -281,8 +290,10 @@ class _JmapAccountSync implements _SyncLoop {
           errorMessage: e.toString(),
           protocol: 'jmap',
           emailsFetched: 0,
+          emailsSkipped: 0,
           mailboxesSynced: 0,
           pendingFlushed: 0,
+          bytesTransferred: 0,
           startedAt: startedAt,
           finishedAt: DateTime.now(),
         );
@@ -307,15 +318,17 @@ class _JmapAccountSync implements _SyncLoop {
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
 
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
-    var emailsFetched = 0;
+    var emailResult = SyncEmailsResult.zero;
     for (final mailbox in mailboxes) {
       if (!_running) break;
-      emailsFetched += await _emails.syncEmails(account.id, mailbox.path);
+      emailResult += await _emails.syncEmails(account.id, mailbox.path);
     }
     return _SyncStats(
-      emailsFetched: emailsFetched,
+      emailsFetched: emailResult.fetched,
+      emailsSkipped: emailResult.skipped,
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
+      bytesTransferred: emailResult.bytesTransferred,
     );
   }
 
@@ -359,11 +372,15 @@ class _JmapAccountSync implements _SyncLoop {
 class _SyncStats {
   const _SyncStats({
     required this.emailsFetched,
+    required this.emailsSkipped,
     required this.mailboxesSynced,
     required this.pendingFlushed,
+    required this.bytesTransferred,
   });
 
   final int emailsFetched;
+  final int emailsSkipped;
   final int mailboxesSynced;
   final int pendingFlushed;
+  final int bytesTransferred;
 }

@@ -208,7 +208,10 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Sync ───────────────────────────────────────────────────────────────────
 
   @override
-  Future<int> syncEmails(String accountId, String mailboxPath) async {
+  Future<model.SyncEmailsResult> syncEmails(
+    String accountId,
+    String mailboxPath,
+  ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     switch (account.type) {
@@ -219,7 +222,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<int> _syncEmailsImap(
+  Future<model.SyncEmailsResult> _syncEmailsImap(
     account_model.Account account,
     String password,
     String mailboxPath,
@@ -258,8 +261,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 .matchingSequence
                 ?.toList() ??
             [];
+        var bytes = 0;
         if (allUids.isNotEmpty) {
-          await _fetchAndUpsertImap(
+          bytes = await _fetchAndUpsertImap(
             client,
             account,
             mailboxPath,
@@ -274,17 +278,26 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
-        return allUids.length;
+        return model.SyncEmailsResult(
+          fetched: allUids.length,
+          skipped: 0,
+          bytesTransferred: bytes,
+        );
       } else {
         // Incremental sync.
         final lastUid = checkpoint['lastUid'] as int;
         final storedModSeq = checkpoint['highestModSeq'] as int?;
+        final totalOnServer = selectedMailbox.messagesExists;
 
         // CONDSTORE fast-path: nothing has changed on the server.
         if (serverModSeq != null &&
             storedModSeq != null &&
             serverModSeq == storedModSeq) {
-          return 0;
+          return model.SyncEmailsResult(
+            fetched: 0,
+            skipped: totalOnServer,
+            bytesTransferred: 0,
+          );
         }
 
         // Fetch new messages.
@@ -294,8 +307,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 .matchingSequence
                 ?.toList() ??
             [];
+        var bytes = 0;
         if (newUids.isNotEmpty) {
-          await _fetchAndUpsertImap(
+          bytes = await _fetchAndUpsertImap(
             client,
             account,
             mailboxPath,
@@ -324,7 +338,11 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
-        return newUids.length;
+        return model.SyncEmailsResult(
+          fetched: newUids.length,
+          skipped: serverUids.length - newUids.length,
+          bytesTransferred: bytes,
+        );
       }
     } finally {
       await client.logout();
@@ -358,7 +376,8 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<void> _fetchAndUpsertImap(
+  // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
+  Future<int> _fetchAndUpsertImap(
     imap.ImapClient client,
     account_model.Account account,
     String mailboxPath,
@@ -367,12 +386,13 @@ class EmailRepositoryImpl implements EmailRepository {
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(
             sequence,
-            '(UID FLAGS ENVELOPE BODYSTRUCTURE)',
+            '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE)',
           )
         : await client.fetchMessages(
             sequence,
-            '(UID FLAGS ENVELOPE BODYSTRUCTURE)',
+            '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE)',
           );
+    var bytes = 0;
     for (final msg in fetch.messages) {
       final envelope = msg.envelope;
       if (envelope == null) {
@@ -384,6 +404,7 @@ class EmailRepositoryImpl implements EmailRepository {
         log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
         continue;
       }
+      bytes += msg.size ?? 0;
       final emailId = '${account.id}:$uid';
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -403,6 +424,7 @@ class EmailRepositoryImpl implements EmailRepository {
             ),
           );
     }
+    return bytes;
   }
 
   Future<Map<String, dynamic>?> _loadImapCheckpoint(
@@ -480,7 +502,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'fetchTextBodyValues': true,
   };
 
-  Future<int> _syncEmailsJmap(
+  Future<model.SyncEmailsResult> _syncEmailsJmap(
     account_model.Account account,
     String password,
     String mailboxJmapId,
@@ -506,7 +528,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  Future<int> _jmapFullEmailSync(
+  Future<model.SyncEmailsResult> _jmapFullEmailSync(
     String accountId,
     JmapClient jmap,
     String mailboxJmapId,
@@ -514,6 +536,7 @@ class EmailRepositoryImpl implements EmailRepository {
     int position = 0;
     String? firstState;
     var fetched = 0;
+    var bytes = 0;
 
     while (true) {
       final responses = await jmap.call([
@@ -550,7 +573,7 @@ class EmailRepositoryImpl implements EmailRepository {
       final getResult = _responseArgs(responses, 1, 'Email/get');
       firstState ??= getResult['state'] as String;
       final list = getResult['list'] as List<dynamic>;
-      await _upsertJmapEmails(accountId, list);
+      bytes += await _upsertJmapEmails(accountId, list);
       fetched += list.length;
 
       position += ids.length;
@@ -558,10 +581,14 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     await _saveSyncState(accountId, 'Email', firstState);
-    return fetched;
+    return model.SyncEmailsResult(
+      fetched: fetched,
+      skipped: 0,
+      bytesTransferred: bytes,
+    );
   }
 
-  Future<int> _jmapIncrementalEmailSync(
+  Future<model.SyncEmailsResult> _jmapIncrementalEmailSync(
     String accountId,
     JmapClient jmap,
     String sinceState,
@@ -581,6 +608,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
 
     var fetched = 0;
+    var bytes = 0;
     final toFetch = [...created, ...updated];
     if (toFetch.isNotEmpty) {
       final getResponses = await jmap.call([
@@ -597,7 +625,7 @@ class EmailRepositoryImpl implements EmailRepository {
       ]);
       final getResult = _responseArgs(getResponses, 0, 'Email/get');
       final list = getResult['list'] as List<dynamic>;
-      await _upsertJmapEmails(accountId, list);
+      bytes += await _upsertJmapEmails(accountId, list);
       fetched += list.length;
     }
 
@@ -608,14 +636,21 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     await _saveSyncState(accountId, 'Email', newState);
-    return fetched;
+    return model.SyncEmailsResult(
+      fetched: fetched,
+      skipped: 0,
+      bytesTransferred: bytes,
+    );
   }
 
-  Future<void> _upsertJmapEmails(String accountId, List<dynamic> emails) async {
+  // Returns total bytes transferred (sum of JMAP `size` fields).
+  Future<int> _upsertJmapEmails(String accountId, List<dynamic> emails) async {
+    var bytes = 0;
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
       final dbId = '$accountId:$jmapId';
+      bytes += (m['size'] as int?) ?? 0;
 
       // Use first mailbox ID as the primary mailboxPath.
       final mailboxIds = m['mailboxIds'] as Map<String, dynamic>?;
@@ -662,6 +697,7 @@ class EmailRepositoryImpl implements EmailRepository {
             );
       }
     }
+    return bytes;
   }
 
   /// Extracts text body, HTML body, and attachments JSON from a JMAP Email object

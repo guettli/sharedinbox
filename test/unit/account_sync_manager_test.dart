@@ -71,7 +71,11 @@ class FakeEmailRepository implements EmailRepository {
       const EmailBody(emailId: '', attachments: []);
 
   @override
-  Future<int> syncEmails(String accountId, String mailboxPath) async => 0;
+  Future<SyncEmailsResult> syncEmails(
+    String accountId,
+    String mailboxPath,
+  ) async =>
+      SyncEmailsResult.zero;
 
   @override
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
@@ -157,9 +161,12 @@ class _CountingEmailRepository extends FakeEmailRepository {
   final List<String> syncedPaths = [];
 
   @override
-  Future<int> syncEmails(String accountId, String mailboxPath) async {
+  Future<SyncEmailsResult> syncEmails(
+    String accountId,
+    String mailboxPath,
+  ) async {
     syncedPaths.add(mailboxPath);
-    return 0;
+    return SyncEmailsResult.zero;
   }
 }
 
@@ -167,10 +174,13 @@ class FailingJmapEmailRepository extends FakeEmailRepository {
   int syncCount = 0;
 
   @override
-  Future<int> syncEmails(String accountId, String mailboxPath) async {
+  Future<SyncEmailsResult> syncEmails(
+    String accountId,
+    String mailboxPath,
+  ) async {
     syncCount++;
     if (syncCount == 1) throw Exception('simulated JMAP failure');
-    return 0;
+    return SyncEmailsResult.zero;
   }
 }
 

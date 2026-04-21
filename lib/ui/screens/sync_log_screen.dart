@@ -7,6 +7,13 @@ import '../../di.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
+String _fmtBytes(int bytes) {
+  if (bytes <= 0) return '0 B';
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 class SyncLogScreen extends ConsumerWidget {
   const SyncLogScreen({super.key, required this.accountId});
 
@@ -63,7 +70,7 @@ class _SyncLogTile extends StatelessWidget {
       ),
       subtitle: Text(
         entry.isOk
-            ? '${entry.emailsFetched} emails · ${entry.mailboxesSynced} mailboxes · took $durationLabel'
+            ? '${entry.emailsFetched} new · ${entry.emailsSkipped} up-to-date · took $durationLabel'
             : 'Error · took $durationLabel',
         style: TextStyle(
           fontSize: 12,
@@ -82,8 +89,10 @@ class _SyncLogTile extends StatelessWidget {
               if (entry.protocol.isNotEmpty)
                 _row('Protocol', entry.protocol.toUpperCase()),
               _row('Emails fetched', '${entry.emailsFetched}'),
+              _row('Emails up-to-date', '${entry.emailsSkipped}'),
               _row('Mailboxes synced', '${entry.mailboxesSynced}'),
               _row('Pending changes flushed', '${entry.pendingFlushed}'),
+              _row('Data transferred', _fmtBytes(entry.bytesTransferred)),
               if (entry.errorMessage != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),

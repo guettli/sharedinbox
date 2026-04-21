@@ -5,8 +5,10 @@ class SyncLogEntry {
     this.errorMessage,
     required this.protocol,
     required this.emailsFetched,
+    required this.emailsSkipped,
     required this.mailboxesSynced,
     required this.pendingFlushed,
+    required this.bytesTransferred,
     required this.startedAt,
     required this.finishedAt,
   });
@@ -16,8 +18,10 @@ class SyncLogEntry {
   final String? errorMessage;
   final String protocol; // 'imap' or 'jmap'
   final int emailsFetched;
+  final int emailsSkipped;
   final int mailboxesSynced;
   final int pendingFlushed;
+  final int bytesTransferred;
   final DateTime startedAt;
   final DateTime finishedAt;
 
@@ -32,8 +36,10 @@ abstract class SyncLogRepository {
     String? errorMessage,
     required String protocol,
     required int emailsFetched,
+    required int emailsSkipped,
     required int mailboxesSynced,
     required int pendingFlushed,
+    required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
   });
@@ -51,8 +57,10 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     String? errorMessage,
     required String protocol,
     required int emailsFetched,
+    required int emailsSkipped,
     required int mailboxesSynced,
     required int pendingFlushed,
+    required int bytesTransferred,
     required DateTime startedAt,
     required DateTime finishedAt,
   }) async {}

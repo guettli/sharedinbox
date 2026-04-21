@@ -119,3 +119,24 @@ class EmailDraft {
     this.attachmentFilePaths = const [],
   });
 }
+
+class SyncEmailsResult {
+  const SyncEmailsResult({
+    required this.fetched,
+    required this.skipped,
+    required this.bytesTransferred,
+  });
+
+  final int fetched;
+  final int skipped;
+  final int bytesTransferred;
+
+  static const zero =
+      SyncEmailsResult(fetched: 0, skipped: 0, bytesTransferred: 0);
+
+  SyncEmailsResult operator +(SyncEmailsResult other) => SyncEmailsResult(
+        fetched: fetched + other.fetched,
+        skipped: skipped + other.skipped,
+        bytesTransferred: bytesTransferred + other.bytesTransferred,
+      );
+}

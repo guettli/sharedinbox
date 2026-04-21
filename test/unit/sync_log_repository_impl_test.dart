@@ -37,8 +37,10 @@ void main() {
       success: true,
       protocol: 'imap',
       emailsFetched: 5,
+      emailsSkipped: 0,
       mailboxesSynced: 3,
       pendingFlushed: 0,
+      bytesTransferred: 0,
       startedAt: start,
       finishedAt: end,
     );
@@ -65,8 +67,10 @@ void main() {
       errorMessage: 'Connection refused',
       protocol: 'imap',
       emailsFetched: 0,
+      emailsSkipped: 0,
       mailboxesSynced: 0,
       pendingFlushed: 0,
+      bytesTransferred: 0,
       startedAt: start,
       finishedAt: end,
     );

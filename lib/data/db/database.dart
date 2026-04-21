@@ -133,6 +133,8 @@ class SyncLogs extends Table {
   IntColumn get itemsSynced => integer().withDefault(const Constant(0))();
   IntColumn get mailboxesSynced => integer().withDefault(const Constant(0))();
   IntColumn get pendingFlushed => integer().withDefault(const Constant(0))();
+  IntColumn get emailsSkipped => integer().withDefault(const Constant(0))();
+  IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
   DateTimeColumn get startedAt => dateTime()();
   DateTimeColumn get finishedAt => dateTime()();
 }
@@ -169,7 +171,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -203,6 +205,10 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(syncLogs, syncLogs.protocol);
             await m.addColumn(syncLogs, syncLogs.mailboxesSynced);
             await m.addColumn(syncLogs, syncLogs.pendingFlushed);
+          }
+          if (from < 11) {
+            await m.addColumn(syncLogs, syncLogs.emailsSkipped);
+            await m.addColumn(syncLogs, syncLogs.bytesTransferred);
           }
         },
       );

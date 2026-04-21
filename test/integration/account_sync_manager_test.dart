@@ -71,7 +71,8 @@ class _FakeEmails implements EmailRepository {
       const EmailBody(emailId: '', attachments: []);
 
   @override
-  Future<int> syncEmails(String a, String m) async => 0;
+  Future<SyncEmailsResult> syncEmails(String a, String m) async =>
+      SyncEmailsResult.zero;
 
   @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}

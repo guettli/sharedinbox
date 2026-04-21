@@ -4,7 +4,7 @@ abstract class EmailRepository {
   Stream<List<Email>> observeEmails(String accountId, String mailboxPath);
   Future<Email?> getEmail(String emailId);
   Future<EmailBody> getEmailBody(String emailId);
-  Future<int> syncEmails(String accountId, String mailboxPath);
+  Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
   Future<void> setFlag(
     String emailId, {
     bool? seen,
