@@ -34,7 +34,7 @@ dependencies:
 
   # File picking (compose attachments) and opening downloaded attachments
   file_picker: ^8.0.0
-  open_file: ^3.3.2
+  open_filex: ^4.6.0
   mime: ^2.0.0
 
 dev_dependencies:

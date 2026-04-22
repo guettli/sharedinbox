@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart';
-import 'package:open_file/open_file.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../../core/models/account.dart';
 import '../../core/models/email.dart';
@@ -187,20 +187,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _opening = true);
     try {
       final path = _attachments[index].path;
-
-      // On Linux, OpenFile.open may fail with "file type not supported".
-      // Use xdg-open directly for better compatibility.
-      if (Platform.isLinux) {
-        final result = await Process.run('xdg-open', [path]);
-        if (result.exitCode != 0 && mounted) {
-          throw Exception(
-            'xdg-open failed: ${result.stderr}\n'
-            'File path: $path',
-          );
-        }
-      } else {
-        await OpenFile.open(path);
-      }
+      await OpenFilex.open(path);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

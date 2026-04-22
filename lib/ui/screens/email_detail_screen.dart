@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:open_file/open_file.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../../core/models/email.dart';
 import '../../core/utils/format_utils.dart';
@@ -162,20 +161,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final path = await ref
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
-
-      // On Linux, OpenFile.open may fail with "file type not supported".
-      // Use xdg-open directly for better compatibility.
-      if (Platform.isLinux) {
-        final result = await Process.run('xdg-open', [path]);
-        if (result.exitCode != 0 && mounted) {
-          throw Exception(
-            'xdg-open failed: ${result.stderr}\n'
-            'File saved to: $path',
-          );
-        }
-      } else {
-        await OpenFile.open(path);
-      }
+      await OpenFilex.open(path);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
