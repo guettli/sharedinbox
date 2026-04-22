@@ -5,10 +5,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mime/mime.dart';
+import 'package:open_file/open_file.dart';
 
 import '../../core/models/account.dart';
 import '../../core/models/email.dart';
 import '../../core/repositories/draft_repository.dart';
+import '../../core/utils/format_utils.dart';
 import '../../di.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
@@ -41,7 +44,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _accountId;
   List<Account> _accounts = [];
   bool _sending = false;
-  final List<String> _attachmentPaths = [];
+  final List<_AttachmentInfo> _attachments = [];
+  bool _opening = false;
 
   int? _draftId;
   bool _draftDirty = false;
@@ -156,13 +160,59 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   Future<void> _pickAttachments() async {
     final result = await FilePicker.platform.pickFiles(allowMultiple: true);
     if (result == null) return;
-    final paths = result.files.map((f) => f.path).whereType<String>().toList();
+    final files = result.files.where((f) => f.path != null).toList();
     if (!mounted) return;
-    setState(() => _attachmentPaths.addAll(paths));
+    final newAttachments = <_AttachmentInfo>[];
+    for (final file in files) {
+      final path = file.path!;
+      final stat = await File(path).stat();
+      newAttachments.add(
+        _AttachmentInfo(
+          path: path,
+          filename: file.name,
+          size: stat.size,
+          contentType: _guessMimeType(file.name),
+        ),
+      );
+    }
+    setState(() => _attachments.addAll(newAttachments));
   }
 
   void _removeAttachment(int index) {
-    setState(() => _attachmentPaths.removeAt(index));
+    setState(() => _attachments.removeAt(index));
+  }
+
+  Future<void> _openAttachment(int index) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final path = _attachments[index].path;
+
+      // On Linux, OpenFile.open may fail with "file type not supported".
+      // Use xdg-open directly for better compatibility.
+      if (Platform.isLinux) {
+        final result = await Process.run('xdg-open', [path]);
+        if (result.exitCode != 0 && mounted) {
+          throw Exception(
+            'xdg-open failed: ${result.stderr}\n'
+            'File path: $path',
+          );
+        }
+      } else {
+        await OpenFile.open(path);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to open file: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  String _guessMimeType(String filename) {
+    return lookupMimeType(filename) ?? 'application/octet-stream';
   }
 
   Future<void> _send() async {
@@ -192,7 +242,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             .toList(),
         subject: _subject.text,
         body: _body.text,
-        attachmentFilePaths: List.unmodifiable(_attachmentPaths),
+        attachmentFilePaths:
+            List.unmodifiable(_attachments.map((a) => a.path).toList()),
       );
       await ref.read(emailRepositoryProvider).sendEmail(_accountId!, draft);
       // Delete the draft only after a successful send.
@@ -292,7 +343,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               alignLabelWithHint: true,
             ),
           ),
-          if (_attachmentPaths.isNotEmpty) ...[
+          if (_attachments.isNotEmpty) ...[
             const SizedBox(height: 8),
             const Divider(),
             Padding(
@@ -302,14 +353,28 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 style: Theme.of(context).textTheme.titleSmall,
               ),
             ),
-            for (var i = 0; i < _attachmentPaths.length; i++)
+            for (var i = 0; i < _attachments.length; i++)
               ListTile(
                 dense: true,
                 leading: const Icon(Icons.attach_file),
-                title: Text(File(_attachmentPaths[i]).uri.pathSegments.last),
-                trailing: IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => _removeAttachment(i),
+                title: Text(_attachments[i].filename),
+                subtitle: Text(
+                  '${_attachments[i].contentType} • ${fmtSize(_attachments[i].size)}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.visibility),
+                      tooltip: 'Open',
+                      onPressed: () => _openAttachment(i),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Remove',
+                      onPressed: () => _removeAttachment(i),
+                    ),
+                  ],
                 ),
               ),
           ],
@@ -335,6 +400,20 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       ),
     );
   }
+}
+
+class _AttachmentInfo {
+  final String path;
+  final String filename;
+  final int size;
+  final String contentType;
+
+  _AttachmentInfo({
+    required this.path,
+    required this.filename,
+    required this.size,
+    required this.contentType,
+  });
 }
 
 // Helper to silence the unawaited_futures lint on fire-and-forget futures.

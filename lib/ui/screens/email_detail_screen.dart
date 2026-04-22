@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -161,11 +162,25 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final path = await ref
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
-      await OpenFile.open(path);
+
+      // On Linux, OpenFile.open may fail with "file type not supported".
+      // Use xdg-open directly for better compatibility.
+      if (Platform.isLinux) {
+        final result = await Process.run('xdg-open', [path]);
+        if (result.exitCode != 0 && mounted) {
+          throw Exception(
+            'xdg-open failed: ${result.stderr}\n'
+            'File saved to: $path',
+          );
+        }
+      } else {
+        await OpenFile.open(path);
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Download failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Opening file failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _downloading.remove(att.filename));
     }

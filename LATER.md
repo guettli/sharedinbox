@@ -4,10 +4,6 @@ Thread view (group by `References` / `In-Reply-To`)
 
 ---
 
-Attachment download + open
-
----
-
 mail-loop.com (anstatt shared inbox).
 
 ---
@@ -20,15 +16,6 @@ create a plan. Avoid downloading big bodies/attachments again.
 ---
 
 mailcoach.de
-
-
----
-
-done?
-
-think about that: Maybe we should not mock jmap/imap/smtp. We  have a temproary Stalwart.
-
-Just like mocking DB in Django makes no sense.
 
 ---
 
@@ -51,12 +38,6 @@ Why is the directory so big? 4 GByte?
 After Try Connection, show some matching icon next to the text.
 
 ---
-
-Mail edit, attachment:
-
-List of attached files should be visible and editable. Show size, and type of file.
-
-Make it possible to open/view the file.
 
 ---
 
