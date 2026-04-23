@@ -140,7 +140,7 @@ void main() {
     final fakeAccounts = _FakeAccounts()..password = pass;
 
     // Stalwart's memory directory authenticates by principal name ('alice'),
-    // not by email address ('alice@localhost').  connectImap() passes
+    // not by email address ('alice@example.com').  connectImap() passes
     // account.email as the IMAP login username, so use the bare name here.
     final account = Account(
       id: 'integration-test',

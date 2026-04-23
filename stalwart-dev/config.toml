@@ -48,15 +48,15 @@ type = "memory"
 
 [[directory."memory".principals]]
 class  = "individual"
-name   = "alice@localhost"
+name   = "alice@example.com"
 secret = "secret"
-email  = ["alice@localhost"]
+email  = ["alice@example.com"]
 
 [[directory."memory".principals]]
 class  = "individual"
-name   = "bob@localhost"
+name   = "bob@example.com"
 secret = "secret"
-email  = ["bob@localhost"]
+email  = ["bob@example.com"]
 
 [authentication.fallback-admin]
 user   = "admin"
@@ -70,3 +70,7 @@ allow-plain-text = true
 [session.auth]
 mechanisms = "[plain, login, oauthbearer, xoauth2]"
 allow-plain-text = true
+
+# Disable rate limiting for local development/testing.
+[authentication.rate-limit]
+enable = false

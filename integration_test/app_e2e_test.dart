@@ -4,7 +4,7 @@
 // Environment variables (set by the runner script):
 //   STALWART_IMAP_HOST, STALWART_IMAP_PORT
 //   STALWART_SMTP_HOST, STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@localhost)
+//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
 
 import 'dart:io';
 
@@ -73,7 +73,7 @@ void main() {
     imapPort = int.parse(Platform.environment['STALWART_IMAP_PORT'] ?? '1430');
     smtpHost = Platform.environment['STALWART_SMTP_HOST'] ?? '127.0.0.1';
     smtpPort = int.parse(Platform.environment['STALWART_SMTP_PORT'] ?? '1025');
-    userEmail = Platform.environment['STALWART_USER_B'] ?? 'alice@localhost';
+    userEmail = Platform.environment['STALWART_USER_B'] ?? 'alice@example.com';
     userPass = Platform.environment['STALWART_PASS_B'] ?? 'secret';
   });
 

@@ -2,8 +2,8 @@
 // Run via: stalwart-dev/test.sh  (sets the env vars below)
 //
 // STALWART_IMAP_HOST, STALWART_IMAP_PORT, STALWART_SMTP_HOST, STALWART_SMTP_PORT
-// STALWART_USER_B / STALWART_PASS_B  (alice@localhost)
-// STALWART_USER_C / STALWART_PASS_C  (bob@localhost)
+// STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
+// STALWART_USER_C / STALWART_PASS_C  (bob@example.com)
 
 import 'dart:io';
 

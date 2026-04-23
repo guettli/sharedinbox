@@ -10,9 +10,9 @@ set -Eeuo pipefail
 _SCRIPT_START=$(date +%s%3N)
 ts() { echo "[$(( $(date +%s%3N) - _SCRIPT_START ))ms] $*"; }
 
-export STALWART_USER_B="${STALWART_USER_B:-alice@localhost}"
+export STALWART_USER_B="${STALWART_USER_B:-alice@example.com}"
 export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
-export STALWART_USER_C="${STALWART_USER_C:-bob@localhost}"
+export STALWART_USER_C="${STALWART_USER_C:-bob@example.com}"
 export STALWART_PASS_C="${STALWART_PASS_C:-secret}"
 export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"

@@ -5,7 +5,7 @@
 //   STALWART_URL       — JMAP base URL, e.g. http://127.0.0.1:8080
 //   STALWART_IMAP_HOST, STALWART_IMAP_PORT
 //   STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@localhost)
+//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
 
 import 'dart:io';
 
@@ -68,7 +68,7 @@ void main() {
     imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
     imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
     smtpPort = _env('STALWART_SMTP_PORT', '1025');
-    userEmail = _env('STALWART_USER_B', 'alice@localhost');
+    userEmail = _env('STALWART_USER_B', 'alice@example.com');
     userPass = _env('STALWART_PASS_B', 'secret');
     account = Account(
       id: 'test-jmap',

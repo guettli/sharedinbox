@@ -62,10 +62,19 @@ class JmapClient {
     required String password,
   }) async {
     final credentials = base64.encode(utf8.encode('$username:$password'));
-    final resp = await httpClient.get(
-      jmapUrl,
-      headers: {'Authorization': 'Basic $credentials'},
-    ).timeout(const Duration(seconds: 10));
+    http.Response resp;
+    var attempt = 0;
+    while (true) {
+      resp = await httpClient.get(
+        jmapUrl,
+        headers: {'Authorization': 'Basic $credentials'},
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 429 || attempt >= 4) {
+        break;
+      }
+      attempt++;
+      await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+    }
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
       throw JmapException('Authentication failed (HTTP ${resp.statusCode})');

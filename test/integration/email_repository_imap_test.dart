@@ -4,7 +4,7 @@
 // Environment variables (set by the runner script):
 //   STALWART_IMAP_HOST, STALWART_IMAP_PORT
 //   STALWART_SMTP_HOST, STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@localhost)
+//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
 
 import 'dart:convert';
 import 'dart:io';
@@ -76,7 +76,7 @@ void main() {
     imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
     smtpHost = _env('STALWART_SMTP_HOST', '127.0.0.1');
     smtpPort = int.parse(_env('STALWART_SMTP_PORT', '1025'));
-    userEmail = _env('STALWART_USER_B', 'alice@localhost');
+    userEmail = _env('STALWART_USER_B', 'alice@example.com');
     userPass = _env('STALWART_PASS_B', 'secret');
     account = Account(
       id: 'test',

@@ -1008,10 +1008,13 @@ class EmailRepositoryImpl implements EmailRepository {
         account.id,
         emailId,
         'move',
-        jsonEncode({'dest': destMailboxPath}),
+        jsonEncode({'src': row.mailboxPath, 'dest': destMailboxPath}),
       );
-      // Optimistic: remove from current view; next sync will reconcile.
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+      // Optimistic: move the cached row so it disappears from the current
+      // mailbox immediately and is visible in the destination mailbox.
+      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+        EmailsCompanion(mailboxPath: Value(destMailboxPath)),
+      );
       return;
     }
 
@@ -1273,6 +1276,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'move':
         final destMailboxId = payload['dest'] as String;
+        final srcMailboxId = payload['src'] as String;
         responses = await jmap.call([
           [
             'Email/set',
@@ -1280,7 +1284,7 @@ class EmailRepositoryImpl implements EmailRepository {
               'update': {
                 jmapEmailId: {
                   'mailboxIds/$destMailboxId': true,
-                  'mailboxIds/${row.resourceId}': null,
+                  'mailboxIds/$srcMailboxId': null,
                 },
               },
             }),
@@ -1458,28 +1462,60 @@ class EmailRepositoryImpl implements EmailRepository {
       ...draft.cc.map((a) => {'email': a.email}),
     ];
 
-    // Chain Email/set (create) + EmailSubmission/set (create) in one request.
-    final responses = await jmap.call(
+    // Fetch identities to get the required identityId for EmailSubmission.
+    final identityResponses = await jmap.call([
       [
-        [
-          'Email/set',
-          {
-            'accountId': jmap.accountId,
-            'create': {'em1': emailCreate},
-          },
-          '0',
-        ],
+        'Identity/get',
+        {'accountId': jmap.accountId, 'ids': null},
+        'i',
+      ],
+    ]);
+    final identityResult = _responseArgs(identityResponses, 0, 'Identity/get');
+    final identityList = identityResult['list'] as List<dynamic>?;
+    if (identityList == null || identityList.isEmpty) {
+      throw JmapException('No identities found for JMAP account');
+    }
+    final identityId =
+        (identityList.first as Map<String, dynamic>)['id'] as String;
+
+    // Create the email first.
+    final createResponses = await jmap.call([
+      [
+        'Email/set',
+        {
+          'accountId': jmap.accountId,
+          'create': {'em1': emailCreate},
+        },
+        '0',
+      ],
+    ]);
+
+    // Check Email/set for creation errors.
+    final setResult = _responseArgs(createResponses, 0, 'Email/set');
+    final notCreated = setResult['notCreated'] as Map<String, dynamic>?;
+    if (notCreated != null && notCreated.containsKey('em1')) {
+      final err = notCreated['em1'] as Map<String, dynamic>;
+      throw JmapException('Email/set create failed: ${err['type']}');
+    }
+
+    final created = setResult['created'] as Map<String, dynamic>?;
+    final createdEmail = created?['em1'] as Map<String, dynamic>?;
+    final emailId = createdEmail?['id'] as String?;
+    if (emailId == null || emailId.isEmpty) {
+      throw JmapException('Email/set create failed: missing created email id');
+    }
+
+    // Then submit the created email.
+    final submissionResponses = await jmap.call(
+      [
         [
           'EmailSubmission/set',
           {
             'accountId': jmap.accountId,
             'create': {
               'sub1': {
-                '#emailId': {
-                  'resultOf': '0',
-                  'name': 'Email/set',
-                  'path': '/created/em1/id',
-                },
+                'emailId': emailId,
+                'identityId': identityId,
                 'envelope': {
                   'mailFrom': {'email': draft.from.email},
                   'rcptTo': allRecipients,
@@ -1493,20 +1529,20 @@ class EmailRepositoryImpl implements EmailRepository {
       withSubmission: true,
     );
 
-    // Check Email/set for creation errors.
-    final setResult = _responseArgs(responses, 0, 'Email/set');
-    final notCreated = setResult['notCreated'] as Map<String, dynamic>?;
-    if (notCreated != null && notCreated.containsKey('em1')) {
-      final err = notCreated['em1'] as Map<String, dynamic>;
-      throw JmapException('Email/set create failed: ${err['type']}');
-    }
-
     // Check EmailSubmission/set for submission errors.
-    final subResult = _responseArgs(responses, 1, 'EmailSubmission/set');
+    final subResult = _responseArgs(
+      submissionResponses,
+      0,
+      'EmailSubmission/set',
+    );
     final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
     if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
       final err = notSubmitted['sub1'] as Map<String, dynamic>;
-      throw JmapException('EmailSubmission/set failed: ${err['type']}');
+      throw JmapException(
+        'EmailSubmission/set failed: ${err['type']} '
+        '${err['description'] ?? ''} '
+        '${err['properties'] ?? ''}',
+      );
     }
   }
 

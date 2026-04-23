@@ -848,7 +848,7 @@ void main() {
       expect(changes.first.changeType, 'flag_flagged');
     });
 
-    test('moveEmail enqueues move change and removes email from local DB',
+    test('moveEmail enqueues move change and updates local mailbox path',
         () async {
       final r = _makeRepos();
       await seedJmapEmail(r.db, r.accounts);
@@ -859,7 +859,9 @@ void main() {
       expect(changes.first.changeType, 'move');
       expect(changes.first.payload, contains('mbx2'));
 
-      expect(await r.emails.getEmail('jmap-1:e1'), isNull);
+      final email = await r.emails.getEmail('jmap-1:e1');
+      expect(email, isNotNull);
+      expect(email?.mailboxPath, 'mbx2');
     });
 
     test('deleteEmail enqueues delete change and removes email from local DB',
@@ -967,7 +969,7 @@ void main() {
         r.db,
         r.accounts,
         changeType: 'move',
-        payload: '{"dest":"mbx2"}',
+        payload: '{"src":"mbx1","dest":"mbx2"}',
       );
 
       await r.emails.flushPendingChanges('jmap-1', 'pw');
@@ -1320,22 +1322,54 @@ void main() {
             sessionStatus,
           );
         }
+        // First API call is Identity/get; respond with a single identity.
+        if (req.body.contains('Identity/get')) {
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Identity/get',
+                  {
+                    'accountId': 'acct1',
+                    'state': 'id1',
+                    'list': [
+                      {'id': 'identity1', 'email': 'alice@example.com'},
+                    ],
+                  },
+                  'i',
+                ],
+              ],
+            }),
+            apiStatus,
+          );
+        }
+        if (req.body.contains('Email/set')) {
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Email/set',
+                  emailSetResult ??
+                      {
+                        'accountId': 'acct1',
+                        'newState': 'est2',
+                        'created': {
+                          'em1': {'id': 'newEmailId1'},
+                        },
+                      },
+                  '0',
+                ],
+              ],
+            }),
+            apiStatus,
+          );
+        }
         return http.Response(
           jsonEncode({
             'sessionState': 's1',
             'methodResponses': [
-              [
-                'Email/set',
-                emailSetResult ??
-                    {
-                      'accountId': 'acct1',
-                      'newState': 'est2',
-                      'created': {
-                        'em1': {'id': 'newEmailId1'},
-                      },
-                    },
-                '0',
-              ],
               [
                 'EmailSubmission/set',
                 submissionResult ??
@@ -1431,22 +1465,56 @@ void main() {
             200,
           );
         }
-        capturedBody = jsonDecode(req.body) as Map<String, dynamic>;
+        if (req.body.contains('Email/set')) {
+          capturedBody = jsonDecode(req.body) as Map<String, dynamic>;
+        }
+        // First API call is Identity/get; respond with a single identity.
+        if (req.body.contains('Identity/get')) {
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Identity/get',
+                  {
+                    'accountId': 'acct1',
+                    'state': 'id1',
+                    'list': [
+                      {'id': 'identity1', 'email': 'alice@example.com'},
+                    ],
+                  },
+                  'i',
+                ],
+              ],
+            }),
+            200,
+          );
+        }
+        if (req.body.contains('Email/set')) {
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Email/set',
+                  {
+                    'accountId': 'acct1',
+                    'newState': 'est2',
+                    'created': {
+                      'em1': {'id': 'newId'},
+                    },
+                  },
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        }
         return http.Response(
           jsonEncode({
             'sessionState': 's1',
             'methodResponses': [
-              [
-                'Email/set',
-                {
-                  'accountId': 'acct1',
-                  'newState': 'est2',
-                  'created': {
-                    'em1': {'id': 'newId'},
-                  },
-                },
-                '0',
-              ],
               [
                 'EmailSubmission/set',
                 {
