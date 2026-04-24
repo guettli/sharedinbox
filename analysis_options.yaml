@@ -52,6 +52,13 @@ linter:
     - discarded_futures
     - unnecessary_await_in_return
 
+    # Widget best practices
+    - use_super_parameters
+    - use_key_in_widget_constructors
+
+    # API clarity
+    - avoid_positional_boolean_parameters
+
     # Imports and style
     - directives_ordering
     - curly_braces_in_flow_control_structures

@@ -37,12 +37,6 @@ Why is that still needed? We have Stalwart.
 
 ---
 
-du -a | sort -rn | head
-
-Why is the directory so big? 4 GByte?
-
----
-
 After Try Connection, show some matching icon next to the text.
 
 ---
@@ -58,14 +52,6 @@ LINTING.md
 ---
 
 Sieve: JMAP, easy. Per IMAP...
-
----
-
-Flutter best practices?
-
----
-
-Flutter/Dart Linters?
 
 ---
 
