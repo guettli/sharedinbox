@@ -267,6 +267,25 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   Future<void> _batchDelete() async {
     final ids = _selectedEmailIds;
+    final count = ids.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete emails'),
+        content: Text('Move $count email${count == 1 ? '' : 's'} to Trash?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
     for (final id in ids) {
@@ -423,6 +442,28 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             icon: Icons.delete,
             label: 'Delete',
           ),
+          confirmDismiss: (direction) async {
+            if (direction == DismissDirection.endToStart) {
+              return showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Delete email'),
+                  content: const Text('Move this email to Trash?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              );
+            }
+            return true;
+          },
           onDismissed: (direction) async {
             final repo = ref.read(emailRepositoryProvider);
             if (direction == DismissDirection.startToEnd) {

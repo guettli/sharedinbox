@@ -160,7 +160,7 @@ class EmailRepositoryImpl implements EmailRepository {
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
-      final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY[])');
+      final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
       final msg = fetch.messages.first;
       final textBody = msg.decodeTextPlainPart();
       final htmlBody = msg.decodeTextHtmlPart();
@@ -1131,6 +1131,19 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
 
+    // Move to Trash when possible so the user can recover the message.
+    final trashRow = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(account.id) & t.role.equals('trash'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    if (trashRow != null && trashRow.path != row.mailboxPath) {
+      return moveEmail(emailId, trashRow.path);
+    }
+
+    // Already in Trash or no Trash folder — hard delete.
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
         account.id,
@@ -1693,7 +1706,7 @@ class EmailRepositoryImpl implements EmailRepository {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(
         emailRow.uid,
-        'BODY[${attachment.fetchPartId}]',
+        'BODY.PEEK[${attachment.fetchPartId}]',
       );
       final msg = fetch.messages.first;
       final part = msg.getPart(attachment.fetchPartId);

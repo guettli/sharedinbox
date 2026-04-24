@@ -10,17 +10,10 @@ Then run `task check`.
 
 Then move task to DONE.md
 
+Check if all files are staged.
+
+Git repo should not contain unknown files.
+
 Then commit.
 
 ## Tasks
-
-Implement thread-view.
-
-First create a plan.
-
-For JMAP this is easy.
-
-But for IMAP?
-
-Threads should be synced to the DB, too. Use JMAP as an example. Then think about getting this data
-structure from imap.
