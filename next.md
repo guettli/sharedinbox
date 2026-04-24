@@ -18,15 +18,6 @@ Then commit.
 
 ## Tasks
 
-## Mark as unread button in email detail
-
-`EmailRepository.setFlag(emailId, seen: false)` already exists. Add a
-"Mark as unread" icon button (or overflow menu item) in `EmailDetailScreen`
-that calls `setFlag(seen: false)` then pops the screen so the message
-reappears as unread in the list.
-
-File: `lib/ui/screens/email_detail_screen.dart`
-
 ## Quote original message in reply, and add Forward button
 
 When replying, `prefillBody` is never set so compose opens with an empty body.

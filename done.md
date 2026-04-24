@@ -6,6 +6,11 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Mark as unread button in email detail
+
+Added `mark_email_unread_outlined` icon button to `EmailDetailScreen` toolbar.
+Calls `setFlag(seen: false)` then pops back to the list.
+
 ## Pull-to-refresh on email list
 
 Wrapped `_buildStreamBody` in a `RefreshIndicator` that calls `syncEmails`.

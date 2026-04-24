@@ -74,6 +74,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     : () => _reply(context, header, replyAll: true),
               ),
               IconButton(
+                icon: const Icon(Icons.mark_email_unread_outlined),
+                tooltip: 'Mark as unread',
+                onPressed: () async {
+                  await repo.setFlag(widget.emailId, seen: false);
+                  if (context.mounted) context.pop();
+                },
+              ),
+              IconButton(
                 icon: Icon(
                   _isFlagged ? Icons.star : Icons.star_border,
                   color: _isFlagged ? Colors.amber : null,
