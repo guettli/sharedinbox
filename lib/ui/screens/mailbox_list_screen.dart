@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/email.dart';
-import '../../core/repositories/email_repository.dart';
-import '../../di.dart';
-import '../widgets/folder_drawer.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 class MailboxListScreen extends ConsumerWidget {
   const MailboxListScreen({super.key, required this.accountId});

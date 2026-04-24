@@ -60,6 +60,7 @@ linter:
     - avoid_positional_boolean_parameters
 
     # Imports and style
+    - always_use_package_imports
     - directives_ordering
     - curly_braces_in_flow_control_structures
     - require_trailing_commas

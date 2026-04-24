@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/sieve_script.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/di.dart';
 
 class SieveScriptsScreen extends ConsumerStatefulWidget {
   const SieveScriptsScreen({super.key, required this.accountId});

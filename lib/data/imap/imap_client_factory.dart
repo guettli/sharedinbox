@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart';
 
-import '../../core/models/account.dart';
+import 'package:sharedinbox/core/models/account.dart';
 
 typedef ImapConnectFn = Future<ImapClient> Function(
   Account account,

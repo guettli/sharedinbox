@@ -1,4 +1,4 @@
-import '../models/mailbox.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 
 abstract class MailboxRepository {
   Stream<List<Mailbox>> observeMailboxes(String accountId);

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'di.dart';
-import 'ui/router.dart';
+import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/router.dart';
 
 void main({List<Override> overrides = const []}) {
   runApp(ProviderScope(overrides: overrides, child: const SharedInboxApp()));

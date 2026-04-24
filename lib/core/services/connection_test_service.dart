@@ -2,9 +2,8 @@ import 'dart:convert';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
-
-import '../../data/imap/imap_client_factory.dart';
-import '../models/account.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 
 typedef ImapConnectForTestFn = Future<imap.ImapClient> Function(
   Account,

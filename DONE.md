@@ -6,6 +6,11 @@ Tasks get moved from NEXT.md to DONE.md
 
 ## Tasks
 
+## Enable always_use_package_imports lint rule
+
+Added rule to `analysis_options.yaml`; `dart fix --apply` converted 125 relative
+imports across 33 files to `package:sharedinbox/...` style automatically.
+
 ## Replace silent catch (_) with logged errors
 
 5 `catch (_)` blocks in JMAP push stream setup and 2 in UI screens now use

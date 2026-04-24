@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/email.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/di.dart';
 
 class AddressEmailsScreen extends ConsumerStatefulWidget {
   const AddressEmailsScreen({

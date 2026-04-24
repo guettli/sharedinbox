@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart';
 
-import '../../core/repositories/sync_log_repository.dart';
-import '../db/database.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/data/db/database.dart';
 
 class SyncLogRepositoryImpl implements SyncLogRepository {
   SyncLogRepositoryImpl(this._db);

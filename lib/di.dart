@@ -1,23 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
-import 'core/models/account.dart' as model;
-import 'core/repositories/account_repository.dart';
-import 'core/repositories/draft_repository.dart';
-import 'core/repositories/email_repository.dart';
-import 'core/repositories/mailbox_repository.dart';
-import 'core/services/account_discovery_service.dart';
-import 'core/services/connection_test_service.dart';
-import 'core/storage/secure_storage.dart';
-import 'core/sync/account_sync_manager.dart';
-import 'data/db/database.dart';
-import 'data/jmap/sieve_repository.dart';
-import 'data/repositories/account_repository_impl.dart';
-import 'data/repositories/draft_repository_impl.dart';
-import 'data/repositories/email_repository_impl.dart';
-import 'data/repositories/mailbox_repository_impl.dart';
-import 'data/repositories/sync_log_repository_impl.dart';
-import 'data/storage/flutter_secure_storage_impl.dart';
+import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/services/account_discovery_service.dart';
+import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/storage/secure_storage.dart';
+import 'package:sharedinbox/core/sync/account_sync_manager.dart';
+import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/jmap/sieve_repository.dart';
+import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
+import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 final dbProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();

@@ -3,11 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/models/account.dart';
-import '../../core/models/email.dart';
-import '../../core/repositories/email_repository.dart';
-import '../../di.dart';
-import '../widgets/folder_drawer.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 final _dateFmt = DateFormat('MMM d');
 

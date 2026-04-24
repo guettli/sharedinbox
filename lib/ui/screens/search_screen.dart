@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/email.dart';
-import '../../core/models/mailbox.dart';
-import '../../core/utils/logger.dart';
-import '../../di.dart';
-import '../widgets/folder_drawer.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, required this.accountId});

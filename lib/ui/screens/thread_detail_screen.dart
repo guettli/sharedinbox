@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/models/email.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/di.dart';
 
 final _dateFmt = DateFormat('MMM d');
 

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/account.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/di.dart';
 
 class EditAccountScreen extends ConsumerStatefulWidget {
   const EditAccountScreen({super.key, required this.accountId});

@@ -1,9 +1,9 @@
 import 'package:drift/drift.dart' show Value;
 
-import '../../core/models/account.dart' as model;
-import '../../core/repositories/account_repository.dart';
-import '../../core/storage/secure_storage.dart';
-import '../db/database.dart';
+import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/storage/secure_storage.dart';
+import 'package:sharedinbox/data/db/database.dart';
 
 class AccountRepositoryImpl implements AccountRepository {
   AccountRepositoryImpl(this._db, this._storage);

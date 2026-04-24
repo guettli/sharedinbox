@@ -1,16 +1,15 @@
 import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
-
-import '../../data/imap/imap_client_factory.dart'
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
-import '../models/account.dart';
-import '../models/email.dart' show SyncEmailsResult;
-import '../repositories/account_repository.dart';
-import '../repositories/email_repository.dart';
-import '../repositories/mailbox_repository.dart';
-import '../repositories/sync_log_repository.dart';
-import '../utils/logger.dart';
 
 /// Manages background sync for all accounts.
 ///

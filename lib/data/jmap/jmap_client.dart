@@ -4,7 +4,8 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import '../imap/imap_client_factory.dart' show verboseLogKey;
+import 'package:sharedinbox/data/imap/imap_client_factory.dart'
+    show verboseLogKey;
 
 const _coreUsing = [
   'urn:ietf:params:jmap:core',

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/mailbox.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/di.dart';
 
 /// Sorts INBOX first, Drafts second, then alphabetically.
 int compareMailboxes(Mailbox a, Mailbox b) {

@@ -1,8 +1,8 @@
 import 'package:drift/drift.dart';
 
-import '../../core/models/draft.dart';
-import '../../core/repositories/draft_repository.dart';
-import '../db/database.dart';
+import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/data/db/database.dart';
 
 class DraftRepositoryImpl implements DraftRepository {
   DraftRepositoryImpl(this._db);

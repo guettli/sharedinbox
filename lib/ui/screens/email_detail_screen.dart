@@ -6,10 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 
-import '../../core/models/email.dart';
-import '../../core/utils/format_utils.dart';
-import '../../core/utils/html_utils.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/html_utils.dart';
+import 'package:sharedinbox/di.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 

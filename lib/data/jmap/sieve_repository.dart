@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import '../../core/models/account.dart';
-import '../../core/models/sieve_script.dart';
-import '../../core/repositories/account_repository.dart';
-import 'jmap_client.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 class SieveRepository {
   SieveRepository(this._accounts, this._httpClient);

@@ -1,6 +1,6 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../../core/storage/secure_storage.dart';
+import 'package:sharedinbox/core/storage/secure_storage.dart';
 
 class FlutterSecureStorageImpl implements SecureStorage {
   const FlutterSecureStorageImpl();

@@ -8,11 +8,11 @@ import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart';
 import 'package:open_filex/open_filex.dart';
 
-import '../../core/models/account.dart';
-import '../../core/models/email.dart';
-import '../../core/repositories/draft_repository.dart';
-import '../../core/utils/format_utils.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/di.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({

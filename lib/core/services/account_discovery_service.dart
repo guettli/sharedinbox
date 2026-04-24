@@ -1,6 +1,6 @@
 import 'package:http/http.dart' as http;
 
-import '../models/discovery_result.dart';
+import 'package:sharedinbox/core/models/discovery_result.dart';
 
 abstract class AccountDiscoveryService {
   Future<DiscoveryResult> discover(String email);

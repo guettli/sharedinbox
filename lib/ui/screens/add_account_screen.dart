@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/models/account.dart';
-import '../../core/models/discovery_result.dart';
-import '../../core/utils/logger.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/discovery_result.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/di.dart';
 
 enum _Step { email, detecting, chooseType, jmapForm, imapForm, connecting }
 

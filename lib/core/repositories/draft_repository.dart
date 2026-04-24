@@ -1,4 +1,4 @@
-import '../models/draft.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 
 abstract class DraftRepository {
   /// Inserts or updates a draft.  Pass [id] to update; omit to create new.

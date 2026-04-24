@@ -9,14 +9,14 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../../core/models/account.dart' as account_model;
-import '../../core/models/email.dart' as model;
-import '../../core/repositories/account_repository.dart';
-import '../../core/repositories/email_repository.dart';
-import '../../core/utils/logger.dart';
-import '../db/database.dart';
-import '../imap/imap_client_factory.dart';
-import '../jmap/jmap_client.dart';
+import 'package:sharedinbox/core/models/account.dart' as account_model;
+import 'package:sharedinbox/core/models/email.dart' as model;
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
   account_model.Account account,

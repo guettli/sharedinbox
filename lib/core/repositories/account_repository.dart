@@ -1,4 +1,4 @@
-import '../models/account.dart';
+import 'package:sharedinbox/core/models/account.dart';
 
 abstract class AccountRepository {
   Stream<List<Account>> observeAccounts();

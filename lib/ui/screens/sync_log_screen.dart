@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/repositories/sync_log_repository.dart';
-import '../../di.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/di.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
