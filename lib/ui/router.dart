@@ -1,5 +1,7 @@
 import 'package:go_router/go_router.dart';
 
+import '../core/models/sieve_script.dart';
+
 import 'screens/account_list_screen.dart';
 import 'screens/add_account_screen.dart';
 import 'screens/address_emails_screen.dart';
@@ -9,6 +11,8 @@ import 'screens/email_detail_screen.dart';
 import 'screens/email_list_screen.dart';
 import 'screens/mailbox_list_screen.dart';
 import 'screens/search_screen.dart';
+import 'screens/sieve_script_edit_screen.dart';
+import 'screens/sieve_scripts_screen.dart';
 import 'screens/sync_log_screen.dart';
 
 final router = GoRouter(
@@ -32,6 +36,19 @@ final router = GoRouter(
           path: ':accountId/sync-log',
           builder: (ctx, state) => SyncLogScreen(
             accountId: state.pathParameters['accountId']!,
+          ),
+        ),
+        GoRoute(
+          path: ':accountId/sieve',
+          builder: (ctx, state) => SieveScriptsScreen(
+            accountId: state.pathParameters['accountId']!,
+          ),
+        ),
+        GoRoute(
+          path: ':accountId/sieve/edit',
+          builder: (ctx, state) => SieveScriptEditScreen(
+            accountId: state.pathParameters['accountId']!,
+            script: state.extra as SieveScript?,
           ),
         ),
         GoRoute(

@@ -11,6 +11,7 @@ import 'core/services/connection_test_service.dart';
 import 'core/storage/secure_storage.dart';
 import 'core/sync/account_sync_manager.dart';
 import 'data/db/database.dart';
+import 'data/jmap/sieve_repository.dart';
 import 'data/repositories/account_repository_impl.dart';
 import 'data/repositories/draft_repository_impl.dart';
 import 'data/repositories/email_repository_impl.dart';
@@ -77,6 +78,13 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
 final accountDiscoveryServiceProvider =
     Provider<AccountDiscoveryService>((ref) {
   return AccountDiscoveryServiceImpl(ref.watch(httpClientProvider));
+});
+
+final sieveRepositoryProvider = Provider<SieveRepository>((ref) {
+  return SieveRepository(
+    ref.watch(accountRepositoryProvider),
+    ref.watch(httpClientProvider),
+  );
 });
 
 final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {

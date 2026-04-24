@@ -91,17 +91,22 @@ class _AccountTile extends ConsumerWidget {
           ),
           PopupMenuButton<_AccountAction>(
             onSelected: (action) => _onAction(context, action),
-            itemBuilder: (_) => const [
-              PopupMenuItem(
+            itemBuilder: (_) => [
+              const PopupMenuItem(
                 value: _AccountAction.syncLog,
                 child: Text('Sync log'),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: _AccountAction.edit,
                 child: Text('Edit'),
               ),
-              PopupMenuDivider(),
-              PopupMenuItem(
+              if (account.type == AccountType.jmap)
+                const PopupMenuItem(
+                  value: _AccountAction.emailFilters,
+                  child: Text('Email filters'),
+                ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
                 value: _AccountAction.delete,
                 child: Text('Delete'),
               ),
@@ -119,6 +124,8 @@ class _AccountTile extends ConsumerWidget {
         await context.push('/accounts/${account.id}/sync-log');
       case _AccountAction.edit:
         await context.push('/accounts/${account.id}/edit');
+      case _AccountAction.emailFilters:
+        await context.push('/accounts/${account.id}/sieve');
       case _AccountAction.delete:
         final confirmed = await showDialog<bool>(
           context: context,
@@ -148,4 +155,4 @@ class _AccountTile extends ConsumerWidget {
   }
 }
 
-enum _AccountAction { syncLog, edit, delete }
+enum _AccountAction { syncLog, edit, emailFilters, delete }

@@ -12,6 +12,7 @@ const _coreUsing = [
 ];
 
 const _submissionCapability = 'urn:ietf:params:jmap:submission';
+const _sieveCapability = 'urn:ietf:params:jmap:sieve';
 
 /// A connected JMAP session. Fetch via [JmapClient.connect].
 ///
@@ -49,6 +50,9 @@ class JmapClient {
 
   /// Whether the server supports `EmailSubmission/set` (RFC 8621 §7).
   bool get supportsSubmission => _capabilities.contains(_submissionCapability);
+
+  /// Whether the server supports Sieve script management (RFC 9661).
+  bool get supportsSieve => _capabilities.contains(_sieveCapability);
 
   /// SSE push URL advertised by the server, or null if push is unsupported.
   String? get eventSourceUrl => _eventSourceUrl;
@@ -123,9 +127,13 @@ class JmapClient {
   Future<List<dynamic>> call(
     List<List<dynamic>> methodCalls, {
     bool withSubmission = false,
+    bool withSieve = false,
   }) async {
-    final using =
-        withSubmission ? [..._coreUsing, _submissionCapability] : _coreUsing;
+    final using = [
+      ..._coreUsing,
+      if (withSubmission) _submissionCapability,
+      if (withSieve) _sieveCapability,
+    ];
     final body = jsonEncode({
       'using': using,
       'methodCalls': methodCalls,
