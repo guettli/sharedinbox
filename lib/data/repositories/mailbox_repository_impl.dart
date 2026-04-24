@@ -38,6 +38,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
+  Future<model.Mailbox?> findMailboxByRole(
+    String accountId,
+    String role,
+  ) async {
+    final row = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals(role),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row == null ? null : _toModel(row);
+  }
+
+  @override
   Future<int> syncMailboxes(String accountId) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
@@ -84,6 +98,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 name: mb.name,
                 unreadCount: Value(unread),
                 totalCount: Value(total),
+                role: Value(_imapRole(mb)),
               ),
             );
       }
@@ -264,5 +279,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
         name: row.name,
         unreadCount: row.unreadCount,
         totalCount: row.totalCount,
+        role: row.role,
       );
+
+  /// Maps enough_mail special-use flags (RFC 6154) to JMAP role strings (RFC 8621).
+  static String? _imapRole(imap.Mailbox mb) {
+    if (mb.isInbox) return 'inbox';
+    if (mb.isArchive) return 'archive';
+    if (mb.isTrash) return 'trash';
+    if (mb.isSent) return 'sent';
+    if (mb.isDrafts) return 'drafts';
+    if (mb.isJunk) return 'junk';
+    return null;
+  }
 }

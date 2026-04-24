@@ -48,6 +48,10 @@ class FakeMailboxRepository implements MailboxRepository {
 
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
+
+  @override
+  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
+      null;
 }
 
 class FailingMailboxRepository implements MailboxRepository {
@@ -57,6 +61,10 @@ class FailingMailboxRepository implements MailboxRepository {
   @override
   Future<int> syncMailboxes(String accountId) async =>
       throw Exception('simulated sync failure');
+
+  @override
+  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
+      null;
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -170,6 +178,10 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
 
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
+
+  @override
+  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
+      null;
 }
 
 class _CountingEmailRepository extends FakeEmailRepository {

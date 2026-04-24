@@ -57,6 +57,10 @@ class _FakeMailboxes implements MailboxRepository {
 
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
+
+  @override
+  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
+      null;
 }
 
 class _FakeEmails implements EmailRepository {

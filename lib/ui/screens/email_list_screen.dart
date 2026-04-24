@@ -178,6 +178,24 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
+  Future<void> _archiveEmail(Email email) async {
+    final mailboxRepo = ref.read(mailboxRepositoryProvider);
+    final archive =
+        await mailboxRepo.findMailboxByRole(widget.accountId, 'archive');
+    if (!mounted) return;
+    if (archive == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No archive folder found')),
+      );
+      return;
+    }
+    await ref.read(emailRepositoryProvider).moveEmail(email.id, archive.path);
+  }
+
+  Future<void> _deleteEmail(Email email) async {
+    await ref.read(emailRepositoryProvider).deleteEmail(email.id);
+  }
+
   Widget _buildList(List<Email> emails) {
     return ListView.builder(
       itemCount: emails.length,
@@ -186,39 +204,83 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         final sender = e.from.isNotEmpty
             ? (e.from.first.name ?? e.from.first.email)
             : '(unknown)';
-        return ListTile(
-          leading: Icon(
-            e.isSeen ? Icons.mail_outline : Icons.mail,
-            color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+        return Dismissible(
+          key: ValueKey(e.id),
+          background: _swipeBackground(
+            alignment: Alignment.centerLeft,
+            color: Colors.green,
+            icon: Icons.archive,
+            label: 'Archive',
           ),
-          title: Text(
-            sender,
-            style:
-                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
+          secondaryBackground: _swipeBackground(
+            alignment: Alignment.centerRight,
+            color: Colors.red,
+            icon: Icons.delete,
+            label: 'Delete',
           ),
-          subtitle: Text(
-            e.subject ?? '(no subject)',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (e.isFlagged)
-                const Icon(Icons.star, color: Colors.amber, size: 16),
-              if (e.hasAttachment) const Icon(Icons.attach_file, size: 16),
-              const SizedBox(width: 4),
-              Text(
-                e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          onTap: () => context.push(
-            '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
+          onDismissed: (direction) async {
+            if (direction == DismissDirection.startToEnd) {
+              await _archiveEmail(e);
+            } else {
+              await _deleteEmail(e);
+            }
+          },
+          child: ListTile(
+            leading: Icon(
+              e.isSeen ? Icons.mail_outline : Icons.mail,
+              color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+            ),
+            title: Text(
+              sender,
+              style: e.isSeen
+                  ? null
+                  : const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              e.subject ?? '(no subject)',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (e.isFlagged)
+                  const Icon(Icons.star, color: Colors.amber, size: 16),
+                if (e.hasAttachment) const Icon(Icons.attach_file, size: 16),
+                const SizedBox(width: 4),
+                Text(
+                  e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            onTap: () => context.push(
+              '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
+            ),
           ),
         );
       },
+    );
+  }
+
+  Widget _swipeBackground({
+    required AlignmentGeometry alignment,
+    required Color color,
+    required IconData icon,
+    required String label,
+  }) {
+    return Container(
+      color: color,
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(color: Colors.white)),
+        ],
+      ),
     );
   }
 }
