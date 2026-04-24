@@ -230,19 +230,30 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Widget _buildStreamBody(EmailRepository emailRepo) {
-    return StreamBuilder<List<EmailThread>>(
-      stream: emailRepo.observeThreads(widget.accountId, widget.mailboxPath),
-      builder: (ctx, snap) {
-        if (!snap.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final threads = snap.data!;
-        _currentThreads = threads;
-        if (threads.isEmpty) {
-          return const Center(child: Text('No emails'));
-        }
-        return _buildThreadList(threads);
-      },
+    return RefreshIndicator(
+      onRefresh: () =>
+          emailRepo.syncEmails(widget.accountId, widget.mailboxPath),
+      child: StreamBuilder<List<EmailThread>>(
+        stream: emailRepo.observeThreads(widget.accountId, widget.mailboxPath),
+        builder: (ctx, snap) {
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final threads = snap.data!;
+          _currentThreads = threads;
+          if (threads.isEmpty) {
+            return ListView(
+              children: const [
+                SizedBox(
+                  height: 300,
+                  child: Center(child: Text('No emails')),
+                ),
+              ],
+            );
+          }
+          return _buildThreadList(threads);
+        },
+      ),
     );
   }
 

@@ -6,6 +6,12 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Pull-to-refresh on email list
+
+Wrapped `_buildStreamBody` in a `RefreshIndicator` that calls `syncEmails`.
+The empty-state is now a scrollable `ListView` so the pull gesture works even
+when the folder has no messages.
+
 ## Show email preview snippet in list
 
 Added `preview` field to `EmailThread` (populated from the latest email in

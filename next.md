@@ -18,14 +18,6 @@ Then commit.
 
 ## Tasks
 
-## Pull-to-refresh on email list
-
-`EmailListScreen` has a manual sync icon button but no swipe-to-refresh gesture.
-Wrap the `StreamBuilder` result body in a `RefreshIndicator` that calls the
-same sync trigger as the icon button.
-
-File: `lib/ui/screens/email_list_screen.dart`
-
 ## Mark as unread button in email detail
 
 `EmailRepository.setFlag(emailId, seen: false)` already exists. Add a
