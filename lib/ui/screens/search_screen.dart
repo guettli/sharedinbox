@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/email.dart';
 import '../../core/models/mailbox.dart';
+import '../../core/utils/logger.dart';
 import '../../di.dart';
 import '../widgets/folder_drawer.dart';
 
@@ -92,7 +93,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      log('Search failed: $e');
       if (mounted) setState(() => _loading = false);
     }
   }

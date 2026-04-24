@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/account.dart';
 import '../../core/models/discovery_result.dart';
+import '../../core/utils/logger.dart';
 import '../../di.dart';
 
 enum _Step { email, detecting, chooseType, jmapForm, imapForm, connecting }
@@ -92,7 +93,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         case UnknownDiscovery():
           setState(() => _step = _Step.chooseType);
       }
-    } catch (_) {
+    } catch (e) {
+      log('Account discovery failed: $e');
       if (mounted) setState(() => _step = _Step.chooseType);
     }
   }

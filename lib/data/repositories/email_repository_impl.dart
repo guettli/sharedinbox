@@ -920,7 +920,8 @@ class EmailRepositoryImpl implements EmailRepository {
             username: _effectiveUsername(account),
             password: password,
           );
-        } catch (_) {
+        } catch (e) {
+          log('JMAP push: connect failed: $e');
           await controller.close();
           return;
         }
@@ -946,7 +947,8 @@ class EmailRepositoryImpl implements EmailRepository {
             await controller.close();
             return;
           }
-        } catch (_) {
+        } catch (e) {
+          log('JMAP push: SSE request failed: $e');
           await controller.close();
           return;
         }
@@ -977,7 +979,8 @@ class EmailRepositoryImpl implements EmailRepository {
           onError: (_) => controller.close(),
           cancelOnError: true,
         );
-      } catch (_) {
+      } catch (e) {
+        log('JMAP push: unexpected error: $e');
         await controller.close();
       }
     }());

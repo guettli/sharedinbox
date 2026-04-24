@@ -6,6 +6,13 @@ Tasks get moved from NEXT.md to DONE.md
 
 ## Tasks
 
+## Replace silent catch (_) with logged errors
+
+5 `catch (_)` blocks in JMAP push stream setup and 2 in UI screens now use
+`catch (e)` with `log(...)` via the project's `logger.dart` wrapper.
+The two intentionally silent catches (malformed SSE JSON, Sent folder already
+exists) were left as-is since they already had explanatory comments.
+
 ## Safety hardening before real account use
 
 ### 1. Fix non-PEEK body fetch (silently sets \Seen)
