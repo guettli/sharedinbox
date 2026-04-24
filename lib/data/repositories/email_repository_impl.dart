@@ -458,7 +458,6 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     List<int> serverUids,
   ) async {
-    final serverUidSet = serverUids.toSet();
     final localRows = await (_db.select(_db.emails)
           ..where(
             (t) =>
@@ -466,6 +465,19 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.mailboxPath.equals(mailboxPath),
           ))
         .get();
+
+    // Guard: if the server returned no UIDs but we have local emails, the
+    // server response is likely incomplete (network glitch, buggy IMAP server).
+    // Skip reconciliation to avoid wiping the local cache unnecessarily.
+    if (serverUids.isEmpty && localRows.isNotEmpty) {
+      log(
+        '_reconcileDeletedImap: skipping — server returned 0 UIDs for '
+        '$mailboxPath but local DB has ${localRows.length} emails',
+      );
+      return;
+    }
+
+    final serverUidSet = serverUids.toSet();
     for (final row in localRows) {
       if (!serverUidSet.contains(row.uid)) {
         await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
