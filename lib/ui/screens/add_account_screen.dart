@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 enum _Step { email, detecting, chooseType, jmapForm, imapForm, connecting }
 
@@ -346,20 +347,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               required: false,
             ),
             _field(_passwordCtrl, 'Password', obscure: true),
-            _tryResultBanner(),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              key: const Key('tryConnectionButton'),
-              onPressed: _tryTesting
-                  ? null
-                  : () => _tryConnection(_jmapFormKey, _buildJmapAccount),
-              child: _tryTesting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Try connection'),
+            TryConnectionButton(
+              buttonKey: const Key('tryConnectionButton'),
+              testing: _tryTesting,
+              okMessage: _tryOk,
+              errorMessage: _tryErr,
+              onPressed: () => _tryConnection(_jmapFormKey, _buildJmapAccount),
             ),
             const SizedBox(height: 8),
             FilledButton(
@@ -405,20 +398,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               value: _smtpSsl,
               onChanged: (v) => setState(() => _smtpSsl = v),
             ),
-            _tryResultBanner(),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              key: const Key('tryConnectionButton'),
-              onPressed: _tryTesting
-                  ? null
-                  : () => _tryConnection(_imapFormKey, _buildImapAccount),
-              child: _tryTesting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Try connection'),
+            TryConnectionButton(
+              buttonKey: const Key('tryConnectionButton'),
+              testing: _tryTesting,
+              okMessage: _tryOk,
+              errorMessage: _tryErr,
+              onPressed: () => _tryConnection(_imapFormKey, _buildImapAccount),
             ),
             const SizedBox(height: 8),
             FilledButton(
@@ -460,28 +445,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         style: TextStyle(color: Theme.of(context).colorScheme.error),
       ),
     );
-  }
-
-  Widget _tryResultBanner() {
-    if (_tryOk != null) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Text(
-          _tryOk!,
-          style: TextStyle(color: Theme.of(context).colorScheme.primary),
-        ),
-      );
-    }
-    if (_tryErr != null) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Text(
-          _tryErr!,
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
-        ),
-      );
-    }
-    return const SizedBox.shrink();
   }
 
   Widget _field(

@@ -6,6 +6,13 @@ Tasks get moved from NEXT.md to DONE.md
 
 ## Tasks
 
+## Extract TryConnectionButton widget shared by account screens
+
+Extracted `lib/ui/widgets/try_connection_button.dart` — a stateless widget
+rendering the result banner (ok/error text) and the spinner/button. Both
+`add_account_screen` and `edit_account_screen` now use it, removing ~30 lines
+of duplicated UI code.
+
 ## Extract _batchMoveToRole helper in email_list_screen
 
 `_batchArchive()` and `_batchMarkSpam()` collapsed into a shared

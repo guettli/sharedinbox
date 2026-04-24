@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 class EditAccountScreen extends ConsumerStatefulWidget {
   const EditAccountScreen({super.key, required this.accountId});
@@ -265,34 +266,12 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               value: _verbose,
               onChanged: (v) => setState(() => _verbose = v),
             ),
-            if (_tryOk != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _tryOk!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.primary),
-                ),
-              ),
-            if (_tryErr != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _tryErr!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              key: const Key('editTryConnectionButton'),
-              onPressed: _tryTesting ? null : _tryConnection,
-              child: _tryTesting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Try connection'),
+            TryConnectionButton(
+              buttonKey: const Key('editTryConnectionButton'),
+              testing: _tryTesting,
+              okMessage: _tryOk,
+              errorMessage: _tryErr,
+              onPressed: _tryConnection,
             ),
             const SizedBox(height: 8),
             FilledButton(onPressed: _save, child: const Text('Save')),
