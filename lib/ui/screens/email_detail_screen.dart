@@ -64,14 +64,21 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 tooltip: 'Reply',
                 onPressed: header == null
                     ? null
-                    : () => _reply(context, header, replyAll: false),
+                    : () => _reply(context, header, body, replyAll: false),
               ),
               IconButton(
                 icon: const Icon(Icons.reply_all),
                 tooltip: 'Reply all',
                 onPressed: header == null
                     ? null
-                    : () => _reply(context, header, replyAll: true),
+                    : () => _reply(context, header, body, replyAll: true),
+              ),
+              IconButton(
+                icon: const Icon(Icons.forward),
+                tooltip: 'Forward',
+                onPressed: header == null
+                    ? null
+                    : () => _forward(context, header, body),
               ),
               IconButton(
                 icon: const Icon(Icons.mark_email_unread_outlined),
@@ -228,7 +235,21 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  void _reply(BuildContext context, Email header, {required bool replyAll}) {
+  String _quotedBody(Email header, EmailBody? body) {
+    final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
+    final from =
+        header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
+    final text = body?.textBody ?? htmlToPlain(body?.htmlBody ?? '');
+    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    return '\n\n— On $date, $from wrote:\n$quoted';
+  }
+
+  void _reply(
+    BuildContext context,
+    Email header,
+    EmailBody? body, {
+    required bool replyAll,
+  }) {
     final to = header.from.isNotEmpty ? header.from.first.email : '';
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
@@ -241,7 +262,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           'replyToEmailId': widget.emailId,
           'prefillTo': to,
           'prefillSubject': subject,
+          'prefillBody': _quotedBody(header, body),
           if (cc.isNotEmpty) 'prefillCc': cc,
+        },
+      ),
+    );
+  }
+
+  void _forward(BuildContext context, Email header, EmailBody? body) {
+    final subject = (header.subject?.startsWith('Fwd:') ?? false)
+        ? header.subject!
+        : 'Fwd: ${header.subject ?? ''}';
+    unawaited(
+      context.push(
+        '/compose',
+        extra: {
+          'prefillSubject': subject,
+          'prefillBody': _quotedBody(header, body),
         },
       ),
     );

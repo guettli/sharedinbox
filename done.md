@@ -6,6 +6,12 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Quote original message in reply, and add Forward button
+
+`_reply` now passes `prefillBody` with the original message quoted as plain
+text (`> line…`). New `_forward` method and Forward toolbar button added;
+sets `Fwd:` subject prefix and prefills the same quoted body with To/Cc empty.
+
 ## Mark as unread button in email detail
 
 Added `mark_email_unread_outlined` icon button to `EmailDetailScreen` toolbar.
