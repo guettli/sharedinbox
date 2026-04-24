@@ -6,6 +6,12 @@ Tasks get moved from NEXT.md to DONE.md
 
 ## Tasks
 
+## Extract _batchMoveToRole helper in email_list_screen
+
+`_batchArchive()` and `_batchMarkSpam()` collapsed into a shared
+`_batchMoveToRole(role, notFoundMessage)` helper, eliminating ~20 lines of
+duplication.
+
 ## Enable always_use_package_imports lint rule
 
 Added rule to `analysis_options.yaml`; `dart fix --apply` converted 125 relative

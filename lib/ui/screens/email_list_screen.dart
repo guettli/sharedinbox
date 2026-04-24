@@ -246,24 +246,27 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
-  Future<void> _batchArchive() async {
+  Future<void> _batchMoveToRole(String role, String notFoundMessage) async {
     final ids = _selectedEmailIds;
     _clearSelection();
-    final archive = await ref
+    final mailbox = await ref
         .read(mailboxRepositoryProvider)
-        .findMailboxByRole(widget.accountId, 'archive');
+        .findMailboxByRole(widget.accountId, role);
     if (!mounted) return;
-    if (archive == null) {
+    if (mailbox == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No archive folder found')),
+        SnackBar(content: Text(notFoundMessage)),
       );
       return;
     }
     final repo = ref.read(emailRepositoryProvider);
     for (final id in ids) {
-      await repo.moveEmail(id, archive.path);
+      await repo.moveEmail(id, mailbox.path);
     }
   }
+
+  Future<void> _batchArchive() =>
+      _batchMoveToRole('archive', 'No archive folder found');
 
   Future<void> _batchDelete() async {
     final ids = _selectedEmailIds;
@@ -293,24 +296,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
   }
 
-  Future<void> _batchMarkSpam() async {
-    final ids = _selectedEmailIds;
-    _clearSelection();
-    final junk = await ref
-        .read(mailboxRepositoryProvider)
-        .findMailboxByRole(widget.accountId, 'junk');
-    if (!mounted) return;
-    if (junk == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No spam folder found')),
-      );
-      return;
-    }
-    final repo = ref.read(emailRepositoryProvider);
-    for (final id in ids) {
-      await repo.moveEmail(id, junk.path);
-    }
-  }
+  Future<void> _batchMarkSpam() =>
+      _batchMoveToRole('junk', 'No spam folder found');
 
   Future<void> _batchMove() async {
     final ids = _selectedEmailIds;
