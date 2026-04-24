@@ -67,6 +67,61 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Stream<List<model.EmailThread>> observeThreads(
+    String accountId,
+    String mailboxPath,
+  ) {
+    return observeEmails(accountId, mailboxPath).map(_groupIntoThreads);
+  }
+
+  static List<model.EmailThread> _groupIntoThreads(List<model.Email> emails) {
+    // Group emails by threadId, falling back to email id for unthreaded mail.
+    final groups = <String, List<model.Email>>{};
+    for (final email in emails) {
+      final key = email.threadId ?? email.id;
+      groups.putIfAbsent(key, () => []).add(email);
+    }
+
+    final threads = groups.values.map((threadEmails) {
+      // Sort within thread oldest-first so latest is last.
+      threadEmails.sort((a, b) {
+        final da = a.sentAt ?? a.receivedAt;
+        final db = b.sentAt ?? b.receivedAt;
+        return da.compareTo(db);
+      });
+
+      final latest = threadEmails.last;
+
+      // Collect unique participants across the whole thread.
+      final seen = <String>{};
+      final participants = <model.EmailAddress>[];
+      for (final e in threadEmails) {
+        for (final a in e.from) {
+          if (seen.add(a.email)) participants.add(a);
+        }
+      }
+
+      return model.EmailThread(
+        threadId: latest.threadId ?? latest.id,
+        subject: latest.subject,
+        participants: participants,
+        latestDate: latest.sentAt ?? latest.receivedAt,
+        messageCount: threadEmails.length,
+        hasUnread: threadEmails.any((e) => !e.isSeen),
+        isFlagged: threadEmails.any((e) => e.isFlagged),
+        latestEmailId: latest.id,
+        emailIds: threadEmails.map((e) => e.id).toList(),
+        accountId: latest.accountId,
+        mailboxPath: latest.mailboxPath,
+      );
+    }).toList();
+
+    // Sort threads by latest message descending.
+    threads.sort((a, b) => b.latestDate.compareTo(a.latestDate));
+    return threads;
+  }
+
+  @override
   Future<model.Email?> getEmail(String emailId) async {
     final row = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
@@ -383,15 +438,11 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     imap.MessageSequence sequence,
   ) async {
+    const fetchItems =
+        '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES)])';
     final fetch = sequence.isUidSequence
-        ? await client.uidFetchMessages(
-            sequence,
-            '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE)',
-          )
-        : await client.fetchMessages(
-            sequence,
-            '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE)',
-          );
+        ? await client.uidFetchMessages(sequence, fetchItems)
+        : await client.fetchMessages(sequence, fetchItems);
     var bytes = 0;
     await _db.transaction(() async {
       for (final msg in fetch.messages) {
@@ -407,6 +458,15 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$uid';
+        final msgId = envelope.messageId?.trim();
+        final inReplyTo = envelope.inReplyTo?.trim();
+        final refs = msg.getHeaderValue('References')?.trim();
+        final threadId = _computeThreadId(
+          emailId: emailId,
+          messageId: msgId,
+          inReplyTo: inReplyTo,
+          references: refs,
+        );
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
@@ -422,6 +482,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
                 hasAttachment: Value(msg.hasAttachments()),
+                threadId: Value(threadId),
+                messageId: Value(msgId),
+                inReplyTo: Value(inReplyTo),
+                references: Value(refs),
               ),
             );
       }
@@ -495,6 +559,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   static const _emailProperties = [
     'id',
+    'threadId',
     'mailboxIds',
     'subject',
     'sentAt',
@@ -505,6 +570,9 @@ class EmailRepositoryImpl implements EmailRepository {
     'keywords',
     'hasAttachment',
     'preview',
+    'messageId',
+    'inReplyTo',
+    'references',
     'textBody',
     'htmlBody',
     'bodyValues',
@@ -678,6 +746,15 @@ class EmailRepositoryImpl implements EmailRepository {
       final receivedAt =
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
 
+      final jmapThreadId = m['threadId'] as String?;
+      // JMAP messageId/inReplyTo/references are arrays; join to space-separated.
+      final jmapMessageId =
+          _joinJmapStringList(m['messageId'] as List<dynamic>?);
+      final jmapInReplyTo =
+          _joinJmapStringList(m['inReplyTo'] as List<dynamic>?);
+      final jmapReferences =
+          _joinJmapStringList(m['references'] as List<dynamic>?);
+
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
               id: dbId,
@@ -694,6 +771,10 @@ class EmailRepositoryImpl implements EmailRepository {
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
+              threadId: Value(jmapThreadId),
+              messageId: Value(jmapMessageId),
+              inReplyTo: Value(jmapInReplyTo),
+              references: Value(jmapReferences),
             ),
           );
 
@@ -1728,6 +1809,32 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  /// Computes a stable threadId from RFC 2822 headers.
+  /// Uses the first entry in References (= oldest ancestor) so all messages
+  /// in a thread share the same root Message-ID as their threadId.
+  /// Falls back to In-Reply-To, then own Message-ID, then internal emailId.
+  /// JMAP header fields like messageId/inReplyTo/references come as arrays.
+  /// We join them space-separated to match the IMAP convention.
+  static String? _joinJmapStringList(List<dynamic>? list) {
+    if (list == null || list.isEmpty) return null;
+    final joined = list.cast<String>().join(' ');
+    return joined.isEmpty ? null : joined;
+  }
+
+  static String? _computeThreadId({
+    required String emailId,
+    required String? messageId,
+    required String? inReplyTo,
+    required String? references,
+  }) {
+    if (references != null && references.isNotEmpty) {
+      final first = references.trim().split(RegExp(r'\s+')).firstOrNull;
+      if (first != null && first.isNotEmpty) return first;
+    }
+    if (inReplyTo != null && inReplyTo.isNotEmpty) return inReplyTo;
+    return messageId; // null for messages with no Message-ID (rare)
+  }
+
   String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(
         (addresses ?? const [])
             .map((a) => {'name': a.personalName, 'email': a.email})
@@ -1762,6 +1869,10 @@ class EmailRepositoryImpl implements EmailRepository {
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,
       hasAttachment: row.hasAttachment,
+      threadId: row.threadId,
+      messageId: row.messageId,
+      inReplyTo: row.inReplyTo,
+      references: row.references,
     );
   }
 

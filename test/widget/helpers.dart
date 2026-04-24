@@ -155,6 +155,29 @@ class FakeEmailRepository implements EmailRepository {
       Stream.value(List.of(_emails));
 
   @override
+  Stream<List<EmailThread>> observeThreads(
+    String accountId,
+    String mailboxPath,
+  ) =>
+      observeEmails(accountId, mailboxPath).map((emails) {
+        return emails.map((e) {
+          return EmailThread(
+            threadId: e.threadId ?? e.id,
+            subject: e.subject,
+            participants: e.from,
+            latestDate: e.sentAt ?? e.receivedAt,
+            messageCount: 1,
+            hasUnread: !e.isSeen,
+            isFlagged: e.isFlagged,
+            latestEmailId: e.id,
+            emailIds: [e.id],
+            accountId: e.accountId,
+            mailboxPath: e.mailboxPath,
+          );
+        }).toList();
+      });
+
+  @override
   Future<Email?> getEmail(String emailId) async => _emailDetail;
 
   @override

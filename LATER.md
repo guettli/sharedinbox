@@ -31,12 +31,6 @@ Try Qwen, vscode plugin
 
 ---
 
-test/unit/fake_imap.dart
-
-Why is that still needed? We have Stalwart.
-
----
-
 After Try Connection, show some matching icon next to the text.
 
 ---
@@ -44,12 +38,6 @@ After Try Connection, show some matching icon next to the text.
 ---
 
 Test with a Fastmail account
-
----
-
-LINTING.md
-
----
 
 ---
 

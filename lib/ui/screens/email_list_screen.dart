@@ -31,8 +31,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   List<Email>? _searchResults;
   bool _searchLoading = false;
 
-  final Set<String> _selectedIds = {};
-  bool get _selecting => _selectedIds.isNotEmpty;
+  // Thread-level selection (key = threadId).
+  final Set<String> _selectedThreadIds = {};
+  // Last-emitted thread list, used to resolve emailIds for batch operations.
+  List<EmailThread> _currentThreads = [];
+  bool get _selecting => _selectedThreadIds.isNotEmpty;
 
   @override
   void dispose() {
@@ -40,17 +43,23 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     super.dispose();
   }
 
-  void _toggleSelection(String id) {
+  void _toggleThreadSelection(EmailThread thread) {
     setState(() {
-      if (_selectedIds.contains(id)) {
-        _selectedIds.remove(id);
+      if (_selectedThreadIds.contains(thread.threadId)) {
+        _selectedThreadIds.remove(thread.threadId);
       } else {
-        _selectedIds.add(id);
+        _selectedThreadIds.add(thread.threadId);
       }
     });
   }
 
-  void _clearSelection() => setState(() => _selectedIds.clear());
+  void _clearSelection() => setState(() => _selectedThreadIds.clear());
+
+  // All email IDs belonging to currently selected threads.
+  List<String> get _selectedEmailIds => _currentThreads
+      .where((t) => _selectedThreadIds.contains(t.threadId))
+      .expand((t) => t.emailIds)
+      .toList();
 
   Future<void> _runSearch(String query) async {
     if (query.trim().isEmpty) {
@@ -144,7 +153,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         icon: const Icon(Icons.close),
         onPressed: _clearSelection,
       ),
-      title: Text('${_selectedIds.length} selected'),
+      title: Text('${_selectedThreadIds.length} selected'),
     );
   }
 
@@ -217,45 +226,28 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (_searchResults!.isEmpty) {
       return const Center(child: Text('No results'));
     }
-    return _buildList(_searchResults!);
+    return _buildEmailList(_searchResults!);
   }
 
   Widget _buildStreamBody(EmailRepository emailRepo) {
-    return StreamBuilder<List<Email>>(
-      stream: emailRepo.observeEmails(widget.accountId, widget.mailboxPath),
+    return StreamBuilder<List<EmailThread>>(
+      stream: emailRepo.observeThreads(widget.accountId, widget.mailboxPath),
       builder: (ctx, snap) {
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final emails = snap.data!;
-        if (emails.isEmpty) {
+        final threads = snap.data!;
+        _currentThreads = threads;
+        if (threads.isEmpty) {
           return const Center(child: Text('No emails'));
         }
-        return _buildList(emails);
+        return _buildThreadList(threads);
       },
     );
   }
 
-  Future<void> _archiveEmail(Email email) async {
-    final archive = await ref
-        .read(mailboxRepositoryProvider)
-        .findMailboxByRole(widget.accountId, 'archive');
-    if (!mounted) return;
-    if (archive == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No archive folder found')),
-      );
-      return;
-    }
-    await ref.read(emailRepositoryProvider).moveEmail(email.id, archive.path);
-  }
-
-  Future<void> _deleteEmail(Email email) async {
-    await ref.read(emailRepositoryProvider).deleteEmail(email.id);
-  }
-
   Future<void> _batchArchive() async {
-    final ids = Set<String>.from(_selectedIds);
+    final ids = _selectedEmailIds;
     _clearSelection();
     final archive = await ref
         .read(mailboxRepositoryProvider)
@@ -274,7 +266,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _batchDelete() async {
-    final ids = Set<String>.from(_selectedIds);
+    final ids = _selectedEmailIds;
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
     for (final id in ids) {
@@ -283,7 +275,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _batchMarkSpam() async {
-    final ids = Set<String>.from(_selectedIds);
+    final ids = _selectedEmailIds;
     _clearSelection();
     final junk = await ref
         .read(mailboxRepositoryProvider)
@@ -302,7 +294,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _batchMove() async {
-    final ids = Set<String>.from(_selectedIds);
+    final ids = _selectedEmailIds;
     final mailboxes = await ref
         .read(mailboxRepositoryProvider)
         .observeMailboxes(widget.accountId)
@@ -341,33 +333,48 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
   }
 
-  Widget _buildList(List<Email> emails) {
+  Widget _buildThreadList(List<EmailThread> threads) {
     return ListView.builder(
-      itemCount: emails.length,
+      itemCount: threads.length,
       itemBuilder: (ctx, i) {
-        final e = emails[i];
-        final isSelected = _selectedIds.contains(e.id);
-        final sender = e.from.isNotEmpty
-            ? (e.from.first.name ?? e.from.first.email)
-            : '(unknown)';
+        final t = threads[i];
+        final isSelected = _selectedThreadIds.contains(t.threadId);
+        final senderNames =
+            t.participants.map((a) => a.name ?? a.email).take(3).join(', ');
 
         final tile = ListTile(
           leading: _selecting
               ? Checkbox(
                   value: isSelected,
-                  onChanged: (_) => _toggleSelection(e.id),
+                  onChanged: (_) => _toggleThreadSelection(t),
                 )
               : Icon(
-                  e.isSeen ? Icons.mail_outline : Icons.mail,
-                  color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+                  t.hasUnread ? Icons.mail : Icons.mail_outline,
+                  color: t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
                 ),
-          title: Text(
-            sender,
-            style:
-                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  senderNames.isEmpty ? '(unknown)' : senderNames,
+                  style: t.hasUnread
+                      ? const TextStyle(fontWeight: FontWeight.bold)
+                      : null,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (t.messageCount > 1)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(
+                    '[${t.messageCount}]',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ),
+            ],
           ),
           subtitle: Text(
-            e.subject ?? '(no subject)',
+            t.subject ?? '(no subject)',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -377,29 +384,33 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               : Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (e.isFlagged)
+                    if (t.isFlagged)
                       const Icon(Icons.star, color: Colors.amber, size: 16),
-                    if (e.hasAttachment)
-                      const Icon(Icons.attach_file, size: 16),
                     const SizedBox(width: 4),
                     Text(
-                      e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+                      _dateFmt.format(t.latestDate),
                       style: Theme.of(ctx).textTheme.bodySmall,
                     ),
                   ],
                 ),
           onTap: _selecting
-              ? () => _toggleSelection(e.id)
-              : () => context.push(
-                    '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
-                  ),
-          onLongPress: () => _toggleSelection(e.id),
+              ? () => _toggleThreadSelection(t)
+              : t.messageCount > 1
+                  ? () => context.push(
+                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/threads/${Uri.encodeComponent(t.threadId)}',
+                      )
+                  : () => context.push(
+                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(t.latestEmailId)}',
+                      ),
+          onLongPress: () => _toggleThreadSelection(t),
         );
 
         if (_selecting) return tile;
 
+        // For swipe actions on threads, operate on the latest email only
+        // (single-email threads) or the whole thread.
         return Dismissible(
-          key: ValueKey(e.id),
+          key: ValueKey(t.threadId),
           background: _swipeBackground(
             alignment: Alignment.centerLeft,
             color: Colors.green,
@@ -413,13 +424,58 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             label: 'Delete',
           ),
           onDismissed: (direction) async {
+            final repo = ref.read(emailRepositoryProvider);
             if (direction == DismissDirection.startToEnd) {
-              await _archiveEmail(e);
+              final archive = await ref
+                  .read(mailboxRepositoryProvider)
+                  .findMailboxByRole(widget.accountId, 'archive');
+              if (!mounted || archive == null) return;
+              for (final id in t.emailIds) {
+                await repo.moveEmail(id, archive.path);
+              }
             } else {
-              await _deleteEmail(e);
+              for (final id in t.emailIds) {
+                await repo.deleteEmail(id);
+              }
             }
           },
           child: tile,
+        );
+      },
+    );
+  }
+
+  // Used for search results, which are individual emails.
+  Widget _buildEmailList(List<Email> emails) {
+    return ListView.builder(
+      itemCount: emails.length,
+      itemBuilder: (ctx, i) {
+        final e = emails[i];
+        final sender = e.from.isNotEmpty
+            ? (e.from.first.name ?? e.from.first.email)
+            : '(unknown)';
+        return ListTile(
+          leading: Icon(
+            e.isSeen ? Icons.mail_outline : Icons.mail,
+            color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+          ),
+          title: Text(
+            sender,
+            style:
+                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(
+            e.subject ?? '(no subject)',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Text(
+            e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+            style: Theme.of(ctx).textTheme.bodySmall,
+          ),
+          onTap: () => context.push(
+            '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
+          ),
         );
       },
     );

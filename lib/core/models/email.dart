@@ -14,6 +14,11 @@ class Email {
   final bool isSeen;
   final bool isFlagged;
   final bool hasAttachment;
+  final String? threadId;
+  final String? messageId;
+  final String? inReplyTo;
+  // Space-separated RFC 2822 References header value.
+  final String? references;
 
   const Email({
     required this.id,
@@ -30,6 +35,41 @@ class Email {
     required this.isSeen,
     required this.isFlagged,
     required this.hasAttachment,
+    this.threadId,
+    this.messageId,
+    this.inReplyTo,
+    this.references,
+  });
+}
+
+/// A group of related emails sharing the same thread.
+class EmailThread {
+  final String threadId;
+  final String? subject;
+  final List<EmailAddress> participants;
+  final DateTime latestDate;
+  final int messageCount;
+  final bool hasUnread;
+  final bool isFlagged;
+  final String latestEmailId;
+  final String accountId;
+  final String mailboxPath;
+
+  // All email IDs in this thread (oldest-first). Needed for batch operations.
+  final List<String> emailIds;
+
+  const EmailThread({
+    required this.threadId,
+    required this.subject,
+    required this.participants,
+    required this.latestDate,
+    required this.messageCount,
+    required this.hasUnread,
+    required this.isFlagged,
+    required this.latestEmailId,
+    required this.emailIds,
+    required this.accountId,
+    required this.mailboxPath,
   });
 }
 

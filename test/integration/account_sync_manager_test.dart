@@ -68,6 +68,10 @@ class _FakeEmails implements EmailRepository {
   Stream<List<Email>> observeEmails(String a, String m) => Stream.value([]);
 
   @override
+  Stream<List<EmailThread>> observeThreads(String a, String m) =>
+      Stream.value([]);
+
+  @override
   Future<Email?> getEmail(String id) async => null;
 
   @override

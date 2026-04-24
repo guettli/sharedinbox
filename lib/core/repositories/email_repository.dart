@@ -2,6 +2,13 @@ import '../models/email.dart';
 
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(String accountId, String mailboxPath);
+
+  /// Groups emails by threadId and returns one [EmailThread] per thread,
+  /// sorted by the latest message date descending.
+  Stream<List<EmailThread>> observeThreads(
+    String accountId,
+    String mailboxPath,
+  );
   Future<Email?> getEmail(String emailId);
   Future<EmailBody> getEmailBody(String emailId);
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);

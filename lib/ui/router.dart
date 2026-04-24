@@ -14,6 +14,7 @@ import 'screens/search_screen.dart';
 import 'screens/sieve_script_edit_screen.dart';
 import 'screens/sieve_scripts_screen.dart';
 import 'screens/sync_log_screen.dart';
+import 'screens/thread_detail_screen.dart';
 
 final router = GoRouter(
   initialLocation: '/accounts',
@@ -83,6 +84,18 @@ final router = GoRouter(
                   ),
                 ),
               ],
+            ),
+            GoRoute(
+              path: ':mailboxPath/threads/:threadId',
+              builder: (ctx, state) => ThreadDetailScreen(
+                accountId: state.pathParameters['accountId']!,
+                mailboxPath: Uri.decodeComponent(
+                  state.pathParameters['mailboxPath']!,
+                ),
+                threadId: Uri.decodeComponent(
+                  state.pathParameters['threadId']!,
+                ),
+              ),
             ),
           ],
         ),

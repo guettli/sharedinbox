@@ -65,6 +65,12 @@ class Emails extends Table {
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
   BoolColumn get hasAttachment =>
       boolean().withDefault(const Constant(false))();
+  // Added in schema v14: email threading.
+  TextColumn get threadId => text().nullable()();
+  TextColumn get messageId => text().nullable()();
+  TextColumn get inReplyTo => text().nullable()();
+  // Space-separated list of Message-IDs (RFC 2822 References header).
+  TextColumn get references => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -189,7 +195,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -234,6 +240,12 @@ class AppDatabase extends _$AppDatabase {
           if (from < 13) {
             await m.addColumn(accounts, accounts.verbose);
             await m.addColumn(syncLogs, syncLogs.protocolLog);
+          }
+          if (from < 14) {
+            await m.addColumn(emails, emails.threadId);
+            await m.addColumn(emails, emails.messageId);
+            await m.addColumn(emails, emails.inReplyTo);
+            await m.addColumn(emails, emails.references);
           }
         },
       );
