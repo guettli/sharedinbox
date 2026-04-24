@@ -1,5 +1,8 @@
 # Later
 
+Are errors written to syncLog ?
+
+---
 
 Implement thread-view.
 
