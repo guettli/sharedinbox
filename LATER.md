@@ -51,8 +51,6 @@ LINTING.md
 
 ---
 
-Sieve: JMAP, easy. Per IMAP...
-
 ---
 
 scripts/check_coverage.dart
