@@ -137,7 +137,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               dense: true,
               leading: const Icon(Icons.attach_file),
               title: Text(att.filename),
-              subtitle: Text(fmtSize(att.size)),
+              subtitle: Text('${att.contentType} • ${fmtSize(att.size)}'),
               trailing: _downloading.contains(att.filename)
                   ? const SizedBox(
                       width: 24,
