@@ -379,10 +379,25 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 ),
             ],
           ),
-          subtitle: Text(
-            t.subject ?? '(no subject)',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                t.subject ?? '(no subject)',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: t.hasUnread
+                    ? const TextStyle(fontWeight: FontWeight.bold)
+                    : null,
+              ),
+              if (t.preview != null && t.preview!.isNotEmpty)
+                Text(
+                  t.preview!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+            ],
           ),
           selected: isSelected,
           trailing: _selecting

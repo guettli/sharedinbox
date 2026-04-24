@@ -110,6 +110,7 @@ class EmailRepositoryImpl implements EmailRepository {
         hasUnread: threadEmails.any((e) => !e.isSeen),
         isFlagged: threadEmails.any((e) => e.isFlagged),
         latestEmailId: latest.id,
+        preview: latest.preview,
         emailIds: threadEmails.map((e) => e.id).toList(),
         accountId: latest.accountId,
         mailboxPath: latest.mailboxPath,

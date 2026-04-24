@@ -2,9 +2,15 @@
 
 This file contains tasks which got implemented.
 
-Tasks get moved from NEXT.md to DONE.md
+Tasks get moved from next.md to done.md
 
 ## Tasks
+
+## Show email preview snippet in list
+
+Added `preview` field to `EmailThread` (populated from the latest email in
+`_groupIntoThreads`). Thread tiles now show subject + a one-line preview
+snippet in the subtitle.
 
 ## Extract TryConnectionButton widget shared by account screens
 

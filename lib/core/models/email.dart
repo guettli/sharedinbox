@@ -52,6 +52,7 @@ class EmailThread {
   final bool hasUnread;
   final bool isFlagged;
   final String latestEmailId;
+  final String? preview;
   final String accountId;
   final String mailboxPath;
 
@@ -67,6 +68,7 @@ class EmailThread {
     required this.hasUnread,
     required this.isFlagged,
     required this.latestEmailId,
+    this.preview,
     required this.emailIds,
     required this.accountId,
     required this.mailboxPath,
