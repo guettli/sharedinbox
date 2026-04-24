@@ -31,11 +31,26 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   List<Email>? _searchResults;
   bool _searchLoading = false;
 
+  final Set<String> _selectedIds = {};
+  bool get _selecting => _selectedIds.isNotEmpty;
+
   @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
   }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(() => _selectedIds.clear());
 
   Future<void> _runSearch(String query) async {
     if (query.trim().isEmpty) {
@@ -68,13 +83,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
     return Scaffold(
-      appBar: _searching ? _searchBar() : _normalBar(repo, accountAsync),
-      drawer: _searching
+      appBar: _selecting
+          ? _selectionBar()
+          : (_searching ? _searchBar() : _normalBar(repo, accountAsync)),
+      drawer: (_selecting || _searching)
           ? null
           : FolderDrawer(
               accountId: widget.accountId,
               currentMailboxPath: widget.mailboxPath,
             ),
+      bottomNavigationBar: _selecting ? _selectionBottomBar() : null,
       body: _searching ? _buildSearchBody() : _buildStreamBody(repo),
     );
   }
@@ -120,6 +138,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
+  AppBar _selectionBar() {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _clearSelection,
+      ),
+      title: Text('${_selectedIds.length} selected'),
+    );
+  }
+
   AppBar _searchBar() {
     return AppBar(
       leading: IconButton(
@@ -146,6 +174,36 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             },
           ),
       ],
+    );
+  }
+
+  Widget _selectionBottomBar() {
+    return BottomAppBar(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.archive),
+            tooltip: 'Archive',
+            onPressed: _batchArchive,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'Delete',
+            onPressed: _batchDelete,
+          ),
+          IconButton(
+            icon: const Icon(Icons.report),
+            tooltip: 'Mark as spam',
+            onPressed: _batchMarkSpam,
+          ),
+          IconButton(
+            icon: const Icon(Icons.drive_file_move),
+            tooltip: 'Move to folder',
+            onPressed: _batchMove,
+          ),
+        ],
+      ),
     );
   }
 
@@ -179,9 +237,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _archiveEmail(Email email) async {
-    final mailboxRepo = ref.read(mailboxRepositoryProvider);
-    final archive =
-        await mailboxRepo.findMailboxByRole(widget.accountId, 'archive');
+    final archive = await ref
+        .read(mailboxRepositoryProvider)
+        .findMailboxByRole(widget.accountId, 'archive');
     if (!mounted) return;
     if (archive == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -196,14 +254,150 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     await ref.read(emailRepositoryProvider).deleteEmail(email.id);
   }
 
+  Future<void> _batchArchive() async {
+    final ids = Set<String>.from(_selectedIds);
+    _clearSelection();
+    final archive = await ref
+        .read(mailboxRepositoryProvider)
+        .findMailboxByRole(widget.accountId, 'archive');
+    if (!mounted) return;
+    if (archive == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No archive folder found')),
+      );
+      return;
+    }
+    final repo = ref.read(emailRepositoryProvider);
+    for (final id in ids) {
+      await repo.moveEmail(id, archive.path);
+    }
+  }
+
+  Future<void> _batchDelete() async {
+    final ids = Set<String>.from(_selectedIds);
+    _clearSelection();
+    final repo = ref.read(emailRepositoryProvider);
+    for (final id in ids) {
+      await repo.deleteEmail(id);
+    }
+  }
+
+  Future<void> _batchMarkSpam() async {
+    final ids = Set<String>.from(_selectedIds);
+    _clearSelection();
+    final junk = await ref
+        .read(mailboxRepositoryProvider)
+        .findMailboxByRole(widget.accountId, 'junk');
+    if (!mounted) return;
+    if (junk == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No spam folder found')),
+      );
+      return;
+    }
+    final repo = ref.read(emailRepositoryProvider);
+    for (final id in ids) {
+      await repo.moveEmail(id, junk.path);
+    }
+  }
+
+  Future<void> _batchMove() async {
+    final ids = Set<String>.from(_selectedIds);
+    final mailboxes = await ref
+        .read(mailboxRepositoryProvider)
+        .observeMailboxes(widget.accountId)
+        .first;
+    final destinations =
+        mailboxes.where((m) => m.path != widget.mailboxPath).toList();
+
+    if (!mounted) return;
+
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => ListView(
+        shrinkWrap: true,
+        children: [
+          const ListTile(
+            title: Text(
+              'Move to…',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          for (final m in destinations)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(m.name),
+              onTap: () => Navigator.pop(ctx, m.path),
+            ),
+        ],
+      ),
+    );
+
+    if (chosen == null || !mounted) return;
+    _clearSelection();
+    final repo = ref.read(emailRepositoryProvider);
+    for (final id in ids) {
+      await repo.moveEmail(id, chosen);
+    }
+  }
+
   Widget _buildList(List<Email> emails) {
     return ListView.builder(
       itemCount: emails.length,
       itemBuilder: (ctx, i) {
         final e = emails[i];
+        final isSelected = _selectedIds.contains(e.id);
         final sender = e.from.isNotEmpty
             ? (e.from.first.name ?? e.from.first.email)
             : '(unknown)';
+
+        final tile = ListTile(
+          leading: _selecting
+              ? Checkbox(
+                  value: isSelected,
+                  onChanged: (_) => _toggleSelection(e.id),
+                )
+              : Icon(
+                  e.isSeen ? Icons.mail_outline : Icons.mail,
+                  color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+                ),
+          title: Text(
+            sender,
+            style:
+                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(
+            e.subject ?? '(no subject)',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          selected: isSelected,
+          trailing: _selecting
+              ? null
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (e.isFlagged)
+                      const Icon(Icons.star, color: Colors.amber, size: 16),
+                    if (e.hasAttachment)
+                      const Icon(Icons.attach_file, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+          onTap: _selecting
+              ? () => _toggleSelection(e.id)
+              : () => context.push(
+                    '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
+                  ),
+          onLongPress: () => _toggleSelection(e.id),
+        );
+
+        if (_selecting) return tile;
+
         return Dismissible(
           key: ValueKey(e.id),
           background: _swipeBackground(
@@ -225,39 +419,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               await _deleteEmail(e);
             }
           },
-          child: ListTile(
-            leading: Icon(
-              e.isSeen ? Icons.mail_outline : Icons.mail,
-              color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-            ),
-            title: Text(
-              sender,
-              style: e.isSeen
-                  ? null
-                  : const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              e.subject ?? '(no subject)',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (e.isFlagged)
-                  const Icon(Icons.star, color: Colors.amber, size: 16),
-                if (e.hasAttachment) const Icon(Icons.attach_file, size: 16),
-                const SizedBox(width: 4),
-                Text(
-                  e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
-              ],
-            ),
-            onTap: () => context.push(
-              '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
-            ),
-          ),
+          child: tile,
         );
       },
     );
