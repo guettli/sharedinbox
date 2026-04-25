@@ -133,8 +133,19 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         ),
         IconButton(
           icon: const Icon(Icons.sync),
-          onPressed: () =>
-              emailRepo.syncEmails(widget.accountId, widget.mailboxPath),
+          onPressed: () async {
+            try {
+              await emailRepo.syncEmails(
+                widget.accountId,
+                widget.mailboxPath,
+              );
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Sync failed: $e')),
+              );
+            }
+          },
         ),
         IconButton(
           icon: const Icon(Icons.edit),
