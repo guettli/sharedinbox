@@ -89,6 +89,12 @@ tasks:
     cmds:
       - stalwart-dev/test.sh
 
+  integration-android:
+    desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
+    deps: [_nix-check, _android-sdk-check]
+    cmds:
+      - stalwart-dev/integration_android_test.sh
+
   build-linux:
     desc: Build the Linux desktop app (debug)
     deps: [_nix-check, _linux-deps-check, _pub-get]

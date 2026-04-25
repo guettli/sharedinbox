@@ -6,6 +6,10 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Android integration test via Stalwart
+
+Added `stalwart-dev/integration_android_test.sh` and `task integration-android`. Starts Stalwart on random ports, detects a connected emulator via `adb devices`, sets `STALWART_IMAP_HOST=10.0.2.2` (emulator host alias), and runs the existing `integration_test/app_e2e_test.dart` on the emulator.
+
 ## Quote original message in reply, and add Forward button
 
 `_reply` now passes `prefillBody` with the original message quoted as plain
