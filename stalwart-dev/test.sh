@@ -26,9 +26,10 @@ sqlite3 "${STALWART_TMPDIR}/data.sqlite" \
 LOGFILE="${STALWART_TMPDIR}/stalwart.log"
 rm -f "$LOGFILE"
 
+tmp=$(mktemp)
 "$(dirname "$0")/start" >"$LOGFILE" 2>&1 &
 STALWART_PID=$!
-trap 'kill "$STALWART_PID" 2>/dev/null || true; wait "$STALWART_PID" 2>/dev/null || true' EXIT
+trap 'kill "$STALWART_PID" 2>/dev/null || true; wait "$STALWART_PID" 2>/dev/null || true; rm -f "$tmp"' EXIT
 
 # Wait until Stalwart is accepting connections (up to 10 s).
 for _i in $(seq 1 20); do
@@ -62,14 +63,22 @@ export STALWART_IMAP_HOST="127.0.0.1"
 export STALWART_SMTP_HOST="127.0.0.1"
 
 START=$(date +%s)
-# If unit tests already produced a coverage baseline, merge integration coverage
-# into it so the final gate reflects both suites.
-if [ -f coverage/lcov.info ]; then
-  cp coverage/lcov.info coverage/lcov.base.info
-  fvm flutter test --concurrency=1 --coverage --merge-coverage test/integration/
-  rm -f coverage/lcov.base.info
+run_tests() {
+  # If unit tests already produced a coverage baseline, merge integration coverage
+  # into it so the final gate reflects both suites.
+  if [ -f coverage/lcov.info ]; then
+    cp coverage/lcov.info coverage/lcov.base.info
+    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter expanded test/integration/ >"$tmp" 2>&1
+    rm -f coverage/lcov.base.info
+  else
+    fvm flutter test --concurrency=1 --reporter expanded test/integration/ >"$tmp" 2>&1
+  fi
+}
+if run_tests; then
+  grep -E "^All [0-9]+ tests passed" "$tmp" || tail -1 "$tmp"
 else
-  fvm flutter test --concurrency=1 test/integration/
+  cat "$tmp"
+  exit 1
 fi
 END=$(date +%s)
 echo "integration: $((END - START))s"
