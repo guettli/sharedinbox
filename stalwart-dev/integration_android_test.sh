@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Starts Stalwart on random ports, then runs Flutter UI integration tests on a
 # connected Android emulator.  Boots the sharedinbox_test AVD automatically if
-# no emulator is already running.  The emulator reaches the host via 10.0.2.2.
+# no emulator is already running.  Uses adb reverse to forward the fixed default
+# ports (IMAP 1430, SMTP 1025) on the emulator to the actual random host ports.
 #
 # Run inside nix develop:
 #   stalwart-dev/integration_android_test.sh
@@ -19,6 +20,7 @@ STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
 export STALWART_TMPDIR
 
 cleanup() {
+    "${ADB:-adb}" -s "${EMULATOR_ID:-}" reverse --remove-all 2>/dev/null || true
     kill "${STALWART_PID:-}" 2>/dev/null || true
     wait "${STALWART_PID:-}" 2>/dev/null || true
 }
@@ -45,6 +47,7 @@ if [ -z "$EMULATOR_ID" ]; then
     EMULATOR_BOOT_PID=$!
     # Extend cleanup to also kill the emulator we started.
     cleanup() {
+        "${ADB:-adb}" -s "${EMULATOR_ID:-}" reverse --remove-all 2>/dev/null || true
         kill "${STALWART_PID:-}" 2>/dev/null || true
         wait "${STALWART_PID:-}" 2>/dev/null || true
         kill "${EMULATOR_BOOT_PID:-}" 2>/dev/null || true
@@ -108,9 +111,12 @@ ts "stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_POR
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Android emulator reaches the host machine via 10.0.2.2, not 127.0.0.1.
-export STALWART_IMAP_HOST="10.0.2.2"
-export STALWART_SMTP_HOST="10.0.2.2"
+# Platform.environment is empty inside the Android app process, so env vars set
+# by this script never reach the test code.  Instead, use adb reverse to forward
+# the fixed "template" ports that the test defaults to (1430 IMAP, 1025 SMTP)
+# on the emulator through to the actual random Stalwart ports on the host.
+"$ADB" -s "$EMULATOR_ID" reverse tcp:1430 tcp:"$STALWART_IMAP_PORT"
+"$ADB" -s "$EMULATOR_ID" reverse tcp:1025 tcp:"$STALWART_SMTP_PORT"
 
 ts "flutter test start"
 fvm flutter test integration_test/ -d "$EMULATOR_ID" | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
