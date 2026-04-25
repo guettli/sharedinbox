@@ -6,17 +6,19 @@ tasks:
     desc: Run all checks (analyze + unit tests + widget tests + integration, in parallel)
     deps: [check]
 
-  _nix-check:
+  _preflight:
     internal: true
     run: once
     preconditions:
       - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
         msg: "Not in nix dev shell. Run: nix develop"
+    cmds:
+      - scripts/silent_on_success.sh pre-commit install
 
   _flutter-check:
     internal: true
     run: once
-    deps: [_nix-check]
+    deps: [_preflight]
     cmds:
       - cmd: scripts/silent_on_success.sh fvm install --skip-pub-get
 
@@ -50,43 +52,43 @@ tasks:
 
   codegen:
     desc: Generate Drift DB code (run after any schema change)
-    deps: [_nix-check, _pub-get]
+    deps: [_preflight, _pub-get]
     cmds:
       - fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   analyze:
     desc: Static analysis (flutter analyze)
-    deps: [_nix-check, _codegen]
+    deps: [_preflight, _codegen]
     cmds:
       - scripts/run_analyze.sh
 
   format:
     desc: Format all Dart source files
-    deps: [_nix-check]
+    deps: [_preflight]
     cmds:
       - fvm dart format .
 
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply
-    deps: [_nix-check]
+    deps: [_preflight]
     cmds:
       - fvm dart fix --apply
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
-    deps: [_nix-check, _codegen]
+    deps: [_preflight, _codegen]
     cmds:
       - scripts/run_unit_tests.sh
 
   test-widget:
     desc: Widget tests — headless, no display or network required
-    deps: [_nix-check, _codegen]
+    deps: [_preflight, _codegen]
     cmds:
       - scripts/run_widget_tests.sh
 
   test-flutter:
     desc: Full Flutter test suite (unit + widget + integration)
-    deps: [_nix-check]
+    deps: [_preflight]
     cmds:
       - fvm flutter test
 
@@ -98,13 +100,13 @@ tasks:
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
-    deps: [_nix-check, _android-sdk-check]
+    deps: [_preflight, _android-sdk-check]
     cmds:
       - stalwart-dev/integration_android_test.sh
 
   build-linux:
     desc: Build the Linux desktop app (debug)
-    deps: [_nix-check, _linux-deps-check, _codegen]
+    deps: [_preflight, _linux-deps-check, _codegen]
     cmds:
       - scripts/silent_on_success.sh fvm flutter build linux --debug --no-pub
 
@@ -127,7 +129,7 @@ tasks:
 
   build-android:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
-    deps: [_nix-check, _android-sdk-check, _pub-get]
+    deps: [_preflight, _android-sdk-check, _pub-get]
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub
 
@@ -140,13 +142,13 @@ tasks:
 
   run:
     desc: Run the app on Linux desktop
-    deps: [_nix-check, _linux-deps-check, _pub-get]
+    deps: [_preflight, _linux-deps-check, _pub-get]
     cmds:
       - fvm flutter run -d linux --no-pub
 
   coverage:
     desc: Coverage gate — run after test (and optionally integration) have written lcov.info
-    deps: [_nix-check]
+    deps: [_preflight]
     cmds:
       - fvm dart run scripts/check_coverage.dart
 
