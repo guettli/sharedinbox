@@ -98,6 +98,12 @@ tasks:
     cmds:
       - stalwart-dev/test.sh
 
+  integration-ui:
+    desc: UI E2E tests on Linux via Xvfb — headless, no emulator needed
+    deps: [_preflight, _linux-deps-check, _pub-get]
+    cmds:
+      - stalwart-dev/integration_ui_test.sh
+
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
     deps: [_preflight, _android-sdk-check]
@@ -131,11 +137,11 @@ tasks:
     desc: Build a release APK (output in build/app/outputs/flutter-apk/)
     deps: [_preflight, _android-sdk-check, _pub-get]
     cmds:
-      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub
+      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
-    deps: [build-android]
+    deps: [integration-android, build-android]
     dotenv: [".env"]
     cmds:
       - scripts/deploy_android.sh
@@ -161,4 +167,5 @@ tasks:
     deps: [analyze, test-widget, build-linux, test]
     cmds:
       - task: integration
+      - task: integration-ui
       - task: coverage

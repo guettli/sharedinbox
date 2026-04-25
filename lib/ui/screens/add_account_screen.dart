@@ -31,6 +31,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _imapPortCtrl = TextEditingController(text: '993');
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController(text: '587');
+  var _imapSsl = true;
   var _smtpSsl = false;
 
   // -- "Try connection" state ------------------------------------------------
@@ -116,6 +117,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         username: _usernameCtrl.text.trim(),
         imapHost: _imapHostCtrl.text.trim(),
         imapPort: int.parse(_imapPortCtrl.text),
+        imapSsl: _imapSsl,
         smtpHost: _smtpHostCtrl.text.trim(),
         smtpPort: int.parse(_smtpPortCtrl.text),
         smtpSsl: _smtpSsl,
@@ -313,6 +315,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             onPressed: () => setState(() {
               _imapHostCtrl.clear();
               _imapPortCtrl.text = '993';
+              _imapSsl = true;
               _smtpHostCtrl.clear();
               _smtpPortCtrl.text = '587';
               _smtpSsl = false;
@@ -383,12 +386,14 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             ),
             _field(_passwordCtrl, 'Password', obscure: true),
             const Divider(height: 32),
-            Text(
-              'IMAP (SSL/TLS)',
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
+            Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
             _field(_imapHostCtrl, 'Host'),
             _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
+            SwitchListTile(
+              title: const Text('SSL/TLS'),
+              value: _imapSsl,
+              onChanged: (v) => setState(() => _imapSsl = v),
+            ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host'),

@@ -170,7 +170,7 @@ void main() {
       await tester.tap(find.text('IMAP / SMTP'));
       await tester.pumpAndSettle();
 
-      expect(find.text('IMAP (SSL/TLS)'), findsOneWidget);
+      expect(find.text('IMAP'), findsOneWidget);
       expect(find.text('SMTP'), findsOneWidget);
     });
 
@@ -307,9 +307,9 @@ void main() {
       await tester.tap(find.text('IMAP / SMTP'));
       await tester.pumpAndSettle();
 
-      expect(find.text('IMAP (SSL/TLS)'), findsOneWidget);
-      // Only the SMTP SSL/TLS toggle remains; no IMAP toggle.
-      expect(find.byType(SwitchListTile), findsOneWidget);
+      expect(find.text('IMAP'), findsOneWidget);
+      // Both IMAP and SMTP have SSL/TLS toggles.
+      expect(find.byType(SwitchListTile), findsNWidgets(2));
     });
   });
 }

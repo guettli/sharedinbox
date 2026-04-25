@@ -343,20 +343,12 @@ class EmailRepositoryImpl implements EmailRepository {
         // Incremental sync.
         final lastUid = checkpoint['lastUid'] as int;
         final storedModSeq = checkpoint['highestModSeq'] as int?;
-        final totalOnServer = selectedMailbox.messagesExists;
 
-        // CONDSTORE fast-path: nothing has changed on the server.
-        if (serverModSeq != null &&
-            storedModSeq != null &&
-            serverModSeq == storedModSeq) {
-          return model.SyncEmailsResult(
-            fetched: 0,
-            skipped: totalOnServer,
-            bytesTransferred: 0,
-          );
-        }
-
-        // Fetch new messages.
+        // Always search for new messages by UID. We intentionally do NOT use
+        // CONDSTORE as a "skip everything" fast-path here because some servers
+        // (including Stalwart 0.14.x) do not increment HIGHESTMODSEQ when new
+        // mail is delivered via SMTP, causing newly arrived messages to be
+        // silently missed when modseq values appear equal.
         final newUids = (await client.uidSearchMessages(
               searchCriteria: 'UID ${lastUid + 1}:*',
             ))
@@ -373,8 +365,10 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         }
 
-        // CONDSTORE flag update: refresh flags only for messages that changed.
-        if (serverModSeq != null && storedModSeq != null) {
+        // CONDSTORE flag update: refresh flags only when something changed.
+        if (serverModSeq != null &&
+            storedModSeq != null &&
+            serverModSeq != storedModSeq) {
           await _refreshFlagsImap(client, account, mailboxPath, storedModSeq);
         }
 

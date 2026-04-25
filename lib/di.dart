@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
@@ -18,6 +19,12 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
+
+/// Swappable IMAP connection factory — override in tests to use plaintext.
+final imapConnectProvider = Provider<ImapConnectFn>((ref) => connectImap);
+
+/// Swappable SMTP connection factory — override in tests to use plaintext.
+final smtpConnectProvider = Provider<SmtpConnectFn>((ref) => connectSmtp);
 
 final dbProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();
@@ -46,6 +53,7 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
   return MailboxRepositoryImpl(
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
   );
 });
 
@@ -57,6 +65,8 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
   return EmailRepositoryImpl(
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+    smtpConnect: ref.watch(smtpConnectProvider),
   );
 });
 
@@ -70,6 +80,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     ref.watch(mailboxRepositoryProvider),
     ref.watch(emailRepositoryProvider),
     syncLog: ref.watch(syncLogRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
   );
   ref.onDispose(manager.dispose);
   return manager;
@@ -88,7 +99,10 @@ final sieveRepositoryProvider = Provider<SieveRepository>((ref) {
 });
 
 final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
-  return ConnectionTestServiceImpl(ref.watch(httpClientProvider));
+  return ConnectionTestServiceImpl(
+    ref.watch(httpClientProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+  );
 });
 
 final accountByIdProvider =

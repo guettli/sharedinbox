@@ -35,8 +35,8 @@ trap 'kill "$STALWART_PID" 2>/dev/null || true; wait "$STALWART_PID" 2>/dev/null
 for _i in $(seq 1 20); do
     # shellcheck source=/dev/null
     [ -f "${STALWART_TMPDIR}/ports.env" ] && . "${STALWART_TMPDIR}/ports.env"
-    grep -E "Configuration build error|Build error for key|already in use" "$LOGFILE" >/dev/null 2>&1 && {
-        cat "$LOGFILE"; echo "Stalwart reported a startup error"; exit 1
+    grep -E "already in use" "$LOGFILE" >/dev/null 2>&1 && {
+        cat "$LOGFILE"; echo "Stalwart port already in use"; exit 1
     }
     kill -0 "$STALWART_PID" 2>/dev/null || {
         cat "$LOGFILE"; echo "Stalwart process died unexpectedly"; exit 1

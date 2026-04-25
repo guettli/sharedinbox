@@ -18,8 +18,6 @@ const verboseLogKey = #verboseProtocolLog;
 
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
-/// Throws [Exception] if the account is not configured for SSL/TLS.
-///
 /// When the current [Zone] carries a [StringBuffer] under [verboseLogKey],
 /// IMAP trace logging is enabled so each command/response is captured there.
 Future<ImapClient> connectImap(
@@ -27,17 +25,16 @@ Future<ImapClient> connectImap(
   String username,
   String password,
 ) async {
-  if (!account.imapSsl) {
-    throw Exception(
-      'Unencrypted IMAP connections are not allowed. Enable SSL/TLS.',
-    );
-  }
   final verboseBuffer = Zone.current[verboseLogKey] as StringBuffer?;
   final client = ImapClient(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseBuffer != null,
   );
-  await client.connectToServer(account.imapHost, account.imapPort);
+  await client.connectToServer(
+    account.imapHost,
+    account.imapPort,
+    isSecure: account.imapSsl,
+  );
   await client.login(username, password);
   return client;
 }

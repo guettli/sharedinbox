@@ -35,7 +35,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Minification is disabled: R8 strips plugin classes (flutter_secure_storage,
+            // sqlite3) that are needed at runtime, causing an immediate crash on launch.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

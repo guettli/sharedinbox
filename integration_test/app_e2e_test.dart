@@ -8,13 +8,52 @@
 
 import 'dart:io';
 
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/main.dart' as app;
+
+/// Plaintext IMAP connection — Stalwart dev server has no TLS certificate.
+Future<imap.ImapClient> _connectImapPlaintext(
+  Account account,
+  String username,
+  String password,
+) async {
+  final client = imap.ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
+  await client.connectToServer(
+    account.imapHost,
+    account.imapPort,
+    isSecure: false,
+  );
+  await client.login(username, password);
+  return client;
+}
+
+/// Plaintext SMTP connection — Stalwart dev server has no TLS certificate.
+Future<imap.SmtpClient> _connectSmtpPlaintext(
+  Account account,
+  String username,
+  String password,
+) async {
+  final atIndex = account.email.lastIndexOf('@');
+  final clientDomain =
+      atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
+  final client = imap.SmtpClient(clientDomain);
+  await client.connectToServer(
+    account.smtpHost,
+    account.smtpPort,
+    isSecure: false,
+  );
+  await client.ehlo();
+  await client.authenticate(username, password);
+  return client;
+}
 
 /// In-memory drop-in for SecureStorage — no D-Bus or keyring daemon required.
 class _InMemorySecureStorage implements SecureStorage {
@@ -91,6 +130,9 @@ void main() {
       app.main(
         overrides: [
           secureStorageProvider.overrideWithValue(_InMemorySecureStorage()),
+          // Stalwart dev server has no TLS — use plaintext IMAP/SMTP throughout.
+          imapConnectProvider.overrideWithValue(_connectImapPlaintext),
+          smtpConnectProvider.overrideWithValue(_connectSmtpPlaintext),
         ],
       );
       await tester.pumpAndSettle();
@@ -101,42 +143,47 @@ void main() {
 
       await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
       await tester.pumpAndSettle();
-
       expect(find.text('Add account'), findsOneWidget);
 
+      // Step 1 — enter email and continue.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Email address'),
+        userEmail,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
+
+      // Auto-detection fails for example.com → falls back to "choose type".
+      await pumpUntil(
+        tester,
+        find.widgetWithText(OutlinedButton, 'IMAP / SMTP'),
+        timeout: const Duration(seconds: 30),
+      );
+      await tester.tap(find.widgetWithText(OutlinedButton, 'IMAP / SMTP'));
+      await tester.pumpAndSettle();
+
+      // Step 2 — IMAP / SMTP form.
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Display name'),
         'Alice',
       );
       await tester.enterText(
-        find.widgetWithText(TextFormField, 'Email address'),
-        userEmail,
-      );
-      await tester.enterText(
         find.widgetWithText(TextFormField, 'Password'),
         userPass,
       );
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'IMAP host'),
-        imapHost,
-      );
 
-      // The form has two "Port" fields: index 0 = IMAP, index 1 = SMTP.
+      // 'Host' appears twice: index 0 = IMAP, index 1 = SMTP.
+      final imapHostField = find.widgetWithText(TextFormField, 'Host').at(0);
+      await tester.ensureVisible(imapHostField);
+      await tester.enterText(imapHostField, imapHost);
+
+      // 'Port' appears twice: index 0 = IMAP, index 1 = SMTP.
       final imapPortField = find.widgetWithText(TextFormField, 'Port').at(0);
       await tester.ensureVisible(imapPortField);
       await tester.enterText(imapPortField, imapPort.toString());
 
-      // IMAP SSL defaults to on — turn it off for the plaintext dev server.
-      final imapSslSwitch =
-          find.widgetWithText(SwitchListTile, 'SSL/TLS').at(0);
-      await tester.ensureVisible(imapSslSwitch);
-      await tester.tap(imapSslSwitch);
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'SMTP host'),
-        smtpHost,
-      );
+      final smtpHostField = find.widgetWithText(TextFormField, 'Host').at(1);
+      await tester.ensureVisible(smtpHostField);
+      await tester.enterText(smtpHostField, smtpHost);
 
       final smtpPortField = find.widgetWithText(TextFormField, 'Port').at(1);
       await tester.ensureVisible(smtpPortField);
@@ -145,7 +192,13 @@ void main() {
       final saveButton = find.widgetWithText(FilledButton, 'Save');
       await tester.ensureVisible(saveButton);
       await tester.tap(saveButton);
-      await tester.pumpAndSettle();
+      // Save makes an async connection before navigating — wait for the FAB,
+      // which is only present on the account list screen.
+      await pumpUntil(
+        tester,
+        find.widgetWithIcon(FloatingActionButton, Icons.add),
+        timeout: const Duration(seconds: 30),
+      );
 
       // Back at account list.
       expect(find.text('Alice'), findsOneWidget);
@@ -190,10 +243,9 @@ void main() {
       // ComposeScreen pops back to EmailListScreen (INBOX) after send.
 
       // ── Check Sent folder ──────────────────────────────────────────────────
-      // Go back to MailboxListScreen.
-      await tester.pageBack();
+      // Use the drawer to switch folders (no back button on Linux desktop).
+      await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();
-
       await tester.tap(find.text('Sent'));
       await tester.pumpAndSettle();
 
@@ -206,16 +258,31 @@ void main() {
       expect(find.text(subject), findsOneWidget);
 
       // ── Check Inbox ────────────────────────────────────────────────────────
-      await tester.pageBack(); // Sent EmailList → MailboxList
+      await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();
-
       await tester.tap(find.text('INBOX'));
       await tester.pumpAndSettle();
 
-      // Sync INBOX — Stalwart delivers to self near-instantly.
+      // Sync INBOX — pump at short intervals so the StreamBuilder rebuilds as
+      // soon as the DB stream emits after each sync.  Re-tap sync every ~5 s
+      // in case Stalwart's local delivery is slightly delayed.
       _log('sync INBOX');
       await tester.tap(find.byIcon(Icons.sync));
-      await pumpUntil(tester, find.text(subject));
+      var tick = 0;
+      final inboxDeadline = DateTime.now().add(const Duration(seconds: 60));
+      while (!tester.any(find.text(subject))) {
+        if (DateTime.now().isAfter(inboxDeadline)) {
+          throw Exception('INBOX sync timed out — email never appeared');
+        }
+        await tester.pump(const Duration(milliseconds: 200));
+        tick++;
+        // Re-tap every ~5 s (25 × 200 ms) in case the first sync fired before
+        // the email was delivered.
+        if (tick % 25 == 0) {
+          await tester.tap(find.byIcon(Icons.sync));
+        }
+      }
+      await tester.pumpAndSettle();
       _log('sync INBOX done');
 
       expect(find.text(subject), findsOneWidget);

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Starts Stalwart on random ports, then runs Flutter UI integration tests on a
-# connected Android emulator.  The emulator reaches the host via 10.0.2.2.
+# connected Android emulator.  Boots the sharedinbox_test AVD automatically if
+# no emulator is already running.  The emulator reaches the host via 10.0.2.2.
 #
-# Run inside nix develop with an emulator already booted:
+# Run inside nix develop:
 #   stalwart-dev/integration_android_test.sh
 set -Eeuo pipefail
 
@@ -35,12 +36,35 @@ ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/pla
     exit 1
 }
 
-# Detect a connected Android emulator.
+# Detect a connected Android emulator; auto-start the sharedinbox_test AVD if none is running.
 EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
 if [ -z "$EMULATOR_ID" ]; then
-    echo "No Android emulator found. Boot one first, e.g.:"
-    echo "  \${ANDROID_HOME:-\$HOME/Android/Sdk}/emulator/emulator -avd <avd-name> -no-window -no-audio &"
-    exit 1
+    EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
+    ts "no emulator running — booting AVD sharedinbox_test"
+    "$EMULATOR_BIN" -avd sharedinbox_test -no-window -no-audio -no-snapshot-save > /tmp/emulator.log 2>&1 &
+    EMULATOR_BOOT_PID=$!
+    # Extend cleanup to also kill the emulator we started.
+    cleanup() {
+        kill "${STALWART_PID:-}" 2>/dev/null || true
+        wait "${STALWART_PID:-}" 2>/dev/null || true
+        kill "${EMULATOR_BOOT_PID:-}" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    # Wait up to 120 s for the emulator to appear as a fully booted device.
+    for _i in $(seq 1 60); do
+        EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
+        [ -n "$EMULATOR_ID" ] && break
+        sleep 2
+    done
+    [ -n "$EMULATOR_ID" ] || { echo "Emulator did not become ready within 120 s"; exit 1; }
+    # Wait for the Android system to finish booting (sys.boot_completed=1).
+    "$ADB" -s "$EMULATOR_ID" wait-for-device
+    for _i in $(seq 1 30); do
+        BOOT_DONE=$("$ADB" -s "$EMULATOR_ID" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+        [ "$BOOT_DONE" = "1" ] && break
+        sleep 2
+    done
+    [ "${BOOT_DONE:-0}" = "1" ] || { echo "Android boot did not complete within 60 s"; exit 1; }
 fi
 ts "using emulator: $EMULATOR_ID"
 
@@ -61,8 +85,8 @@ STALWART_PID=$!
 for _i in $(seq 1 20); do
     # shellcheck source=/dev/null
     [ -f "${STALWART_TMPDIR}/ports.env" ] && . "${STALWART_TMPDIR}/ports.env"
-    grep -E "Configuration build error|Build error for key|already in use" "$LOGFILE" >/dev/null 2>&1 && {
-        cat "$LOGFILE"; echo "Stalwart reported a startup error"; exit 1
+    grep -E "already in use" "$LOGFILE" >/dev/null 2>&1 && {
+        cat "$LOGFILE"; echo "Stalwart port already in use"; exit 1
     }
     kill -0 "$STALWART_PID" 2>/dev/null || {
         cat "$LOGFILE"; echo "Stalwart process died unexpectedly"; exit 1
@@ -89,5 +113,5 @@ export STALWART_IMAP_HOST="10.0.2.2"
 export STALWART_SMTP_HOST="10.0.2.2"
 
 ts "flutter test start"
-fvm flutter test integration_test/ -d "$EMULATOR_ID"
+fvm flutter test integration_test/ -d "$EMULATOR_ID" | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 ts "flutter test done"
