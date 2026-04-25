@@ -11,6 +11,9 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Not used directly, but required to silence Flutter's "missing CupertinoIcons font" build warning.
+  cupertino_icons: ^1.0.8
+
   enough_mail: ^2.1.7
   http: ^1.2.0
 

@@ -227,7 +227,8 @@ void main() {
       // 1. IDLE connects
       await firstIdleConnected.future.timeout(
         const Duration(seconds: 5),
-        onTimeout: () => fail('IDLE did not connect within 5s; error: $connectError'),
+        onTimeout: () =>
+            fail('IDLE did not connect within 5s; error: $connectError'),
       );
       expect(connectError, isNull, reason: 'IMAP connect should succeed');
 
