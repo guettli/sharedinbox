@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/jmap/jmap_client.dart' show JmapException;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
@@ -360,6 +361,71 @@ void main() {
         final state = await r.db.select(r.db.syncStates).get();
         expect(state.first.state, 'st1');
       });
+
+      test('syncMailboxes throws when JMAP account has no jmapUrl', () async {
+        const noUrlAccount = Account(
+          id: 'jmap-no-url',
+          displayName: 'NoUrl',
+          email: 'nourl@example.com',
+          type: AccountType.jmap,
+        );
+        final r = _makeRepos();
+        await r.accounts.addAccount(noUrlAccount, 'pw');
+        await expectLater(
+          r.mailboxes.syncMailboxes('jmap-no-url'),
+          throwsA(isA<Exception>()),
+        );
+      });
+
+      test('syncMailboxes throws JmapException on API error response',
+          () async {
+        final r = _makeRepos(
+          httpClient: _mockJmap(
+            apiResponses: [
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'error',
+                    <String, dynamic>{'type': 'serverFail'},
+                    '0',
+                  ],
+                ],
+              },
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await expectLater(
+          r.mailboxes.syncMailboxes('jmap-1'),
+          throwsA(isA<JmapException>()),
+        );
+      });
+    });
+
+    test('findMailboxByRole returns null when no matching mailbox', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      final result = await r.mailboxes.findMailboxByRole('jmap-1', 'inbox');
+      expect(result, isNull);
+    });
+
+    test('findMailboxByRole returns matching mailbox', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-inbox',
+              accountId: 'jmap-1',
+              path: 'INBOX',
+              name: 'Inbox',
+              role: const Value('inbox'),
+            ),
+          );
+
+      final result = await r.mailboxes.findMailboxByRole('jmap-1', 'inbox');
+      expect(result, isNotNull);
+      expect(result!.role, 'inbox');
     });
   });
 }

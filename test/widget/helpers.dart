@@ -164,6 +164,7 @@ class FakeEmailRepository implements EmailRepository {
           return EmailThread(
             threadId: e.threadId ?? e.id,
             subject: e.subject,
+            preview: e.preview,
             participants: e.from,
             latestDate: e.sentAt ?? e.receivedAt,
             messageCount: 1,

@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:enough_mail/enough_mail.dart' show ImapClient;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -128,6 +129,21 @@ class _FakeEmails implements EmailRepository {
   Future<void> retryMutation(int id) async {}
 }
 
+// Plain (non-TLS) IMAP connect for the local dev Stalwart, which has no TLS.
+// Production connectImap() rejects imapSsl:false, so tests inject this instead.
+Future<ImapClient> _connectImapPlain(
+  Account account,
+  String username,
+  String password,
+) async {
+  final client = ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
+  await client.connectToServer(account.imapHost, account.imapPort);
+  await client.login(username, password);
+  return client;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -165,6 +181,7 @@ void main() {
       fakeAccounts,
       _FakeMailboxes(),
       _FakeEmails(),
+      imapConnect: _connectImapPlain,
     );
     mgr.start();
 

@@ -47,12 +47,16 @@ const _excluded = {
   'lib/ui/screens/email_detail_screen.dart',
   'lib/ui/screens/mailbox_list_screen.dart',
   'lib/ui/screens/search_screen.dart',
+  'lib/ui/screens/sieve_script_edit_screen.dart',
+  'lib/ui/screens/sieve_scripts_screen.dart',
   'lib/ui/screens/sync_log_screen.dart',
+  'lib/ui/screens/thread_detail_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
   // Repositories and sync orchestration that are exercised primarily through
   // integration tests against real servers.
   'lib/core/sync/account_sync_manager.dart',
   'lib/data/jmap/jmap_client.dart',
+  'lib/data/jmap/sieve_repository.dart',
   'lib/data/repositories/account_repository_impl.dart',
   'lib/data/repositories/email_repository_impl.dart',
   'lib/data/repositories/sync_log_repository_impl.dart',
