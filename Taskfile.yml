@@ -18,14 +18,14 @@ tasks:
     run: once
     deps: [_nix-check]
     cmds:
-      - cmd: fvm install --skip-pub-get
+      - cmd: scripts/silent_on_success.sh fvm install --skip-pub-get
 
   _pub-get:
     internal: true
     run: once
     deps: [_flutter-check]
     cmds:
-      - fvm flutter pub get --suppress-analytics
+      - scripts/silent_on_success.sh fvm flutter pub get --suppress-analytics
 
   _linux-deps-check:
     internal: true
@@ -33,13 +33,20 @@ tasks:
     preconditions:
       - sh: command -v clang >/dev/null 2>&1
         msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
-      - sh: pkg-config --exists gtk+-3.0 2>/dev/null
+      - sh: /usr/bin/pkg-config --exists gtk+-3.0 2>/dev/null
         msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
 
   install-hooks:
     desc: Install pre-commit hooks (requires pre-commit; see .pre-commit-config.yaml)
     cmds:
       - pre-commit install
+
+  _codegen:
+    internal: true
+    run: once
+    deps: [_pub-get]
+    cmds:
+      - scripts/silent_on_success.sh fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   codegen:
     desc: Generate Drift DB code (run after any schema change)
@@ -49,7 +56,7 @@ tasks:
 
   analyze:
     desc: Static analysis (flutter analyze)
-    deps: [_nix-check, _pub-get]
+    deps: [_nix-check, _codegen]
     cmds:
       - scripts/run_analyze.sh
 
@@ -67,13 +74,13 @@ tasks:
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
-    deps: [_nix-check, _pub-get]
+    deps: [_nix-check, _codegen]
     cmds:
       - scripts/run_unit_tests.sh
 
   test-widget:
     desc: Widget tests — headless, no display or network required
-    deps: [_nix-check, _pub-get]
+    deps: [_nix-check, _codegen]
     cmds:
       - scripts/run_widget_tests.sh
 
@@ -97,9 +104,9 @@ tasks:
 
   build-linux:
     desc: Build the Linux desktop app (debug)
-    deps: [_nix-check, _linux-deps-check, _pub-get]
+    deps: [_nix-check, _linux-deps-check, _codegen]
     cmds:
-      - fvm flutter build linux --debug --no-pub
+      - scripts/silent_on_success.sh fvm flutter build linux --debug --no-pub
 
   _android-sdk-check:
     internal: true

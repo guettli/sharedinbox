@@ -7,7 +7,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:enough_mail/enough_mail.dart' show ImapClient;
+import 'package:enough_mail/enough_mail.dart'
+    show ImapClient, SmtpClient, MessageBuilder, MailAddress;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -129,19 +130,25 @@ class _FakeEmails implements EmailRepository {
   Future<void> retryMutation(int id) async {}
 }
 
-// Plain (non-TLS) IMAP connect for the local dev Stalwart, which has no TLS.
-// Production connectImap() rejects imapSsl:false, so tests inject this instead.
-Future<ImapClient> _connectImapPlain(
-  Account account,
-  String username,
-  String password,
-) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(account.imapHost, account.imapPort);
-  await client.login(username, password);
-  return client;
+Future<void> _sendMessage({
+  required String host,
+  required int port,
+  required String from,
+  required String pass,
+  required String to,
+  required String subject,
+}) async {
+  final smtp = SmtpClient('sharedinbox-test');
+  await smtp.connectToServer(host, port, isSecure: false);
+  await smtp.ehlo();
+  await smtp.authenticate(from, pass);
+  final builder = MessageBuilder()
+    ..from = [MailAddress('', from)]
+    ..to = [MailAddress('', to)]
+    ..subject = subject
+    ..text = 'IDLE wake-up test body';
+  await smtp.sendMessage(builder.buildMimeMessage());
+  await smtp.quit();
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -160,42 +167,91 @@ void main() {
     pass = _env('STALWART_PASS_B');
   });
 
-  test('IDLE connects, wakes on new message, and shuts down cleanly', () async {
-    final fakeAccounts = _FakeAccounts()..password = pass;
+  test(
+    'IDLE connects, wakes on new message, and shuts down cleanly',
+    timeout: const Timeout(Duration(seconds: 30)),
+    () async {
+      final firstIdleConnected = Completer<void>();
+      final secondIdleConnected = Completer<void>();
+      Object? connectError;
 
-    // Stalwart's memory directory authenticates by principal name ('alice'),
-    // not by email address ('alice@example.com').  connectImap() passes
-    // account.email as the IMAP login username, so use the bare name here.
-    final account = Account(
-      id: 'integration-test',
-      displayName: 'Integration Test',
-      email: user,
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: imapHost,
-      smtpPort: smtpPort,
-    );
+      Future<ImapClient> trackingConnect(
+        Account account,
+        String username,
+        String password,
+      ) async {
+        try {
+          final client = ImapClient(
+            defaultResponseTimeout: const Duration(seconds: 20),
+          );
+          await client.connectToServer(
+            account.imapHost,
+            account.imapPort,
+            isSecure: false,
+          );
+          await client.login(username, password);
+          if (!firstIdleConnected.isCompleted) {
+            firstIdleConnected.complete();
+          } else if (!secondIdleConnected.isCompleted) {
+            secondIdleConnected.complete();
+          }
+          return client;
+        } catch (e) {
+          connectError ??= e;
+          rethrow;
+        }
+      }
 
-    final mgr = AccountSyncManager(
-      fakeAccounts,
-      _FakeMailboxes(),
-      _FakeEmails(),
-      imapConnect: _connectImapPlain,
-    );
-    mgr.start();
+      final fakeAccounts = _FakeAccounts()..password = pass;
+      final account = Account(
+        id: 'integration-test',
+        displayName: 'Integration Test',
+        email: user,
+        imapHost: imapHost,
+        imapPort: imapPort,
+        imapSsl: false,
+        smtpHost: imapHost,
+        smtpPort: smtpPort,
+      );
 
-    // Push the account — this triggers _sync() then _idle() in the background.
-    fakeAccounts.push([account]);
+      final mgr = AccountSyncManager(
+        fakeAccounts,
+        _FakeMailboxes(),
+        _FakeEmails(),
+        imapConnect: trackingConnect,
+      );
+      addTearDown(mgr.dispose);
+      mgr.start();
+      fakeAccounts.push([account]);
 
-    // Give the manager time to connect and enter IDLE.
-    await Future<void>.delayed(const Duration(seconds: 2));
+      // 1. IDLE connects
+      await firstIdleConnected.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => fail('IDLE did not connect within 5s; error: $connectError'),
+      );
+      expect(connectError, isNull, reason: 'IMAP connect should succeed');
 
-    // Shut down — stop() completes the _stopSignal completer so _idle() exits
-    // immediately without waiting for the 25-minute cap.
-    mgr.dispose();
+      // 2. Wakes on new message — deliver a message and wait for IDLE to
+      //    reconnect, which proves the manager woke up and re-entered IDLE.
+      await _sendMessage(
+        host: imapHost,
+        port: smtpPort,
+        from: user,
+        pass: pass,
+        to: user,
+        subject: 'wake-idle-${DateTime.now().millisecondsSinceEpoch}',
+      );
+      await secondIdleConnected.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () =>
+            fail('IDLE did not reconnect after new message within 10s'),
+      );
+      expect(connectError, isNull, reason: 'reconnect should succeed');
 
-    // Let all in-flight async work (idleDone, logout) finish.
-    await Future<void>.delayed(const Duration(seconds: 1));
-  });
+      // 3. Shuts down cleanly — dispose() must return quickly without hanging
+      //    on the 25-minute IDLE cap.
+      mgr.dispose();
+      await Future<void>.delayed(const Duration(seconds: 1));
+    },
+  );
 }
