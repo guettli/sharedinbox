@@ -18,11 +18,7 @@ Then commit.
 
 ## Tasks
 
-When I download and install the apk, then the app starts, but closes again immediatly.
-
-I want an automated test, which ensures the apk is functional.
-
-If that test fails, then the upload should not be done.
+make `task deploy-android` faster. More concurrent tasks? Caching?
 
 ---
 

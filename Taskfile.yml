@@ -147,9 +147,12 @@ tasks:
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
-    deps: [check, integration-android, build-android]
+    deps: [check, build-android]
     dotenv: [".env"]
     cmds:
+      # integration-android runs after check (not in parallel) so the two E2E
+      # test suites don't compete for CPU and slow the Android emulator.
+      - task: integration-android
       - scripts/deploy_android.sh
 
   run:

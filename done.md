@@ -6,6 +6,30 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Android E2E test verifies APK before deploy
+
+`task deploy-android` now runs `integration-android` (the full Android E2E test) before
+uploading the APK. If the app crashes on start or any E2E step fails, the deploy is skipped.
+
+Key fixes to make the Android E2E test reliable:
+
+- `Taskfile.yml`: moved `integration-android` to a sequential `cmds` step after `check`,
+  so the two E2E suites don't compete for CPU and slow the emulator.
+- `stalwart-dev/integration_android_test.sh`: wrapped `force-stop`/`pm clear`/`uninstall`
+  in a `pm list packages | grep -qF` check — only runs when the package is installed, so
+  any real failure is surfaced instead of silently suppressed.
+- `integration_test/app_e2e_test.dart`:
+  - `pumpUntil` uses `pump(300ms)` instead of `pumpAndSettle()` so a concurrently
+    running spinner never blocks settling.
+  - `accountConnectionStatusProvider` overridden to complete immediately, eliminating the
+    `CircularProgressIndicator` in `_AccountTile` that caused `pumpAndSettle` to deadlock.
+  - Search section: `FocusManager.instance.primaryFocus?.unfocus()` dismisses the Android
+    IME keyboard before polling for results — without this, the soft keyboard reduces
+    `viewInsets.bottom` to near-zero and `ListView.builder` renders 0 items even though
+    search results are present.
+
+---
+
 ## Override accountConnectionStatusProvider in E2E test (fix Android pumpAndSettle deadlock)
 
 `accountConnectionStatusProvider` overridden in `integration_test/app_e2e_test.dart` so

@@ -94,7 +94,11 @@ Future<void> pumpUntil(
     }
     await tester.pump(interval);
   }
-  await tester.pumpAndSettle();
+  // pump(300ms) instead of pumpAndSettle(): a continuously-running animation
+  // (e.g. a spinner in a concurrent test under CPU load) would prevent
+  // pumpAndSettle() from ever settling. One bounded pump is enough for any
+  // route transition to complete.
+  await tester.pump(const Duration(milliseconds: 300));
 }
 
 void main() {
@@ -151,15 +155,12 @@ void main() {
           accountConnectionStatusProvider.overrideWith((ref, _) async {}),
         ],
       );
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.text('No accounts yet.'));
       _log('app settled');
 
       // ── Add account ────────────────────────────────────────────────────────
-      expect(find.text('No accounts yet.'), findsOneWidget);
-
       await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
-      await tester.pumpAndSettle();
-      expect(find.text('Add account'), findsOneWidget);
+      await pumpUntil(tester, find.text('Add account'));
 
       // Step 1 — enter email and continue.
       await tester.enterText(
@@ -302,18 +303,24 @@ void main() {
 
       // ── Search ─────────────────────────────────────────────────────────────
       await tester.tap(find.byIcon(Icons.search));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, find.byType(TextField));
 
       // Search by the 'E2E-' prefix — should match the message we just sent.
       _log('search');
       await tester.enterText(find.byType(TextField), 'E2E-');
-      // Allow the 300ms debounce timer to fire before polling for results.
-      await Future.delayed(const Duration(milliseconds: 400));
+      // Dismiss the IME keyboard so the results ListView.builder gets full
+      // body height.  On Android the soft keyboard reduces viewInsets.bottom,
+      // leaving near-zero height for the body — ListView.builder then renders
+      // 0 items and find.text() always fails even when results are present.
+      FocusManager.instance.primaryFocus?.unfocus();
+      // Future.delayed advances real time so the 300ms debounce Timer fires.
+      await Future.delayed(const Duration(milliseconds: 500));
       await tester.pump();
+
       await pumpUntil(
         tester,
         find.text(subject),
-        timeout: const Duration(seconds: 20),
+        timeout: const Duration(seconds: 30),
       );
       _log('search done');
 

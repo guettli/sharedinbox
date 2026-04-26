@@ -119,10 +119,12 @@ cd "$ROOT"
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1025 tcp:"$STALWART_SMTP_PORT"
 
 # Clear any leftover app state from previous runs (stale DB, cached APK process).
-# Force-stop first so adb uninstall doesn't fail with DELETE_FAILED_INTERNAL_ERROR.
-"$ADB" -s "$EMULATOR_ID" shell am force-stop com.example.sharedinbox 2>/dev/null || true
-"$ADB" -s "$EMULATOR_ID" shell pm clear com.example.sharedinbox 2>/dev/null || true
-"$ADB" -s "$EMULATOR_ID" uninstall com.example.sharedinbox 2>/dev/null || true
+# Only run if the package is installed — that way any failure is a real error.
+if "$ADB" -s "$EMULATOR_ID" shell pm list packages | grep -qF "com.example.sharedinbox"; then
+    "$ADB" -s "$EMULATOR_ID" shell am force-stop com.example.sharedinbox
+    "$ADB" -s "$EMULATOR_ID" shell pm clear com.example.sharedinbox
+    "$ADB" -s "$EMULATOR_ID" uninstall com.example.sharedinbox
+fi
 
 ts "flutter test start"
 fvm flutter test integration_test/ -d "$EMULATOR_ID" | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
