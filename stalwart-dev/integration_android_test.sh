@@ -119,7 +119,9 @@ cd "$ROOT"
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1025 tcp:"$STALWART_SMTP_PORT"
 
 # Clear any leftover app state from previous runs (stale DB, cached APK process).
-# This ensures "No accounts yet." on every fresh run and prevents install conflicts.
+# Force-stop first so adb uninstall doesn't fail with DELETE_FAILED_INTERNAL_ERROR.
+"$ADB" -s "$EMULATOR_ID" shell am force-stop com.example.sharedinbox 2>/dev/null || true
+"$ADB" -s "$EMULATOR_ID" shell pm clear com.example.sharedinbox 2>/dev/null || true
 "$ADB" -s "$EMULATOR_ID" uninstall com.example.sharedinbox 2>/dev/null || true
 
 ts "flutter test start"

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -28,6 +30,7 @@ class EmailListScreen extends ConsumerStatefulWidget {
 class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   bool _searching = false;
   final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
   List<Email>? _searchResults;
   bool _searchLoading = false;
 
@@ -39,6 +42,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -80,6 +84,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   void _closeSearch() {
+    _searchDebounce?.cancel();
     setState(() {
       _searching = false;
       _searchResults = null;
@@ -181,6 +186,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           hintText: 'Search…',
           border: InputBorder.none,
         ),
+        onChanged: (value) {
+          _searchDebounce?.cancel();
+          _searchDebounce = Timer(
+            const Duration(milliseconds: 300),
+            () => _runSearch(value),
+          );
+        },
         onSubmitted: _runSearch,
         textInputAction: TextInputAction.search,
       ),
@@ -189,6 +201,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           IconButton(
             icon: const Icon(Icons.clear),
             onPressed: () {
+              _searchDebounce?.cancel();
               _searchCtrl.clear();
               setState(() => _searchResults = null);
             },
