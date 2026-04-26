@@ -134,10 +134,16 @@ tasks:
             ${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
   build-android:
-    desc: Build a release APK (output in build/app/outputs/flutter-apk/)
+    desc: Build a release APK and run a MobSF security scan
     deps: [_preflight, _android-sdk-check, _pub-get]
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
+      - scripts/mobsf_scan.sh
+
+  mobsf-stop:
+    desc: Stop the MobSF Docker container (started automatically by build-android)
+    cmds:
+      - docker stop mobsf-sharedinbox 2>/dev/null || true
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH

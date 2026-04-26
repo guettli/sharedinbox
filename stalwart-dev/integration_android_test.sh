@@ -118,6 +118,10 @@ cd "$ROOT"
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1430 tcp:"$STALWART_IMAP_PORT"
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1025 tcp:"$STALWART_SMTP_PORT"
 
+# Clear any leftover app state from previous runs (stale DB, cached APK process).
+# This ensures "No accounts yet." on every fresh run and prevents install conflicts.
+"$ADB" -s "$EMULATOR_ID" uninstall com.example.sharedinbox 2>/dev/null || true
+
 ts "flutter test start"
 fvm flutter test integration_test/ -d "$EMULATOR_ID" | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 ts "flutter test done"

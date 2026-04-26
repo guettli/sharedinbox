@@ -27,8 +27,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('alice@example.com'), findsOneWidget);
-      expect(find.text('IMAP'), findsOneWidget);
+      // Email and type label are now a single Text widget ('email\ntype').
+      expect(find.textContaining('alice@example.com'), findsOneWidget);
+      expect(find.textContaining('IMAP'), findsOneWidget);
     });
 
     testWidgets('shows IMAP type label for IMAP account', (tester) async {
@@ -40,7 +41,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('IMAP'), findsOneWidget);
+      expect(find.textContaining('IMAP'), findsOneWidget);
     });
 
     testWidgets('shows check icon after successful connection test',

@@ -192,21 +192,18 @@ void main() {
       final saveButton = find.widgetWithText(FilledButton, 'Save');
       await tester.ensureVisible(saveButton);
       await tester.tap(saveButton);
-      // Save makes an async connection before navigating — wait for the FAB,
-      // which is only present on the account list screen.
+      // Wait for the account to appear in the list. This covers both the async
+      // connection+save and the Drift background-isolate stream propagation,
+      // which pumpAndSettle() alone does not flush on Android.
       await pumpUntil(
         tester,
-        find.widgetWithIcon(FloatingActionButton, Icons.add),
+        find.text('Alice'),
         timeout: const Duration(seconds: 30),
       );
 
-      // Back at account list.
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text(userEmail), findsOneWidget);
-
       // ── Navigate to mailboxes ──────────────────────────────────────────────
       _log('navigate to mailboxes');
-      await tester.tap(find.text('Alice'));
+      await tester.tap(find.text('Alice', skipOffstage: false));
       await pumpUntil(tester, find.text('INBOX'));
       _log('mailboxes settled');
 

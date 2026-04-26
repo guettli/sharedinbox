@@ -62,17 +62,7 @@ class _AccountTile extends ConsumerWidget {
     return ListTile(
       leading: const Icon(Icons.account_circle),
       title: Text(account.displayName),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(account.email),
-          Text(
-            typeLabel,
-            style: Theme.of(context).textTheme.labelSmall,
-          ),
-        ],
-      ),
+      subtitle: Text('${account.email}\n$typeLabel'),
       isThreeLine: true,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
