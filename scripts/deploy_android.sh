@@ -8,3 +8,5 @@ set -Eeuo pipefail
 : "${ANDROID_APK_SCP_PATH:?ANDROID_APK_SCP_PATH is not set (add it to .env)}"
 
 scp -C build/app/outputs/flutter-apk/app-release.apk "${ANDROID_APK_SCP_USER}@${ANDROID_APK_SCP_HOST}:${ANDROID_APK_SCP_PATH}"
+
+curl -d 'Deployed to https://thomas-guettler.de/si3.apk' https://ntfy.sh/ClaudeGuettliNotification265746942

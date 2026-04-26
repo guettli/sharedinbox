@@ -145,6 +145,10 @@ void main() {
           // Stalwart dev server has no TLS — use plaintext IMAP/SMTP throughout.
           imapConnectProvider.overrideWithValue(_connectImapPlaintext),
           smtpConnectProvider.overrideWithValue(_connectSmtpPlaintext),
+          // Skip the real IMAP connection-check so _AccountTile never shows a
+          // CircularProgressIndicator — pumpAndSettle() cannot settle while a
+          // continuously-running animation is in the tree.
+          accountConnectionStatusProvider.overrideWith((ref, _) async {}),
         ],
       );
       await tester.pumpAndSettle();
