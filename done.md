@@ -6,6 +6,15 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Override accountConnectionStatusProvider in E2E test (fix Android pumpAndSettle deadlock)
+
+`accountConnectionStatusProvider` overridden in `integration_test/app_e2e_test.dart` so
+`_AccountTile` never shows a `CircularProgressIndicator` during tests. The spinner's
+continuous animation prevented `pumpAndSettle()` from settling on Android. Reverted
+`pumpUntil` to use `pumpAndSettle()` again. Commit: e50ff3c.
+
+---
+
 ## Fix task check: unencrypted IMAP error + coverage gate
 
 - `account_sync_manager_test.dart`: inject `_connectImapPlain` (bypasses the production SSL check) so the test works against the plain-IMAP dev Stalwart.

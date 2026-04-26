@@ -18,35 +18,6 @@ Then commit.
 
 ## Tasks
 
-Override `accountConnectionStatusProvider` in the Android E2E test so `CircularProgressIndicator` never appears.
-
-`_AccountTile` in `lib/ui/screens/account_list_screen.dart` watches `accountConnectionStatusProvider(account.id)` (defined at `lib/di.dart:118`). It is a `FutureProvider.autoDispose.family` that connects to the real IMAP server. While loading, it shows a `CircularProgressIndicator` in the tile's trailing widget. That continuously-running animation prevents `pumpAndSettle()` from ever settling in Flutter integration tests on Android, causing frame-pump storms that can drop the `StreamBuilder`'s data state and make `tap(aliceTile)` find 0 widgets.
-
-The current workaround in `integration_test/app_e2e_test.dart` is to replace `pumpAndSettle()` with `pump(300ms)` inside `pumpUntil`. The real fix is to override the provider so it completes immediately — no spinner ever enters the tree.
-
-1. In `integration_test/app_e2e_test.dart`, add `accountConnectionStatusProvider` to the `overrides` list passed to `app.main(...)`:
-
-```dart
-app.main(
-  overrides: [
-    secureStorageProvider.overrideWithValue(_InMemorySecureStorage()),
-    imapConnectProvider.overrideWithValue(_connectImapPlaintext),
-    smtpConnectProvider.overrideWithValue(_connectSmtpPlaintext),
-    // Override so _AccountTile never shows a CircularProgressIndicator:
-    // pumpAndSettle() cannot settle while a continuously-running animation is in the tree.
-    accountConnectionStatusProvider.overrideWith((ref, _) async {}),
-  ],
-);
-```
-
-1. After adding the override, revert `pumpUntil` back to using `pumpAndSettle()` instead of `pump(const Duration(milliseconds: 300))` — the original comment about `CircularProgressIndicator` and the bounded-pump workaround can both be removed.
-
-1. Verify the Linux UI E2E test still passes (`task integration-ui`) and the Android E2E test passes (`task integration-android`).
-
-Constraints: only `integration_test/app_e2e_test.dart` should be modified. No production code changes.
-
----
-
 When I download and install the apk, then the app starts, but closes again immediatly.
 
 I want an automated test, which ensures the apk is functional.
