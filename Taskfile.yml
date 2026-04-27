@@ -133,9 +133,24 @@ tasks:
           Android platform 34 or higher not found. Install it with:
             ${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
+  _mobsf-start:
+    internal: true
+    run: once
+    cmds:
+      - cmd: |
+          if ! docker ps -q --filter name=mobsf-sharedinbox | grep -q .; then
+            docker rm mobsf-sharedinbox 2>/dev/null || true
+            docker pull -q opensecurity/mobile-security-framework-mobsf:latest >/dev/null 2>&1 || true
+            docker run -d --rm \
+              --name mobsf-sharedinbox \
+              -p 8000:8000 \
+              -e MOBSF_API_KEY=sharedinbox-dev \
+              opensecurity/mobile-security-framework-mobsf:latest >/dev/null
+          fi
+
   build-android:
     desc: Build a release APK and run a MobSF security scan
-    deps: [_preflight, _android-sdk-check, _pub-get]
+    deps: [_preflight, _android-sdk-check, _pub-get, _mobsf-start]
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
       - scripts/mobsf_scan.sh
@@ -177,10 +192,14 @@ tasks:
     desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
     deps: [analyze, test, test-widget]
 
+  _integrations:
+    internal: true
+    run: once
+    deps: [integration, integration-ui]
+
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate
     deps: [analyze, test-widget, build-linux, test]
     cmds:
-      - task: integration
-      - task: integration-ui
+      - task: _integrations
       - task: coverage

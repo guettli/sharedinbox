@@ -18,10 +18,6 @@ Then commit.
 
 ## Tasks
 
-make `task deploy-android` faster. More concurrent tasks? Caching?
-
----
-
 I opened an account. How to get back to the list of accounts?
 
 I saw no way to do that.

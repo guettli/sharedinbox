@@ -24,6 +24,7 @@ command -v docker >/dev/null 2>&1 || { echo "docker not found — install Docker
 # Start MobSF if not already running.
 if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
     echo "Starting MobSF Docker container (this may take a moment on first run)..."
+    docker rm "$CONTAINER_NAME" 2>/dev/null || true
     # Pull quietly first so progress-bar noise doesn't overwrite other output.
     docker pull -q opensecurity/mobile-security-framework-mobsf:latest >/dev/null 2>&1
     docker run -d --rm \

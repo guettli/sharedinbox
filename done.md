@@ -6,6 +6,18 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Speed up `task deploy-android`
+
+Two parallelism improvements:
+
+- `_integrations` internal task: runs `integration` and `integration-ui` in parallel (they use
+  random Stalwart ports and different Flutter build targets so there is no conflict).
+- `_mobsf-start` internal task: starts the MobSF Docker container as a dep of `build-android`,
+  so it warms up concurrently with the APK build instead of blocking for up to 90 s afterwards.
+- `scripts/mobsf_scan.sh`: added `docker rm $CONTAINER_NAME 2>/dev/null || true` before
+  `docker run` to handle stopped-but-not-yet-removed containers (same fix applied to the new
+  `_mobsf-start` task).
+
 ## Android E2E test verifies APK before deploy
 
 `task deploy-android` now runs `integration-android` (the full Android E2E test) before
