@@ -18,10 +18,6 @@ Then commit.
 
 ## Tasks
 
-How can I edit the Sieve Filter?
-
----
-
 When adding a new account, and no well-known file was found, not exact hint in DNS, then
 SMTP/IMAP/JMAP should use the mx record as fallback.
 

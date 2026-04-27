@@ -6,6 +6,13 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Email filters accessible from inside an account
+
+Added "Email filters" entry to `FolderDrawer` (below "All accounts", above the folder
+list). Visible only for JMAP accounts (`accountAsync.valueOrNull?.type == AccountType.jmap`).
+Tapping it closes the drawer and pushes `/accounts/:id/sieve`. Previously the Sieve script
+editor was only reachable via the hidden popup menu on the account list.
+
 ## Bulk actions on search results
 
 Long-pressing a search result enters selection mode; tapping additional results adds/removes
