@@ -38,6 +38,10 @@ ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/pla
     exit 1
 }
 
+# Ensure adb daemon is running before querying/starting the emulator; without it
+# the emulator cannot register and adb devices always returns empty.
+"$ADB" start-server >/dev/null 2>&1 || true
+
 # Detect a connected Android emulator; auto-start the sharedinbox_test AVD if none is running.
 EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
 if [ -z "$EMULATOR_ID" ]; then

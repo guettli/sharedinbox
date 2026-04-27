@@ -12,6 +12,9 @@ ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/pla
     exit 1
 }
 
+# Ensure adb daemon is running before querying/starting the emulator.
+"$ADB" start-server >/dev/null 2>&1 || true
+
 EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
 if [ -z "$EMULATOR_ID" ]; then
     EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
