@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/discovery_result.dart';
@@ -22,6 +24,9 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
 
     final imap = await _tryImapAutoconfig(domain);
     if (imap != null) return imap;
+
+    final mx = await _tryMxFallback(domain);
+    if (mx != null) return mx;
 
     return UnknownDiscovery();
   }
@@ -101,4 +106,50 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
 
   String? _tag(String block, String tag) =>
       RegExp('<$tag>([^<]+)</$tag>').firstMatch(block)?.group(1)?.trim();
+
+  /// Queries DNS-over-HTTPS for MX records and returns an [ImapSmtpDiscovery]
+  /// using the highest-priority MX host with standard ports (IMAP 993/SSL,
+  /// SMTP 587/STARTTLS). Used as a last-resort fallback when neither the JMAP
+  /// well-known endpoint nor the autoconfig XML was found.
+  Future<ImapSmtpDiscovery?> _tryMxFallback(String domain) async {
+    try {
+      final url = Uri.https(
+        'dns.google',
+        '/resolve',
+        {'name': domain, 'type': 'MX'},
+      );
+      final resp = await _client.get(url).timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200) return null;
+
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (body['Status'] != 0) return null;
+
+      final answers = (body['Answer'] as List?)?.cast<Map<String, dynamic>>();
+      if (answers == null || answers.isEmpty) return null;
+
+      final entries = <MapEntry<int, String>>[];
+      for (final a in answers.where((a) => a['type'] == 15)) {
+        final parts = (a['data'] as String).trim().split(RegExp(r'\s+'));
+        if (parts.length < 2) continue;
+        final priority = int.tryParse(parts[0]);
+        if (priority == null) continue;
+        final host = parts[1].replaceAll(RegExp(r'\.$'), '');
+        if (host.isNotEmpty) entries.add(MapEntry(priority, host));
+      }
+      if (entries.isEmpty) return null;
+      entries.sort((a, b) => a.key.compareTo(b.key));
+      final host = entries.first.value;
+
+      return ImapSmtpDiscovery(
+        imapHost: host,
+        imapPort: 993,
+        imapSsl: true,
+        smtpHost: host,
+        smtpPort: 587,
+        smtpSsl: false,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }

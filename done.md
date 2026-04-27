@@ -6,6 +6,14 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## MX record fallback in account auto-discovery
+
+When JMAP well-known and autoconfig XML both fail, `AccountDiscoveryServiceImpl` now
+queries `https://dns.google/resolve?name={domain}&type=MX` (DNS-over-HTTPS, no new
+dependency). The highest-priority MX hostname is used as both IMAP host (port 993, SSL)
+and SMTP host (port 587, STARTTLS). Three unit tests cover: basic MX hit, priority
+sorting, and NXDOMAIN/error fallback to `UnknownDiscovery`.
+
 ## Email filters accessible from inside an account
 
 Added "Email filters" entry to `FolderDrawer` (below "All accounts", above the folder

@@ -119,5 +119,50 @@ void main() {
       final result = await svc.discover('user@example.com');
       expect(result, isA<UnknownDiscovery>());
     });
+
+    test('returns ImapSmtpDiscovery from MX record when autoconfig not found',
+        () async {
+      final svc = _service({
+        'https://dns.google/resolve?name=example.com&type=MX': http.Response(
+          '{"Status":0,"Answer":[{"type":15,"data":"10 mail.example.com."}]}',
+          200,
+        ),
+      });
+      final result = await svc.discover('user@example.com');
+      expect(result, isA<ImapSmtpDiscovery>());
+      final imap = result as ImapSmtpDiscovery;
+      expect(imap.imapHost, 'mail.example.com');
+      expect(imap.imapPort, 993);
+      expect(imap.imapSsl, isTrue);
+      expect(imap.smtpHost, 'mail.example.com');
+      expect(imap.smtpPort, 587);
+      expect(imap.smtpSsl, isFalse);
+    });
+
+    test('MX fallback picks lowest priority record', () async {
+      final svc = _service({
+        'https://dns.google/resolve?name=example.com&type=MX': http.Response(
+          '{"Status":0,"Answer":['
+          '{"type":15,"data":"20 backup.example.com."},'
+          '{"type":15,"data":"10 mail.example.com."}'
+          ']}',
+          200,
+        ),
+      });
+      final result = await svc.discover('user@example.com');
+      expect(result, isA<ImapSmtpDiscovery>());
+      expect((result as ImapSmtpDiscovery).imapHost, 'mail.example.com');
+    });
+
+    test('returns UnknownDiscovery when MX lookup also fails', () async {
+      final svc = _service({
+        'https://dns.google/resolve?name=example.com&type=MX': http.Response(
+          '{"Status":3}',
+          200,
+        ),
+      });
+      final result = await svc.discover('user@example.com');
+      expect(result, isA<UnknownDiscovery>());
+    });
   });
 }
