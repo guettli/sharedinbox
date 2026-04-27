@@ -18,11 +18,6 @@ Then commit.
 
 ## Tasks
 
-I opened a mailbox. I search for "foo bar". I want to see all mails containing foo and bar. Not
-mails containing "foo bar" exactly.
-
----
-
 I search for "foo". Now I see all mails containing "foo". I want to easily do the common actions on
 the selected mails: Delete, Archive, Move to Folder, Move to Junk, ...
 

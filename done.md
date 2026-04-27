@@ -6,6 +6,17 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Multi-word search uses AND semantics
+
+Searching for "foo bar" now returns emails that contain **both** words, not the exact
+phrase. Fixed in `email_repository_impl.dart`:
+
+- **IMAP search** (`searchEmails`): query is split on whitespace; each word becomes
+  `OR SUBJECT "word" TEXT "word"`, joined by spaces. Multiple top-level IMAP criteria
+  are implicitly ANDed by the protocol.
+- **Local DB search** (`searchEmailsGlobal`): each word adds
+  `& (subject LIKE '%word%' | preview LIKE '%word%')` to the Drift where-clause.
+
 ## Navigate back to account list from inside an account
 
 Added an "All accounts" tile (with `Icons.switch_account`) at the top of `FolderDrawer`,

@@ -1726,13 +1726,21 @@ class EmailRepositoryImpl implements EmailRepository {
     String accountId,
     String query,
   ) async {
-    final pattern = '%${query.toLowerCase()}%';
+    final words = query
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
     final rows = await (_db.select(_db.emails)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                (t.subject.like(pattern) | t.preview.like(pattern)),
-          )
+          ..where((t) {
+            Expression<bool> condition = t.accountId.equals(accountId);
+            for (final word in words) {
+              final pattern = '%$word%';
+              condition = condition &
+                  (t.subject.like(pattern) | t.preview.like(pattern));
+            }
+            return condition;
+          })
           ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
           ..limit(50))
         .get();
@@ -1770,9 +1778,14 @@ class EmailRepositoryImpl implements EmailRepository {
         await _imapConnect(account, _effectiveUsername(account), password);
     try {
       await client.selectMailboxByPath(mailboxPath);
-      final escaped = query.replaceAll('"', '\\"');
+      final terms =
+          query.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+      final searchCriteria = terms.map((term) {
+        final escaped = term.replaceAll('"', '\\"');
+        return 'OR SUBJECT "$escaped" TEXT "$escaped"';
+      }).join(' ');
       final result = await client.uidSearchMessages(
-        searchCriteria: 'OR SUBJECT "$escaped" TEXT "$escaped"',
+        searchCriteria: searchCriteria,
       );
       final uids = result.matchingSequence?.toList() ?? [];
       if (uids.isEmpty) return [];
