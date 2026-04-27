@@ -6,6 +6,18 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Bulk actions on search results
+
+Long-pressing a search result enters selection mode; tapping additional results adds/removes
+them. The existing bottom bar (Archive, Delete, Mark as spam, Move to folder) works on the
+selection. Implementation in `email_list_screen.dart`:
+
+- `_selectedSearchIds` (`Set<String>`) tracks selected email IDs in search results.
+- `_selecting` is true when either `_selectedThreadIds` or `_selectedSearchIds` is non-empty.
+- `_selectedEmailIds` returns `_selectedSearchIds` when searching, thread-resolved IDs otherwise.
+- `_buildEmailList` shows checkboxes in selection mode, highlights selected tiles, and routes
+  taps to toggle-vs-open depending on mode.
+
 ## Multi-word search uses AND semantics
 
 Searching for "foo bar" now returns emails that contain **both** words, not the exact

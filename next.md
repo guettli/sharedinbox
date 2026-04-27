@@ -18,11 +18,6 @@ Then commit.
 
 ## Tasks
 
-I search for "foo". Now I see all mails containing "foo". I want to easily do the common actions on
-the selected mails: Delete, Archive, Move to Folder, Move to Junk, ...
-
----
-
 How can I edit the Sieve Filter?
 
 ---

@@ -38,7 +38,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   final Set<String> _selectedThreadIds = {};
   // Last-emitted thread list, used to resolve emailIds for batch operations.
   List<EmailThread> _currentThreads = [];
-  bool get _selecting => _selectedThreadIds.isNotEmpty;
+  // Individual email selection used in search results.
+  final Set<String> _selectedSearchIds = {};
+  bool get _selecting =>
+      _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
   @override
   void dispose() {
@@ -57,13 +60,29 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     });
   }
 
-  void _clearSelection() => setState(() => _selectedThreadIds.clear());
+  void _clearSelection() => setState(() {
+        _selectedThreadIds.clear();
+        _selectedSearchIds.clear();
+      });
 
-  // All email IDs belonging to currently selected threads.
-  List<String> get _selectedEmailIds => _currentThreads
-      .where((t) => _selectedThreadIds.contains(t.threadId))
-      .expand((t) => t.emailIds)
-      .toList();
+  void _toggleSearchSelection(String emailId) {
+    setState(() {
+      if (_selectedSearchIds.contains(emailId)) {
+        _selectedSearchIds.remove(emailId);
+      } else {
+        _selectedSearchIds.add(emailId);
+      }
+    });
+  }
+
+  // All email IDs for the current selection context.
+  List<String> get _selectedEmailIds {
+    if (_searching) return _selectedSearchIds.toList();
+    return _currentThreads
+        .where((t) => _selectedThreadIds.contains(t.threadId))
+        .expand((t) => t.emailIds)
+        .toList();
+  }
 
   Future<void> _runSearch(String query) async {
     if (query.trim().isEmpty) {
@@ -164,12 +183,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   AppBar _selectionBar() {
+    final count =
+        _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
         onPressed: _clearSelection,
       ),
-      title: Text('${_selectedThreadIds.length} selected'),
+      title: Text('$count selected'),
     );
   }
 
@@ -529,14 +550,20 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       itemCount: emails.length,
       itemBuilder: (ctx, i) {
         final e = emails[i];
+        final isSelected = _selectedSearchIds.contains(e.id);
         final sender = e.from.isNotEmpty
             ? (e.from.first.name ?? e.from.first.email)
             : '(unknown)';
         return ListTile(
-          leading: Icon(
-            e.isSeen ? Icons.mail_outline : Icons.mail,
-            color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-          ),
+          leading: _selecting
+              ? Checkbox(
+                  value: isSelected,
+                  onChanged: (_) => _toggleSearchSelection(e.id),
+                )
+              : Icon(
+                  e.isSeen ? Icons.mail_outline : Icons.mail,
+                  color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+                ),
           title: Text(
             sender,
             style:
@@ -547,13 +574,19 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          trailing: Text(
-            e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-            style: Theme.of(ctx).textTheme.bodySmall,
-          ),
-          onTap: () => context.push(
-            '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
-          ),
+          selected: isSelected,
+          trailing: _selecting
+              ? null
+              : Text(
+                  e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+          onTap: _selecting
+              ? () => _toggleSearchSelection(e.id)
+              : () => context.push(
+                    '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
+                  ),
+          onLongPress: () => _toggleSearchSelection(e.id),
         );
       },
     );
