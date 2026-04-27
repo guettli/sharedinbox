@@ -302,19 +302,15 @@ void main() {
       expect(find.text(subject), findsOneWidget);
 
       // ── Search ─────────────────────────────────────────────────────────────
-      await tester.tap(find.byIcon(Icons.search));
-      await pumpUntil(tester, find.byType(TextField));
-
       // Search by the 'E2E-' prefix — should match the message we just sent.
+      // SearchBar is always visible in the AppBar bottom; no icon tap needed.
       _log('search');
-      await tester.enterText(find.byType(TextField), 'E2E-');
+      await tester.enterText(find.byType(SearchBar), 'E2E-');
       // Dismiss the IME keyboard so the results ListView.builder gets full
       // body height.  On Android the soft keyboard reduces viewInsets.bottom,
       // leaving near-zero height for the body — ListView.builder then renders
       // 0 items and find.text() always fails even when results are present.
       FocusManager.instance.primaryFocus?.unfocus();
-      // Future.delayed advances real time so the 300ms debounce Timer fires.
-      await Future.delayed(const Duration(milliseconds: 500));
       await tester.pump();
 
       await pumpUntil(

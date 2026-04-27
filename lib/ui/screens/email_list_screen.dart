@@ -28,11 +28,10 @@ class EmailListScreen extends ConsumerStatefulWidget {
 }
 
 class _EmailListScreenState extends ConsumerState<EmailListScreen> {
-  bool _searching = false;
-  final _searchCtrl = TextEditingController();
-  Timer? _searchDebounce;
+  final _searchController = SearchController();
   List<Email>? _searchResults;
   bool _searchLoading = false;
+  bool get _searching => _searchController.text.isNotEmpty;
 
   // Thread-level selection (key = threadId).
   final Set<String> _selectedThreadIds = {};
@@ -44,9 +43,21 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
   @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(() {
+      if (_searchController.text.isEmpty) {
+        setState(() {
+          _searchResults = null;
+          _searchLoading = false;
+        });
+      }
+    });
+  }
+
+  @override
   void dispose() {
-    _searchDebounce?.cancel();
-    _searchCtrl.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -102,13 +113,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
   }
 
-  void _closeSearch() {
-    _searchDebounce?.cancel();
-    setState(() {
-      _searching = false;
-      _searchResults = null;
-      _searchCtrl.clear();
-    });
+  void _onSearchChanged(String value) {
+    if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
   }
 
   @override
@@ -116,17 +122,17 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
     return Scaffold(
-      appBar: _selecting
-          ? _selectionBar()
-          : (_searching ? _searchBar() : _normalBar(repo, accountAsync)),
-      drawer: (_selecting || _searching)
+      appBar: _selecting ? _selectionBar() : _normalBar(repo, accountAsync),
+      drawer: _selecting
           ? null
           : FolderDrawer(
               accountId: widget.accountId,
               currentMailboxPath: widget.mailboxPath,
             ),
       bottomNavigationBar: _selecting ? _selectionBottomBar() : null,
-      body: _searching ? _buildSearchBody() : _buildStreamBody(repo),
+      body: (_searchResults != null || _searchLoading)
+          ? _buildSearchBody()
+          : _buildStreamBody(repo),
     );
   }
 
@@ -149,11 +155,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               ),
             ),
           ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.search),
-          tooltip: 'Search',
-          onPressed: () => setState(() => _searching = true),
         ),
         IconButton(
           icon: const Icon(Icons.sync),
@@ -179,6 +180,27 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ),
         ),
       ],
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(60),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: SearchBar(
+            controller: _searchController,
+            hintText: 'Search…',
+            leading: const Icon(Icons.search),
+            trailing: [
+              if (_searchController.text.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () => _searchController.clear(),
+                ),
+            ],
+            onChanged: _onSearchChanged,
+            onSubmitted: _runSearch,
+            textInputAction: TextInputAction.search,
+          ),
+        ),
+      ),
     );
   }
 
@@ -191,43 +213,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         onPressed: _clearSelection,
       ),
       title: Text('$count selected'),
-    );
-  }
-
-  AppBar _searchBar() {
-    return AppBar(
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back),
-        onPressed: _closeSearch,
-      ),
-      title: TextField(
-        controller: _searchCtrl,
-        autofocus: true,
-        decoration: const InputDecoration(
-          hintText: 'Search…',
-          border: InputBorder.none,
-        ),
-        onChanged: (value) {
-          _searchDebounce?.cancel();
-          _searchDebounce = Timer(
-            const Duration(milliseconds: 300),
-            () => _runSearch(value),
-          );
-        },
-        onSubmitted: _runSearch,
-        textInputAction: TextInputAction.search,
-      ),
-      actions: [
-        if (_searchCtrl.text.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.clear),
-            onPressed: () {
-              _searchDebounce?.cancel();
-              _searchCtrl.clear();
-              setState(() => _searchResults = null);
-            },
-          ),
-      ],
     );
   }
 

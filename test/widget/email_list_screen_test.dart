@@ -189,7 +189,7 @@ void main() {
       expect(find.text('To'), findsOneWidget);
     });
 
-    testWidgets('tapping back arrow in search bar closes it', (tester) async {
+    testWidgets('SearchBar is always visible in the AppBar', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
@@ -204,13 +204,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.search));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.arrow_back));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Search…'), findsNothing);
+      expect(find.byType(SearchBar), findsOneWidget);
+      expect(find.text('Search…'), findsOneWidget);
       expect(find.text('INBOX'), findsOneWidget);
     });
 
@@ -280,7 +275,7 @@ void main() {
             mailboxRepositoryProvider
                 .overrideWithValue(FakeMailboxRepository()),
             emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(emails: [email], searchResults: [email]),
+              FakeEmailRepository(emails: [], searchResults: [email]),
             ),
           ],
         ),

@@ -6,6 +6,32 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Replace custom search TextField with Flutter SearchBar
+
+Replaced the hand-rolled `TextField`-in-`AppBar` search UI with Flutter's built-in `SearchBar`
+widget (Material 3). The `SearchBar` is now always visible in the `AppBar`'s `bottom` slot — no
+toggle needed.
+
+Removed: `bool _searching` state field, `TextEditingController _searchCtrl`, `Timer? _searchDebounce`,
+and the `_searchBar()` / `_closeSearch()` helpers.
+
+Added: `SearchController _searchController` with a listener that clears results when text is
+emptied. `onChanged` fires search immediately (no debounce); `onSubmitted` also fires it. A clear
+`IconButton` appears in `trailing` when the controller has text.
+
+Updated `integration_test/app_e2e_test.dart`: search section now enters text directly into
+`find.byType(SearchBar)` — no icon tap or `TextField` lookup needed.
+
+Updated widget tests in `test/widget/email_list_screen_test.dart`: replaced the "tapping back
+arrow" test with "SearchBar is always visible in the AppBar"; fixed "clear results" test to use
+`emails: []` so the stream body stays empty after clearing.
+
+## Sieve Scripts editing is discoverable
+
+The Sieve script editor ("Email filters") was already implemented. It became reachable
+via the "Email filters" entry added to `FolderDrawer` in the previous task — no further
+code changes needed.
+
 ## MX record fallback in account auto-discovery
 
 When JMAP well-known and autoconfig XML both fail, `AccountDiscoveryServiceImpl` now
