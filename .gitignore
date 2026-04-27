@@ -55,3 +55,4 @@ linux/flutter/generated_plugins.cmake
 # FVM — .fvmrc is committed; .fvm/ contains the downloaded SDK (not committed)
 .fvm/
 .qwen
+.claude
