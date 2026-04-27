@@ -18,12 +18,6 @@ Then commit.
 
 ## Tasks
 
-I opened an account. How to get back to the list of accounts?
-
-I saw no way to do that.
-
----
-
 I opened a mailbox. I search for "foo bar". I want to see all mails containing foo and bar. Not
 mails containing "foo bar" exactly.
 

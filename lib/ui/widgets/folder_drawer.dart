@@ -74,6 +74,15 @@ class FolderDrawer extends ConsumerWidget {
               ),
             ),
           ),
+          ListTile(
+            leading: const Icon(Icons.switch_account),
+            title: const Text('All accounts'),
+            onTap: () {
+              Navigator.pop(context);
+              context.go('/accounts');
+            },
+          ),
+          const Divider(height: 1),
           Expanded(
             child: StreamBuilder(
               stream: mailboxRepo.observeMailboxes(accountId),

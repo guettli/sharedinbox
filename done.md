@@ -6,6 +6,13 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Navigate back to account list from inside an account
+
+Added an "All accounts" tile (with `Icons.switch_account`) at the top of `FolderDrawer`,
+above a divider and the folder list. Tapping it closes the drawer and navigates to
+`/accounts` via `context.go`. The drawer is shown in both `MailboxListScreen` and
+`EmailListScreen`, so this entry point is reachable from anywhere inside an account.
+
 ## Speed up `task deploy-android`
 
 Two parallelism improvements:
