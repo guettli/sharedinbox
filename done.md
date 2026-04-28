@@ -6,6 +6,33 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## IMAP delete: locally-deleted message no longer reappears after sync
+
+User report: deleting an IMAP message removes it from the list, but tapping
+the sync button before the next background flush makes it pop back in.
+
+Reproduced in `test/integration/email_repository_imap_test.dart` with a new
+case `syncEmails after local delete does not resurrect message`: it deletes an
+email locally (which queues a pending change and drops the cached row), then
+calls `syncEmails` directly — exactly what the sync button does — and
+asserts the row stays gone and the pending change stays queued.
+
+Root cause: the incremental IMAP sync issues `UID ${lastUid + 1}:*` to look
+for new mail. Per RFC 3501 §6.4.4 a sequence range `n:*` reverses to `*:n`
+when `n` exceeds the largest UID. With one message at UID 1 and `lastUid=1`,
+`UID 2:*` reverses to `*:2` and the server returns UID 1, which then gets
+re-fetched and re-inserted — undoing the optimistic local delete.
+
+Fix in `lib/data/repositories/email_repository_impl.dart`: in
+`_fetchAndUpsertImap`, look up the UIDs in this mailbox that have a pending
+`delete` or `move` queued and skip the insert for those. Keeping the `UID n:*`
+search untouched preserves the existing E2E flow where re-fetching freshly
+delivered SMTP messages drives the StreamBuilder rebuild.
+
+Same protection guards the `move`-on-delete path (when a Trash mailbox is
+configured) for free, since `moveEmail` enqueues a `move` and drops the cached
+row in the source mailbox.
+
 ## task deploy-android works end-to-end
 
 The original "Emulator did not become ready within 120 s" was already resolved in

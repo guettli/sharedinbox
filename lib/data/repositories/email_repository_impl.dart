@@ -438,6 +438,8 @@ class EmailRepositoryImpl implements EmailRepository {
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
+    final pendingByUid =
+        await _pendingDeleteOrMoveUids(account.id, mailboxPath);
     var bytes = 0;
     await _db.transaction(() async {
       for (final msg in fetch.messages) {
@@ -449,6 +451,18 @@ class EmailRepositoryImpl implements EmailRepository {
         final uid = msg.uid;
         if (uid == null) {
           log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
+          continue;
+        }
+        // Don't resurrect a row the user has already removed locally via a
+        // pending delete or move. The IMAP server still has the message
+        // until the next flushPendingChanges, and `UID lastUid+1:*` can
+        // even return a UID smaller than `lastUid+1` because RFC 3501
+        // §6.4.4 reverses `n:*` to `*:n` when `n` exceeds the largest UID.
+        if (pendingByUid.containsKey(uid)) {
+          log(
+            'IMAP: skipping insert for uid=$uid in $mailboxPath '
+            '(pending ${pendingByUid[uid]})',
+          );
           continue;
         }
         bytes += msg.size ?? 0;
@@ -486,6 +500,35 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     });
     return bytes;
+  }
+
+  // UIDs in [mailboxPath] that have a pending local delete or move queued.
+  // Used by the IMAP fetch path to avoid re-inserting rows the user has
+  // already removed from view but whose change has not yet flushed.
+  Future<Map<int, String>> _pendingDeleteOrMoveUids(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final rows = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals('Email') &
+                (t.changeType.equals('delete') | t.changeType.equals('move')),
+          ))
+        .get();
+    final result = <int, String>{};
+    for (final r in rows) {
+      try {
+        final payload = jsonDecode(r.payload) as Map<String, dynamic>;
+        if (payload['mailboxPath'] != mailboxPath) continue;
+        final uid = payload['uid'];
+        if (uid is int) result[uid] = r.changeType;
+      } catch (_) {
+        // Malformed payload — skip.
+      }
+    }
+    return result;
   }
 
   Future<Map<String, dynamic>?> _loadImapCheckpoint(

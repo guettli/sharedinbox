@@ -520,4 +520,39 @@ void main() {
       await client.logout();
     }
   });
+
+  // Regression: the in-app "sync" button calls syncEmails directly and does
+  // not invoke flushPendingChanges itself. After a local delete, the message
+  // is removed from the local DB optimistically but still lives on the server
+  // until the pending change is flushed. If syncEmails runs before that flush,
+  // it must not resurrect the deleted row from the server.
+  test('syncEmails after local delete does not resurrect message', () async {
+    await appendToInbox('delete-and-sync');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(emails, hasLength(1));
+
+    // User taps delete in the UI: enqueues a pending change, drops local row.
+    await r.emails.deleteEmail(emails.first.id);
+    expect(await r.emails.observeEmails('test', 'INBOX').first, isEmpty);
+
+    // User taps the sync button: syncEmails runs without flushPendingChanges.
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final after = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(
+      after,
+      isEmpty,
+      reason: 'deleted message must not reappear on next sync',
+    );
+
+    // The pending delete must still be queued for the next flush.
+    final pending = await r.db.select(r.db.pendingChanges).get();
+    expect(pending, hasLength(1));
+    expect(pending.first.changeType, 'delete');
+  });
 }
