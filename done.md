@@ -6,6 +6,28 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Render HTML email bodies
+
+`lib/ui/screens/email_detail_screen.dart` now renders the message's
+`htmlBody` with the `flutter_html` widget instead of stripping tags via
+`htmlToPlain`. Plain-text-only messages still render through
+`SelectableText` (no HTML widget instantiated when `htmlBody` is empty).
+
+Added `flutter_html: ^3.0.0` to `pubspec.yaml`.
+
+Remote (`http(s)`) images are blocked by default — defeats tracking
+pixels. A small "Load remote images" button appears at the top of an
+HTML body and flips a per-screen flag to re-render with images. Inline
+`cid:` and `data:` images fall through to the default handler. Blocking
+is implemented via a small `HtmlExtension` subclass
+(`_BlockRemoteImagesExtension`) that matches `<img>` whose `src` starts
+with `http://` or `https://` and renders `SizedBox.shrink()`.
+
+`htmlToPlain` is kept — it's still used by `_quotedBody` for reply /
+forward quoting where plain text is correct.
+
+No DB schema, no codegen, no migrations.
+
 ## SMTP TLS enabled by default for new accounts
 
 User report: when creating a new Account, the SMTP SSL/TLS toggle is off by

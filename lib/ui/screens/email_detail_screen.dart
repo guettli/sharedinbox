@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -24,6 +25,7 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   late final Future<(Email?, EmailBody)> _dataFuture;
   bool _isFlagged = false;
+  bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
 
   @override
@@ -147,6 +149,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Widget _buildBody(BuildContext ctx, Email? header, EmailBody body) {
+    final hasHtml = (body.htmlBody ?? '').trim().isNotEmpty;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -154,10 +157,30 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           _buildHeader(ctx, header),
           const Divider(),
         ],
-        SelectableText(
-          body.textBody ?? htmlToPlain(body.htmlBody ?? ''),
-          style: Theme.of(ctx).textTheme.bodyMedium,
-        ),
+        if (hasHtml) ...[
+          if (!_loadRemoteImages)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.image_outlined, size: 18),
+                  label: const Text('Load remote images'),
+                  onPressed: () => setState(() => _loadRemoteImages = true),
+                ),
+              ),
+            ),
+          Html(
+            data: body.htmlBody!,
+            extensions: [
+              if (!_loadRemoteImages) _BlockRemoteImagesExtension(),
+            ],
+          ),
+        ] else
+          SelectableText(
+            body.textBody ?? '',
+            style: Theme.of(ctx).textTheme.bodyMedium,
+          ),
         if (body.attachments.isNotEmpty) ...[
           const Divider(),
           Padding(
@@ -321,4 +344,24 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
     if (context.mounted) context.pop();
   }
+}
+
+/// Replaces `<img>` tags whose src is an absolute http(s) URL with an empty
+/// widget. Defeats tracking pixels and remote-image loading until the user
+/// explicitly opts in. Inline `cid:` and `data:` images fall through and are
+/// rendered by the default handler.
+class _BlockRemoteImagesExtension extends HtmlExtension {
+  @override
+  Set<String> get supportedTags => {'img'};
+
+  @override
+  bool matches(ExtensionContext context) {
+    if (context.elementName != 'img') return false;
+    final src = context.attributes['src'] ?? '';
+    return src.startsWith('http://') || src.startsWith('https://');
+  }
+
+  @override
+  InlineSpan build(ExtensionContext context) =>
+      const WidgetSpan(child: SizedBox.shrink());
 }
