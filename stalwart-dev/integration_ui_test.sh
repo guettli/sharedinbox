@@ -41,6 +41,20 @@ command -v xvfb-run >/dev/null || {
     exit 1
 }
 
+# Reap orphan Xvfb processes from previous sessions that were killed mid-flight.
+# Without this, xvfb-run's wrapper may pick a fresh display via --auto-servernum
+# but the leftover Xvfb's stale /tmp/.X11-unix/X<N> socket and lock file confuse
+# its cleanup, producing "kill: No such process" on exit and a non-zero status
+# even when the test itself passed.
+for _xvfb_pid in $(pgrep -u "$USER" -x Xvfb 2>/dev/null); do
+    _xvfb_display=$(tr '\0' ' ' < "/proc/${_xvfb_pid}/cmdline" 2>/dev/null \
+        | grep -oE ':[0-9]+' | head -1)
+    kill "$_xvfb_pid" 2>/dev/null || true
+    [ -n "$_xvfb_display" ] && {
+        rm -f "/tmp/.X11-unix/X${_xvfb_display#:}" "/tmp/.X${_xvfb_display#:}-lock" 2>/dev/null || true
+    }
+done
+
 ts "script start"
 
 # Pre-seed spam-filter version so Stalwart does not fetch it on first boot.
