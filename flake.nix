@@ -10,6 +10,24 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+
+        # All Linux desktop runtime libraries needed by flutter build linux and
+        # the UI integration tests (xvfb-run).  Kept as a list so we can reuse
+        # it for both buildInputs and LD_LIBRARY_PATH / PKG_CONFIG_PATH.
+        linuxDesktopLibs = with pkgs; [
+          gtk3
+          libsecret
+          fontconfig
+          libepoxy
+          mesa
+          libGL        # libglvnd — vendor-neutral GL/EGL/GLX dispatch layer
+          at-spi2-core
+          glib
+          pango
+          cairo
+          gdk-pixbuf
+          harfbuzz
+        ];
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -21,6 +39,13 @@
 
             # Flutter version manager — needed for host builds (task build-linux, task run)
             fvm
+
+            # Linux desktop build + runtime dependencies (flutter build linux / task run)
+          ] ++ linuxDesktopLibs ++ (with pkgs; [
+            pkg-config
+            clang
+            cmake
+            ninja
 
             # Local IMAP/SMTP dev server for integration tests
             stalwart-mail
@@ -37,11 +62,31 @@
             jq
             sqlite
             python3  # used by stalwart-dev/start to pick random ports
-          ];
+          ]);
 
           shellHook = ''
             # Disable Flutter telemetry inside dev shell
             export FLUTTER_SUPPRESS_ANALYTICS=true
+
+            # Expose dev headers to cmake's FindPkgConfig.
+            # The nix pkg-config wrapper works in bash but cmake invokes pkg-config
+            # as a subprocess and needs PKG_CONFIG_PATH set explicitly.
+            export PKG_CONFIG_PATH="${pkgs.gtk3.dev}/lib/pkgconfig:${pkgs.glib.dev}/lib/pkgconfig:${pkgs.pango.dev}/lib/pkgconfig:${pkgs.cairo.dev}/lib/pkgconfig:${pkgs.gdk-pixbuf.dev}/lib/pkgconfig:${pkgs.at-spi2-core.dev}/lib/pkgconfig:${pkgs.harfbuzz.dev}/lib/pkgconfig:${pkgs.libsecret}/lib/pkgconfig:${pkgs.fontconfig.dev}/lib/pkgconfig:${pkgs.libepoxy}/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+            # Nix ld uses --no-copy-dt-needed-entries (strict mode): transitive shared-lib
+            # deps are not followed automatically, so link them explicitly.
+            export LDFLAGS="-L${pkgs.fontconfig.lib}/lib -lfontconfig $LDFLAGS"
+
+            # Make nix-built runtime libs visible to the dynamic linker so the
+            # Flutter Linux bundle and integration-ui tests can run.
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath linuxDesktopLibs}:$LD_LIBRARY_PATH"
+
+            # Wire the libglvnd dispatch to the nix mesa vendor ICDs so GTK/Flutter
+            # can create an OpenGL (EGL + GLX) context under Xvfb without a real GPU.
+            export __EGL_VENDOR_LIBRARY_DIRS="${pkgs.mesa}/share/glvnd/egl_vendor.d"
+            export __GLX_VENDOR_LIBRARY_DIRS="${pkgs.mesa}/lib"
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export MESA_LOADER_DRIVER_OVERRIDE=softpipe
 
             echo "SharedInbox Flutter dev environment ready."
             echo "  Analyze        : task analyze"

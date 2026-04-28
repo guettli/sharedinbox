@@ -35,7 +35,7 @@ tasks:
     preconditions:
       - sh: command -v clang >/dev/null 2>&1
         msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
-      - sh: /usr/bin/pkg-config --exists gtk+-3.0 2>/dev/null
+      - sh: pkg-config --exists gtk+-3.0 2>/dev/null
         msg: "Linux desktop deps missing. Run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"
 
   install-hooks:

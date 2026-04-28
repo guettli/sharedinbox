@@ -54,3 +54,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+dependency_overrides:
+  # path_provider_android 2.3+ uses package:jni which crashes on startup
+  # (SIGSEGV in libdartjni.so FindClassUnchecked — JNI env not ready when
+  # the Dart VM first calls into it). Pin to 2.2.x which uses Pigeon instead.
+  path_provider_android: ">=2.2.0 <2.3.0"

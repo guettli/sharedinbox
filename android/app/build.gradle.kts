@@ -47,10 +47,4 @@ flutter {
     source = "../.."
 }
 
-dependencies {
-    // integration_test is a dev dependency; the Flutter plugin loader adds it as
-    // debugImplementation only, but GeneratedPluginRegistrant.java (in src/main)
-    // references its class in all variants. Make it available for release compilation
-    // without bundling it in the APK.
-    releaseCompileOnly(project(":integration_test"))
-}
+dependencies {}

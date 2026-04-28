@@ -94,6 +94,9 @@ ts "flutter test start"
 # xvfb-run provides a virtual framebuffer so the Flutter Linux runner has a
 # display without requiring a real desktop session.  No D-Bus or keyring daemon
 # is needed because the integration tests inject an in-memory SecureStorage.
-xvfb-run --auto-servernum fvm flutter test integration_test/ -d linux
+# +iglx enables indirect GLX on Xvfb so Flutter/GTK3 can create an OpenGL context
+# using mesa's software renderer (LIBGL_ALWAYS_SOFTWARE=1 is set in flake.nix).
+xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
+    fvm flutter test integration_test/ -d linux
 
 ts "flutter test done"

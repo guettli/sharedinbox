@@ -220,6 +220,10 @@ void main() {
 
       // ── Navigate to mailboxes ──────────────────────────────────────────────
       _log('navigate to mailboxes');
+      // On the slow Android emulator (software rendering), aliceTile can be
+      // briefly absent right after pumpUntil's trailing 300ms settle while the
+      // route-pop animation finalises. Re-confirm it's present before tapping.
+      await pumpUntil(tester, aliceTile, timeout: const Duration(seconds: 5));
       await tester.tap(aliceTile);
       await pumpUntil(tester, find.text('INBOX'));
       _log('mailboxes settled');

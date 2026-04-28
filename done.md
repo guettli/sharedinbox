@@ -6,6 +6,41 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## task deploy-android works end-to-end
+
+The original "Emulator did not become ready within 120 s" was already resolved in
+commit `d222638` by running `adb start-server` before booting the AVD; without the
+adb daemon running first, the emulator can never register as a device.
+
+Running `task deploy-android` after that surfaced an Android-specific integration-test
+failure: `aliceTile` had 0 widgets at `tester.tap()` time even though the immediately
+preceding `pumpUntil(aliceTile)` had just found it. On the slow software-rendered
+emulator the route-pop animation finalises during `pumpUntil`'s trailing 300 ms settle
+and the tile is briefly absent right after. Fixed in
+`integration_test/app_e2e_test.dart` by re-confirming `aliceTile` with a second
+`pumpUntil` (5 s timeout) before the tap.
+
+Bundled with a coherent set of pre-existing infrastructure changes that make the full
+pipeline (Linux + Android UI tests, MobSF scan, APK upload) work in `nix develop`:
+
+- `flake.nix`: adds Linux desktop runtime libs (gtk3, mesa, libGL, libsecret, …) plus
+  `PKG_CONFIG_PATH`, `LD_LIBRARY_PATH`, `LIBGL_ALWAYS_SOFTWARE=1`, and the libglvnd
+  vendor-dir env vars so `flutter build linux` and `xvfb-run` work without a real GPU.
+- `pubspec.yaml`: pins `path_provider_android` to `>=2.2.0 <2.3.0` to dodge the SIGSEGV
+  in `libdartjni.so` (FindClassUnchecked) on Android startup with 2.3+.
+- `lib/main.dart` + `lib/data/db/database.dart`: resolves the DB path during `main()`
+  after `WidgetsFlutterBinding.ensureInitialized()` so the path_provider plugin channel
+  is registered before the first DB access.
+- `stalwart-dev/integration_ui_test.sh`: passes `-screen 0 1280x720x24 +iglx` to Xvfb
+  so GTK3/Flutter can create a GLX OpenGL context under the virtual framebuffer.
+- `.envrc`: adds `$HOME/Android/Sdk/platform-tools` to PATH so `adb` resolves outside
+  `nix develop`.
+- `Taskfile.yml`: drops the `/usr/bin/pkg-config` hardcode in favour of PATH so the
+  nix-provided wrapper is found.
+- `.pre-commit-config.yaml` + `scripts/pre_commit_check.sh`: consolidates `dart format`
+  and `task check-fast` into a single script invoked by one hook (one `nix develop`
+  startup instead of two).
+
 ## Replace custom search TextField with Flutter SearchBar
 
 Replaced the hand-rolled `TextField`-in-`AppBar` search UI with Flutter's built-in `SearchBar`

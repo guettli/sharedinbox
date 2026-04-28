@@ -251,10 +251,25 @@ class AppDatabase extends _$AppDatabase {
       );
 }
 
+// Resolved once in main() via initDatabasePath() before runApp().
+String? _dbPath;
+
+/// Call after WidgetsFlutterBinding.ensureInitialized() so that the
+/// path_provider plugin channel is registered before the first DB access.
+Future<void> initDatabasePath() async {
+  final dir = await getApplicationSupportDirectory();
+  _dbPath = p.join(dir.path, 'sharedinbox.db');
+}
+
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final dir = await getApplicationSupportDirectory();
-    final file = File(p.join(dir.path, 'sharedinbox.db'));
+    final file = File(
+      _dbPath ??
+          p.join(
+            (await getApplicationSupportDirectory()).path,
+            'sharedinbox.db',
+          ),
+    );
     return NativeDatabase.createInBackground(
       file,
       setup: (db) {

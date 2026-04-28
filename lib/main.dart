@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 
-void main({List<Override> overrides = const []}) {
+void main({List<Override> overrides = const []}) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initDatabasePath();
   runApp(ProviderScope(overrides: overrides, child: const SharedInboxApp()));
 }
 
