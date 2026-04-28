@@ -135,8 +135,8 @@ void main() {
       expect(imap.imapPort, 993);
       expect(imap.imapSsl, isTrue);
       expect(imap.smtpHost, 'mail.example.com');
-      expect(imap.smtpPort, 587);
-      expect(imap.smtpSsl, isFalse);
+      expect(imap.smtpPort, 465);
+      expect(imap.smtpSsl, isTrue);
     });
 
     test('MX fallback picks lowest priority record', () async {

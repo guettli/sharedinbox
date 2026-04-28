@@ -145,8 +145,8 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
         imapPort: 993,
         imapSsl: true,
         smtpHost: host,
-        smtpPort: 587,
-        smtpSsl: false,
+        smtpPort: 465,
+        smtpSsl: true,
       );
     } catch (_) {
       return null;

@@ -36,8 +36,8 @@ class Account {
     this.imapPort = 993,
     this.imapSsl = true,
     this.smtpHost = '',
-    this.smtpPort = 587,
-    this.smtpSsl = false,
+    this.smtpPort = 465,
+    this.smtpSsl = true,
     this.jmapUrl,
     this.verbose = false,
   });

@@ -30,9 +30,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController(text: '993');
   final _smtpHostCtrl = TextEditingController();
-  final _smtpPortCtrl = TextEditingController(text: '587');
+  final _smtpPortCtrl = TextEditingController(text: '465');
   var _imapSsl = true;
-  var _smtpSsl = false;
+  var _smtpSsl = true;
 
   // -- "Try connection" state ------------------------------------------------
   bool _tryTesting = false;
@@ -317,8 +317,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               _imapPortCtrl.text = '993';
               _imapSsl = true;
               _smtpHostCtrl.clear();
-              _smtpPortCtrl.text = '587';
-              _smtpSsl = false;
+              _smtpPortCtrl.text = '465';
+              _smtpSsl = true;
               _step = _Step.imapForm;
             }),
             child: const Text('IMAP / SMTP'),

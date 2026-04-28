@@ -6,6 +6,34 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## SMTP TLS enabled by default for new accounts
+
+User report: when creating a new Account, the SMTP SSL/TLS toggle is off by
+default. The toggle should default to on so the user perception matches
+"secure by default".
+
+Changed defaults from port 587 + `smtpSsl=false` (STARTTLS on submission) to
+port 465 + `smtpSsl=true` (implicit TLS on submission-over-TLS) in:
+
+- `lib/core/models/account.dart` (constructor defaults)
+- `lib/ui/screens/add_account_screen.dart` (initial state and reset path
+  when user picks "IMAP / SMTP" from the choose-type fallback)
+- `lib/ui/screens/edit_account_screen.dart` (initial state before
+  loading)
+- `lib/core/services/account_discovery_service.dart` (MX-record
+  fallback when autoconfig returns nothing)
+
+Autoconfig XML parsing is unchanged: when a server's autoconfig advertises
+`STARTTLS`, the discovery still returns `smtpSsl=false` so the client uses
+STARTTLS on whichever port was advertised. Only the *fallback / blank-form*
+defaults flipped.
+
+Tests updated to match the new defaults: `test/unit/account_model_test.dart`
+and the MX-fallback case in
+`test/unit/account_discovery_service_test.dart`. Widget tests that pass an
+explicit `ImapSmtpDiscovery(smtpPort: 587, smtpSsl: false)` to simulate
+STARTTLS discovery are intentionally untouched.
+
 ## IMAP delete: locally-deleted message no longer reappears after sync
 
 User report: deleting an IMAP message removes it from the list, but tapping

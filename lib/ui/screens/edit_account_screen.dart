@@ -31,7 +31,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _imapPortCtrl = TextEditingController();
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
-  var _smtpSsl = false;
+  var _smtpSsl = true;
   var _verbose = false;
   final _jmapUrlCtrl = TextEditingController();
 

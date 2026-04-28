@@ -21,8 +21,8 @@ void main() {
       expect(account.imapPort, 993);
       expect(account.imapSsl, isTrue);
       expect(account.smtpHost, 'smtp.example.com');
-      expect(account.smtpPort, 587);
-      expect(account.smtpSsl, isFalse);
+      expect(account.smtpPort, 465);
+      expect(account.smtpSsl, isTrue);
     });
 
     test('const constructor produces equal instances', () {
