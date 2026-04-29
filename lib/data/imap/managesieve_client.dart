@@ -5,15 +5,15 @@ import 'dart:typed_data';
 
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
+import 'package:sharedinbox/data/imap/tls_error.dart';
 
 /// Minimal ManageSieve (RFC 5804) client used by [SieveRepository] to
 /// list / fetch / upload / activate / delete server-side Sieve scripts on
 /// IMAP-style mail servers (e.g. Stalwart, Dovecot, Cyrus).
 ///
 /// Only the small subset needed by the app is implemented:
-/// AUTHENTICATE PLAIN, LISTSCRIPTS, GETSCRIPT, PUTSCRIPT, SETACTIVE,
-/// DELETESCRIPT, LOGOUT. STARTTLS is not implemented — connect with
-/// implicit TLS instead (the default port 4190 layout used by Stalwart).
+/// STARTTLS, AUTHENTICATE PLAIN, LISTSCRIPTS, GETSCRIPT, PUTSCRIPT,
+/// SETACTIVE, DELETESCRIPT, LOGOUT.
 class ManageSieveClient {
   ManageSieveClient._(this._socket, this._source);
 
@@ -21,7 +21,11 @@ class ManageSieveClient {
   final _ByteSource _source;
   bool _closed = false;
 
-  /// Connects to [host]:[port] and reads the capability greeting.
+  /// Connects to [host]:[port] in plaintext, reads the capability greeting,
+  /// and — when [useTls] is true — upgrades the connection with STARTTLS per
+  /// RFC 5804 §1.7 before returning. Implicit-TLS ManageSieve is non-standard
+  /// and not supported here; if [useTls] is true the server must advertise
+  /// the `STARTTLS` capability.
   static Future<ManageSieveClient> connect({
     required String host,
     required int port,
@@ -29,20 +33,85 @@ class ManageSieveClient {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     // ignore: close_sinks  // Stored in client and closed in logout().
-    final Socket socket = useTls
-        ? await SecureSocket.connect(host, port, timeout: timeout)
-        : await Socket.connect(host, port, timeout: timeout);
-    final source = _ByteSource();
-    socket.listen(
+    Socket socket = await Socket.connect(host, port, timeout: timeout);
+    var source = _ByteSource();
+    var sub = _attach(socket, source);
+    try {
+      final greeting = await _readResponseFromSource(source);
+      if (greeting.status != _Status.ok) {
+        throw ManageSieveException(
+          'Capability greeting failed: ${greeting.message}',
+        );
+      }
+      if (!useTls) {
+        return ManageSieveClient._(socket, source);
+      }
+      if (!_advertisesStartTls(greeting.dataLines)) {
+        throw const ManageSieveException(
+          'Server does not advertise STARTTLS — disable SSL for ManageSieve '
+          'in account settings, or use a server that supports STARTTLS.',
+        );
+      }
+      await _writeLineTo(socket, 'STARTTLS');
+      final ok = await _readResponseFromSource(source);
+      if (ok.status != _Status.ok) {
+        throw ManageSieveException('STARTTLS rejected: ${ok.message}');
+      }
+      // Detach plaintext listener before handing the socket to TLS.
+      await sub.cancel();
+      try {
+        socket = await SecureSocket.secure(socket, host: host);
+      } catch (e, st) {
+        rethrowAsTlsHint(e, st, host, port);
+      }
+      source = _ByteSource();
+      sub = _attach(socket, source);
+      // RFC 5804 §1.7: server re-sends capability listing on the secured
+      // connection. Read and discard it so the response stream stays aligned.
+      final reCap = await _readResponseFromSource(source);
+      if (reCap.status != _Status.ok) {
+        throw ManageSieveException(
+          'Post-STARTTLS capability failed: ${reCap.message}',
+        );
+      }
+      return ManageSieveClient._(socket, source);
+    } catch (_) {
+      await sub.cancel();
+      try {
+        await socket.close();
+      } catch (_) {/* best-effort */}
+      rethrow;
+    }
+  }
+
+  static StreamSubscription<List<int>> _attach(
+    Socket socket,
+    _ByteSource source,
+  ) {
+    return socket.listen(
       source._add,
       onDone: () => source._close(),
       onError: (Object e, StackTrace _) => source._close(e),
       cancelOnError: true,
     );
-    final client = ManageSieveClient._(socket, source);
-    // Greeting / capability response.
-    await client._readResponse();
-    return client;
+  }
+
+  static bool _advertisesStartTls(List<String> capLines) {
+    for (final line in capLines) {
+      // Capability tokens are quoted-strings, e.g. `"STARTTLS"`. Match the
+      // first token on each line, case-insensitively.
+      final m = RegExp(r'^\s*"?([A-Za-z0-9-]+)"?').firstMatch(line);
+      if (m != null && m.group(1)!.toUpperCase() == 'STARTTLS') return true;
+    }
+    return false;
+  }
+
+  static Future<void> _writeLineTo(Socket socket, String line) async {
+    final log = Zone.current[verboseLogKey] as StringBuffer?;
+    if (log != null) log.writeln('SIEVE → $line');
+    socket.add(utf8.encode(line));
+    socket.add(_crlf);
+    await socket.flush();
   }
 
   /// Authenticates with SASL PLAIN. Throws [ManageSieveException] on failure.
@@ -157,20 +226,22 @@ class ManageSieveClient {
     }
   }
 
-  Future<_Response> _readResponse() async {
+  Future<_Response> _readResponse() => _readResponseFromSource(_source);
+
+  static Future<_Response> _readResponseFromSource(_ByteSource source) async {
     final dataLines = <String>[];
     final log = Zone.current[verboseLogKey] as StringBuffer?;
     while (true) {
-      final lineBytes = await _source.takeLine();
+      final lineBytes = await source.takeLine();
       var line = utf8.decode(lineBytes);
       // Detect a trailing literal: line ends with `{NNN}` or `{NNN+}`.
       final lit = RegExp(r'\{(\d+)\+?\}\s*$').firstMatch(line);
       if (lit != null) {
         final n = int.parse(lit.group(1)!);
-        final body = await _source.takeBytes(n);
+        final body = await source.takeBytes(n);
         // After the literal, the server emits the rest of the line — typically
         // empty plus CRLF. Consume it so the next iteration is line-aligned.
-        await _source.takeLine();
+        await source.takeLine();
         line = utf8.decode(body);
         if (log != null) {
           log.writeln('SIEVE ← <literal $n bytes>');

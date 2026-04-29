@@ -16,3 +16,11 @@ class FakeImapClient extends imap.ImapClient {
   @override
   Future<dynamic> logout() async {}
 }
+
+/// Minimal fake SMTP client; only `quit` is exercised by ConnectionTestService.
+class FakeSmtpClient extends imap.SmtpClient {
+  FakeSmtpClient() : super('fake.host');
+
+  @override
+  Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
+}

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:enough_mail/enough_mail.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/imap/tls_error.dart';
 
 typedef ImapConnectFn = Future<ImapClient> Function(
   Account account,
@@ -30,11 +31,15 @@ Future<ImapClient> connectImap(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseBuffer != null,
   );
-  await client.connectToServer(
-    account.imapHost,
-    account.imapPort,
-    isSecure: account.imapSsl,
-  );
+  try {
+    await client.connectToServer(
+      account.imapHost,
+      account.imapPort,
+      isSecure: account.imapSsl,
+    );
+  } catch (e, st) {
+    rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
+  }
   await client.login(username, password);
   return client;
 }
@@ -57,15 +62,23 @@ Future<SmtpClient> connectSmtp(
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
   final client = SmtpClient(clientDomain);
-  await client.connectToServer(
-    account.smtpHost,
-    account.smtpPort,
-    isSecure: account.smtpSsl,
-  );
+  try {
+    await client.connectToServer(
+      account.smtpHost,
+      account.smtpPort,
+      isSecure: account.smtpSsl,
+    );
+  } catch (e, st) {
+    rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
+  }
   await client.ehlo();
   if (!account.smtpSsl) {
     // STARTTLS required on submission port (587). No plaintext fallback.
-    await client.startTls();
+    try {
+      await client.startTls();
+    } catch (e, st) {
+      rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
+    }
   }
   await client.authenticate(username, password);
   return client;

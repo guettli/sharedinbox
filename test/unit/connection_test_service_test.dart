@@ -46,6 +46,7 @@ ConnectionTestServiceImpl _makeService({
       if (imapError != null) throw imapError;
       return fakeImap ?? FakeImapClient();
     },
+    smtpConnect: (account, username, password) async => FakeSmtpClient(),
   );
 }
 
@@ -83,6 +84,7 @@ void main() {
           }
           return FakeImapClient();
         },
+        smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
       final result = await svc.testConnection(_imapAccount, 'pw');
       expect(result, 'alice');
@@ -93,10 +95,68 @@ void main() {
       final svc = ConnectionTestServiceImpl(
         MockClient((_) async => http.Response('', 200)),
         imapConnect: (_, __, ___) async => throw Exception('auth failed'),
+        smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
       expect(
         () => svc.testConnection(_imapAccount, 'pw'),
         throwsException,
+      );
+    });
+
+    test('reports SMTP failure after IMAP success', () async {
+      final svc = ConnectionTestServiceImpl(
+        MockClient((_) async => http.Response('', 200)),
+        imapConnect: (_, __, ___) async => FakeImapClient(),
+        smtpConnect: (_, __, ___) async => throw Exception('smtp boom'),
+      );
+      expect(
+        () => svc.testConnection(_imapAccount, 'pw'),
+        throwsA(predicate((e) => e.toString().contains('SMTP: '))),
+      );
+    });
+
+    test('skips ManageSieve when manageSieveHost is empty', () async {
+      var sieveCalled = false;
+      final svc = ConnectionTestServiceImpl(
+        MockClient((_) async => http.Response('', 200)),
+        imapConnect: (_, __, ___) async => FakeImapClient(),
+        smtpConnect: (_, __, ___) async => FakeSmtpClient(),
+        manageSieveConnect: ({
+          required String host,
+          required int port,
+          required bool useTls,
+        }) async {
+          sieveCalled = true;
+          throw Exception('should not be called');
+        },
+      );
+      await svc.testConnection(_imapAccount, 'pw');
+      expect(sieveCalled, false);
+    });
+
+    test('reports ManageSieve failure when host is set', () async {
+      const accountWithSieve = Account(
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+        manageSieveHost: 'sieve.example.com',
+      );
+      final svc = ConnectionTestServiceImpl(
+        MockClient((_) async => http.Response('', 200)),
+        imapConnect: (_, __, ___) async => FakeImapClient(),
+        smtpConnect: (_, __, ___) async => FakeSmtpClient(),
+        manageSieveConnect: ({
+          required String host,
+          required int port,
+          required bool useTls,
+        }) async =>
+            throw Exception('sieve boom'),
+      );
+      expect(
+        () => svc.testConnection(accountWithSieve, 'pw'),
+        throwsA(predicate((e) => e.toString().contains('ManageSieve: '))),
       );
     });
   });

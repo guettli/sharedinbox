@@ -4,12 +4,32 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/managesieve_client.dart';
 
 typedef ImapConnectForTestFn = Future<imap.ImapClient> Function(
   Account,
   String username,
   String password,
 );
+
+typedef SmtpConnectForTestFn = Future<imap.SmtpClient> Function(
+  Account,
+  String username,
+  String password,
+);
+
+typedef ManageSieveConnectForTestFn = Future<ManageSieveClient> Function({
+  required String host,
+  required int port,
+  required bool useTls,
+});
+
+Future<ManageSieveClient> _defaultManageSieveConnect({
+  required String host,
+  required int port,
+  required bool useTls,
+}) =>
+    ManageSieveClient.connect(host: host, port: port, useTls: useTls);
 
 abstract class ConnectionTestService {
   /// Verifies credentials and returns the effective username used.
@@ -21,16 +41,31 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
   ConnectionTestServiceImpl(
     this._httpClient, {
     ImapConnectForTestFn imapConnect = connectImap,
-  }) : _imapConnect = imapConnect;
+    SmtpConnectForTestFn smtpConnect = connectSmtp,
+    ManageSieveConnectForTestFn manageSieveConnect = _defaultManageSieveConnect,
+  })  : _imapConnect = imapConnect,
+        _smtpConnect = smtpConnect,
+        _manageSieveConnect = manageSieveConnect;
 
   final http.Client _httpClient;
   final ImapConnectForTestFn _imapConnect;
+  final SmtpConnectForTestFn _smtpConnect;
+  final ManageSieveConnectForTestFn _manageSieveConnect;
 
   @override
   Future<String> testConnection(Account account, String password) async {
     switch (account.type) {
       case AccountType.imap:
-        return _testImap(account, password);
+        final username = await _testImap(account, password);
+        // Also verify SMTP — without this, send-mail would fail later with
+        // no warning at account-edit time.
+        await _testSmtp(account, username, password);
+        // ManageSieve is opt-in: only test it if the user has explicitly
+        // filled in the host (the section is collapsed by default).
+        if (account.manageSieveHost.trim().isNotEmpty) {
+          await _testManageSieve(account, username, password);
+        }
+        return username;
       case AccountType.jmap:
         return _testJmap(account, password);
     }
@@ -61,6 +96,53 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
       }
     }
     throw lastError!;
+  }
+
+  Future<void> _testSmtp(
+    Account account,
+    String username,
+    String password,
+  ) async {
+    final imap.SmtpClient client;
+    try {
+      client = await _smtpConnect(account, username, password);
+    } catch (e) {
+      throw Exception('SMTP: $e');
+    }
+    try {
+      await client.quit();
+    } catch (_) {/* best-effort */}
+  }
+
+  Future<void> _testManageSieve(
+    Account account,
+    String username,
+    String password,
+  ) async {
+    final host = account.manageSieveHost.trim().isNotEmpty
+        ? account.manageSieveHost.trim()
+        : account.imapHost;
+    final ManageSieveClient client;
+    try {
+      client = await _manageSieveConnect(
+        host: host,
+        port: account.manageSievePort,
+        useTls: account.manageSieveSsl,
+      );
+    } catch (e) {
+      throw Exception('ManageSieve: $e');
+    }
+    try {
+      await client.authenticatePlain(username, password);
+    } catch (e) {
+      try {
+        await client.logout();
+      } catch (_) {/* best-effort */}
+      throw Exception('ManageSieve: $e');
+    }
+    try {
+      await client.logout();
+    } catch (_) {/* best-effort */}
   }
 
   Future<String> _testJmap(Account account, String password) async {

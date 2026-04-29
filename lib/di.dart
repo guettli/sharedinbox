@@ -102,6 +102,7 @@ final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
   return ConnectionTestServiceImpl(
     ref.watch(httpClientProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    smtpConnect: ref.watch(smtpConnectProvider),
   );
 });
 

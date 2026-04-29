@@ -4,6 +4,16 @@ Are errors written to syncLog ?
 
 ---
 
+Error and Crash reporting to central server.
+
+But this needs a central service at sharedinbox.de
+
+Data will be sent only after confirmation.
+
+The user must decide: send crash report, or accept select "I prefer not to send crash report".
+
+---
+
 Taskfile: Debug logs with start+end timestamp for debugging. Each stdout/stderr in one file. How to
 get this?
 

@@ -16,4 +16,9 @@ Git repo should not contain unknown files.
 
 Then commit.
 
+Then push
+
 ## Tasks
+
+Plain-text connections only via localhost.
+Dont show in ui, except host is localhost.

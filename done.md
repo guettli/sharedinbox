@@ -6,6 +6,45 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## ManageSieve uses STARTTLS; clearer TLS-mismatch errors; broader connection check
+
+The "Email filters" screen failed for IMAP accounts with
+`HandshakeException: WRONG_VERSION_NUMBER(tls_record.cc:127)` because the
+ManageSieve client was opening an implicit-TLS socket to port 4190, while
+the server (Stalwart and other RFC 5804 implementations) listens plaintext
+on 4190 and expects a `STARTTLS` upgrade. The plaintext capability greeting
+landed in the TLS parser, which (correctly) rejected it.
+
+`ManageSieveClient.connect` (`lib/data/imap/managesieve_client.dart`) now
+follows RFC 5804 §1.7: it opens a plaintext socket, reads the capability
+greeting, and — when `useTls` is true — sends `STARTTLS`, waits for `OK`,
+detaches the plaintext listener, hands the raw socket to
+`SecureSocket.secure()`, and re-reads capabilities on the secured stream.
+The previous "implicit TLS, no STARTTLS" mode is gone; if the server does
+not advertise `STARTTLS`, the client throws a clear error pointing the
+user at the SSL toggle.
+
+`WRONG_VERSION_NUMBER` is also produced for SMTP (and IMAP) when the SSL
+toggle and the chosen port disagree — e.g. SSL=on with port 587 (which is
+STARTTLS-only). New helper `lib/data/imap/tls_error.dart` translates that
+specific BoringSSL error into a `TlsModeMismatchException` with the host,
+port, and a hint about which port matches which TLS mode (465/587, 993/143,
+4190). `connectImap`, `connectSmtp`, and the ManageSieve TLS upgrade now
+all funnel through `rethrowAsTlsHint` so the same readable message reaches
+the UI regardless of which protocol failed.
+
+`ConnectionTestService` (`lib/core/services/connection_test_service.dart`)
+previously only verified IMAP/JMAP, so SMTP and ManageSieve misconfig
+silently passed the "Try connection" button on the edit-account screen
+and only surfaced when the user later tried to send mail or open Email
+filters. After IMAP succeeds, the service now also verifies SMTP (always
+for IMAP accounts — sending mail requires it) and ManageSieve (only when
+`manageSieveHost` is explicitly set, since the section is collapsed and
+opt-in by default). Failures are prefixed with `SMTP:` or `ManageSieve:`
+so the user can tell which leg of the connection is broken. New tests in
+`test/unit/connection_test_service_test.dart` cover SMTP-failure
+surfacing, the opt-in skip path, and ManageSieve-failure surfacing.
+
 ## Sieve filter editing for IMAP accounts (ManageSieve)
 
 The "Email filters" entry was previously hidden for IMAP accounts because
