@@ -30,6 +30,9 @@ const _excluded = {
   // IMAP/SMTP factory — top-level functions that open real network connections;
   // no seam to inject a fake client without wrapping the enough_mail types.
   'lib/data/imap/imap_client_factory.dart',
+  // ManageSieve (RFC 5804) client — opens real TCP/TLS sockets; tested via
+  // the Sieve UI + integration scenarios rather than unit tests.
+  'lib/data/imap/managesieve_client.dart',
   // Pure adapter over FlutterSecureStorage (a platform plugin);
   // all three methods just delegate — no logic, and platform channels are
   // unavailable in unit tests.

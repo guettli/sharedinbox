@@ -26,6 +26,12 @@ class Accounts extends Table {
   TextColumn get username => text().withDefault(const Constant(''))();
   // Added in schema v13:
   BoolColumn get verbose => boolean().withDefault(const Constant(false))();
+  // Added in schema v15: ManageSieve (RFC 5804) settings for IMAP accounts.
+  TextColumn get manageSieveHost => text().withDefault(const Constant(''))();
+  IntColumn get manageSievePort =>
+      integer().withDefault(const Constant(4190))();
+  BoolColumn get manageSieveSsl =>
+      boolean().withDefault(const Constant(true))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -195,7 +201,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -246,6 +252,11 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(emails, emails.messageId);
             await m.addColumn(emails, emails.inReplyTo);
             await m.addColumn(emails, emails.references);
+          }
+          if (from < 15) {
+            await m.addColumn(accounts, accounts.manageSieveHost);
+            await m.addColumn(accounts, accounts.manageSievePort);
+            await m.addColumn(accounts, accounts.manageSieveSsl);
           }
         },
       );

@@ -6,6 +6,53 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Sieve filter editing for IMAP accounts (ManageSieve)
+
+The "Email filters" entry was previously hidden for IMAP accounts because
+`SieveRepository` only spoke JMAP. Added a minimal ManageSieve client
+(RFC 5804) so IMAP accounts can now list / fetch / upload / activate /
+delete server-side Sieve scripts.
+
+New: `lib/data/imap/managesieve_client.dart` — implements CONNECT
+(implicit TLS or plaintext), AUTHENTICATE PLAIN (SASL), LISTSCRIPTS,
+GETSCRIPT, PUTSCRIPT, SETACTIVE, DELETESCRIPT, LOGOUT. Handles
+RFC 5804 quoted-strings and `{N+}` non-synchronizing literals (used for
+both reading script bodies and uploading them in PUTSCRIPT). The base64
+SASL PLAIN payload is redacted in the verbose protocol log.
+
+`SieveRepository` (`lib/data/jmap/sieve_repository.dart`) is now a
+dispatcher: `account.type == imap` routes through `ManageSieveClient`
+(connecting per-call and `LOGOUT`-ing in `finally`); `account.type ==
+jmap` keeps the existing JMAP path unchanged. Public API is unchanged
+so the existing Sieve script list / edit screens work for both
+account types. For ManageSieve, where scripts are identified by name,
+`SieveScript.id` and `SieveScript.blobId` are both set to the script
+name. Renames are implemented as PUTSCRIPT(new) followed by
+DELETESCRIPT(old).
+
+Account model + DB: added `manageSieveHost`, `manageSievePort` (default
+4190), `manageSieveSsl` (default true) to `Account` and `Accounts`
+table. Schema bumped to v15 with a forward-only migration that
+`addColumn`s the three fields. Empty `manageSieveHost` falls back to
+`imapHost` so the typical setup (Stalwart / Dovecot on the same host)
+needs no extra configuration.
+
+UI: removed the `account.type == AccountType.jmap` guard from the
+"Email filters" entry in both `FolderDrawer` (the per-account drawer)
+and the popup menu in `AccountListScreen`, so IMAP accounts now see it
+too. The Add and Edit account screens grew a collapsed `ExpansionTile`
+labelled "ManageSieve (email filters)" containing host / port / SSL
+fields — collapsed by default so the form stays the same height for
+users who accept the defaults (which avoided pushing the Save button
+off the bottom of the Linux Xvfb 1280x720 viewport in the integration
+test).
+
+`scripts/check_coverage.dart` excludes `managesieve_client.dart` from
+the unit-coverage gate (real-socket network code, like
+`imap_client_factory.dart`). Updated `add_account_screen_test` to
+expect 2 visible `SwitchListTile`s on the IMAP form (the third toggle
+lives inside the collapsed ExpansionTile).
+
 ## Render HTML email bodies
 
 `lib/ui/screens/email_detail_screen.dart` now renders the message's

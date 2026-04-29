@@ -32,6 +32,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = true;
+  final _sieveHostCtrl = TextEditingController();
+  final _sievePortCtrl = TextEditingController();
+  var _sieveSsl = true;
   var _verbose = false;
   final _jmapUrlCtrl = TextEditingController();
 
@@ -62,6 +65,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _smtpHostCtrl.text = account.smtpHost;
     _smtpPortCtrl.text = account.smtpPort.toString();
     _smtpSsl = account.smtpSsl;
+    _sieveHostCtrl.text = account.manageSieveHost;
+    _sievePortCtrl.text = account.manageSievePort.toString();
+    _sieveSsl = account.manageSieveSsl;
     _verbose = account.verbose;
     _jmapUrlCtrl.text = account.jmapUrl ?? '';
     setState(() => _loading = false);
@@ -77,6 +83,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       _imapPortCtrl,
       _smtpHostCtrl,
       _smtpPortCtrl,
+      _sieveHostCtrl,
+      _sievePortCtrl,
       _jmapUrlCtrl,
     ]) {
       c.dispose();
@@ -97,6 +105,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       smtpHost: _smtpHostCtrl.text.trim(),
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
       smtpSsl: _smtpSsl,
+      manageSieveHost: _sieveHostCtrl.text.trim(),
+      manageSievePort:
+          int.tryParse(_sievePortCtrl.text) ?? account.manageSievePort,
+      manageSieveSsl: _sieveSsl,
       jmapUrl:
           _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
       verbose: _verbose,
@@ -163,6 +175,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             smtpHost: updated.smtpHost,
             smtpPort: updated.smtpPort,
             smtpSsl: updated.smtpSsl,
+            manageSieveHost: updated.manageSieveHost,
+            manageSievePort: updated.manageSievePort,
+            manageSieveSsl: updated.manageSieveSsl,
             jmapUrl: updated.jmapUrl,
             verbose: updated.verbose,
           );
@@ -254,6 +269,31 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 title: const Text('SSL/TLS'),
                 value: _smtpSsl,
                 onChanged: (v) => setState(() => _smtpSsl = v),
+              ),
+              const Divider(height: 32),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: Text(
+                  'ManageSieve (email filters)',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                children: [
+                  _field(
+                    _sieveHostCtrl,
+                    'Host (leave blank to use IMAP host)',
+                    required: false,
+                  ),
+                  _field(
+                    _sievePortCtrl,
+                    'Port',
+                    keyboardType: TextInputType.number,
+                  ),
+                  SwitchListTile(
+                    title: const Text('SSL/TLS'),
+                    value: _sieveSsl,
+                    onChanged: (v) => setState(() => _sieveSsl = v),
+                  ),
+                ],
               ),
             ],
             const Divider(height: 32),

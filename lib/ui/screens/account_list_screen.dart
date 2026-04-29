@@ -90,11 +90,10 @@ class _AccountTile extends ConsumerWidget {
                 value: _AccountAction.edit,
                 child: Text('Edit'),
               ),
-              if (account.type == AccountType.jmap)
-                const PopupMenuItem(
-                  value: _AccountAction.emailFilters,
-                  child: Text('Email filters'),
-                ),
+              const PopupMenuItem(
+                value: _AccountAction.emailFilters,
+                child: Text('Email filters'),
+              ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: _AccountAction.delete,

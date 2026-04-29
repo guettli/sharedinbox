@@ -14,6 +14,12 @@ class Account {
   final int smtpPort;
   final bool smtpSsl;
 
+  /// ManageSieve host (RFC 5804). Empty falls back to [imapHost].
+  /// Only consulted when [type] == AccountType.imap.
+  final String manageSieveHost;
+  final int manageSievePort;
+  final bool manageSieveSsl;
+
   // Used when type == AccountType.jmap
   final String? jmapUrl;
 
@@ -38,6 +44,9 @@ class Account {
     this.smtpHost = '',
     this.smtpPort = 465,
     this.smtpSsl = true,
+    this.manageSieveHost = '',
+    this.manageSievePort = 4190,
+    this.manageSieveSsl = true,
     this.jmapUrl,
     this.verbose = false,
   });

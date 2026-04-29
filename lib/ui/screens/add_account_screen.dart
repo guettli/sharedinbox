@@ -31,8 +31,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _imapPortCtrl = TextEditingController(text: '993');
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController(text: '465');
+  final _sieveHostCtrl = TextEditingController();
+  final _sievePortCtrl = TextEditingController(text: '4190');
   var _imapSsl = true;
   var _smtpSsl = true;
+  var _sieveSsl = true;
 
   // -- "Try connection" state ------------------------------------------------
   bool _tryTesting = false;
@@ -56,6 +59,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       _imapPortCtrl,
       _smtpHostCtrl,
       _smtpPortCtrl,
+      _sieveHostCtrl,
+      _sievePortCtrl,
     ]) {
       c.dispose();
     }
@@ -121,6 +126,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         smtpHost: _smtpHostCtrl.text.trim(),
         smtpPort: int.parse(_smtpPortCtrl.text),
         smtpSsl: _smtpSsl,
+        manageSieveHost: _sieveHostCtrl.text.trim(),
+        manageSievePort: int.tryParse(_sievePortCtrl.text) ?? 4190,
+        manageSieveSsl: _sieveSsl,
       );
 
   Future<void> _tryConnection(
@@ -208,6 +216,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         smtpHost: account.smtpHost,
         smtpPort: account.smtpPort,
         smtpSsl: account.smtpSsl,
+        manageSieveHost: account.manageSieveHost,
+        manageSievePort: account.manageSievePort,
+        manageSieveSsl: account.manageSieveSsl,
       );
       await ref
           .read(accountRepositoryProvider)
@@ -319,6 +330,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               _smtpHostCtrl.clear();
               _smtpPortCtrl.text = '465';
               _smtpSsl = true;
+              _sieveHostCtrl.clear();
+              _sievePortCtrl.text = '4190';
+              _sieveSsl = true;
               _step = _Step.imapForm;
             }),
             child: const Text('IMAP / SMTP'),
@@ -402,6 +416,31 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               title: const Text('SSL/TLS'),
               value: _smtpSsl,
               onChanged: (v) => setState(() => _smtpSsl = v),
+            ),
+            const Divider(height: 32),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: Text(
+                'ManageSieve (email filters)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              children: [
+                _field(
+                  _sieveHostCtrl,
+                  'Host (leave blank to use IMAP host)',
+                  required: false,
+                ),
+                _field(
+                  _sievePortCtrl,
+                  'Port',
+                  keyboardType: TextInputType.number,
+                ),
+                SwitchListTile(
+                  title: const Text('SSL/TLS'),
+                  value: _sieveSsl,
+                  onChanged: (v) => setState(() => _sieveSsl = v),
+                ),
+              ],
             ),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),

@@ -308,7 +308,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('IMAP'), findsOneWidget);
-      // Both IMAP and SMTP have SSL/TLS toggles.
+      // IMAP and SMTP each have an SSL/TLS toggle (the ManageSieve toggle is
+      // hidden inside a collapsed ExpansionTile).
       expect(find.byType(SwitchListTile), findsNWidgets(2));
     });
   });

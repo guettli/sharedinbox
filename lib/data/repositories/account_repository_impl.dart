@@ -42,6 +42,9 @@ class AccountRepositoryImpl implements AccountRepository {
             jmapUrl: Value(account.jmapUrl),
             username: Value(account.username),
             verbose: Value(account.verbose),
+            manageSieveHost: Value(account.manageSieveHost),
+            manageSievePort: Value(account.manageSievePort),
+            manageSieveSsl: Value(account.manageSieveSsl),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
@@ -64,6 +67,9 @@ class AccountRepositoryImpl implements AccountRepository {
         jmapUrl: Value(account.jmapUrl),
         username: Value(account.username),
         verbose: Value(account.verbose),
+        manageSieveHost: Value(account.manageSieveHost),
+        manageSievePort: Value(account.manageSievePort),
+        manageSieveSsl: Value(account.manageSieveSsl),
       ),
     );
     if (password != null) {
@@ -100,6 +106,9 @@ class AccountRepositoryImpl implements AccountRepository {
         smtpHost: row.smtpHost,
         smtpPort: row.smtpPort,
         smtpSsl: row.smtpSsl,
+        manageSieveHost: row.manageSieveHost,
+        manageSievePort: row.manageSievePort,
+        manageSieveSsl: row.manageSieveSsl,
         jmapUrl: row.jmapUrl,
         verbose: row.verbose,
       );

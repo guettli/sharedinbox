@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 
@@ -85,15 +84,14 @@ class FolderDrawer extends ConsumerWidget {
               context.go('/accounts');
             },
           ),
-          if (accountAsync.valueOrNull?.type == AccountType.jmap)
-            ListTile(
-              leading: const Icon(Icons.filter_list),
-              title: const Text('Email filters'),
-              onTap: () {
-                Navigator.pop(context);
-                unawaited(context.push('/accounts/$accountId/sieve'));
-              },
-            ),
+          ListTile(
+            leading: const Icon(Icons.filter_list),
+            title: const Text('Email filters'),
+            onTap: () {
+              Navigator.pop(context);
+              unawaited(context.push('/accounts/$accountId/sieve'));
+            },
+          ),
           const Divider(height: 1),
           Expanded(
             child: StreamBuilder(
