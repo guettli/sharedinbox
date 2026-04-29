@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -104,6 +105,11 @@ final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
     imapConnect: ref.watch(imapConnectProvider),
     smtpConnect: ref.watch(smtpConnectProvider),
   );
+});
+
+final manageSieveProbeServiceProvider =
+    Provider<ManageSieveProbeService>((ref) {
+  return ManageSieveProbeService(ref.watch(accountRepositoryProvider));
 });
 
 final accountByIdProvider =

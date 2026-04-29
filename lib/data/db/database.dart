@@ -32,6 +32,11 @@ class Accounts extends Table {
       integer().withDefault(const Constant(4190))();
   BoolColumn get manageSieveSsl =>
       boolean().withDefault(const Constant(true))();
+  // Added in schema v16: tri-state probe result.
+  // null  = not probed yet (treat as available; show UI)
+  // true  = probe succeeded; show ManageSieve UI
+  // false = probe failed; hide ManageSieve UI (server doesn't support it)
+  BoolColumn get manageSieveAvailable => boolean().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -201,7 +206,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -257,6 +262,9 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(accounts, accounts.manageSieveHost);
             await m.addColumn(accounts, accounts.manageSievePort);
             await m.addColumn(accounts, accounts.manageSieveSsl);
+          }
+          if (from < 16) {
+            await m.addColumn(accounts, accounts.manageSieveAvailable);
           }
         },
       );

@@ -20,6 +20,12 @@ class Account {
   final int manageSievePort;
   final bool manageSieveSsl;
 
+  /// Tri-state result of the post-save ManageSieve probe.
+  /// null  = not probed yet (treat as available; show UI),
+  /// true  = probe succeeded,
+  /// false = probe failed (hide ManageSieve UI for this account).
+  final bool? manageSieveAvailable;
+
   // Used when type == AccountType.jmap
   final String? jmapUrl;
 
@@ -47,6 +53,7 @@ class Account {
     this.manageSieveHost = '',
     this.manageSievePort = 4190,
     this.manageSieveSsl = true,
+    this.manageSieveAvailable,
     this.jmapUrl,
     this.verbose = false,
   });

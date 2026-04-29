@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
@@ -273,6 +274,11 @@ class FakeConnectionTestService implements ConnectionTestService {
   }
 }
 
+class _NoOpManageSieveProbeService implements ManageSieveProbeService {
+  @override
+  Future<void> probe(Account account) async {/* no-op in tests */}
+}
+
 // ---------------------------------------------------------------------------
 // App builder
 // ---------------------------------------------------------------------------
@@ -358,7 +364,14 @@ Widget buildApp({
   );
 
   return ProviderScope(
-    overrides: overrides,
+    // Always neutralise the ManageSieve probe so widget tests never open a
+    // real socket. Tests that need to assert on probe behaviour should supply
+    // their own override before this default in [overrides].
+    overrides: [
+      ...overrides,
+      manageSieveProbeServiceProvider
+          .overrideWith((ref) => _NoOpManageSieveProbeService()),
+    ],
     child: MaterialApp.router(
       routerConfig: testRouter,
       theme: ThemeData(

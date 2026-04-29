@@ -45,6 +45,7 @@ class AccountRepositoryImpl implements AccountRepository {
             manageSieveHost: Value(account.manageSieveHost),
             manageSievePort: Value(account.manageSievePort),
             manageSieveSsl: Value(account.manageSieveSsl),
+            manageSieveAvailable: Value(account.manageSieveAvailable),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
@@ -70,6 +71,7 @@ class AccountRepositoryImpl implements AccountRepository {
         manageSieveHost: Value(account.manageSieveHost),
         manageSievePort: Value(account.manageSievePort),
         manageSieveSsl: Value(account.manageSieveSsl),
+        manageSieveAvailable: Value(account.manageSieveAvailable),
       ),
     );
     if (password != null) {
@@ -109,6 +111,7 @@ class AccountRepositoryImpl implements AccountRepository {
         manageSieveHost: row.manageSieveHost,
         manageSievePort: row.manageSievePort,
         manageSieveSsl: row.manageSieveSsl,
+        manageSieveAvailable: row.manageSieveAvailable,
         jmapUrl: row.jmapUrl,
         verbose: row.verbose,
       );

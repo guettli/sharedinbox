@@ -94,21 +94,32 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
 
   Account _buildUpdated() {
     final account = _account!;
+    final imapHost = _imapHostCtrl.text.trim();
+    final sieveHost = _sieveHostCtrl.text.trim();
+    final sievePort =
+        int.tryParse(_sievePortCtrl.text) ?? account.manageSievePort;
+    // Reset the cached probe result when any field that affects the probe
+    // changed; the post-save probe will refill it.
+    final sieveSettingsChanged = imapHost != account.imapHost ||
+        sieveHost != account.manageSieveHost ||
+        sievePort != account.manageSievePort ||
+        _sieveSsl != account.manageSieveSsl;
     return Account(
       id: account.id,
       displayName: _displayNameCtrl.text.trim(),
       email: account.email,
       username: _usernameCtrl.text.trim(),
       type: account.type,
-      imapHost: _imapHostCtrl.text.trim(),
+      imapHost: imapHost,
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
       smtpHost: _smtpHostCtrl.text.trim(),
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
       smtpSsl: _smtpSsl,
-      manageSieveHost: _sieveHostCtrl.text.trim(),
-      manageSievePort:
-          int.tryParse(_sievePortCtrl.text) ?? account.manageSievePort,
+      manageSieveHost: sieveHost,
+      manageSievePort: sievePort,
       manageSieveSsl: _sieveSsl,
+      manageSieveAvailable:
+          sieveSettingsChanged ? null : account.manageSieveAvailable,
       jmapUrl:
           _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
       verbose: _verbose,
@@ -178,6 +189,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             manageSieveHost: updated.manageSieveHost,
             manageSievePort: updated.manageSievePort,
             manageSieveSsl: updated.manageSieveSsl,
+            manageSieveAvailable: updated.manageSieveAvailable,
             jmapUrl: updated.jmapUrl,
             verbose: updated.verbose,
           );
@@ -186,6 +198,13 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       await ref
           .read(accountRepositoryProvider)
           .updateAccount(updated, password: password);
+      // Re-probe when the cached availability was cleared above.
+      if (updated.type == AccountType.imap &&
+          updated.manageSieveAvailable == null) {
+        unawaited(
+          ref.read(manageSieveProbeServiceProvider).probe(updated),
+        );
+      }
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {

@@ -90,10 +90,11 @@ class _AccountTile extends ConsumerWidget {
                 value: _AccountAction.edit,
                 child: Text('Edit'),
               ),
-              const PopupMenuItem(
-                value: _AccountAction.emailFilters,
-                child: Text('Email filters'),
-              ),
+              if (_sieveSupported(account))
+                const PopupMenuItem(
+                  value: _AccountAction.emailFilters,
+                  child: Text('Email filters'),
+                ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: _AccountAction.delete,
@@ -145,3 +146,14 @@ class _AccountTile extends ConsumerWidget {
 }
 
 enum _AccountAction { syncLog, edit, emailFilters, delete }
+
+/// Whether to surface the "Email filters" (Sieve) entry for [account].
+///
+/// JMAP accounts always show it (Sieve over JMAP, no separate probe).
+/// IMAP accounts hide it only when a previous ManageSieve probe failed
+/// (manageSieveAvailable == false). Null means "not yet probed" — we
+/// optimistically show it and let the menu disappear once the probe lands.
+bool _sieveSupported(Account account) {
+  if (account.type == AccountType.jmap) return true;
+  return account.manageSieveAvailable != false;
+}
