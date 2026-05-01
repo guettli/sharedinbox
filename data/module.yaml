@@ -19,6 +19,8 @@ dependencies@android:
   - io.ktor:ktor-client-okhttp:3.4.2
   - app.cash.sqldelight:android-driver:2.3.2
   - androidx.security:security-crypto:1.1.0-alpha06
+  - io.github.kmpmail:kmp-imap:0.1.1
+  - io.github.kmpmail:kmp-smtp:0.1.1
 
 dependencies@iosArm64:
   - io.ktor:ktor-client-darwin:3.4.2

@@ -45,6 +45,21 @@ interface AccountRepository {
     ): Result<Account>
 
     /**
+     * Tests IMAP and SMTP connectivity with the given credentials without persisting anything.
+     * Returns [Result.success] if both connections succeed, [Result.failure] with the error otherwise.
+     */
+    suspend fun checkImapSmtpConnection(
+        username: String,
+        password: String,
+        imapHost: String,
+        imapPort: Int,
+        imapSecurity: String,
+        smtpHost: String,
+        smtpPort: Int,
+        smtpSecurity: String,
+    ): Result<Unit>
+
+    /**
      * Removes the account and all its data (mailboxes, emails, state tokens)
      * via ON DELETE CASCADE. Also clears stored credentials.
      */

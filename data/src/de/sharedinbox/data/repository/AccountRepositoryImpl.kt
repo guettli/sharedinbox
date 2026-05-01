@@ -5,6 +5,7 @@ import app.cash.sqldelight.coroutines.mapToList
 import de.sharedinbox.core.account.Account
 import de.sharedinbox.core.jmap.JmapCapability
 import de.sharedinbox.core.repository.AccountRepository
+import de.sharedinbox.data.imap.checkImapSmtpConnection
 import de.sharedinbox.core.repository.SessionRepository
 import de.sharedinbox.core.repository.TokenStore
 import de.sharedinbox.data.db.SharedInboxDatabase
@@ -122,6 +123,27 @@ class AccountRepositoryImpl(
                 addedAt = now,
             )
         }
+
+    override suspend fun checkImapSmtpConnection(
+        username: String,
+        password: String,
+        imapHost: String,
+        imapPort: Int,
+        imapSecurity: String,
+        smtpHost: String,
+        smtpPort: Int,
+        smtpSecurity: String,
+    ): Result<Unit> =
+        checkImapSmtpConnection(
+            username = username,
+            password = password,
+            imapHost = imapHost,
+            imapPort = imapPort,
+            imapSecurity = imapSecurity,
+            smtpHost = smtpHost,
+            smtpPort = smtpPort,
+            smtpSecurity = smtpSecurity,
+        )
 
     override suspend fun removeAccount(accountId: String) {
         db.accountQueries.deleteAccount(accountId)

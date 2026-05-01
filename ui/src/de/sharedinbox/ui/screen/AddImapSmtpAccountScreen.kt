@@ -22,6 +22,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -158,6 +159,24 @@ fun AddImapSmtpAccountScreen(
             vm.error?.let { err ->
                 Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
+            if (vm.connectionOk) {
+                Text(
+                    "Connection successful",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedButton(
+                onClick = { vm.checkConnection() },
+                enabled = vm.isValid,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (vm.isLoading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Try connection")
+                }
+            }
             Button(
                 onClick = { vm.addAccount(onSuccess = onSuccess) },
                 enabled = vm.isValid,
@@ -166,7 +185,7 @@ fun AddImapSmtpAccountScreen(
                 if (vm.isLoading) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("Add Account")
+                    Text("Save")
                 }
             }
         }
