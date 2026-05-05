@@ -71,6 +71,12 @@ class AccountSyncManager {
     }
     _active.clear();
   }
+
+  /// Wakes the idle/wait phase of the given account's sync loop so a new
+  /// sync cycle starts immediately. No-op if the account is unknown.
+  void syncNow(String accountId) {
+    _active[accountId]?.kick();
+  }
 }
 
 // ── Shared interface ──────────────────────────────────────────────────────────
@@ -78,6 +84,7 @@ class AccountSyncManager {
 abstract class _SyncLoop {
   void start();
   void stop();
+  void kick();
 }
 
 // ── IMAP ──────────────────────────────────────────────────────────────────────
@@ -118,6 +125,13 @@ class _AccountSync implements _SyncLoop {
     }
     _idleClient?.logout().ignore();
     _idleClient = null;
+  }
+
+  @override
+  void kick() {
+    if (_stopSignal != null && !_stopSignal!.isCompleted) {
+      _stopSignal!.complete();
+    }
   }
 
   Future<void> _loop() async {
@@ -290,6 +304,13 @@ class _JmapAccountSync implements _SyncLoop {
   @override
   void stop() {
     _running = false;
+    if (_stopSignal != null && !_stopSignal!.isCompleted) {
+      _stopSignal!.complete();
+    }
+  }
+
+  @override
+  void kick() {
     if (_stopSignal != null && !_stopSignal!.isCompleted) {
       _stopSignal!.complete();
     }

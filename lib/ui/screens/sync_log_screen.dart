@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -14,32 +16,83 @@ String _fmtBytes(int bytes) {
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
-class SyncLogScreen extends ConsumerWidget {
+class SyncLogScreen extends ConsumerStatefulWidget {
   const SyncLogScreen({super.key, required this.accountId});
 
   final String accountId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.watch(syncLogRepositoryProvider);
+  ConsumerState<SyncLogScreen> createState() => _SyncLogScreenState();
+}
+
+class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
+  List<SyncLogEntry> _entries = [];
+  bool _syncing = false;
+  int? _presynCount;
+  StreamSubscription<List<SyncLogEntry>>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = ref
+        .read(syncLogRepositoryProvider)
+        .observeSyncLogs(widget.accountId)
+        .listen((entries) {
+      setState(() {
+        if (_syncing &&
+            _presynCount != null &&
+            entries.length > _presynCount!) {
+          _syncing = false;
+          _presynCount = null;
+        }
+        _entries = entries;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_sub?.cancel());
+    super.dispose();
+  }
+
+  void _syncNow() {
+    setState(() {
+      _syncing = true;
+      _presynCount = _entries.length;
+    });
+    ref.read(syncManagerProvider).syncNow(widget.accountId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sync log')),
-      body: StreamBuilder<List<SyncLogEntry>>(
-        stream: repo.observeSyncLogs(accountId),
-        builder: (ctx, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final entries = snap.data!;
-          if (entries.isEmpty) {
-            return const Center(child: Text('No sync entries yet'));
-          }
-          return ListView.builder(
-            itemCount: entries.length,
-            itemBuilder: (ctx, i) => _SyncLogTile(entry: entries[i]),
-          );
-        },
+      appBar: AppBar(
+        title: const Text('Sync log'),
+        actions: [
+          if (_syncing)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.sync),
+              tooltip: 'Sync now',
+              onPressed: _syncNow,
+            ),
+        ],
       ),
+      body: _entries.isEmpty
+          ? const Center(child: Text('No sync entries yet'))
+          : ListView.builder(
+              itemCount: _entries.length,
+              itemBuilder: (ctx, i) => _SyncLogTile(entry: _entries[i]),
+            ),
     );
   }
 }
