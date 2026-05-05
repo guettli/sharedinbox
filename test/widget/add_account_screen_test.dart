@@ -287,7 +287,8 @@ void main() {
       expect(find.text('No accounts yet.'), findsOneWidget);
     });
 
-    testWidgets('IMAP form shows SSL/TLS label and SMTP toggle',
+    testWidgets(
+        'IMAP form hides SSL toggle for non-localhost, shows for localhost',
         (tester) async {
       await tester.pumpWidget(
         buildApp(
@@ -308,8 +309,23 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('IMAP'), findsOneWidget);
-      // IMAP and SMTP each have an SSL/TLS toggle (the ManageSieve toggle is
-      // hidden inside a collapsed ExpansionTile).
+      // No SSL toggles shown when hosts are empty (non-localhost).
+      expect(find.byType(SwitchListTile), findsNothing);
+
+      // Entering localhost as IMAP host reveals the IMAP SSL toggle.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Host').first,
+        'localhost',
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(SwitchListTile), findsOneWidget);
+
+      // Entering localhost as SMTP host reveals both SSL toggles.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Host').last,
+        'localhost',
+      );
+      await tester.pumpAndSettle();
       expect(find.byType(SwitchListTile), findsNWidgets(2));
     });
   });

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:enough_mail/enough_mail.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/tls_error.dart';
 
 typedef ImapConnectFn = Future<ImapClient> Function(
@@ -31,6 +32,11 @@ Future<ImapClient> connectImap(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseBuffer != null,
   );
+  if (!account.imapSsl && !isLocalhost(account.imapHost)) {
+    throw Exception(
+      'Plain-text IMAP is only allowed for localhost connections',
+    );
+  }
   try {
     await client.connectToServer(
       account.imapHost,
@@ -61,6 +67,11 @@ Future<SmtpClient> connectSmtp(
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
+  if (!account.smtpSsl && !isLocalhost(account.smtpHost)) {
+    throw Exception(
+      'Plain-text SMTP is only allowed for localhost connections',
+    );
+  }
   final client = SmtpClient(clientDomain);
   try {
     await client.connectToServer(

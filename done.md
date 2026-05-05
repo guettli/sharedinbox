@@ -6,6 +6,8 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Plain-text connections only via localhost; SSL toggle hidden for non-localhost hosts
+
 ## ManageSieve uses STARTTLS; clearer TLS-mismatch errors; broader connection check
 
 The "Email filters" screen failed for IMAP accounts with

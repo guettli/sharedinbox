@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
@@ -46,8 +47,13 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   @override
   void initState() {
     super.initState();
+    _smtpHostCtrl.addListener(_rebuild);
+    _sieveHostCtrl.addListener(_rebuild);
+    _imapHostCtrl.addListener(_rebuild);
     unawaited(_load());
   }
+
+  void _rebuild() => setState(() {});
 
   Future<void> _load() async {
     final repo = ref.read(accountRepositoryProvider);
@@ -75,6 +81,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
 
   @override
   void dispose() {
+    _smtpHostCtrl.removeListener(_rebuild);
+    _sieveHostCtrl.removeListener(_rebuild);
+    _imapHostCtrl.removeListener(_rebuild);
     for (final c in [
       _displayNameCtrl,
       _usernameCtrl,
@@ -104,6 +113,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         sieveHost != account.manageSieveHost ||
         sievePort != account.manageSievePort ||
         _sieveSsl != account.manageSieveSsl;
+    final smtpHost = _smtpHostCtrl.text.trim();
+    final effectiveSieveHost = sieveHost.isNotEmpty ? sieveHost : imapHost;
     return Account(
       id: account.id,
       displayName: _displayNameCtrl.text.trim(),
@@ -112,12 +123,13 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       type: account.type,
       imapHost: imapHost,
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
-      smtpHost: _smtpHostCtrl.text.trim(),
+      imapSsl: isLocalhost(imapHost) ? account.imapSsl : true,
+      smtpHost: smtpHost,
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
-      smtpSsl: _smtpSsl,
+      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
       manageSieveHost: sieveHost,
       manageSievePort: sievePort,
-      manageSieveSsl: _sieveSsl,
+      manageSieveSsl: isLocalhost(effectiveSieveHost) ? _sieveSsl : true,
       manageSieveAvailable:
           sieveSettingsChanged ? null : account.manageSieveAvailable,
       jmapUrl:
@@ -284,11 +296,12 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host'),
               _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _smtpSsl,
-                onChanged: (v) => setState(() => _smtpSsl = v),
-              ),
+              if (isLocalhost(_smtpHostCtrl.text.trim()))
+                SwitchListTile(
+                  title: const Text('SSL/TLS'),
+                  value: _smtpSsl,
+                  onChanged: (v) => setState(() => _smtpSsl = v),
+                ),
               const Divider(height: 32),
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
@@ -307,11 +320,16 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                     'Port',
                     keyboardType: TextInputType.number,
                   ),
-                  SwitchListTile(
-                    title: const Text('SSL/TLS'),
-                    value: _sieveSsl,
-                    onChanged: (v) => setState(() => _sieveSsl = v),
-                  ),
+                  if (isLocalhost(
+                    _sieveHostCtrl.text.trim().isNotEmpty
+                        ? _sieveHostCtrl.text.trim()
+                        : _imapHostCtrl.text.trim(),
+                  ))
+                    SwitchListTile(
+                      title: const Text('SSL/TLS'),
+                      value: _sieveSsl,
+                      onChanged: (v) => setState(() => _sieveSsl = v),
+                    ),
                 ],
               ),
             ],

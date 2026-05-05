@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/discovery_result.dart';
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
@@ -47,7 +48,18 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _imapFormKey = GlobalKey<FormState>();
 
   @override
+  void initState() {
+    super.initState();
+    _imapHostCtrl.addListener(_rebuild);
+    _smtpHostCtrl.addListener(_rebuild);
+  }
+
+  void _rebuild() => setState(() {});
+
+  @override
   void dispose() {
+    _imapHostCtrl.removeListener(_rebuild);
+    _smtpHostCtrl.removeListener(_rebuild);
     for (final c in [
       _emailCtrl,
       _displayNameCtrl,
@@ -112,18 +124,22 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         jmapUrl: _jmapApiUrlCtrl.text.trim(),
       );
 
-  Account _buildImapAccount() => Account(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        displayName: _displayNameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
-        username: _usernameCtrl.text.trim(),
-        imapHost: _imapHostCtrl.text.trim(),
-        imapPort: int.parse(_imapPortCtrl.text),
-        imapSsl: _imapSsl,
-        smtpHost: _smtpHostCtrl.text.trim(),
-        smtpPort: int.parse(_smtpPortCtrl.text),
-        smtpSsl: _smtpSsl,
-      );
+  Account _buildImapAccount() {
+    final imapHost = _imapHostCtrl.text.trim();
+    final smtpHost = _smtpHostCtrl.text.trim();
+    return Account(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      displayName: _displayNameCtrl.text.trim(),
+      email: _emailCtrl.text.trim(),
+      username: _usernameCtrl.text.trim(),
+      imapHost: imapHost,
+      imapPort: int.parse(_imapPortCtrl.text),
+      imapSsl: isLocalhost(imapHost) ? _imapSsl : true,
+      smtpHost: smtpHost,
+      smtpPort: int.parse(_smtpPortCtrl.text),
+      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
+    );
+  }
 
   Future<void> _tryConnection(
     GlobalKey<FormState> formKey,
@@ -399,20 +415,22 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
             _field(_imapHostCtrl, 'Host'),
             _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
-            SwitchListTile(
-              title: const Text('SSL/TLS'),
-              value: _imapSsl,
-              onChanged: (v) => setState(() => _imapSsl = v),
-            ),
+            if (isLocalhost(_imapHostCtrl.text.trim()))
+              SwitchListTile(
+                title: const Text('SSL/TLS'),
+                value: _imapSsl,
+                onChanged: (v) => setState(() => _imapSsl = v),
+              ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host'),
             _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-            SwitchListTile(
-              title: const Text('SSL/TLS'),
-              value: _smtpSsl,
-              onChanged: (v) => setState(() => _smtpSsl = v),
-            ),
+            if (isLocalhost(_smtpHostCtrl.text.trim()))
+              SwitchListTile(
+                title: const Text('SSL/TLS'),
+                value: _smtpSsl,
+                onChanged: (v) => setState(() => _smtpSsl = v),
+              ),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),
               testing: _tryTesting,

@@ -20,5 +20,7 @@ Then push
 
 ## Tasks
 
-Plain-text connections only via localhost.
-Dont show in ui, except host is localhost.
+Download of attachments does not work yet. Attachments have size 0. (IMAP account)
+---
+
+I deleted some mails, then I use Thunderbird, but the deleted mails are still there. After restart of sharedinbox the delete seems to get synced. Why not immediately?
