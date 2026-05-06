@@ -33,8 +33,13 @@ class AccountSyncManager {
 
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
+  StreamSubscription<String>? _onChangesSub;
 
   void start() {
+    _onChangesSub = _emails.onChangesQueued.listen((accountId) {
+      _active[accountId]?.kick();
+    });
+
     _accountsSub = _accounts.observeAccounts().listen((accounts) {
       final currentIds = accounts.map((a) => a.id).toSet();
 
@@ -66,6 +71,7 @@ class AccountSyncManager {
 
   void dispose() {
     unawaited(_accountsSub?.cancel());
+    unawaited(_onChangesSub?.cancel());
     for (final s in _active.values) {
       s.stop();
     }

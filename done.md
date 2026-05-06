@@ -6,6 +6,38 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## IMAP attachments: accurate sizes and reliable downloads
+
+Attachments in IMAP accounts previously showed as "0 B" in the UI because
+the size was retrieved from the `Content-Disposition` header's `size`
+parameter, which is frequently missing from real-world emails. Since the
+full message is already fetched into memory when viewing an email,
+`EmailRepositoryImpl.getEmailBody` now falls back to the length of the
+actual (decoded) part content when the header is missing.
+
+IMAP attachment downloads also frequently failed (throwing a `StateError`)
+because `downloadAttachment` would fetch a single part from the server
+and then try to call `msg.getPart(fetchId)` on the result. When fetching
+only a single part, the IMAP library returns an `ImapMessage` where the
+requested part *is* the root, so `getPart` (which looks for children)
+would return `null`. The repository now falls back to the message itself
+if the specific part ID cannot be found in the result of a partial fetch.
+
+## Immediate server-side sync for local deletions and flag changes
+
+Deletions and flag changes (seen/flagged) made in SharedInbox previously
+did not appear in other clients (like Thunderbird) until the next sync
+cycle or app restart, because the local mutations were enqueued but the
+background sync loop was not notified to flush them immediately.
+
+Added `onChangesQueued` stream to `EmailRepository` interface and
+implementation. `EmailRepositoryImpl._enqueueChange` now emits the
+`accountId` on this stream whenever a new local mutation is queued.
+`AccountSyncManager` listens to this stream; when it sees an account ID,
+it "kicks" the corresponding active sync loop, waking it from its IDLE
+or wait phase to immediately run a sync cycle and flush the pending
+changes to the server.
+
 ## Plain-text connections only via localhost; SSL toggle hidden for non-localhost hosts
 
 ## ManageSieve uses STARTTLS; clearer TLS-mismatch errors; broader connection check

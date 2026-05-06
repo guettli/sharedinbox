@@ -57,6 +57,10 @@ abstract class EmailRepository {
   /// retries it.
   Future<void> retryMutation(int id);
 
+  /// Emits the accountId whenever a new change is enqueued locally.
+  /// Used by AccountSyncManager to trigger an immediate flush.
+  Stream<String> get onChangesQueued;
+
   /// Returns a stream that emits once for each JMAP push event (RFC 8887
   /// `StateChange`) received from the server's EventSource URL.
   ///

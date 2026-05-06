@@ -40,6 +40,9 @@
             # Flutter version manager — needed for host builds (task build-linux, task run)
             fvm
 
+            # Git hooks
+            pre-commit
+
             # Linux desktop build + runtime dependencies (flutter build linux / task run)
           ] ++ linuxDesktopLibs ++ (with pkgs; [
             pkg-config

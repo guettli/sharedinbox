@@ -45,6 +45,11 @@ class EmailRepositoryImpl implements EmailRepository {
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
 
+  final _changeCtrl = StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get onChangesQueued => _changeCtrl.stream;
+
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
 
@@ -173,7 +178,9 @@ class EmailRepositoryImpl implements EmailRepository {
               (a) => {
                 'filename': a.fileName ?? '',
                 'contentType': a.contentType?.mediaType.text ?? '',
-                'size': a.size ?? 0,
+                'size': a.size ??
+                    msg.getPart(a.fetchId)?.decodeContentBinary()?.length ??
+                    0,
                 'fetchPartId': a.fetchId,
               },
             )
@@ -1223,6 +1230,7 @@ class EmailRepositoryImpl implements EmailRepository {
             createdAt: DateTime.now(),
           ),
         );
+    _changeCtrl.add(accountId);
   }
 
   /// Drains pending changes for [accountId] via the appropriate protocol.
@@ -1750,8 +1758,8 @@ class EmailRepositoryImpl implements EmailRepository {
         'BODY.PEEK[${attachment.fetchPartId}]',
       );
       final msg = fetch.messages.first;
-      final part = msg.getPart(attachment.fetchPartId);
-      final bytes = part?.decodeContentBinary();
+      final part = msg.getPart(attachment.fetchPartId) ?? msg;
+      final bytes = part.decodeContentBinary();
       if (bytes == null) {
         throw StateError(
           'Failed to decode attachment ${attachment.filename}.',

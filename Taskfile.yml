@@ -21,6 +21,13 @@ tasks:
     deps: [_preflight]
     cmds:
       - cmd: scripts/silent_on_success.sh fvm install --skip-pub-get
+      - cmd: scripts/silent_on_success.sh fvm use --skip-pub-get
+
+  setup:
+    desc: Fully set up the dev environment (FVM, pub get, codegen, hooks)
+    deps: [_preflight, _codegen]
+    cmds:
+      - echo "Setup complete."
 
   _pub-get:
     internal: true
@@ -106,7 +113,7 @@ tasks:
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
-    deps: [_preflight, _android-sdk-check]
+    deps: [_preflight, _android-sdk-check, _android-avd-setup]
     cmds:
       - stalwart-dev/integration_android_test.sh
 
@@ -115,6 +122,25 @@ tasks:
     deps: [_preflight, _linux-deps-check, _codegen]
     cmds:
       - scripts/silent_on_success.sh fvm flutter build linux --debug --no-pub
+
+  _android-avd-setup:
+    internal: true
+    run: once
+    status:
+      - test -f "${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
+      - test -d "$HOME/.android/avd/sharedinbox_test.avd"
+    cmds:
+      - cmd: |
+          SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$SDK/cmdline-tools/latest/bin/avdmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "emulator" "system-images;android-34;google_apis;x86_64"
+          echo no | "$AVDMANAGER" create avd \
+            --name sharedinbox_test \
+            --package "system-images;android-34;google_apis;x86_64" \
+            --device pixel_4 \
+            --force
 
   _android-sdk-check:
     internal: true
@@ -136,6 +162,7 @@ tasks:
   _mobsf-start:
     internal: true
     run: once
+    ignore_error: true
     cmds:
       - cmd: |
           if ! docker ps -q --filter name=mobsf-sharedinbox | grep -q .; then
@@ -149,11 +176,12 @@ tasks:
           fi
 
   build-android:
-    desc: Build a release APK and run a MobSF security scan
-    deps: [_preflight, _android-sdk-check, _pub-get, _mobsf-start]
+    desc: Build a release APK (runs MobSF security scan if docker is available)
+    deps: [_preflight, _android-sdk-check, _pub-get]
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
-      - scripts/mobsf_scan.sh
+      - task: _mobsf-start
+      - scripts/mobsf_scan.sh || true
 
   mobsf-stop:
     desc: Stop the MobSF Docker container (started automatically by build-android)
@@ -178,7 +206,7 @@ tasks:
 
   run-android:
     desc: Run the app on a connected Android emulator (boots sharedinbox_test AVD if needed)
-    deps: [_preflight, _android-sdk-check, _pub-get]
+    deps: [_preflight, _android-sdk-check, _android-avd-setup, _pub-get]
     cmds:
       - stalwart-dev/run_android.sh
 

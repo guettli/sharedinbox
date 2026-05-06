@@ -94,6 +94,9 @@ class _FakeEmails implements EmailRepository {
   Future<void> deleteEmail(String id) async {}
 
   @override
+  Stream<String> get onChangesQueued => const Stream.empty();
+
+  @override
   Future<int> flushPendingChanges(String accountId, String password) async => 0;
 
   @override
