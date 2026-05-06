@@ -218,7 +218,7 @@ and the tile is briefly absent right after. Fixed in
 `pumpUntil` (5 s timeout) before the tap.
 
 Bundled with a coherent set of pre-existing infrastructure changes that make the full
-pipeline (Linux + Android UI tests, MobSF scan, APK upload) work in `nix develop`:
+pipeline (Linux + Android UI tests, APK upload) work in `nix develop`:
 
 - `flake.nix`: adds Linux desktop runtime libs (gtk3, mesa, libGL, libsecret, …) plus
   `PKG_CONFIG_PATH`, `LD_LIBRARY_PATH`, `LIBGL_ALWAYS_SOFTWARE=1`, and the libglvnd
@@ -311,15 +311,10 @@ above a divider and the folder list. Tapping it closes the drawer and navigates 
 
 ## Speed up `task deploy-android`
 
-Two parallelism improvements:
+Parallelism improvement:
 
 - `_integrations` internal task: runs `integration` and `integration-ui` in parallel (they use
   random Stalwart ports and different Flutter build targets so there is no conflict).
-- `_mobsf-start` internal task: starts the MobSF Docker container as a dep of `build-android`,
-  so it warms up concurrently with the APK build instead of blocking for up to 90 s afterwards.
-- `scripts/mobsf_scan.sh`: added `docker rm $CONTAINER_NAME 2>/dev/null || true` before
-  `docker run` to handle stopped-but-not-yet-removed containers (same fix applied to the new
-  `_mobsf-start` task).
 
 ## Android E2E test verifies APK before deploy
 

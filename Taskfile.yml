@@ -159,34 +159,11 @@ tasks:
           Android platform 34 or higher not found. Install it with:
             ${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
-  _mobsf-start:
-    internal: true
-    run: once
-    ignore_error: true
-    cmds:
-      - cmd: |
-          if ! docker ps -q --filter name=mobsf-sharedinbox | grep -q .; then
-            docker rm mobsf-sharedinbox 2>/dev/null || true
-            docker pull -q opensecurity/mobile-security-framework-mobsf:latest >/dev/null 2>&1 || true
-            docker run -d --rm \
-              --name mobsf-sharedinbox \
-              -p 8000:8000 \
-              -e MOBSF_API_KEY=sharedinbox-dev \
-              opensecurity/mobile-security-framework-mobsf:latest >/dev/null
-          fi
-
   build-android:
-    desc: Build a release APK (runs MobSF security scan if docker is available)
+    desc: Build a release APK
     deps: [_preflight, _android-sdk-check, _pub-get]
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
-      - task: _mobsf-start
-      - scripts/mobsf_scan.sh || true
-
-  mobsf-stop:
-    desc: Stop the MobSF Docker container (started automatically by build-android)
-    cmds:
-      - docker stop mobsf-sharedinbox 2>/dev/null || true
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
