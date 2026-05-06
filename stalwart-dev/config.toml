@@ -26,6 +26,11 @@ id       = "smtp"
 bind     = ["127.0.0.1:1025"]
 protocol = "smtp"
 
+[[server.listener]]
+id       = "managesieve"
+bind     = ["127.0.0.1:4190"]
+protocol = "managesieve"
+
 [store."db"]
 type = "sqlite"
 path = "/tmp/stalwart-dev/data.sqlite"

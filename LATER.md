@@ -1,5 +1,11 @@
 # Later
 
+task deploy-android
+it is slow. First debug what is slow.
+What is the bottleneck?
+I see qemu with a lot of CPU load.
+Maybe giving the user more Linux permissions to run optimized qemu helps?
+
 ---
 
 use si3e2e@thomas-guettler.de in tests.

@@ -19,20 +19,20 @@ EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print
 if [ -z "$EMULATOR_ID" ]; then
     EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
     echo "No emulator running — booting AVD sharedinbox_test..."
-    "$EMULATOR_BIN" -avd sharedinbox_test -no-audio -no-snapshot-save &
-    for _i in $(seq 1 60); do
+    "$EMULATOR_BIN" -avd sharedinbox_test -no-audio -no-snapshot-save -accel off &
+    for _i in $(seq 1 150); do
         EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
         [ -n "$EMULATOR_ID" ] && break
         sleep 2
     done
-    [ -n "$EMULATOR_ID" ] || { echo "Emulator did not become ready within 120 s"; exit 1; }
+    [ -n "$EMULATOR_ID" ] || { echo "Emulator did not become ready within 300 s"; exit 1; }
     "$ADB" -s "$EMULATOR_ID" wait-for-device
-    for _i in $(seq 1 30); do
+    for _i in $(seq 1 450); do
         BOOT_DONE=$("$ADB" -s "$EMULATOR_ID" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
         [ "$BOOT_DONE" = "1" ] && break
         sleep 2
     done
-    [ "${BOOT_DONE:-0}" = "1" ] || { echo "Android boot did not complete within 60 s"; exit 1; }
+    [ "${BOOT_DONE:-0}" = "1" ] || { echo "Android boot did not complete within 900 s"; exit 1; }
 fi
 
 echo "Using emulator: $EMULATOR_ID"

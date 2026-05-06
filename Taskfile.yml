@@ -200,7 +200,9 @@ tasks:
   _integrations:
     internal: true
     run: once
-    deps: [integration, integration-ui]
+    cmds:
+      - task: integration
+      - task: integration-ui
 
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate
