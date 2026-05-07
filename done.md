@@ -6,6 +6,22 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Multi-account search improvement
+
+Extended the search functionality to allow searching across all accounts
+simultaneously, including folders, addresses, and messages.
+
+- **Global Search UI**: Updated `SearchScreen` (`lib/ui/screens/search_screen.dart`)
+  to support searching without a specific `accountId`.
+- **Account Context**: Added account display names and icons to search results
+  when performing a global search.
+- **Repository Support**: Modified `EmailRepository` and `MailboxRepository`
+  to handle optional `accountId` parameters, enabling cross-account queries.
+- **Global Entry Point**: Added a search icon to the `AccountListScreen`
+  app bar for quick access to global search.
+- **Model Enhancements**: Added `compareMailboxes` to the `Mailbox` model
+  and `copyWith` to the `Account` model for better code reuse and testability.
+
 ## Thread View UI and Repository Support
 
 Implemented a dedicated screen to view all emails within a thread, providing

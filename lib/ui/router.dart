@@ -102,6 +102,10 @@ final router = GoRouter(
       ],
     ),
     GoRoute(
+      path: '/search',
+      builder: (ctx, state) => const SearchScreen(),
+    ),
+    GoRoute(
       path: '/compose',
       builder: (ctx, state) {
         final extra = state.extra as Map<String, dynamic>?;

@@ -29,9 +29,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
       account.username.isNotEmpty ? account.username : account.email;
 
   @override
-  Stream<List<model.Mailbox>> observeMailboxes(String accountId) {
+  Stream<List<model.Mailbox>> observeMailboxes(String? accountId) {
     return (_db.select(_db.mailboxes)
-          ..where((t) => t.accountId.equals(accountId))
+          ..where((t) {
+            if (accountId != null) return t.accountId.equals(accountId);
+            return const Constant(true);
+          })
           ..orderBy([(t) => OrderingTerm.asc(t.path)]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());

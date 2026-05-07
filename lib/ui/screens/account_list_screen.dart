@@ -11,7 +11,16 @@ class AccountListScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SharedInbox')),
+      appBar: AppBar(
+        title: const Text('SharedInbox'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Search all accounts',
+            onPressed: () => context.push('/search'),
+          ),
+        ],
+      ),
       body: StreamBuilder(
         stream: ref.watch(accountRepositoryProvider).observeAccounts(),
         builder: (ctx, snap) {

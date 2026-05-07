@@ -57,4 +57,44 @@ class Account {
     this.jmapUrl,
     this.verbose = false,
   });
+
+  Account copyWith({
+    String? id,
+    String? displayName,
+    String? email,
+    String? username,
+    AccountType? type,
+    String? imapHost,
+    int? imapPort,
+    bool? imapSsl,
+    String? smtpHost,
+    int? smtpPort,
+    bool? smtpSsl,
+    String? manageSieveHost,
+    int? manageSievePort,
+    bool? manageSieveSsl,
+    bool? manageSieveAvailable,
+    String? jmapUrl,
+    bool? verbose,
+  }) {
+    return Account(
+      id: id ?? this.id,
+      displayName: displayName ?? this.displayName,
+      email: email ?? this.email,
+      username: username ?? this.username,
+      type: type ?? this.type,
+      imapHost: imapHost ?? this.imapHost,
+      imapPort: imapPort ?? this.imapPort,
+      imapSsl: imapSsl ?? this.imapSsl,
+      smtpHost: smtpHost ?? this.smtpHost,
+      smtpPort: smtpPort ?? this.smtpPort,
+      smtpSsl: smtpSsl ?? this.smtpSsl,
+      manageSieveHost: manageSieveHost ?? this.manageSieveHost,
+      manageSievePort: manageSievePort ?? this.manageSievePort,
+      manageSieveSsl: manageSieveSsl ?? this.manageSieveSsl,
+      manageSieveAvailable: manageSieveAvailable ?? this.manageSieveAvailable,
+      jmapUrl: jmapUrl ?? this.jmapUrl,
+      verbose: verbose ?? this.verbose,
+    );
+  }
 }

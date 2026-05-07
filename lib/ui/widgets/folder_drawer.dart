@@ -7,21 +7,6 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 
-/// Sorts INBOX first, Drafts second, then alphabetically.
-int compareMailboxes(Mailbox a, Mailbox b) {
-  final pa = _priority(a);
-  final pb = _priority(b);
-  if (pa != pb) return pa.compareTo(pb);
-  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-}
-
-int _priority(Mailbox mb) {
-  final upper = mb.path.toUpperCase();
-  if (upper == 'INBOX') return 0;
-  if (upper.contains('DRAFT')) return 1;
-  return 2;
-}
-
 /// Drawer showing all folders for [accountId].
 /// Highlights [currentMailboxPath] when provided.
 class FolderDrawer extends ConsumerWidget {

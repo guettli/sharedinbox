@@ -123,7 +123,7 @@ class FakeMailboxRepository implements MailboxRepository {
       : _mailboxes = mailboxes ?? [];
 
   @override
-  Stream<List<Mailbox>> observeMailboxes(String accountId) =>
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
       Stream.value(List.of(_mailboxes));
 
   @override
@@ -235,14 +235,14 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<List<Email>> searchEmailsGlobal(
-    String accountId,
+    String? accountId,
     String query,
   ) async =>
       _searchResults;
 
   @override
   Future<List<Email>> getEmailsByAddress(
-    String accountId,
+    String? accountId,
     String address,
   ) async =>
       [];

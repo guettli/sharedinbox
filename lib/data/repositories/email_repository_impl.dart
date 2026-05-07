@@ -1890,7 +1890,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<List<model.Email>> searchEmailsGlobal(
-    String accountId,
+    String? accountId,
     String query,
   ) async {
     final words = query
@@ -1900,7 +1900,10 @@ class EmailRepositoryImpl implements EmailRepository {
         .toList();
     final rows = await (_db.select(_db.emails)
           ..where((t) {
-            Expression<bool> condition = t.accountId.equals(accountId);
+            Expression<bool> condition = const Constant(true);
+            if (accountId != null) {
+              condition = t.accountId.equals(accountId);
+            }
             for (final word in words) {
               final pattern = '%$word%';
               condition = condition &
@@ -1916,18 +1919,22 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<List<model.Email>> getEmailsByAddress(
-    String accountId,
+    String? accountId,
     String address,
   ) async {
     final pattern = '%${address.toLowerCase()}%';
     final rows = await (_db.select(_db.emails)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
+          ..where((t) {
+            Expression<bool> condition = const Constant(true);
+            if (accountId != null) {
+              condition = t.accountId.equals(accountId);
+            }
+            condition = condition &
                 (t.fromJson.like(pattern) |
                     t.toAddresses.like(pattern) |
-                    t.ccJson.like(pattern)),
-          )
+                    t.ccJson.like(pattern));
+            return condition;
+          })
           ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
         .get();
     return rows.map(_toModel).toList();

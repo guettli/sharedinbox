@@ -43,13 +43,13 @@ abstract class EmailRepository {
     String query,
   );
 
-  /// Searches the local DB across all mailboxes of [accountId] by subject
-  /// and preview. Fast, works offline, intended for incremental search UI.
-  Future<List<Email>> searchEmailsGlobal(String accountId, String query);
+  /// Searches the local DB across all mailboxes of [accountId] (or all accounts
+  /// if null) by subject and preview. Fast, works offline.
+  Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
 
-  /// Returns all locally cached emails in any mailbox of [accountId] whose
-  /// from, to, or cc fields contain [address].
-  Future<List<Email>> getEmailsByAddress(String accountId, String address);
+  /// Returns all locally cached emails in any mailbox of [accountId] (or all
+  /// accounts if null) whose from, to, or cc fields contain [address].
+  Future<List<Email>> getEmailsByAddress(String? accountId, String address);
 
   /// Sends any queued local mutations for [accountId] to the server.
   /// Returns the number of changes successfully applied.

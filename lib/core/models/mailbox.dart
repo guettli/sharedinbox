@@ -20,3 +20,16 @@ class Mailbox {
     this.role,
   });
 }
+
+/// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by path.
+int compareMailboxes(Mailbox a, Mailbox b) {
+  const roleOrder = ['inbox', 'drafts', 'sent', 'archive', 'junk', 'trash'];
+  if (a.role != b.role) {
+    final idxA = a.role == null ? 99 : roleOrder.indexOf(a.role!);
+    final idxB = b.role == null ? 99 : roleOrder.indexOf(b.role!);
+    if (idxA != idxB) {
+      return (idxA == -1 ? 99 : idxA).compareTo(idxB == -1 ? 99 : idxB);
+    }
+  }
+  return a.path.toLowerCase().compareTo(b.path.toLowerCase());
+}

@@ -134,6 +134,7 @@ Map<String, dynamic> _jmapEmail({
   required String mailboxId,
   String subject = 'Hello',
   bool seen = false,
+  String? threadId,
 }) =>
     {
       'id': id,
@@ -151,6 +152,7 @@ Map<String, dynamic> _jmapEmail({
       'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
       'hasAttachment': false,
       'preview': 'Hello world',
+      'threadId': threadId,
     };
 
 Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
@@ -309,6 +311,112 @@ void main() {
       final body = await r.emails.getEmailBody('acc-1:1');
       expect(body.textBody, 'Hello');
       expect(body.htmlBody, '<p>Hello</p>');
+    });
+
+    // ── Threading tests ──────────────────────────────────────────────────────
+
+    test('observeThreads returns aggregated thread rows from DB', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      final now = DateTime.now();
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 'tid1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              subject: const Value('Thread 1'),
+              latestDate: now,
+              messageCount: const Value(2),
+              hasUnread: const Value(true),
+              latestEmailId: 'acc-1:2',
+              emailIdsJson: const Value('["acc-1:1", "acc-1:2"]'),
+            ),
+          );
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(threads, hasLength(1));
+      expect(threads.first.threadId, 'tid1');
+      expect(threads.first.subject, 'Thread 1');
+      expect(threads.first.messageCount, 2);
+      expect(threads.first.hasUnread, isTrue);
+      expect(threads.first.emailIds, ['acc-1:1', 'acc-1:2']);
+    });
+
+    test('observeEmailsInThread returns all emails for a thread', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              threadId: const Value('tid1'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              threadId: const Value('tid1'),
+              receivedAt: DateTime(2024, 2),
+            ),
+          );
+
+      final emails =
+          await r.emails.observeEmailsInThread('acc-1', 'INBOX', 'tid1').first;
+      expect(emails, hasLength(2));
+      expect(emails.map((e) => e.id).toSet(), {'acc-1:1', 'acc-1:2'});
+    });
+
+    // ── Search tests ─────────────────────────────────────────────────────────
+
+    test('searchEmailsGlobal filters by query across accounts', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.accounts.addAccount(
+        _account.copyWith(id: 'acc-2', email: 'bob@example.com'),
+        'pw',
+      );
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Pizza night'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-2:1',
+              accountId: 'acc-2',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Burger lunch'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Global search
+      final results1 = await r.emails.searchEmailsGlobal(null, 'pizza');
+      expect(results1, hasLength(1));
+      expect(results1.first.subject, 'Pizza night');
+
+      // Account-specific search
+      final results2 = await r.emails.searchEmailsGlobal('acc-2', 'burger');
+      expect(results2, hasLength(1));
+      expect(results2.first.subject, 'Burger lunch');
+
+      final results3 = await r.emails.searchEmailsGlobal('acc-1', 'burger');
+      expect(results3, isEmpty);
     });
 
     // ── IMAP method tests ────────────────────────────────────────────────────
@@ -1672,7 +1780,6 @@ void main() {
               changeType: 'flag_seen',
               payload: '{"seen":true}',
               createdAt: DateTime.now(),
-              attempts: const Value(1),
               lastError: const Value('network error'),
             ),
           );

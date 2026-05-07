@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';

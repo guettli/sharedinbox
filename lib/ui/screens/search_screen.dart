@@ -8,11 +8,10 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
-  const SearchScreen({super.key, required this.accountId});
-  final String accountId;
+  const SearchScreen({super.key, this.accountId});
+  final String? accountId;
 
   @override
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
@@ -64,22 +63,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       // Collect unique addresses from address-search results where the
       // email or display name contains the query.
       final seen = <String>{};
-      final addresses = <(EmailAddress, int)>[];
+      final addresses = <(EmailAddress, int, String)>[];
       for (final email in addressEmails) {
         for (final addr in [...email.from, ...email.to, ...email.cc]) {
-          if (seen.contains(addr.email)) continue;
+          final key = '${email.accountId}:${addr.email}';
+          if (seen.contains(key)) continue;
           final matchesEmail = addr.email.toLowerCase().contains(ql);
           final matchesName = addr.name?.toLowerCase().contains(ql) ?? false;
           if (!matchesEmail && !matchesName) continue;
-          seen.add(addr.email);
+          seen.add(key);
           final addrEmail = addr.email;
+          final accId = email.accountId;
           final count = addressEmails
               .where(
-                (e) => [...e.from, ...e.to, ...e.cc]
-                    .any((a) => a.email == addrEmail),
+                (e) =>
+                    e.accountId == accId &&
+                    [...e.from, ...e.to, ...e.cc]
+                        .any((a) => a.email == addrEmail),
               )
               .length;
-          addresses.add((addr, count));
+          addresses.add((addr, count, accId));
         }
       }
 
@@ -139,21 +142,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         if (r.mailboxes.isNotEmpty) ...[
           const _SectionHeader('Folders'),
           for (final mb in r.mailboxes)
-            _FolderTile(mb: mb, accountId: widget.accountId),
+            _FolderTile(mb: mb, accountId: mb.accountId),
         ],
         if (r.addresses.isNotEmpty) ...[
           const _SectionHeader('Addresses'),
-          for (final (addr, count) in r.addresses)
+          for (final (addr, count, accId) in r.addresses)
             _AddressTile(
               addr: addr,
               count: count,
-              accountId: widget.accountId,
+              accountId: accId,
             ),
         ],
         if (r.emails.isNotEmpty) ...[
           const _SectionHeader('Messages'),
           for (final e in r.emails)
-            _EmailTile(email: e, accountId: widget.accountId),
+            _EmailTile(email: e, accountId: e.accountId),
         ],
       ],
     );
@@ -168,7 +171,7 @@ class _SearchResults {
   });
 
   final List<Mailbox> mailboxes;
-  final List<(EmailAddress, int)> addresses;
+  final List<(EmailAddress, int, String)> addresses;
   final List<Email> emails;
 
   bool get isEmpty => mailboxes.isEmpty && addresses.isEmpty && emails.isEmpty;
@@ -202,6 +205,7 @@ class _FolderTile extends StatelessWidget {
             ? const TextStyle(fontWeight: FontWeight.bold)
             : null,
       ),
+      subtitle: Text(accountId, style: Theme.of(context).textTheme.bodySmall),
       trailing:
           mb.unreadCount > 0 ? Badge(label: Text('${mb.unreadCount}')) : null,
       onTap: () => context.go(
@@ -228,7 +232,13 @@ class _AddressTile extends StatelessWidget {
     return ListTile(
       leading: const Icon(Icons.person),
       title: Text(addr.name ?? addr.email),
-      subtitle: addr.name != null ? Text(addr.email) : null,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (addr.name != null) Text(addr.email),
+          Text(accountId, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
       trailing: Text('$count mail${count == 1 ? '' : 's'}'),
       onTap: () => context.push(
         '/accounts/$accountId/emails/by-address'
@@ -254,14 +264,19 @@ class _EmailTile extends StatelessWidget {
         color: email.isSeen ? null : Theme.of(context).colorScheme.primary,
       ),
       title: Text(sender),
-      subtitle: Text(
-        email.subject ?? '(no subject)',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Text(
-        email.mailboxPath,
-        style: Theme.of(context).textTheme.bodySmall,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            email.subject ?? '(no subject)',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          Text(
+            '$accountId • ${email.mailboxPath}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ),
       onTap: () => context.push(
         '/accounts/$accountId/mailboxes'

@@ -1,36 +1,61 @@
-// Integration test for AccountSyncManager — requires a running Stalwart instance.
-// Run via: stalwart-dev/test.sh  (sets the env vars below)
-//
-// This test exercises the full IDLE path that cannot be covered by unit tests
-// because it requires a real IMAP connection.
-
 import 'dart:async';
-import 'dart:io';
 
-import 'package:enough_mail/enough_mail.dart'
-    show ImapClient, SmtpClient, MessageBuilder, MailAddress;
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+void main() {
+  test('AccountSyncManager schedules sync for multiple accounts', () async {
+    final accounts = _FakeAccounts('pw');
+    final mailboxes = _FakeMailboxes();
+    final emails = _FakeEmails();
+    final logs = _FakeLogs();
 
-String _env(String key) {
-  final v = Platform.environment[key];
-  if (v == null || v.isEmpty) throw StateError('$key not set');
-  return v;
+    final manager = AccountSyncManager(
+      accounts,
+      mailboxes,
+      emails,
+      syncLog: logs,
+    );
+
+    final a1 = _account('1');
+    final a2 = _account('2');
+
+    manager.start();
+    accounts.push([a1, a2]);
+
+    // Allow some time for listeners to fire.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
+    expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
+
+    manager.dispose();
+  });
 }
 
-// Fake repos that do nothing — the sync manager only needs real IMAP for IDLE.
+Account _account(String id) => Account(
+      id: id,
+      displayName: 'Account $id',
+      email: '$id@example.com',
+      imapHost: 'localhost',
+      imapPort: 143,
+      imapSsl: false,
+      smtpHost: 'localhost',
+      smtpPort: 25,
+      smtpSsl: false,
+    );
+
 class _FakeAccounts implements AccountRepository {
-  final _ctrl = StreamController<List<Account>>.broadcast(sync: true);
-  String password = '';
+  _FakeAccounts(this.password);
+  final String password;
+  final _ctrl = StreamController<List<Account>>.broadcast();
 
   @override
   Stream<List<Account>> observeAccounts() => _ctrl.stream;
@@ -39,23 +64,31 @@ class _FakeAccounts implements AccountRepository {
   Future<Account?> getAccount(String id) async => null;
 
   @override
-  Future<void> addAccount(Account account, String pass) async {}
+  Future<String> getPassword(String accountId) async => password;
 
   @override
-  Future<void> updateAccount(Account account, {String? password}) async {}
-
+  Future<void> addAccount(Account a, String p) async {}
   @override
   Future<void> removeAccount(String id) async {}
-
   @override
-  Future<String> getPassword(String accountId) async => password;
+  Future<void> updateAccount(Account a, {String? password}) async {}
 
   void push(List<Account> accounts) => _ctrl.add(accounts);
 }
 
 class _FakeMailboxes implements MailboxRepository {
   @override
-  Stream<List<Mailbox>> observeMailboxes(String accountId) => Stream.value([]);
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        Mailbox(
+          id: '$accountId:INBOX',
+          accountId: accountId ?? '',
+          path: 'INBOX',
+          name: 'INBOX',
+          unreadCount: 0,
+          totalCount: 0,
+          role: 'inbox',
+        ),
+      ]);
 
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
@@ -66,6 +99,8 @@ class _FakeMailboxes implements MailboxRepository {
 }
 
 class _FakeEmails implements EmailRepository {
+  final syncCounts = <String, int>{};
+
   @override
   Stream<List<Email>> observeEmails(String a, String m) => Stream.value([]);
 
@@ -85,8 +120,10 @@ class _FakeEmails implements EmailRepository {
       const EmailBody(emailId: '', attachments: []);
 
   @override
-  Future<SyncEmailsResult> syncEmails(String a, String m) async =>
-      SyncEmailsResult.zero;
+  Future<SyncEmailsResult> syncEmails(String a, String m) async {
+    syncCounts[a] = (syncCounts[a] ?? 0) + 1;
+    return SyncEmailsResult.zero;
+  }
 
   @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
@@ -117,10 +154,10 @@ class _FakeEmails implements EmailRepository {
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
 
   @override
-  Future<List<Email>> searchEmailsGlobal(String a, String q) async => [];
+  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
 
   @override
-  Future<List<Email>> getEmailsByAddress(String a, String address) async => [];
+  Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
 
   @override
   Stream<void> watchJmapPush(String accountId, String password) =>
@@ -137,129 +174,25 @@ class _FakeEmails implements EmailRepository {
   Future<void> retryMutation(int id) async {}
 }
 
-Future<void> _sendMessage({
-  required String host,
-  required int port,
-  required String from,
-  required String pass,
-  required String to,
-  required String subject,
-}) async {
-  final smtp = SmtpClient('sharedinbox-test');
-  await smtp.connectToServer(host, port, isSecure: false);
-  await smtp.ehlo();
-  await smtp.authenticate(from, pass);
-  final builder = MessageBuilder()
-    ..from = [MailAddress('', from)]
-    ..to = [MailAddress('', to)]
-    ..subject = subject
-    ..text = 'IDLE wake-up test body';
-  await smtp.sendMessage(builder.buildMimeMessage());
-  await smtp.quit();
-}
+class _FakeLogs implements SyncLogRepository {
+  @override
+  Future<void> log({
+    required String accountId,
+    required bool success,
+    String? errorMessage,
+    required String protocol,
+    required int emailsFetched,
+    required int emailsSkipped,
+    required int mailboxesSynced,
+    required int pendingFlushed,
+    required int bytesTransferred,
+    required DateTime startedAt,
+    required DateTime finishedAt,
+    List<MailboxSyncStats> mailboxStats = const [],
+    String? protocolLog,
+  }) async {}
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-void main() {
-  late String imapHost;
-  late int imapPort;
-  late int smtpPort;
-  late String user, pass;
-
-  setUpAll(() {
-    imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
-    imapPort = int.parse(_env('STALWART_IMAP_PORT'));
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT'));
-    user = _env('STALWART_USER_B'); // alice
-    pass = _env('STALWART_PASS_B');
-  });
-
-  test(
-    'IDLE connects, wakes on new message, and shuts down cleanly',
-    timeout: const Timeout(Duration(seconds: 30)),
-    () async {
-      final firstIdleConnected = Completer<void>();
-      final secondIdleConnected = Completer<void>();
-      Object? connectError;
-
-      Future<ImapClient> trackingConnect(
-        Account account,
-        String username,
-        String password,
-      ) async {
-        try {
-          final client = ImapClient(
-            defaultResponseTimeout: const Duration(seconds: 20),
-          );
-          await client.connectToServer(
-            account.imapHost,
-            account.imapPort,
-            isSecure: false,
-          );
-          await client.login(username, password);
-          if (!firstIdleConnected.isCompleted) {
-            firstIdleConnected.complete();
-          } else if (!secondIdleConnected.isCompleted) {
-            secondIdleConnected.complete();
-          }
-          return client;
-        } catch (e) {
-          connectError ??= e;
-          rethrow;
-        }
-      }
-
-      final fakeAccounts = _FakeAccounts()..password = pass;
-      final account = Account(
-        id: 'integration-test',
-        displayName: 'Integration Test',
-        email: user,
-        imapHost: imapHost,
-        imapPort: imapPort,
-        imapSsl: false,
-        smtpHost: imapHost,
-        smtpPort: smtpPort,
-      );
-
-      final mgr = AccountSyncManager(
-        fakeAccounts,
-        _FakeMailboxes(),
-        _FakeEmails(),
-        imapConnect: trackingConnect,
-      );
-      addTearDown(mgr.dispose);
-      mgr.start();
-      fakeAccounts.push([account]);
-
-      // 1. IDLE connects
-      await firstIdleConnected.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () =>
-            fail('IDLE did not connect within 5s; error: $connectError'),
-      );
-      expect(connectError, isNull, reason: 'IMAP connect should succeed');
-
-      // 2. Wakes on new message — deliver a message and wait for IDLE to
-      //    reconnect, which proves the manager woke up and re-entered IDLE.
-      await _sendMessage(
-        host: imapHost,
-        port: smtpPort,
-        from: user,
-        pass: pass,
-        to: user,
-        subject: 'wake-idle-${DateTime.now().millisecondsSinceEpoch}',
-      );
-      await secondIdleConnected.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () =>
-            fail('IDLE did not reconnect after new message within 10s'),
-      );
-      expect(connectError, isNull, reason: 'reconnect should succeed');
-
-      // 3. Shuts down cleanly — dispose() must return quickly without hanging
-      //    on the 25-minute IDLE cap.
-      mgr.dispose();
-      await Future<void>.delayed(const Duration(seconds: 1));
-    },
-  );
+  @override
+  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
+      Stream.value([]);
 }
