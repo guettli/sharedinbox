@@ -45,9 +45,19 @@ ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/pla
 # Detect a connected Android emulator; auto-start the sharedinbox_test AVD if none is running.
 EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
 if [ -z "$EMULATOR_ID" ]; then
+    # Check for KVM before starting.
+    if [ ! -c /dev/kvm ] || [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        echo "ERROR: KVM (/dev/kvm) not accessible. Software emulation is too slow for these tests."
+        echo "Run these commands to fix permissions:"
+        echo "  sudo groupadd -r kvm || true"
+        echo "  sudo gpasswd -a \$USER kvm"
+        echo "  # Then log out and back in."
+        exit 1
+    fi
+
     EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
     ts "no emulator running — booting AVD sharedinbox_test"
-    "$EMULATOR_BIN" -avd sharedinbox_test -no-window -no-audio -no-snapshot-save -accel off -no-boot-anim -gpu swiftshader_indirect > /tmp/emulator.log 2>&1 &
+    "$EMULATOR_BIN" -avd sharedinbox_test -no-window -no-audio -no-snapshot-save > /tmp/emulator.log 2>&1 &
     EMULATOR_BOOT_PID=$!
     # Extend cleanup to also kill the emulator we started.
     cleanup() {
@@ -57,21 +67,21 @@ if [ -z "$EMULATOR_ID" ]; then
         kill "${EMULATOR_BOOT_PID:-}" 2>/dev/null || true
     }
     trap cleanup EXIT
-    # Wait up to 300 s for the emulator to appear as a fully booted device.
-    for _i in $(seq 1 150); do
+    # Wait up to 120 s for the emulator to appear as a fully booted device.
+    for _i in $(seq 1 60); do
         EMULATOR_ID=$("$ADB" devices | awk '/^emulator-[0-9]+[[:space:]]+device$/ {print $1; exit}')
         [ -n "$EMULATOR_ID" ] && break
         sleep 2
     done
-    [ -n "$EMULATOR_ID" ] || { echo "Emulator did not become ready within 300 s"; exit 1; }
+    [ -n "$EMULATOR_ID" ] || { echo "Emulator did not become ready within 120 s"; exit 1; }
     # Wait for the Android system to finish booting (sys.boot_completed=1).
     "$ADB" -s "$EMULATOR_ID" wait-for-device
-    for _i in $(seq 1 600); do
+    for _i in $(seq 1 30); do
         BOOT_DONE=$("$ADB" -s "$EMULATOR_ID" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
         [ "$BOOT_DONE" = "1" ] && break
         sleep 2
     done
-    [ "${BOOT_DONE:-0}" = "1" ] || { echo "Android boot did not complete within 1200 s"; exit 1; }
+    [ "${BOOT_DONE:-0}" = "1" ] || { echo "Android boot did not complete within 60 s"; exit 1; }
 fi
 ts "using emulator: $EMULATOR_ID"
 
@@ -110,17 +120,18 @@ curl -s --max-time 1 -o /dev/null "${STALWART_URL}/.well-known/jmap" || {
     cat "$LOGFILE"; echo "Stalwart did not become ready"; exit 1
 }
 
-ts "stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_PORT:-?}"
+ts "stalwart ready — IMAP=:${STALWART_IMAP_PORT:-?}  SMTP=:${STALWART_SMTP_PORT:-?}  SIEVE=:${STALWART_SIEVE_PORT:-?}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # Platform.environment is empty inside the Android app process, so env vars set
 # by this script never reach the test code.  Instead, use adb reverse to forward
-# the fixed "template" ports that the test defaults to (1430 IMAP, 1025 SMTP)
+# the fixed "template" ports that the test defaults to (1430 IMAP, 1025 SMTP, 4190 SIEVE)
 # on the emulator through to the actual random Stalwart ports on the host.
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1430 tcp:"$STALWART_IMAP_PORT"
 "$ADB" -s "$EMULATOR_ID" reverse tcp:1025 tcp:"$STALWART_SMTP_PORT"
+"$ADB" -s "$EMULATOR_ID" reverse tcp:4190 tcp:"$STALWART_SIEVE_PORT"
 
 # Clear any leftover app state from previous runs (stale DB, cached APK process).
 # Only run if the package is installed — that way any failure is a real error.
