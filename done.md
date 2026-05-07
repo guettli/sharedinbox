@@ -6,6 +6,81 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Thread View UI and Repository Support
+
+Implemented a dedicated screen to view all emails within a thread, providing
+a cohesive conversation view.
+
+- **ThreadDetailScreen**: A new screen (`lib/ui/screens/thread_detail_screen.dart`)
+  that displays a list of emails in a thread. Each email is rendered as an
+  expandable card, with the latest message expanded by default.
+- **HTML Support**: Integrated HTML rendering with remote image blocking
+  (reusing logic from `EmailDetailScreen`) into the thread view.
+- **Message Actions**: Added reply and delete actions for individual messages
+  within the thread.
+- **Repository Support**: Added `observeEmailsInThread` to `EmailRepository`
+  to fetch and watch all messages belonging to a specific thread ID.
+- **Navigation**: Updated `EmailListScreen` to navigate to the new thread view
+  when a thread with multiple messages is tapped.
+- **Mock Support**: Updated `FakeEmailRepository` in unit, widget, and
+  integration tests to support the new `observeEmailsInThread` method.
+
+## Database-Backed Threading and Performance Optimizations
+
+Refactored the threading logic from in-memory grouping to a persistent
+database-backed approach for improved performance and scalability.
+
+- **Threads Table**: Added a new `Threads` table to the SQLite database
+  (Schema v17/v18) to store aggregated thread metadata (subject, unread
+  status, participants, etc.).
+- **Automatic Sync**: Implemented `_updateThread` logic in `EmailRepositoryImpl`
+  to keep the `Threads` table synchronized during IMAP/JMAP syncs and
+  user actions (flag changes, moves, deletions).
+- **Migration**: Added migration logic to automatically populate the `Threads`
+  table from existing email data upon schema upgrade.
+- **Indexes**: Added performance indexes on `emails.receivedAt`,
+  `emails.threadId`, and `pending_changes.accountId` to speed up common
+  query patterns for large mailboxes.
+- **Repository Refactor**: Updated `observeThreads` to query the `Threads`
+  table directly, significantly reducing CPU and memory usage when
+  displaying the inbox.
+
+## Global Crash Screen and Error Handling
+
+Implemented a robust error handling system to capture and display unhandled
+exceptions to users, facilitating easier bug reporting.
+
+- **CrashScreen**: A new full-screen widget (`lib/ui/screens/crash_screen.dart`)
+  that displays the exception message, stack trace, and a "Copy to Clipboard"
+  button for easy sharing of error details.
+- **Global Handlers**: Wrapped `main()` in `runZonedGuarded` to catch unhandled
+  async errors.
+- **Framework Integration**: Installed `FlutterError.onError` and
+  `ErrorWidget.builder` to catch framework-level and widget build errors,
+  ensuring that all types of crashes result in a graceful error display.
+
+## Optimized Android Deployment and Fixed E2E Flakiness
+
+Improved the speed and reliability of the Android deployment pipeline.
+
+- **Taskfile Optimization**: Updated `Taskfile.yml` to use `sources` and
+  `generates` for long-running tasks. Implemented marker files (`.done` files)
+  to skip `integration-android` and `deploy-android` when inputs haven't changed.
+- **E2E Reliability**: Fixed a race condition in `app_e2e_test.dart` by adding
+  `pumpAndSettle()` and a 2-second safety delay before the "Save" button tap,
+  resolving the intermittent "missed tap" failure on slow emulators.
+- **Deployment Confirmation**: The `deploy-android` task now verifies the build
+  with a full Android integration test before uploading the APK.
+
+## Coverage Gate Maintenance
+
+- **Ghost Path Check**: Updated `scripts/check_coverage.dart` to verify that all
+  excluded files still exist on disk, preventing "ghost paths" from cluttering
+  the configuration.
+- **Increased Coverage**: Included `account_sync_manager.dart` and
+  `email_repository_impl.dart` in the coverage gate.
+- **Current Status**: Total unit coverage increased to **82%**.
+
 ## IMAP attachments: accurate sizes and reliable downloads
 
 Attachments in IMAP accounts previously showed as "0 B" in the UI because

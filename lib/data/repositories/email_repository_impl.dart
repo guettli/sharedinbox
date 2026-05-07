@@ -2032,6 +2032,27 @@ class EmailRepositoryImpl implements EmailRepository {
             .toList(),
       );
 
+  @override
+  Stream<List<model.Email>> observeEmailsInThread(
+    String accountId,
+    String mailboxPath,
+    String threadId,
+  ) {
+    return (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                t.threadId.equals(threadId),
+          )
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sentAt),
+            (t) => OrderingTerm.asc(t.receivedAt),
+          ]))
+        .watch()
+        .map((rows) => rows.map(_toModel).toList());
+  }
+
   model.Email _toModel(Email row) {
     List<model.EmailAddress> parseAddresses(String json) {
       final list = jsonDecode(json) as List<dynamic>;

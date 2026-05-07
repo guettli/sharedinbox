@@ -9,7 +9,16 @@ abstract class EmailRepository {
     String accountId,
     String mailboxPath,
   );
+
+  /// Returns all emails belonging to [threadId] in [mailboxPath].
+  Stream<List<Email>> observeEmailsInThread(
+    String accountId,
+    String mailboxPath,
+    String threadId,
+  );
+
   Future<Email?> getEmail(String emailId);
+
   Future<EmailBody> getEmailBody(String emailId);
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
   Future<void> setFlag(

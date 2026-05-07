@@ -180,6 +180,14 @@ class FakeEmailRepository implements EmailRepository {
       });
 
   @override
+  Stream<List<Email>> observeEmailsInThread(
+    String accountId,
+    String mailboxPath,
+    String threadId,
+  ) =>
+      Stream.value(_emails.where((e) => e.threadId == threadId).toList());
+
+  @override
   Future<Email?> getEmail(String emailId) async => _emailDetail;
 
   @override

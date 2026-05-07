@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 
-final _dateFmt = DateFormat('MMM d');
+final _dateFmt = DateFormat('EEE, MMM d, HH:mm');
 
 class ThreadDetailScreen extends ConsumerWidget {
   const ThreadDetailScreen({
@@ -23,74 +27,33 @@ class ThreadDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.watch(emailRepositoryProvider);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Thread')),
-      body: StreamBuilder<List<EmailThread>>(
-        stream: repo.observeThreads(accountId, mailboxPath),
-        builder: (ctx, snap) {
-          if (!snap.hasData) {
+      appBar: AppBar(
+        title: const Text('Thread'),
+      ),
+      body: StreamBuilder<List<Email>>(
+        stream: repo.observeEmailsInThread(accountId, mailboxPath, threadId),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          final thread =
-              snap.data!.where((t) => t.threadId == threadId).firstOrNull;
-          if (thread == null) {
-            return const Center(child: Text('Thread not found'));
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
           }
-          // Re-fetch the individual emails from observeEmails to show them.
-          return StreamBuilder<List<Email>>(
-            stream: repo.observeEmails(accountId, mailboxPath),
-            builder: (ctx, emailSnap) {
-              if (!emailSnap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final emails = emailSnap.data!
-                  .where(
-                    (e) => (e.threadId ?? e.id) == threadId,
-                  )
-                  .toList()
-                ..sort((a, b) {
-                  final da = a.sentAt ?? a.receivedAt;
-                  final db = b.sentAt ?? b.receivedAt;
-                  return da.compareTo(db);
-                });
+          final emails = snapshot.data ?? [];
+          if (emails.isEmpty) {
+            return const Center(child: Text('Thread not found or empty'));
+          }
 
-              if (emails.isEmpty) {
-                return const Center(child: Text('No messages'));
-              }
-
-              return ListView.builder(
-                itemCount: emails.length,
-                itemBuilder: (ctx, i) {
-                  final e = emails[i];
-                  final sender = e.from.isNotEmpty
-                      ? (e.from.first.name ?? e.from.first.email)
-                      : '(unknown)';
-                  return ListTile(
-                    leading: Icon(
-                      e.isSeen ? Icons.mail_outline : Icons.mail,
-                      color:
-                          e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-                    ),
-                    title: Text(
-                      sender,
-                      style: e.isSeen
-                          ? null
-                          : const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text(
-                      e.preview ?? e.subject ?? '(no subject)',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: Text(
-                      e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-                      style: Theme.of(ctx).textTheme.bodySmall,
-                    ),
-                    onTap: () => context.push(
-                      '/accounts/$accountId/mailboxes/${Uri.encodeComponent(mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
-                    ),
-                  );
-                },
+          return ListView.builder(
+            padding: const EdgeInsets.all(8),
+            itemCount: emails.length,
+            itemBuilder: (context, index) {
+              final email = emails[index];
+              return _EmailMessageCard(
+                email: email,
+                isLatest: index == emails.length - 1,
               );
             },
           );
@@ -98,4 +61,212 @@ class ThreadDetailScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _EmailMessageCard extends ConsumerStatefulWidget {
+  const _EmailMessageCard({required this.email, required this.isLatest});
+  final Email email;
+  final bool isLatest;
+
+  @override
+  ConsumerState<_EmailMessageCard> createState() => _EmailMessageCardState();
+}
+
+class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
+  late Future<EmailBody> _bodyFuture;
+  bool _expanded = false;
+  bool _loadRemoteImages = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bodyFuture =
+        ref.read(emailRepositoryProvider).getEmailBody(widget.email.id);
+    _expanded = widget.isLatest;
+    if (widget.email.isSeen == false) {
+      unawaited(
+        ref.read(emailRepositoryProvider).setFlag(widget.email.id, seen: true),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        children: [
+          ListTile(
+            onTap: () => setState(() => _expanded = !_expanded),
+            leading: CircleAvatar(
+              child: Text(
+                widget.email.from.isNotEmpty
+                    ? widget.email.from.first.email[0].toUpperCase()
+                    : '?',
+              ),
+            ),
+            title: Text(
+              widget.email.from.isNotEmpty
+                  ? widget.email.from.first.toString()
+                  : '(unknown)',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              widget.email.sentAt != null
+                  ? _dateFmt.format(widget.email.sentAt!)
+                  : '',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.email.isFlagged)
+                  const Icon(Icons.star, color: Colors.amber, size: 20),
+                Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+          if (_expanded) _buildExpandedBody(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpandedBody() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(),
+          FutureBuilder<EmailBody>(
+            future: _bodyFuture,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                );
+              }
+              final body = snapshot.data!;
+              final hasHtml = (body.htmlBody ?? '').trim().isNotEmpty;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (hasHtml) ...[
+                    if (!_loadRemoteImages)
+                      TextButton.icon(
+                        icon: const Icon(Icons.image_outlined, size: 16),
+                        label: const Text('Load remote images'),
+                        onPressed: () =>
+                            setState(() => _loadRemoteImages = true),
+                      ),
+                    Html(
+                      data: body.htmlBody!,
+                      extensions: [
+                        if (!_loadRemoteImages) _BlockRemoteImagesExtension(),
+                      ],
+                    ),
+                  ] else
+                    SelectableText(
+                      body.textBody ?? '(no body text)',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.reply),
+                        onPressed: () => _reply(context, body, replyAll: false),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: _delete,
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _reply(BuildContext context, EmailBody body, {required bool replyAll}) {
+    final to =
+        widget.email.from.isNotEmpty ? widget.email.from.first.email : '';
+    final subject = (widget.email.subject?.startsWith('Re:') ?? false)
+        ? widget.email.subject!
+        : 'Re: ${widget.email.subject ?? ''}';
+
+    unawaited(
+      context.push(
+        '/compose',
+        extra: {
+          'accountId': widget.email.accountId,
+          'replyToEmailId': widget.email.id,
+          'prefillTo': to,
+          'prefillSubject': subject,
+          'prefillBody': _quotedBody(body),
+        },
+      ),
+    );
+  }
+
+  String _quotedBody(EmailBody body) {
+    final date = widget.email.sentAt != null
+        ? _dateFmt.format(widget.email.sentAt!)
+        : '';
+    final from = widget.email.from.isNotEmpty
+        ? widget.email.from.first.toString()
+        : '(unknown)';
+    final text = body.textBody ?? htmlToPlain(body.htmlBody ?? '');
+    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    return '\n\n— On $date, $from wrote:\n$quoted';
+  }
+
+  Future<void> _delete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete email'),
+        content: const Text('Move this email to Trash?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      unawaited(ref.read(emailRepositoryProvider).deleteEmail(widget.email.id));
+    }
+  }
+}
+
+class _BlockRemoteImagesExtension extends HtmlExtension {
+  @override
+  Set<String> get supportedTags => {'img'};
+
+  @override
+  bool matches(ExtensionContext context) {
+    if (context.elementName != 'img') return false;
+    final src = context.attributes['src'] ?? '';
+    return src.startsWith('http://') || src.startsWith('https://');
+  }
+
+  @override
+  InlineSpan build(ExtensionContext context) =>
+      const WidgetSpan(child: SizedBox.shrink());
 }
