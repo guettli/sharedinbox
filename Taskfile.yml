@@ -54,72 +54,124 @@ tasks:
     internal: true
     run: once
     deps: [_pub-get]
+    sources:
+      - lib/**/*.dart
+      - pubspec.yaml
+    generates:
+      - lib/**/*.g.dart
     cmds:
       - scripts/silent_on_success.sh fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   codegen:
     desc: Generate Drift DB code (run after any schema change)
     deps: [_preflight, _pub-get]
+    sources:
+      - lib/**/*.dart
+      - pubspec.yaml
+    generates:
+      - lib/**/*.g.dart
     cmds:
       - fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   analyze:
     desc: Static analysis (flutter analyze)
     deps: [_preflight, _codegen]
+    sources:
+      - lib/**/*.dart
+      - test/**/*.dart
+      - pubspec.yaml
+      - analysis_options.yaml
     cmds:
       - scripts/run_analyze.sh
 
   format:
     desc: Format all Dart source files
     deps: [_preflight]
+    sources:
+      - "**/*.dart"
     cmds:
       - fvm dart format .
 
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply
     deps: [_preflight]
+    sources:
+      - lib/**/*.dart
+      - test/**/*.dart
     cmds:
       - fvm dart fix --apply
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
     deps: [_preflight, _codegen]
+    sources:
+      - lib/**/*.dart
+      - test/unit/**/*.dart
+    generates:
+      - coverage/lcov.info
     cmds:
       - scripts/run_unit_tests.sh
 
   test-widget:
     desc: Widget tests — headless, no display or network required
     deps: [_preflight, _codegen]
+    sources:
+      - lib/**/*.dart
+      - test/widget/**/*.dart
     cmds:
       - scripts/run_widget_tests.sh
 
   test-flutter:
     desc: Full Flutter test suite (unit + widget + integration)
     deps: [_preflight]
+    sources:
+      - lib/**/*.dart
+      - test/**/*.dart
+      - integration_test/**/*.dart
     cmds:
       - fvm flutter test
 
   integration:
     desc: Integration tests against a local Stalwart mail server
     deps: [_flutter-check]
+    sources:
+      - lib/**/*.dart
+      - test/integration/**/*.dart
     cmds:
       - stalwart-dev/test.sh
 
   integration-ui:
     desc: UI E2E tests on Linux via Xvfb — headless, no emulator needed
     deps: [_preflight, _linux-deps-check, _pub-get]
+    sources:
+      - lib/**/*.dart
+      - integration_test/app_e2e_test.dart
     cmds:
       - stalwart-dev/integration_ui_test.sh
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
     deps: [_preflight, _android-sdk-check, _android-avd-setup]
+    sources:
+      - lib/**/*.dart
+      - integration_test/app_e2e_test.dart
+      - android/**/*
+    generates:
+      - build/integration-android.done
     cmds:
       - stalwart-dev/integration_android_test.sh
+      - touch build/integration-android.done
 
   build-linux:
     desc: Build the Linux desktop app (debug)
     deps: [_preflight, _linux-deps-check, _codegen]
+    method: timestamp
+    sources:
+      - lib/**/*.dart
+      - linux/**/*
+      - pubspec.yaml
+    generates:
+      - build/linux/x64/debug/bundle/sharedinbox
     cmds:
       - scripts/silent_on_success.sh fvm flutter build linux --debug --no-pub
 
@@ -162,18 +214,31 @@ tasks:
   build-android:
     desc: Build a release APK
     deps: [_preflight, _android-sdk-check, _pub-get]
+    method: timestamp
+    sources:
+      - lib/**/*.dart
+      - android/**/*
+      - pubspec.yaml
+    generates:
+      - build/app/outputs/flutter-apk/app-release.apk
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
     deps: [check, build-android]
+    sources:
+      - build/app/outputs/flutter-apk/app-release.apk
+    generates:
+      - build/deploy-android.done
     dotenv: [".env"]
     cmds:
       # integration-android runs after check (not in parallel) so the two E2E
       # test suites don't compete for CPU and slow the Android emulator.
       - task: integration-android
       - scripts/deploy_android.sh
+      - touch build/deploy-android.done
+
 
   run:
     desc: Run the app on Linux desktop

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
@@ -102,6 +103,27 @@ class EmailBodies extends Table {
   Set<Column> get primaryKey => {emailId};
 }
 
+@DataClassName('ThreadRow')
+class Threads extends Table {
+  TextColumn get id => text()(); // the threadId
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get mailboxPath => text()();
+  TextColumn get subject => text().nullable()();
+  DateTimeColumn get latestDate => dateTime()();
+  IntColumn get messageCount => integer().withDefault(const Constant(1))();
+  BoolColumn get hasUnread => boolean().withDefault(const Constant(false))();
+  BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
+  // JSON-encoded List<{name,email}>
+  TextColumn get participantsJson => text().withDefault(const Constant('[]'))();
+  TextColumn get preview => text().nullable()();
+  TextColumn get latestEmailId => text()();
+  TextColumn get emailIdsJson => text().withDefault(const Constant('[]'))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, mailboxPath, id};
+}
+
 /// Protocol-agnostic outbound change queue.
 /// Local mutations are written here before being sent to the server,
 /// enabling offline-first behaviour and durable retries.
@@ -195,6 +217,7 @@ class Drafts extends Table {
     Mailboxes,
     Emails,
     EmailBodies,
+    Threads,
     Drafts,
     SyncStates,
     PendingChanges,
@@ -206,7 +229,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -265,6 +288,69 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 16) {
             await m.addColumn(accounts, accounts.manageSieveAvailable);
+          }
+          if (from < 17) {
+            await m.createTable(threads);
+            // Populate threads from existing emails.
+            final allRows = await select(emails).get();
+            final groups = <String, List<Email>>{};
+            for (final row in allRows) {
+              final key =
+                  '${row.accountId}:${row.mailboxPath}:${row.threadId ?? row.id}';
+              groups.putIfAbsent(key, () => []).add(row);
+            }
+
+            for (final threadEmails in groups.values) {
+              threadEmails.sort((a, b) {
+                final da = a.sentAt ?? a.receivedAt;
+                final db = b.sentAt ?? b.receivedAt;
+                return da.compareTo(db);
+              });
+              final latest = threadEmails.last;
+
+              await into(threads).insert(
+                ThreadsCompanion.insert(
+                  id: latest.threadId ?? latest.id,
+                  accountId: latest.accountId,
+                  mailboxPath: latest.mailboxPath,
+                  subject: Value(latest.subject),
+                  latestDate: latest.sentAt ?? latest.receivedAt,
+                  messageCount: Value(threadEmails.length),
+                  hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
+                  isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+                  preview: Value(latest.preview),
+                  latestEmailId: latest.id,
+                  emailIdsJson: Value(
+                    jsonEncode(threadEmails.map((e) => e.id).toList()),
+                  ),
+                  participantsJson:
+                      Value(latest.fromJson), // Good enough for migration
+                ),
+              );
+            }
+          }
+          if (from < 18) {
+            // Index for sorting email list by date.
+            await m.createIndex(
+              Index(
+                'emails_received_at',
+                'CREATE INDEX emails_received_at ON emails (accountId, mailboxPath, receivedAt DESC);',
+              ),
+            );
+            // Index for finding emails in a thread.
+            await m.createIndex(
+              Index(
+                'emails_thread_id',
+                'CREATE INDEX emails_thread_id ON emails (accountId, mailboxPath, threadId);',
+              ),
+            );
+            // Index for pending changes queue.
+            await m.createIndex(
+              Index(
+                'pending_changes_account_id',
+                'CREATE INDEX pending_changes_account_id ON pending_changes (accountId);',
+              ),
+            );
           }
         },
       );

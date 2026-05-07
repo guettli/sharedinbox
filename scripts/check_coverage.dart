@@ -46,6 +46,7 @@ const _excluded = {
   'lib/ui/screens/address_emails_screen.dart',
   'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/compose_screen.dart',
+  'lib/ui/screens/crash_screen.dart',
   'lib/ui/screens/edit_account_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
   'lib/ui/screens/mailbox_list_screen.dart',
@@ -57,15 +58,22 @@ const _excluded = {
   'lib/ui/widgets/folder_drawer.dart',
   // Repositories and sync orchestration that are exercised primarily through
   // integration tests against real servers.
-  'lib/core/sync/account_sync_manager.dart',
   'lib/data/jmap/jmap_client.dart',
   'lib/data/jmap/sieve_repository.dart',
   'lib/data/repositories/account_repository_impl.dart',
-  'lib/data/repositories/email_repository_impl.dart',
   'lib/data/repositories/sync_log_repository_impl.dart',
 };
 
 void main() {
+  // Check for ghost paths in _excluded and _noCode.
+  final allConfiguredPaths = {..._excluded, ..._noCode};
+  for (final path in allConfiguredPaths) {
+    if (!File(path).existsSync()) {
+      stderr.writeln('ERROR: Ghost path found in check_coverage.dart: $path');
+      exit(2);
+    }
+  }
+
   final lcovFile = File('coverage/lcov.info');
   final measuredFiles = lcovFile.existsSync()
       ? lcovFile

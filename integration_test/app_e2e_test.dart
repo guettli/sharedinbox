@@ -208,7 +208,13 @@ void main() {
 
       final saveButton = find.widgetWithText(FilledButton, 'Save');
       await tester.ensureVisible(saveButton);
+      // Dismiss keyboard to stop cursor animation and avoid layout artifacts.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      // Extra wait to ensure layout is fully stable on slow emulators.
+      await tester.pump(const Duration(seconds: 2));
       await tester.tap(saveButton);
+
       // Wait for the account tile to appear in the account list. Use a
       // ListTile-scoped finder so we don't exit early when 'Alice' still
       // appears in the form's EditableText before navigation pops back.
@@ -220,10 +226,9 @@ void main() {
 
       // ── Navigate to mailboxes ──────────────────────────────────────────────
       _log('navigate to mailboxes');
-      // On the slow Android emulator (software rendering), aliceTile can be
-      // briefly absent right after pumpUntil's trailing 300ms settle while the
-      // route-pop animation finalises. Re-confirm it's present before tapping.
-      await pumpUntil(tester, aliceTile, timeout: const Duration(seconds: 5));
+      // On the slow Android emulator (software rendering), animations can lag.
+      // Ensure the route transition is fully settled before tapping.
+      await tester.pumpAndSettle();
       await tester.tap(aliceTile);
       await pumpUntil(tester, find.text('INBOX'));
       _log('mailboxes settled');

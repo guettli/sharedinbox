@@ -1,0 +1,9 @@
+# Plan Log
+
+- Optimized `task deploy-android` using marker files and Taskfile `sources`/`generates`.
+- Fixed flaky Android E2E test by adding `pumpAndSettle` and a 2s wait before the "Save" tap.
+- Implemented `CrashScreen` widget and global error handlers in `main.dart`.
+- Refactored threading to be database-backed using a new `Threads` table.
+- Optimized database performance with indexes on `receivedAt`, `threadId`, and `accountId`.
+- Cleaned up `scripts/check_coverage.dart`: added ghost path check and reduced `_excluded` list.
+- Verified all changes with `task check`. Total unit coverage: 82%.
