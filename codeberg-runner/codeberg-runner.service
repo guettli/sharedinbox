@@ -5,10 +5,12 @@ After=docker.service network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/picoclaw/projects/sharedinbox3/codeberg-runner
-ExecStartPre=-/usr/bin/docker compose down
-ExecStart=/usr/bin/docker compose up --build
-ExecStop=/usr/bin/docker compose down
+User=si
+Group=si
+WorkingDirectory=/
+ExecStartPre=-/usr/bin/docker compose -f /home/si/projects/sharedinbox3/codeberg-runner/docker-compose.yml down
+ExecStart=/usr/bin/docker compose -f /home/si/projects/sharedinbox3/codeberg-runner/docker-compose.yml up --build
+ExecStop=/usr/bin/docker compose -f /home/si/projects/sharedinbox3/codeberg-runner/docker-compose.yml down
 Restart=always
 RestartSec=10
 
