@@ -61,4 +61,4 @@ linux/flutter/generated_plugins.cmake
 
 *.log
 runner-data/
-codeberg-runner/runner-data/
+sharedinbox-runner/runner-data/
