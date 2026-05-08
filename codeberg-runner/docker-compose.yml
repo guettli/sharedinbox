@@ -1,0 +1,19 @@
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - ../.env
+    environment:
+      - GITEA_INSTANCE_URL=${CODEBERG_INSTANCE_URL:-https://codeberg.org}
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${CODEBERG_CI_RUNNER_TOKEN}
+      - GITEA_RUNNER_NAME=${CODEBERG_RUNNER_NAME:-laptop-runner}
+      - GITEA_RUNNER_LABELS=${CODEBERG_RUNNER_LABELS:-self-hosted,linux,nix}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runner-data:/data
+    # Use host network if you want to access local services easily, 
+    # but for most cases the default bridge is fine.
+    # network_mode: host 

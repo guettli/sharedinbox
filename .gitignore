@@ -60,3 +60,5 @@ linux/flutter/generated_plugins.cmake
 .task
 
 *.log
+runner-data/
+codeberg-runner/runner-data/

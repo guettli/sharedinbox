@@ -175,6 +175,19 @@ tasks:
     cmds:
       - scripts/silent_on_success.sh fvm flutter build linux --debug --no-pub
 
+  build-linux-release:
+    desc: Build the Linux desktop app (release)
+    deps: [_preflight, _linux-deps-check, _codegen]
+    method: timestamp
+    sources:
+      - lib/**/*.dart
+      - linux/**/*
+      - pubspec.yaml
+    generates:
+      - build/linux/x64/release/bundle/sharedinbox
+    cmds:
+      - scripts/silent_on_success.sh fvm flutter build linux --release --no-pub
+
   _android-avd-setup:
     internal: true
     run: once
