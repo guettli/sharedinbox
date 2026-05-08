@@ -56,3 +56,5 @@ linux/flutter/generated_plugins.cmake
 .fvm/
 .qwen
 .claude
+
+.task
