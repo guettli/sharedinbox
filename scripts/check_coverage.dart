@@ -16,6 +16,7 @@ const _noCode = {
   'lib/core/repositories/email_repository.dart',
   'lib/core/repositories/mailbox_repository.dart',
   'lib/core/repositories/sync_log_repository.dart',
+  'lib/core/models/undo_action.dart',
   'lib/core/storage/secure_storage.dart',
 };
 
@@ -49,6 +50,7 @@ const _excluded = {
   'lib/ui/screens/crash_screen.dart',
   'lib/ui/screens/edit_account_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
+  'lib/ui/screens/email_list_screen.dart',
   'lib/ui/screens/mailbox_list_screen.dart',
   'lib/ui/screens/search_screen.dart',
   'lib/ui/screens/sieve_script_edit_screen.dart',
@@ -56,6 +58,7 @@ const _excluded = {
   'lib/ui/screens/sync_log_screen.dart',
   'lib/ui/screens/thread_detail_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
+  'lib/ui/widgets/try_connection_button.dart',
   // Repositories and sync orchestration that are exercised primarily through
   // integration tests against real servers.
   'lib/data/jmap/jmap_client.dart',

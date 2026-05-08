@@ -1349,6 +1349,30 @@ class EmailRepositoryImpl implements EmailRepository {
     _changeCtrl.add(accountId);
   }
 
+  @override
+  Future<bool> cancelPendingChange(String emailId, String changeType) async {
+    // Find the latest pending change for this email/type that hasn't been
+    // attempted yet.
+    final query = _db.select(_db.pendingChanges)
+      ..where(
+        (t) =>
+            t.resourceId.equals(emailId) &
+            t.changeType.equals(changeType) &
+            t.attempts.equals(0),
+      )
+      ..orderBy([(t) => OrderingTerm.desc(t.id)])
+      ..limit(1);
+
+    final row = await query.getSingleOrNull();
+    if (row != null) {
+      final count = await (_db.delete(_db.pendingChanges)
+            ..where((t) => t.id.equals(row.id)))
+          .go();
+      return count > 0;
+    }
+    return false;
+  }
+
   /// Drains pending changes for [accountId] via the appropriate protocol.
   /// Called at the start of each sync cycle. Returns count of applied changes.
   @override

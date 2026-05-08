@@ -66,6 +66,10 @@ abstract class EmailRepository {
   /// retries it.
   Future<void> retryMutation(int id);
 
+  /// Tries to remove a pending change for [emailId] of [changeType] from the
+  /// queue. Returns true if a pending change was found and removed.
+  Future<bool> cancelPendingChange(String emailId, String changeType);
+
   /// Emits the accountId whenever a new change is enqueued locally.
   /// Used by AccountSyncManager to trigger an immediate flush.
   Stream<String> get onChangesQueued;

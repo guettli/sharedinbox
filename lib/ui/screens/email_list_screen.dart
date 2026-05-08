@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
@@ -117,10 +118,34 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
   }
 
+  void _showUndoSnackbar(UndoAction action) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          action.type == UndoType.delete
+              ? '${action.emailIds.length} email(s) moved to Trash'
+              : '${action.emailIds.length} email(s) moved',
+        ),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => ref.read(undoServiceProvider.notifier).undo(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
+
+    ref.listen<UndoAction?>(undoServiceProvider, (previous, next) {
+      if (next != null && previous?.id != next.id) {
+        _showUndoSnackbar(next);
+      }
+    });
+
     return Scaffold(
       appBar: _selecting ? _selectionBar() : _normalBar(repo, accountAsync),
       drawer: _selecting
@@ -304,6 +329,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     for (final id in ids) {
       await repo.moveEmail(id, mailbox.path);
     }
+
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: widget.accountId,
+      type: UndoType.move,
+      emailIds: ids,
+      sourceMailboxPath: widget.mailboxPath,
+      destinationMailboxPath: mailbox.path,
+    );
+    ref.read(undoServiceProvider.notifier).pushAction(action);
   }
 
   Future<void> _batchArchive() =>
@@ -335,6 +370,15 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     for (final id in ids) {
       await repo.deleteEmail(id);
     }
+
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: widget.accountId,
+      type: UndoType.delete,
+      emailIds: ids,
+      sourceMailboxPath: widget.mailboxPath,
+    );
+    ref.read(undoServiceProvider.notifier).pushAction(action);
   }
 
   Future<void> _batchMarkSpam() =>
@@ -378,6 +422,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     for (final id in ids) {
       await repo.moveEmail(id, chosen);
     }
+
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: widget.accountId,
+      type: UndoType.move,
+      emailIds: ids,
+      sourceMailboxPath: widget.mailboxPath,
+      destinationMailboxPath: chosen,
+    );
+    ref.read(undoServiceProvider.notifier).pushAction(action);
   }
 
   Widget _buildThreadList(List<EmailThread> threads) {
@@ -509,6 +563,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           },
           onDismissed: (direction) async {
             final repo = ref.read(emailRepositoryProvider);
+            final type = direction == DismissDirection.startToEnd
+                ? UndoType.move
+                : UndoType.delete;
+
             if (direction == DismissDirection.startToEnd) {
               final archive = await ref
                   .read(mailboxRepositoryProvider)
@@ -517,10 +575,29 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               for (final id in t.emailIds) {
                 await repo.moveEmail(id, archive.path);
               }
+
+              final action = UndoAction(
+                id: DateTime.now().toIso8601String(),
+                accountId: widget.accountId,
+                type: type,
+                emailIds: t.emailIds,
+                sourceMailboxPath: widget.mailboxPath,
+                destinationMailboxPath: archive.path,
+              );
+              ref.read(undoServiceProvider.notifier).pushAction(action);
             } else {
               for (final id in t.emailIds) {
                 await repo.deleteEmail(id);
               }
+
+              final action = UndoAction(
+                id: DateTime.now().toIso8601String(),
+                accountId: widget.accountId,
+                type: type,
+                emailIds: t.emailIds,
+                sourceMailboxPath: widget.mailboxPath,
+              );
+              ref.read(undoServiceProvider.notifier).pushAction(action);
             }
           },
           child: tile,

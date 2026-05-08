@@ -207,6 +207,9 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> moveEmail(String emailId, String destMailboxPath) async {}
 
   @override
+  Future<bool> cancelPendingChange(String id, String type) async => false;
+
+  @override
   Future<void> deleteEmail(String emailId) async {}
 
   @override

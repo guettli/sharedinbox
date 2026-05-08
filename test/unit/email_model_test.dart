@@ -165,4 +165,41 @@ void main() {
       expect(att.size, 2048);
     });
   });
+
+  group('SyncEmailsResult', () {
+    test('operator + adds fields', () {
+      const r1 =
+          SyncEmailsResult(fetched: 1, skipped: 2, bytesTransferred: 100);
+      const r2 =
+          SyncEmailsResult(fetched: 3, skipped: 4, bytesTransferred: 200);
+      final r3 = r1 + r2;
+      expect(r3.fetched, 4);
+      expect(r3.skipped, 6);
+      expect(r3.bytesTransferred, 300);
+    });
+
+    test('zero constant is correct', () {
+      expect(SyncEmailsResult.zero.fetched, 0);
+      expect(SyncEmailsResult.zero.skipped, 0);
+      expect(SyncEmailsResult.zero.bytesTransferred, 0);
+    });
+  });
+
+  group('FailedMutation', () {
+    test('constructs and stores all fields', () {
+      final now = DateTime.now();
+      final fm = FailedMutation(
+        id: 1,
+        accountId: 'acc1',
+        changeType: 'move',
+        resourceId: 'e1',
+        lastError: 'error',
+        attempts: 1,
+        createdAt: now,
+      );
+      expect(fm.id, 1);
+      expect(fm.changeType, 'move');
+      expect(fm.createdAt, now);
+    });
+  });
 }

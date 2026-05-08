@@ -62,5 +62,71 @@ void main() {
       expect(empty.unreadCount, 0);
       expect(empty.totalCount, 0);
     });
+
+    test('compareMailboxes sorts by role priority then path', () {
+      const inbox = Mailbox(
+        id: '1',
+        accountId: 'a',
+        path: 'INBOX',
+        name: 'INBOX',
+        unreadCount: 0,
+        totalCount: 0,
+        role: 'inbox',
+      );
+      const sent = Mailbox(
+        id: '2',
+        accountId: 'a',
+        path: 'Sent',
+        name: 'Sent',
+        unreadCount: 0,
+        totalCount: 0,
+        role: 'sent',
+      );
+      const apple = Mailbox(
+        id: '3',
+        accountId: 'a',
+        path: 'Apple',
+        name: 'Apple',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      const zebra = Mailbox(
+        id: '4',
+        accountId: 'a',
+        path: 'Zebra',
+        name: 'Zebra',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+
+      expect(compareMailboxes(inbox, sent), lessThan(0));
+      expect(compareMailboxes(sent, inbox), greaterThan(0));
+      expect(compareMailboxes(sent, apple), lessThan(0));
+      expect(compareMailboxes(apple, zebra), lessThan(0));
+      expect(compareMailboxes(zebra, apple), greaterThan(0));
+    });
+
+    test('compareMailboxes handles unknown roles', () {
+      const m1 = Mailbox(
+        id: '1',
+        accountId: 'a',
+        path: 'Path1',
+        name: 'P1',
+        unreadCount: 0,
+        totalCount: 0,
+        role: 'unknown',
+      );
+      const m2 = Mailbox(
+        id: '2',
+        accountId: 'a',
+        path: 'Path2',
+        name: 'P2',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+
+      // unknown role and null role both have priority 99, so they sort by path.
+      expect(compareMailboxes(m1, m2), lessThan(0));
+    });
   });
 }

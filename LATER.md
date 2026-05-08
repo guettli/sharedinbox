@@ -96,10 +96,6 @@ Thread view (group by `References` / `In-Reply-To`)
 
 ---
 
-mail-loop.com (anstatt shared inbox).
-
----
-
 ---
 
 full-sync: Imaging the sync got out-of-sync somehow. Provide a way via UI to force a sync. First

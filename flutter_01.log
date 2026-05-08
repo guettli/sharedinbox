@@ -1,0 +1,95 @@
+Flutter crash report.
+Please report a bug at https://github.com/flutter/flutter/issues.
+
+## command
+
+flutter test test/widget/ --no-pub --reporter expanded
+
+## exception
+
+ShaderCompilerException: ShaderCompilerException: Shader compilation of "/home/picoclaw/fvm/versions/3.41.6/packages/flutter/lib/src/material/shaders/ink_sparkle.frag" to "build/unit_test_assets/shaders/ink_sparkle.frag" failed with exit code 1.
+impellerc stdout:
+
+impellerc stderr:
+Could not write file to "build/unit_test_assets/shaders/ink_sparkle.frag.spirv"
+
+
+
+
+```
+#0      ShaderCompiler.compileShader (package:flutter_tools/src/build_system/tools/shader_compiler.dart:196:9)
+<asynchronous suspension>
+#1      writeBundle.<anonymous closure> (package:flutter_tools/src/bundle_builder.dart:208:25)
+<asynchronous suspension>
+#2      Future.wait.<anonymous closure> (dart:async/future.dart:546:21)
+<asynchronous suspension>
+#3      writeBundle (package:flutter_tools/src/bundle_builder.dart:171:3)
+<asynchronous suspension>
+#4      TestCommand._buildTestAsset (package:flutter_tools/src/commands/test.dart:791:7)
+<asynchronous suspension>
+#5      TestCommand.runCommand (package:flutter_tools/src/commands/test.dart:487:7)
+<asynchronous suspension>
+#6      FlutterCommand.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command.dart:1590:27)
+<asynchronous suspension>
+#7      AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#8      CommandRunner.runCommand (package:args/command_runner.dart:212:13)
+<asynchronous suspension>
+#9      FlutterCommandRunner.runCommand.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:496:9)
+<asynchronous suspension>
+#10     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#11     FlutterCommandRunner.runCommand (package:flutter_tools/src/runner/flutter_command_runner.dart:431:5)
+<asynchronous suspension>
+#12     FlutterCommandRunner.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:307:33)
+<asynchronous suspension>
+#13     run.<anonymous closure>.<anonymous closure> (package:flutter_tools/runner.dart:104:11)
+<asynchronous suspension>
+#14     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#15     main (package:flutter_tools/executable.dart:103:3)
+<asynchronous suspension>
+```
+
+## flutter doctor
+
+```
+[✓] Flutter (Channel stable, 3.41.6, on Ubuntu 24.04.4 LTS 6.8.0-111-generic, locale de_DE.UTF-8) [125ms]
+    • Flutter version 3.41.6 on channel stable at /home/picoclaw/fvm/versions/3.41.6
+    • Upstream repository https://github.com/flutter/flutter.git
+    • Framework revision db50e20168 (6 weeks ago), 2026-03-25 16:21:00 -0700
+    • Engine revision 425cfb54d0
+    • Dart version 3.11.4
+    • DevTools version 2.54.2
+    • Feature flags: enable-web, enable-linux-desktop, enable-macos-desktop, enable-windows-desktop, enable-android, enable-ios, cli-animations, enable-native-assets, omit-legacy-version-file, enable-lldb-debugging, enable-uiscene-migration
+
+[✓] Android toolchain - develop for Android devices (Android SDK version 35.0.0) [3,1s]
+    • Android SDK at /home/picoclaw/Android/Sdk
+    • Emulator version 36.5.11.0 (build_id 15261927) (CL:N/A)
+    • Platform android-36, build-tools 35.0.0
+    • Java binary at: /nix/store/8r5yr9kkhnrx2mdhykcfwj7yzv9x1825-openjdk-17.0.18+8/lib/openjdk/bin/java
+      This JDK is specified by the JAVA_HOME environment variable.
+      To manually set the JDK path, use: `flutter config --jdk-dir="path/to/jdk"`.
+    • Java version OpenJDK Runtime Environment (build 17.0.18+8-nixos)
+    • All Android licenses accepted.
+
+[✓] Chrome - develop for the web [31ms]
+    • Chrome at google-chrome
+
+[✓] Linux toolchain - develop for Linux desktop [1.269ms]
+    • clang version 21.1.7
+    • cmake version 4.1.2
+    • ninja version 1.13.1
+    • pkg-config version 0.29.2
+    • GL_EXT_framebuffer_blit: no
+    • GL_EXT_texture_format_BGRA8888: no
+
+[✓] Connected device (2 available) [532ms]
+    • Linux (desktop) • linux  • linux-x64      • Ubuntu 24.04.4 LTS 6.8.0-111-generic
+    • Chrome (web)    • chrome • web-javascript • Google Chrome 144.0.7559.132
+
+[✓] Network resources [756ms]
+    • All expected network resources are available.
+
+• No issues found!
+```

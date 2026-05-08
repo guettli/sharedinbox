@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -133,6 +134,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   );
                   if (confirmed != true || !context.mounted) return;
                   await repo.deleteEmail(widget.emailId);
+
+                  if (header != null) {
+                    ref.read(undoServiceProvider.notifier).pushAction(
+                          UndoAction(
+                            id: DateTime.now().toIso8601String(),
+                            accountId: header.accountId,
+                            type: UndoType.delete,
+                            emailIds: [widget.emailId],
+                            sourceMailboxPath: header.mailboxPath,
+                          ),
+                        );
+                  }
+
                   if (context.mounted) context.pop();
                 },
               ),
@@ -342,14 +356,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (chosen == null || !context.mounted) return;
 
     await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
+
+    ref.read(undoServiceProvider.notifier).pushAction(
+          UndoAction(
+            id: DateTime.now().toIso8601String(),
+            accountId: header.accountId,
+            type: UndoType.move,
+            emailIds: [widget.emailId],
+            sourceMailboxPath: header.mailboxPath,
+            destinationMailboxPath: chosen,
+          ),
+        );
+
     if (context.mounted) context.pop();
   }
 }
 
-/// Replaces `<img>` tags whose src is an absolute http(s) URL with an empty
-/// widget. Defeats tracking pixels and remote-image loading until the user
-/// explicitly opts in. Inline `cid:` and `data:` images fall through and are
-/// rendered by the default handler.
 class _BlockRemoteImagesExtension extends HtmlExtension {
   @override
   Set<String> get supportedTags => {'img'};

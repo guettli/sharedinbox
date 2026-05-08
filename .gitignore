@@ -58,3 +58,5 @@ linux/flutter/generated_plugins.cmake
 .claude
 
 .task
+
+*.log

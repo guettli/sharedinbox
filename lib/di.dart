@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
-
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
+import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -110,6 +111,11 @@ final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
 final manageSieveProbeServiceProvider =
     Provider<ManageSieveProbeService>((ref) {
   return ManageSieveProbeService(ref.watch(accountRepositoryProvider));
+});
+
+final undoServiceProvider =
+    StateNotifierProvider<UndoService, UndoAction?>((ref) {
+  return UndoService(ref);
 });
 
 final accountByIdProvider =

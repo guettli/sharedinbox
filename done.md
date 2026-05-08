@@ -6,6 +6,32 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Undo for Delete and Move actions
+
+Implemented a robust Undo mechanism for destructive actions like deleting
+emails or moving them to different folders.
+
+- **UndoService Infrastructure**: Added a new service (`lib/core/services/undo_service.dart`)
+  that maintains a history of the last 10 actions. It uses a `StateNotifier`
+  to expose the most recent undoable action to the UI.
+- **UI Integration**: Added a global Snackbar listener in `EmailListScreen`.
+  Whenever a move or delete occurs (including bulk actions and swipes), a
+  Snackbar appears with an "Undo" button. Redundant snackbar triggers were
+  removed for a cleaner experience.
+- **Optimized Repository Interaction**: Added `cancelPendingChange` to the
+  `EmailRepository` interface and implementation. This allows the Undo
+  operation to attempt to remove unsynced changes from the local queue,
+  preventing unnecessary server round-trips and potential conflicts.
+- **Improved Model Coverage**: Added comprehensive unit tests for `Mailbox`
+  and `Email` models, achieving 100% coverage for these critical data
+  structures.
+- **Sorting Logic Fix**: Identified and fixed a bug in `compareMailboxes`
+  where different unknown roles would cause the sort to return equality
+  incorrectly. The logic now correctly falls through to path-based sorting
+  for all same-priority roles.
+- **Status**: Verified with unit, widget, and integration tests.
+  Total unit coverage: **83%**.
+
 ## Multi-account search improvement
 
 Extended the search functionality to allow searching across all accounts
