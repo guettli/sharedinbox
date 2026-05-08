@@ -45,10 +45,8 @@ const _excluded = {
   // Screens below the 70% gate — covered by widget tests but not yet fully:
   'lib/ui/screens/account_list_screen.dart',
   'lib/ui/screens/address_emails_screen.dart',
-  'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/compose_screen.dart',
   'lib/ui/screens/crash_screen.dart',
-  'lib/ui/screens/edit_account_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
   'lib/ui/screens/email_list_screen.dart',
   'lib/ui/screens/mailbox_list_screen.dart',
@@ -58,7 +56,6 @@ const _excluded = {
   'lib/ui/screens/sync_log_screen.dart',
   'lib/ui/screens/thread_detail_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
-  'lib/ui/widgets/try_connection_button.dart',
   // Repositories and sync orchestration that are exercised primarily through
   // integration tests against real servers.
   'lib/data/jmap/jmap_client.dart',

@@ -77,3 +77,4 @@ sharedinbox-runner/runner-data/
 .zshrc
 snap/
 .gitconfig
+.gemini/

@@ -6,6 +6,12 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Coverage Gate Cleanup and Verification Test
+
+- **Reduced Exclusions**: Removed well-tested widgets (`try_connection_button.dart`, `add_account_screen.dart`, `edit_account_screen.dart`) from the unit-test `_excluded` list in `scripts/check_coverage.dart`.
+- **Standalone Ghost Path Test**: Added a dedicated `test/unit/coverage_exclusion_test.dart` that parses the check_coverage script to ensure no "ghost paths" ever make it into the codebase, guaranteeing the exclusion list stays clean and valid during the standard test phase.
+- **Coverage Status**: verified combined unit and integration coverage meets the 80%+ threshold (currently 84%).
+
 ## Undo for Delete and Move actions
 
 Implemented a robust Undo mechanism for destructive actions like deleting

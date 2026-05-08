@@ -65,9 +65,3 @@ reflects the server state across multiple accounts and protocols.
   especially for mobile.
 - **Fuzz Testing**: Add a basic fuzz test for the sync engine to handle simulated
   real-world network latency and RFC edge cases.
-
-### 6. Coverage Gate Maintenance
-
-Reduce the `_excluded` list in `scripts/check_coverage.dart`.
-Add a test to ensure the exclusion list doesn't contain files that no longer
-exist ("ghost paths").
