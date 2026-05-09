@@ -245,6 +245,13 @@ tasks:
     generates:
       - build/deploy-android.done
     dotenv: [".env"]
+    preconditions:
+      - sh: test -n "$ANDROID_APK_SCP_HOST"
+        msg: "ANDROID_APK_SCP_HOST is not set in .env"
+      - sh: test -n "$ANDROID_APK_SCP_USER"
+        msg: "ANDROID_APK_SCP_USER is not set in .env"
+      - sh: test -n "$ANDROID_APK_SCP_PATH"
+        msg: "ANDROID_APK_SCP_PATH is not set in .env"
     cmds:
       # integration-android runs after check (not in parallel) so the two E2E
       # test suites don't compete for CPU and slow the Android emulator.

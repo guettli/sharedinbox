@@ -6,6 +6,17 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Network Resilience: Exponential Backoff and Smart Retries
+
+Improved the sync engine's reliability on intermittent connections.
+
+- **Exponential Backoff**: Replaced fixed retry intervals with a strategy that
+  scales from 5s up to 15m depending on consecutive failures.
+- **Permanent Error Handling**: Sync loops now detect authentication failures
+  and stop automatically to prevent account lockout or useless battery drain.
+- **Manual Override**: "Pull to refresh" now triggers an immediate full account
+  sync, bypassing any active backoff timers.
+
 ## Sync Reliability and Reliability Runner
 
 Implemented a robust verification system to ensure the local database accurately

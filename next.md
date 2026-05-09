@@ -26,8 +26,6 @@ Continue the momentum from the safety hardening and infrastructure work.
 The focus is on making the app ready for real-world use with robust error
 handling and performance optimizations.
 
-- **Sync Reliability**: Implement a "Sync reliability" check that compares local
-  counts with server counts periodically.
 - **Search Optimization**: Add a "Recent Searches" history and optimize local search
   indexing for large accounts.
 - **UI Polishing**: Ensure consistent spacing and theming across all screens.
@@ -47,19 +45,7 @@ Refactor attachment logic to be more consistent and provide better user feedback
 - **Indexing**: Optimize database indexes for search performance.
 - **UI**: Add advanced search filters (date range, attachment size, etc.).
 
-### 4. Network Resilience and Fuzz Testing
+### 4. Fuzz Testing
 
-- **Network Resilience**: Improve backoff and retry logic for intermittent connections,
-  especially for mobile.
-- **Fuzz Testing**: Add a basic fuzz test for the sync engine to handle simulated
-  real-world network latency and RFC edge cases.
-s the server state across multiple accounts and protocols.
-
-- **Reliability Runner**: A background service that periodically fetches a "ground truth"
-  snapshot (UIDs/IDs only) for all folders and identifies discrepancies.
-- **Sync Reliability UI**: Add a "Sync health" indicator in settings showing when each
-  account was last verified 100%.
-- **Network Resilience**: Improve backoff and retry logic for intermittent connections,
-  especially for mobile.
 - **Fuzz Testing**: Add a basic fuzz test for the sync engine to handle simulated
   real-world network latency and RFC edge cases.

@@ -1,6 +1,12 @@
 # Plan Log
 
 ## 2026-05-09
+- Implemented Network Resilience (Task 1/4 from next.md).
+- Added exponential backoff logic (5s to 15m) to IMAP and JMAP sync loops.
+- Added permanent error detection (auth/credentials) to stop sync loops gracefully.
+- Improved "Pull to Refresh" in email list to trigger full account sync and bypass backoff.
+- Verified with integration tests.
+
 - Started work on Sync Reliability (Task 1/5 from next.md).
 - Added `verifySyncReliability` to `EmailRepository` interface and models.
 - Implemented `verifySyncReliability` in `EmailRepositoryImpl` for IMAP and JMAP.

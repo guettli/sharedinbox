@@ -160,9 +160,10 @@ class _AccountSync implements _SyncLoop {
           mailboxStats: stats.mailboxStats,
           protocolLog: capturedLog,
         );
-        await _idle();
         _backoffSeconds = 5;
+        await _idle();
       } catch (e, st) {
+        final isPermanent = _isPermanentError(e);
         try {
           await _syncLog.log(
             accountId: account.id,
@@ -180,15 +181,43 @@ class _AccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write IMAP sync log entry: $logErr');
         }
+
+        if (isPermanent) {
+          log(
+            'Permanent error for ${account.email}, stopping sync loop.',
+            error: e,
+            stackTrace: st,
+          );
+          _running = false;
+          break;
+        }
+
         log(
           'Sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
-          stackTrace: st,
         );
-        await Future.delayed(Duration(seconds: _backoffSeconds));
-        _backoffSeconds = (_backoffSeconds * 2).clamp(5, 300);
+        await _waitSeconds(_backoffSeconds);
+        _backoffSeconds = (_backoffSeconds * 2).clamp(5, 900); // max 15m
       }
     }
+  }
+
+  bool _isPermanentError(Object e) {
+    final s = e.toString().toLowerCase();
+    // enough_mail doesn't always have typed exceptions for auth, so we check strings.
+    return s.contains('invalid credentials') ||
+        s.contains('authentication failed') ||
+        s.contains('login failed');
+  }
+
+  Future<void> _waitSeconds(int seconds) async {
+    if (!_running) return;
+    _stopSignal = Completer<void>();
+    await Future.any([
+      Future.delayed(Duration(seconds: seconds)),
+      _stopSignal!.future,
+    ]);
+    _stopSignal = null;
   }
 
   Future<(_SyncStats, String?)> _runSync(bool verbose) async {
@@ -345,6 +374,7 @@ class _JmapAccountSync implements _SyncLoop {
         _backoffSeconds = 5;
         await _wait();
       } catch (e, st) {
+        final isPermanent = _isPermanentError(e);
         try {
           await _syncLog.log(
             accountId: account.id,
@@ -362,15 +392,44 @@ class _JmapAccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write JMAP sync log entry: $logErr');
         }
+
+        if (isPermanent) {
+          log(
+            'Permanent JMAP error for ${account.email}, stopping sync loop.',
+            error: e,
+            stackTrace: st,
+          );
+          _running = false;
+          break;
+        }
+
         log(
           'JMAP sync failed for ${account.email}, retrying in ${_backoffSeconds}s',
           error: e,
-          stackTrace: st,
         );
         await _waitSeconds(_backoffSeconds);
-        _backoffSeconds = (_backoffSeconds * 2).clamp(5, 300);
+        _backoffSeconds = (_backoffSeconds * 2).clamp(5, 900); // max 15m
       }
     }
+  }
+
+  bool _isPermanentError(Object e) {
+    final s = e.toString().toLowerCase();
+    return s.contains('invalid credentials') ||
+        s.contains('authentication failed') ||
+        s.contains('login failed') ||
+        s.contains('401') ||
+        s.contains('403');
+  }
+
+  Future<void> _waitSeconds(int seconds) async {
+    if (!_running) return;
+    _stopSignal = Completer<void>();
+    await Future.any([
+      Future.delayed(Duration(seconds: seconds)),
+      _stopSignal!.future,
+    ]);
+    _stopSignal = null;
   }
 
   Future<(_SyncStats, String?)> _runSync(bool verbose) async {
@@ -444,16 +503,6 @@ class _JmapAccountSync implements _SyncLoop {
     ]);
 
     await pushSub.cancel();
-    _stopSignal = null;
-  }
-
-  Future<void> _waitSeconds(int seconds) async {
-    if (!_running) return;
-    _stopSignal = Completer<void>();
-    await Future.any([
-      Future.delayed(Duration(seconds: seconds)),
-      _stopSignal!.future,
-    ]);
     _stopSignal = null;
   }
 }

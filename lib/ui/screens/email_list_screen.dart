@@ -286,8 +286,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   Widget _buildStreamBody(EmailRepository emailRepo) {
     return RefreshIndicator(
-      onRefresh: () =>
-          emailRepo.syncEmails(widget.accountId, widget.mailboxPath),
+      onRefresh: () async {
+        // Trigger a background sync cycle immediately.
+        ref.read(syncManagerProvider).syncNow(widget.accountId);
+        // Also wait for this specific mailbox to sync for immediate feedback.
+        await emailRepo.syncEmails(widget.accountId, widget.mailboxPath);
+      },
       child: StreamBuilder<List<EmailThread>>(
         stream: emailRepo.observeThreads(widget.accountId, widget.mailboxPath),
         builder: (ctx, snap) {
