@@ -133,7 +133,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     ),
                   );
                   if (confirmed != true || !context.mounted) return;
-                  await repo.deleteEmail(widget.emailId);
+                  final destPath = await repo.deleteEmail(widget.emailId);
 
                   if (header != null) {
                     ref.read(undoServiceProvider.notifier).pushAction(
@@ -143,6 +143,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                             type: UndoType.delete,
                             emailIds: [widget.emailId],
                             sourceMailboxPath: header.mailboxPath,
+                            destinationMailboxPath: destPath,
                             originalEmails: [header],
                           ),
                         );

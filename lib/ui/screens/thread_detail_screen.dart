@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 
@@ -250,7 +251,25 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
       ),
     );
     if (confirmed == true) {
-      unawaited(ref.read(emailRepositoryProvider).deleteEmail(widget.email.id));
+      final repo = ref.read(emailRepositoryProvider);
+      // Fetch data first for IMAP undo support
+      final original = await repo.getEmail(widget.email.id);
+
+      final destPath = await repo.deleteEmail(widget.email.id);
+
+      if (original != null) {
+        ref.read(undoServiceProvider.notifier).pushAction(
+              UndoAction(
+                id: DateTime.now().toIso8601String(),
+                accountId: widget.email.accountId,
+                type: UndoType.delete,
+                emailIds: [widget.email.id],
+                sourceMailboxPath: widget.email.mailboxPath,
+                destinationMailboxPath: destPath,
+                originalEmails: [original],
+              ),
+            );
+      }
     }
   }
 }

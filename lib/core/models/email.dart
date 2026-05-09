@@ -40,6 +40,48 @@ class Email {
     this.inReplyTo,
     this.references,
   });
+
+  Email copyWith({
+    String? id,
+    String? accountId,
+    String? mailboxPath,
+    int? uid,
+    String? subject,
+    DateTime? sentAt,
+    DateTime? receivedAt,
+    List<EmailAddress>? from,
+    List<EmailAddress>? to,
+    List<EmailAddress>? cc,
+    String? preview,
+    bool? isSeen,
+    bool? isFlagged,
+    bool? hasAttachment,
+    String? threadId,
+    String? messageId,
+    String? inReplyTo,
+    String? references,
+  }) {
+    return Email(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      mailboxPath: mailboxPath ?? this.mailboxPath,
+      uid: uid ?? this.uid,
+      subject: subject ?? this.subject,
+      sentAt: sentAt ?? this.sentAt,
+      receivedAt: receivedAt ?? this.receivedAt,
+      from: from ?? this.from,
+      to: to ?? this.to,
+      cc: cc ?? this.cc,
+      preview: preview ?? this.preview,
+      isSeen: isSeen ?? this.isSeen,
+      isFlagged: isFlagged ?? this.isFlagged,
+      hasAttachment: hasAttachment ?? this.hasAttachment,
+      threadId: threadId ?? this.threadId,
+      messageId: messageId ?? this.messageId,
+      inReplyTo: inReplyTo ?? this.inReplyTo,
+      references: references ?? this.references,
+    );
+  }
 }
 
 /// A group of related emails sharing the same thread.

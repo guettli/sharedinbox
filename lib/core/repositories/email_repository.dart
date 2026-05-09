@@ -27,7 +27,11 @@ abstract class EmailRepository {
     bool? flagged,
   });
   Future<void> moveEmail(String emailId, String destMailboxPath);
-  Future<void> deleteEmail(String emailId);
+
+  /// Deletes the email. Returns the path of the mailbox it was moved to
+  /// (e.g. Trash) if it was a soft-delete, or null if it was hard-deleted.
+  Future<String?> deleteEmail(String emailId);
+
   Future<void> sendEmail(String accountId, EmailDraft draft);
 
   /// Downloads [attachment] bytes from the server (or local cache) and returns

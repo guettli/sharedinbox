@@ -1478,17 +1478,25 @@ class EmailRepositoryImpl implements EmailRepository {
         'dest': destMailboxPath,
       }),
     );
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+    // Optimistic: move the cached row locally instead of hard-deleting.
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(mailboxPath: Value(destMailboxPath)),
+    );
     await _updateThread(
       row.accountId,
       row.mailboxPath,
       row.threadId ?? emailId,
     );
-    // Destination will be updated when synced (IMAP move is a delete + copy).
+    await _updateThread(
+      row.accountId,
+      destMailboxPath,
+      row.threadId ?? emailId,
+    );
+    // Destination UID will be updated when synced (IMAP move is a delete + copy).
   }
 
   @override
-  Future<void> deleteEmail(String emailId) async {
+  Future<String?> deleteEmail(String emailId) async {
     final row = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
         .getSingle();
@@ -1503,7 +1511,8 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
 
     if (trashRow != null && trashRow.path != row.mailboxPath) {
-      return moveEmail(emailId, trashRow.path);
+      await moveEmail(emailId, trashRow.path);
+      return trashRow.path;
     }
 
     // Already in Trash or no Trash folder — hard delete.
@@ -1520,7 +1529,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.mailboxPath,
         row.threadId ?? emailId,
       );
-      return;
+      return null;
     }
 
     await _enqueueChange(
@@ -1535,6 +1544,7 @@ class EmailRepositoryImpl implements EmailRepository {
       row.mailboxPath,
       row.threadId ?? emailId,
     );
+    return null;
   }
 
   // ── pending_changes queue ──────────────────────────────────────────────────

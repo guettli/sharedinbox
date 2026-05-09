@@ -209,14 +209,13 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<void>);
 
   @override
-  _i4.Future<void> deleteEmail(String? emailId) => (super.noSuchMethod(
+  _i4.Future<String?> deleteEmail(String? emailId) => (super.noSuchMethod(
         Invocation.method(
           #deleteEmail,
           [emailId],
         ),
-        returnValue: _i4.Future<void>.value(),
-        returnValueForMissingStub: _i4.Future<void>.value(),
-      ) as _i4.Future<void>);
+        returnValue: _i4.Future<String?>.value(),
+      ) as _i4.Future<String?>);
 
   @override
   _i4.Future<void> sendEmail(

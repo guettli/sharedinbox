@@ -213,7 +213,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> restoreEmails(List<Email> emails) async {}
 
   @override
-  Future<void> deleteEmail(String emailId) async {}
+  Future<String?> deleteEmail(String emailId) async => null;
 
   @override
   Stream<String> get onChangesQueued => const Stream.empty();

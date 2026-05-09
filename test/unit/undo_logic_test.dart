@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -180,5 +181,46 @@ void main() {
           ..where((t) => t.mailboxPath.equals('INBOX')))
         .get();
     expect(restored, isNotEmpty, reason: 'JMAP email should be restored to Inbox after undo');
+  });
+
+  test('Undo deletion for IMAP enqueues reverse move if cancel fails', () async {
+    const emailId = 'acc1:101';
+    final original = await repo.getEmail(emailId);
+
+    // 1. Delete
+    final destPath = await repo.deleteEmail(emailId);
+    expect(destPath, 'Trash');
+
+    // 2. Mark the pending change as "attempted" so it cannot be cancelled
+    await (db.update(db.pendingChanges)..where((t) => t.resourceId.equals(emailId))).write(
+      const PendingChangesCompanion(attempts: Value(1)),
+    );
+
+    // 3. Undo
+    final action = UndoAction(
+      id: 'undo3',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: [emailId],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: destPath,
+      originalEmails: [original!],
+    );
+    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).undo();
+
+    // 4. Verify local state
+    final restored = await (db.select(db.emails)
+          ..where((t) => t.id.equals(emailId))
+          ..where((t) => t.mailboxPath.equals('INBOX')))
+        .get();
+    expect(restored, isNotEmpty);
+
+    // 5. Verify a NEW pending change was enqueued (Trash -> INBOX)
+    final changes = await db.select(db.pendingChanges).get();
+    final reverseMove = changes.firstWhere((c) => c.changeType == 'move' && c.attempts == 0);
+    final payload = jsonDecode(reverseMove.payload) as Map<String, dynamic>;
+    expect(payload['mailboxPath'], 'Trash');
+    expect(payload['dest'], 'INBOX');
   });
 }

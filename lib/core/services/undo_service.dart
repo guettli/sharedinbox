@@ -31,30 +31,39 @@ class UndoService extends StateNotifier<UndoAction?> {
     state = _history.isNotEmpty ? _history.last : null;
 
     final repo = _ref.read(emailRepositoryProvider);
-    
-    // For IMAP, the rows were hard-deleted, so we must restore them first.
-    if (action.originalEmails.isNotEmpty) {
-      await repo.restoreEmails(action.originalEmails);
-    }
 
     for (final id in action.emailIds) {
-      // Try to cancel the original change. 
-      // Deletes might have been implemented as moves to Trash, so try both.
+      // 1. Try to cancel the original change (if not started yet).
       final cancelled = await repo.cancelPendingChange(id, 'delete') ||
           await repo.cancelPendingChange(id, 'move');
 
-      // Move the email back to its source to reverse local DB state and
-      // (if not cancelled) enqueue the reverse change on the server.
       try {
+        final original = action.originalEmails.isEmpty
+            ? null
+            : action.originalEmails.where((e) => e.id == id).firstOrNull;
+
+        // 2. If row is missing (hard delete), restore it first.
+        // We restore it at its CURRENT state (where it is on the server, 
+        // or where it was moving to).
+        if (original != null) {
+          final currentPath = cancelled
+              ? action.sourceMailboxPath
+              : (action.destinationMailboxPath ?? action.sourceMailboxPath);
+          await repo.restoreEmails([original.copyWith(mailboxPath: currentPath)]);
+        }
+
+        // 3. Move it back to source. 
+        // This updates local DB optimistically and (if not cancelled) enqueues 
+        // a reverse move on the server.
         await repo.moveEmail(id, action.sourceMailboxPath);
 
         if (cancelled) {
-          // If we cancelled the original change, and then moved it back,
-          // we've just enqueued a NEW 'move' change that is redundant.
+          // 4. If we successfully cancelled the original, the reverse move
+          // we just enqueued is redundant.
           await repo.cancelPendingChange(id, 'move');
         }
       } catch (e) {
-        // If it still fails, nothing more we can do locally.
+        // Best effort.
       }
     }
   }

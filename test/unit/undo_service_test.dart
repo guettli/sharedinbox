@@ -143,7 +143,7 @@ void main() {
     container.read(undoServiceProvider.notifier).pushAction(action);
     await container.read(undoServiceProvider.notifier).undo();
 
-    verify(mockEmailRepo.restoreEmails([email])).called(1);
+    verify(mockEmailRepo.restoreEmails(any)).called(1);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 

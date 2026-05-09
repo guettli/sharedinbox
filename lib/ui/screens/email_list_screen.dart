@@ -118,33 +118,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
   }
 
-  void _showUndoSnackbar(UndoAction action) {
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          action.type == UndoType.delete
-              ? '${action.emailIds.length} email(s) moved to Trash'
-              : '${action.emailIds.length} email(s) moved',
-        ),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => ref.read(undoServiceProvider.notifier).undo(),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
-
-    ref.listen<UndoAction?>(undoServiceProvider, (previous, next) {
-      if (next != null && previous?.id != next.id) {
-        _showUndoSnackbar(next);
-      }
-    });
 
     return Scaffold(
       appBar: _selecting ? _selectionBar() : _normalBar(repo, accountAsync),
@@ -389,8 +366,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         .whereType<Email>()
         .toList();
 
+    String? lastDestPath;
     for (final id in ids) {
-      await repo.deleteEmail(id);
+      lastDestPath = await repo.deleteEmail(id);
     }
 
     final action = UndoAction(
@@ -399,6 +377,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       type: UndoType.delete,
       emailIds: ids,
       sourceMailboxPath: widget.mailboxPath,
+      destinationMailboxPath: lastDestPath,
       originalEmails: originalEmails,
     );
     ref.read(undoServiceProvider.notifier).pushAction(action);
@@ -626,8 +605,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               );
               ref.read(undoServiceProvider.notifier).pushAction(action);
             } else {
+              String? lastDestPath;
               for (final id in t.emailIds) {
-                await repo.deleteEmail(id);
+                lastDestPath = await repo.deleteEmail(id);
               }
 
               final action = UndoAction(
@@ -636,6 +616,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 type: type,
                 emailIds: t.emailIds,
                 sourceMailboxPath: widget.mailboxPath,
+                destinationMailboxPath: lastDestPath,
                 originalEmails: originalEmails,
               );
               ref.read(undoServiceProvider.notifier).pushAction(action);

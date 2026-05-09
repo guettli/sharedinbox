@@ -6,6 +6,15 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+- **Optimistic UI**: Both IMAP and JMAP `moveEmail` operations are now optimistic,
+  updating the local database immediately instead of waiting for sync. This
+  provides instant feedback and ensures rows are available for Undo actions.
+- **Global Undo Support**: Introduced `UndoShell` and `ShellRoute` to provide a
+  consistent "Undo" experience across all screens, automatically surfacing the
+  Undo SnackBar whenever a destructive action is performed.
+- **Improved Thread Support**: Fixed a bug where deleting emails from the
+  `ThreadDetailScreen` lacked Undo logic.
+
 ## Undo Feature Fix (IMAP)
 
 Fixed a bug where undoing an email deletion or move would fail for IMAP accounts
