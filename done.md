@@ -4,7 +4,18 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
-## Tasks
+## Tasks (2026-05-09)
+
+- **Fix Crash Page (Issue 3)**: Added a "Report this issue on Codeberg" button to the
+  global `CrashScreen`, facilitating easier bug reporting for users.
+- **Fix Show Mail Headers (Issue 1)**: Extended the database schema and repository
+  to fetch and store raw email headers. Added a new "Headers" tab/view in the
+  email detail screen to display them in a zebra-colored table.
+- **Fix Exception on Undo of Delete (Issue 2)**: Added `toJson()` and `fromJson()`
+  to the `EmailAddress` model to support correct serialization during undo
+  operations, resolving a crash when restoring deleted emails.
+- **Dev Environment Hardening**: Added an automated check and fix for Nix
+  experimental features (`nix-command`, `flakes`) to the `Taskfile.yml`.
 
 - **Optimistic UI**: Both IMAP and JMAP `moveEmail` operations are now optimistic,
   updating the local database immediately instead of waiting for sync. This

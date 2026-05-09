@@ -1,6 +1,13 @@
 # Plan Log
 
 ## 2026-05-09
+- Fixed Crash Page (Issue 3): Added Codeberg reporting button.
+- Fixed Show Mail Headers (Issue 1): Added raw header storage and UI display.
+- Fixed Exception on Undo of delete (Issue 2): Added serialization to EmailAddress.
+- Updated Taskfile with Nix experimental features check.
+- Pushed all changes to branch `fix-issues`.
+
+## 2026-05-09
 - Fixed Undo feature for IMAP accounts.
 - Identified that IMAP moveEmail hard-deletes local rows, making Undo impossible without data.
 - Added `originalEmails` to `UndoAction` and `restoreEmails` to `EmailRepository`.
