@@ -4,8 +4,11 @@ import 'package:test/test.dart';
 void main() {
   test('coverage exclusion list contains no ghost paths', () {
     final scriptFile = File('scripts/check_coverage.dart');
-    expect(scriptFile.existsSync(), isTrue,
-        reason: 'scripts/check_coverage.dart must exist',);
+    expect(
+      scriptFile.existsSync(),
+      isTrue,
+      reason: 'scripts/check_coverage.dart must exist',
+    );
 
     final content = scriptFile.readAsStringSync();
 
@@ -35,8 +38,11 @@ void main() {
     expect(paths, isNotEmpty, reason: 'Should have found some excluded paths');
 
     for (final path in paths) {
-      expect(File(path).existsSync(), isTrue,
-          reason: 'Ghost path found in check_coverage.dart: $path',);
+      expect(
+        File(path).existsSync(),
+        isTrue,
+        reason: 'Ghost path found in check_coverage.dart: $path',
+      );
     }
   });
 }

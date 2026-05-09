@@ -660,6 +660,211 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  // ── Sync Reliability ──────────────────────────────────────────────────────
+
+  @override
+  Future<model.ReliabilityResult> verifySyncReliability(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        return _verifyReliabilityImap(account, password, mailboxPath);
+      case account_model.AccountType.jmap:
+        return _verifyReliabilityJmap(account, password, mailboxPath);
+    }
+  }
+
+  Future<model.ReliabilityResult> _verifyReliabilityImap(
+    account_model.Account account,
+    String password,
+    String mailboxPath,
+  ) async {
+    final client =
+        await _imapConnect(account, _effectiveUsername(account), password);
+    try {
+      await client.selectMailboxByPath(mailboxPath);
+      final serverUids = (await client.uidSearchMessages(searchCriteria: 'ALL'))
+              .matchingSequence
+              ?.toList() ??
+          [];
+      final serverUidSet = serverUids.toSet();
+
+      final localRows = await (_db.select(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(account.id) &
+                  t.mailboxPath.equals(mailboxPath),
+            ))
+          .get();
+      final localUidSet = localRows.map((r) => r.uid).toSet();
+
+      final missingLocally = <String>[];
+      for (final uid in serverUids) {
+        if (!localUidSet.contains(uid)) {
+          missingLocally.add(uid.toString());
+        }
+      }
+
+      final missingOnServer = <String>[];
+      for (final row in localRows) {
+        if (!serverUidSet.contains(row.uid)) {
+          missingOnServer.add(row.id);
+        }
+      }
+
+      final flagMismatches = <model.FlagMismatch>[];
+      // To avoid fetching thousands of flags, we only check if there aren't too many.
+      if (serverUids.isNotEmpty && serverUids.length < 5000) {
+        final fetch = await client.uidFetchMessages(
+          imap.MessageSequence.fromAll(),
+          'FLAGS',
+        );
+        final localMap = {for (final r in localRows) r.uid: r};
+        for (final msg in fetch.messages) {
+          final uid = msg.uid;
+          if (uid == null) continue;
+          final local = localMap[uid];
+          if (local == null) continue;
+
+          final serverSeen = msg.flags?.contains(r'\Seen') ?? false;
+          final serverFlagged = msg.flags?.contains(r'\Flagged') ?? false;
+
+          if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
+            flagMismatches.add(
+              model.FlagMismatch(
+                id: local.id,
+                serverSeen: serverSeen,
+                localSeen: local.isSeen,
+                serverFlagged: serverFlagged,
+                localFlagged: local.isFlagged,
+              ),
+            );
+          }
+        }
+      }
+
+      return model.ReliabilityResult(
+        missingLocally: missingLocally,
+        missingOnServer: missingOnServer,
+        flagMismatches: flagMismatches,
+      );
+    } finally {
+      await client.logout();
+    }
+  }
+
+  Future<model.ReliabilityResult> _verifyReliabilityJmap(
+    account_model.Account account,
+    String password,
+    String mailboxJmapId,
+  ) async {
+    final jmapUrl = account.jmapUrl!;
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+
+    final allServerIds = <String>[];
+    int position = 0;
+    while (true) {
+      final responses = await jmap.call([
+        [
+          'Email/query',
+          {
+            'accountId': jmap.accountId,
+            'filter': {'inMailbox': mailboxJmapId},
+            'limit': 1000,
+            'position': position,
+          },
+          '0',
+        ]
+      ]);
+      final queryResult = _responseArgs(responses, 0, 'Email/query');
+      final ids = List<String>.from(queryResult['ids'] as List);
+      allServerIds.addAll(ids);
+      if (ids.length < 1000) break;
+      position += ids.length;
+    }
+    final serverIdSet = allServerIds.toSet();
+
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(account.id) &
+                t.mailboxPath.equals(mailboxJmapId),
+          ))
+        .get();
+    final localIdSet = localRows.map((r) => r.id.split(':').last).toSet();
+
+    final missingLocally = <String>[];
+    for (final id in allServerIds) {
+      if (!localIdSet.contains(id)) {
+        missingLocally.add(id);
+      }
+    }
+
+    final missingOnServer = <String>[];
+    for (final row in localRows) {
+      final jmapId = row.id.split(':').last;
+      if (!serverIdSet.contains(jmapId)) {
+        missingOnServer.add(row.id);
+      }
+    }
+
+    final flagMismatches = <model.FlagMismatch>[];
+    if (allServerIds.isNotEmpty && allServerIds.length < 5000) {
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': allServerIds,
+            'properties': ['id', 'keywords'],
+          },
+          '0',
+        ]
+      ]);
+      final getResult = _responseArgs(responses, 0, 'Email/get');
+      final list = getResult['list'] as List<dynamic>;
+      final localMap = {for (final r in localRows) r.id.split(':').last: r};
+
+      for (final e in list) {
+        final m = e as Map<String, dynamic>;
+        final id = m['id'] as String;
+        final local = localMap[id];
+        if (local == null) continue;
+
+        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+        final serverSeen = keywords.containsKey(r'$seen');
+        final serverFlagged = keywords.containsKey(r'$flagged');
+
+        if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
+          flagMismatches.add(
+            model.FlagMismatch(
+              id: local.id,
+              serverSeen: serverSeen,
+              localSeen: local.isSeen,
+              serverFlagged: serverFlagged,
+              localFlagged: local.isFlagged,
+            ),
+          );
+        }
+      }
+    }
+
+    return model.ReliabilityResult(
+      missingLocally: missingLocally,
+      missingOnServer: missingOnServer,
+      flagMismatches: flagMismatches,
+    );
+  }
+
   // ── JMAP email sync ────────────────────────────────────────────────────────
 
   static const _jmapPageSize = 500;

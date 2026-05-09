@@ -182,3 +182,42 @@ class SyncEmailsResult {
         bytesTransferred: bytesTransferred + other.bytesTransferred,
       );
 }
+
+class ReliabilityResult {
+  const ReliabilityResult({
+    required this.missingLocally,
+    required this.missingOnServer,
+    required this.flagMismatches,
+  });
+
+  final List<String> missingLocally; // Server UIDs/IDs not in local DB
+  final List<String> missingOnServer; // Local UIDs/IDs not on server
+  final List<FlagMismatch> flagMismatches;
+
+  bool get isHealthy =>
+      missingLocally.isEmpty &&
+      missingOnServer.isEmpty &&
+      flagMismatches.isEmpty;
+
+  static const healthy = ReliabilityResult(
+    missingLocally: [],
+    missingOnServer: [],
+    flagMismatches: [],
+  );
+}
+
+class FlagMismatch {
+  const FlagMismatch({
+    required this.id,
+    required this.serverSeen,
+    required this.localSeen,
+    required this.serverFlagged,
+    required this.localFlagged,
+  });
+
+  final String id;
+  final bool serverSeen;
+  final bool localSeen;
+  final bool serverFlagged;
+  final bool localFlagged;
+}

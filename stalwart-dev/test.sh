@@ -66,15 +66,17 @@ START=$(date +%s)
 run_tests() {
   # If unit tests already produced a coverage baseline, merge integration coverage
   # into it so the final gate reflects both suites.
+  local target="${1:-test/integration/}"
   if [ -f coverage/lcov.info ]; then
     cp coverage/lcov.info coverage/lcov.base.info
-    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter expanded test/integration/ >"$tmp" 2>&1
+    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter expanded "$target" >"$tmp" 2>&1
     rm -f coverage/lcov.base.info
   else
-    fvm flutter test --concurrency=1 --reporter expanded test/integration/ >"$tmp" 2>&1
+    fvm flutter test --concurrency=1 --reporter expanded "$target" >"$tmp" 2>&1
   fi
 }
-if run_tests; then
+if run_tests "${@:-}"; then
+  cat "$tmp"
   grep -E "^All [0-9]+ tests passed" "$tmp" || tail -1 "$tmp"
 else
   cat "$tmp"

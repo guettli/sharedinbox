@@ -195,6 +195,20 @@ class SyncLogMailboxes extends Table {
   IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
 }
 
+/// Stores the result of the periodic "ground truth" verification.
+@DataClassName('SyncHealthRow')
+class SyncHealth extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  DateTimeColumn get lastVerifiedAt => dateTime()();
+  BoolColumn get isHealthy => boolean()();
+  // JSON summary of discrepancies (missingLocally, missingOnServer, etc.)
+  TextColumn get discrepancySummary => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {accountId};
+}
+
 /// Auto-saved compose drafts — persisted across app restarts.
 class Drafts extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -223,13 +237,14 @@ class Drafts extends Table {
     PendingChanges,
     SyncLogs,
     SyncLogMailboxes,
+    SyncHealth,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -351,6 +366,9 @@ class AppDatabase extends _$AppDatabase {
                 'CREATE INDEX pending_changes_account_id ON pending_changes (accountId);',
               ),
             );
+          }
+          if (from < 19) {
+            await m.createTable(syncHealth);
           }
         },
       );

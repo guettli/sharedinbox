@@ -6,6 +6,23 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Sync Reliability and Reliability Runner
+
+Implemented a robust verification system to ensure the local database accurately
+reflects the server state across multiple accounts and protocols.
+
+- **Reliability Check**: Added `verifySyncReliability` to `EmailRepository` to
+  compare local UIDs/IDs and flags against the server's "ground truth".
+- **Reliability Runner**: A background service (`lib/core/sync/reliability_runner.dart`)
+  that periodically identifies discrepancies.
+- **Database Support**: Added `SyncHealth` table (Schema v19) to store verification
+  results.
+- **UI Integration**: Added "Sync health" indicators to the account list tiles and
+  a manual "Verify sync health" menu action.
+- **Comprehensive Testing**: Verified with a new integration test suite
+  (`test/integration/sync_reliability_test.dart`) covering both IMAP and JMAP
+  paths.
+
 ## Coverage Gate Cleanup and Verification Test
 
 - **Reduced Exclusions**: Removed well-tested widgets (`try_connection_button.dart`, `add_account_screen.dart`, `edit_account_screen.dart`) from the unit-test `_excluded` list in `scripts/check_coverage.dart`.

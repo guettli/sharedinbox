@@ -65,6 +65,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     super.initState();
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
+    ref.read(reliabilityRunnerProvider).start();
   }
 
   @override

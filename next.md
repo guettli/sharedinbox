@@ -42,20 +42,18 @@ Refactor attachment logic to be more consistent and provide better user feedback
 - **Progress**: Show download progress in the UI when fetching attachments.
 - **Caching**: Implement a more robust caching mechanism with expiry.
 
-### 3. Sync Reliability and Conflict Resolution
-
-- **Reliability**: Implement a "Reliability Runner" that periodically verifies local state against the server.
-- **Conflicts**: Improve handling of concurrent changes (e.g., mail moved on server while local move is pending).
-
-### 4. Advanced Search and Performance
+### 3. Advanced Search and Performance
 
 - **Indexing**: Optimize database indexes for search performance.
 - **UI**: Add advanced search filters (date range, attachment size, etc.).
 
-### 5. Multi-account Sync and Reliability Runner
+### 4. Network Resilience and Fuzz Testing
 
-Implement a robust verification system to ensure the local database accurately
-reflects the server state across multiple accounts and protocols.
+- **Network Resilience**: Improve backoff and retry logic for intermittent connections,
+  especially for mobile.
+- **Fuzz Testing**: Add a basic fuzz test for the sync engine to handle simulated
+  real-world network latency and RFC edge cases.
+s the server state across multiple accounts and protocols.
 
 - **Reliability Runner**: A background service that periodically fetches a "ground truth"
   snapshot (UIDs/IDs only) for all folders and identifies discrepancies.

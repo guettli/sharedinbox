@@ -1,0 +1,13 @@
+# Plan Log
+
+## 2026-05-09
+- Started work on Sync Reliability (Task 1/5 from next.md).
+- Added `verifySyncReliability` to `EmailRepository` interface and models.
+- Implemented `verifySyncReliability` in `EmailRepositoryImpl` for IMAP and JMAP.
+- Added `SyncHealth` table to database (Schema v19).
+- Created `ReliabilityRunner` for periodic verification.
+- Integrated sync health indicators in `AccountListScreen` UI.
+- Added manual "Verify sync health" action.
+- Verified with new integration tests in `test/integration/sync_reliability_test.dart`.
+- All integration tests (IMAP and JMAP) passing.
+- Fixed several compilation and analysis issues.

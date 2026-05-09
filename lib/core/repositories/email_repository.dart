@@ -81,4 +81,11 @@ abstract class EmailRepository {
   /// support push (IMAP accounts, or JMAP servers without an eventSourceUrl).
   /// Callers should fall back to polling when the stream ends.
   Stream<void> watchJmapPush(String accountId, String password);
+
+  /// Compares local UIDs/IDs against the server's "ground truth" for [mailboxPath].
+  /// Returns a [ReliabilityResult] containing any discrepancies found.
+  Future<ReliabilityResult> verifySyncReliability(
+    String accountId,
+    String mailboxPath,
+  );
 }

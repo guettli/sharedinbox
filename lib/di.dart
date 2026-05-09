@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
+import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
@@ -74,6 +75,24 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
 
 final syncLogRepositoryProvider = Provider((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
+});
+
+final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
+  final runner = ReliabilityRunner(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    ref.watch(mailboxRepositoryProvider),
+    ref.watch(emailRepositoryProvider),
+  );
+  ref.onDispose(runner.stop);
+  return runner;
+});
+
+final syncHealthProvider =
+    StreamProvider.autoDispose.family<SyncHealthRow?, String>((ref, accountId) {
+  final db = ref.watch(dbProvider);
+  return (db.select(db.syncHealth)..where((t) => t.accountId.equals(accountId)))
+      .watchSingleOrNull();
 });
 
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -66,12 +68,41 @@ class _AccountTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(accountConnectionStatusProvider(account.id));
+    final health = ref.watch(syncHealthProvider(account.id));
     final typeLabel = account.type == AccountType.jmap ? 'JMAP' : 'IMAP';
 
     return ListTile(
       leading: const Icon(Icons.account_circle),
       title: Text(account.displayName),
-      subtitle: Text('${account.email}\n$typeLabel'),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${account.email}\n$typeLabel'),
+          const SizedBox(height: 4),
+          health.when(
+            data: (h) {
+              if (h == null) return const Text('Sync health: Not verified yet');
+              final date = h.lastVerifiedAt.toLocal().toString().split('.')[0];
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Sync health: '),
+                  Icon(
+                    h.isHealthy ? Icons.verified : Icons.warning_amber,
+                    size: 14,
+                    color: h.isHealthy ? Colors.green : Colors.orange,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(h.isHealthy ? 'Healthy' : 'Discrepancies found'),
+                  Text(' ($date)', style: const TextStyle(fontSize: 10)),
+                ],
+              );
+            },
+            loading: () => const Text('Sync health: checking...'),
+            error: (e, _) => Text('Sync health error: $e'),
+          ),
+        ],
+      ),
       isThreeLine: true,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -94,6 +125,10 @@ class _AccountTile extends ConsumerWidget {
               const PopupMenuItem(
                 value: _AccountAction.syncLog,
                 child: Text('Sync log'),
+              ),
+              const PopupMenuItem(
+                value: _AccountAction.verifySync,
+                child: Text('Verify sync health'),
               ),
               const PopupMenuItem(
                 value: _AccountAction.edit,
@@ -121,10 +156,25 @@ class _AccountTile extends ConsumerWidget {
     switch (action) {
       case _AccountAction.syncLog:
         await context.push('/accounts/${account.id}/sync-log');
+        break;
+      case _AccountAction.verifySync:
+        unawaited(
+          ProviderScope.containerOf(context)
+              .read(reliabilityRunnerProvider)
+              .checkNow(),
+        );
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Starting sync verification...')),
+          );
+        }
+        break;
       case _AccountAction.edit:
         await context.push('/accounts/${account.id}/edit');
+        break;
       case _AccountAction.emailFilters:
         await context.push('/accounts/${account.id}/sieve');
+        break;
       case _AccountAction.delete:
         final confirmed = await showDialog<bool>(
           context: context,
@@ -154,7 +204,7 @@ class _AccountTile extends ConsumerWidget {
   }
 }
 
-enum _AccountAction { syncLog, edit, emailFilters, delete }
+enum _AccountAction { syncLog, verifySync, edit, emailFilters, delete }
 
 /// Whether to surface the "Email filters" (Sieve) entry for [account].
 ///

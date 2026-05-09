@@ -255,6 +255,13 @@ class FakeEmailRepository implements EmailRepository {
       const Stream.empty();
 
   @override
+  Future<ReliabilityResult> verifySyncReliability(
+    String accountId,
+    String mailboxPath,
+  ) async =>
+      ReliabilityResult.healthy;
+
+  @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
       Stream.value([]);
 
