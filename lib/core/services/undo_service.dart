@@ -43,17 +43,18 @@ class UndoService extends StateNotifier<UndoAction?> {
             : action.originalEmails.where((e) => e.id == id).firstOrNull;
 
         // 2. If row is missing (hard delete), restore it first.
-        // We restore it at its CURRENT state (where it is on the server, 
+        // We restore it at its CURRENT state (where it is on the server,
         // or where it was moving to).
         if (original != null) {
           final currentPath = cancelled
               ? action.sourceMailboxPath
               : (action.destinationMailboxPath ?? action.sourceMailboxPath);
-          await repo.restoreEmails([original.copyWith(mailboxPath: currentPath)]);
+          await repo
+              .restoreEmails([original.copyWith(mailboxPath: currentPath)]);
         }
 
-        // 3. Move it back to source. 
-        // This updates local DB optimistically and (if not cancelled) enqueues 
+        // 3. Move it back to source.
+        // This updates local DB optimistically and (if not cancelled) enqueues
         // a reverse move on the server.
         await repo.moveEmail(id, action.sourceMailboxPath);
 

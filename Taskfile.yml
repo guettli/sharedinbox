@@ -114,7 +114,7 @@ tasks:
     sources:
       - "**/*.dart"
     cmds:
-      - fvm dart format .
+      - fvm dart format lib test
 
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply

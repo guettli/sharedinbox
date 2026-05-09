@@ -4,5 +4,5 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-fvm dart format .
+fvm dart format lib test
 task check-fast

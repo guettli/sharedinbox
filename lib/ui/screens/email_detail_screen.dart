@@ -389,7 +389,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   void _showHeaders(BuildContext context, EmailBody body) {
     if (body.headers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No headers available. Try re-syncing the email.')),
+        const SnackBar(
+          content: Text('No headers available. Try re-syncing the email.'),
+        ),
       );
       return;
     }
@@ -410,7 +412,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   color: i.isEven
                       ? Theme.of(ctx).colorScheme.surfaceContainerHighest
                       : Theme.of(ctx).colorScheme.surface,
-                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

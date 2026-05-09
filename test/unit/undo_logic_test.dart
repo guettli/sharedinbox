@@ -46,29 +46,35 @@ void main() {
     await accounts.addAccount(account, 'password');
 
     // Setup Inbox and Trash mailboxes
-    await db.into(db.mailboxes).insert(MailboxesCompanion.insert(
-          id: 'acc1:INBOX',
-          accountId: 'acc1',
-          path: 'INBOX',
-          name: 'Inbox',
-        ),);
-    await db.into(db.mailboxes).insert(MailboxesCompanion.insert(
-          id: 'acc1:Trash',
-          accountId: 'acc1',
-          path: 'Trash',
-          name: 'Trash',
-          role: const Value('trash'),
-        ),);
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'acc1:INBOX',
+            accountId: 'acc1',
+            path: 'INBOX',
+            name: 'Inbox',
+          ),
+        );
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'acc1:Trash',
+            accountId: 'acc1',
+            path: 'Trash',
+            name: 'Trash',
+            role: const Value('trash'),
+          ),
+        );
 
     // Setup an email in Inbox
-    await db.into(db.emails).insert(EmailsCompanion.insert(
-          id: 'acc1:101',
-          accountId: 'acc1',
-          mailboxPath: 'INBOX',
-          uid: 101,
-          subject: const Value('Test Email'),
-          receivedAt: DateTime.now(),
-        ),);
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'acc1:101',
+            accountId: 'acc1',
+            mailboxPath: 'INBOX',
+            uid: 101,
+            subject: const Value('Test Email'),
+            receivedAt: DateTime.now(),
+          ),
+        );
   });
 
   tearDown(() async {
@@ -109,8 +115,12 @@ void main() {
           ..where((t) => t.id.equals(emailId))
           ..where((t) => t.mailboxPath.equals('INBOX')))
         .get();
-    
-    expect(restored, isNotEmpty, reason: 'Email should be restored to Inbox after undo');
+
+    expect(
+      restored,
+      isNotEmpty,
+      reason: 'Email should be restored to Inbox after undo',
+    );
   });
 
   test('Undo deletion works for JMAP', () async {
@@ -129,30 +139,36 @@ void main() {
     await accounts.addAccount(jmapAccount, 'password');
 
     // Setup Inbox and Trash mailboxes for JMAP
-    await db.into(db.mailboxes).insert(MailboxesCompanion.insert(
-          id: 'jmap1:INBOX',
-          accountId: 'jmap1',
-          path: 'INBOX',
-          name: 'Inbox',
-          role: const Value('inbox'),
-        ),);
-    await db.into(db.mailboxes).insert(MailboxesCompanion.insert(
-          id: 'jmap1:Trash',
-          accountId: 'jmap1',
-          path: 'Trash',
-          name: 'Trash',
-          role: const Value('trash'),
-        ),);
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'jmap1:INBOX',
+            accountId: 'jmap1',
+            path: 'INBOX',
+            name: 'Inbox',
+            role: const Value('inbox'),
+          ),
+        );
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'jmap1:Trash',
+            accountId: 'jmap1',
+            path: 'Trash',
+            name: 'Trash',
+            role: const Value('trash'),
+          ),
+        );
 
     // Setup an email in JMAP Inbox
-    await db.into(db.emails).insert(EmailsCompanion.insert(
-          id: emailId,
-          accountId: 'jmap1',
-          mailboxPath: 'INBOX',
-          uid: 0, // not used for JMAP ID
-          subject: const Value('JMAP Test Email'),
-          receivedAt: DateTime.now(),
-        ),);
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: emailId,
+            accountId: 'jmap1',
+            mailboxPath: 'INBOX',
+            uid: 0, // not used for JMAP ID
+            subject: const Value('JMAP Test Email'),
+            receivedAt: DateTime.now(),
+          ),
+        );
 
     // 1. Delete the email
     await repo.deleteEmail(emailId);
@@ -180,10 +196,15 @@ void main() {
           ..where((t) => t.id.equals(emailId))
           ..where((t) => t.mailboxPath.equals('INBOX')))
         .get();
-    expect(restored, isNotEmpty, reason: 'JMAP email should be restored to Inbox after undo');
+    expect(
+      restored,
+      isNotEmpty,
+      reason: 'JMAP email should be restored to Inbox after undo',
+    );
   });
 
-  test('Undo deletion for IMAP enqueues reverse move if cancel fails', () async {
+  test('Undo deletion for IMAP enqueues reverse move if cancel fails',
+      () async {
     const emailId = 'acc1:101';
     final original = await repo.getEmail(emailId);
 
@@ -192,7 +213,9 @@ void main() {
     expect(destPath, 'Trash');
 
     // 2. Mark the pending change as "attempted" so it cannot be cancelled
-    await (db.update(db.pendingChanges)..where((t) => t.resourceId.equals(emailId))).write(
+    await (db.update(db.pendingChanges)
+          ..where((t) => t.resourceId.equals(emailId)))
+        .write(
       const PendingChangesCompanion(attempts: Value(1)),
     );
 
@@ -218,7 +241,8 @@ void main() {
 
     // 5. Verify a NEW pending change was enqueued (Trash -> INBOX)
     final changes = await db.select(db.pendingChanges).get();
-    final reverseMove = changes.firstWhere((c) => c.changeType == 'move' && c.attempts == 0);
+    final reverseMove =
+        changes.firstWhere((c) => c.changeType == 'move' && c.attempts == 0);
     final payload = jsonDecode(reverseMove.payload) as Map<String, dynamic>;
     expect(payload['mailboxPath'], 'Trash');
     expect(payload['dest'], 'INBOX');

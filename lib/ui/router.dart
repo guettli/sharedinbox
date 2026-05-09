@@ -72,7 +72,8 @@ final router = GoRouter(
             GoRoute(
               path: ':accountId/mailboxes',
               builder: (ctx, state) => MailboxListScreen(
-                  accountId: state.pathParameters['accountId']!,),
+                accountId: state.pathParameters['accountId']!,
+              ),
               routes: [
                 GoRoute(
                   path: ':mailboxPath/emails',

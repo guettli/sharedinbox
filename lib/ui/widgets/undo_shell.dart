@@ -19,7 +19,11 @@ class UndoShell extends ConsumerWidget {
     return child;
   }
 
-  void _showUndoSnackbar(BuildContext context, WidgetRef ref, UndoAction action) {
+  void _showUndoSnackbar(
+    BuildContext context,
+    WidgetRef ref,
+    UndoAction action,
+  ) {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     scaffoldMessenger.clearSnackBars();
     scaffoldMessenger.showSnackBar(

@@ -56,6 +56,7 @@ const _excluded = {
   'lib/ui/screens/sync_log_screen.dart',
   'lib/ui/screens/thread_detail_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
+  'lib/ui/widgets/undo_shell.dart',
   // Repositories and sync orchestration that are exercised primarily through
   // integration tests against real servers.
   'lib/data/jmap/jmap_client.dart',

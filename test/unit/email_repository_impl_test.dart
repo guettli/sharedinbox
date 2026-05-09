@@ -513,7 +513,8 @@ void main() {
       expect(changes.first.payload, contains('"flagged":false'));
     });
 
-    test('moveEmail enqueues move change and updates local mailboxPath (optimistic)',
+    test(
+        'moveEmail enqueues move change and updates local mailboxPath (optimistic)',
         () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -532,7 +533,7 @@ void main() {
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes.first.changeType, 'move');
       expect(changes.first.payload, contains('Archive'));
-      
+
       final email = await r.emails.getEmail('acc-1:5');
       expect(email, isNotNull);
       expect(email!.mailboxPath, 'Archive');
