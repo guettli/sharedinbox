@@ -210,6 +210,9 @@ class FakeEmailRepository implements EmailRepository {
   Future<bool> cancelPendingChange(String id, String type) async => false;
 
   @override
+  Future<void> restoreEmails(List<Email> emails) async {}
+
+  @override
   Future<void> deleteEmail(String emailId) async {}
 
   @override

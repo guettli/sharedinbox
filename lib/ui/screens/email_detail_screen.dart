@@ -143,6 +143,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                             type: UndoType.delete,
                             emailIds: [widget.emailId],
                             sourceMailboxPath: header.mailboxPath,
+                            originalEmails: [header],
                           ),
                         );
                   }

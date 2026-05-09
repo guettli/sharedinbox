@@ -1,6 +1,15 @@
 # Plan Log
 
 ## 2026-05-09
+- Fixed Undo feature for IMAP accounts.
+- Identified that IMAP moveEmail hard-deletes local rows, making Undo impossible without data.
+- Added `originalEmails` to `UndoAction` and `restoreEmails` to `EmailRepository`.
+- Updated UI to fetch email data before move/delete to support restoration.
+- Fixed `UndoService` to restore rows and be more robust with pending change cancellation.
+- Verified with `test/unit/undo_reproduction_test.dart` and updated unit tests.
+- Successfully deployed to Android.
+
+## 2026-05-09
 - Implemented Network Resilience (Task 1/4 from next.md).
 - Added exponential backoff logic (5s to 15m) to IMAP and JMAP sync loops.
 - Added permanent error detection (auth/credentials) to stop sync loops gracefully.

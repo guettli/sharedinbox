@@ -374,6 +374,17 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<bool>);
 
   @override
+  _i4.Future<void> restoreEmails(List<_i2.Email>? emails) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #restoreEmails,
+          [emails],
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
+
+  @override
   _i4.Stream<void> watchJmapPush(
     String? accountId,
     String? password,

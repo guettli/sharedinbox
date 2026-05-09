@@ -70,6 +70,10 @@ abstract class EmailRepository {
   /// queue. Returns true if a pending change was found and removed.
   Future<bool> cancelPendingChange(String emailId, String changeType);
 
+  /// Restores previously deleted/moved emails to the local database.
+  /// Used for the "Undo" feature when the original rows were hard-deleted (IMAP).
+  Future<void> restoreEmails(List<Email> emails);
+
   /// Emits the accountId whenever a new change is enqueued locally.
   /// Used by AccountSyncManager to trigger an immediate flush.
   Stream<String> get onChangesQueued;

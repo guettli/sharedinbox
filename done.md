@@ -6,6 +6,21 @@ Tasks get moved from next.md to done.md
 
 ## Tasks
 
+## Undo Feature Fix (IMAP)
+
+Fixed a bug where undoing an email deletion or move would fail for IMAP accounts
+because the local row was hard-deleted before the Undo action was performed.
+
+- **Data Preservation**: The app now fetches and preserves the full email data in
+  the `UndoAction` before performing a move or delete.
+- **Restoration Support**: Added `restoreEmails` to the repository to allow
+  re-inserting hard-deleted rows into the local database during an Undo.
+- **Robust Cancellation**: Improved `UndoService` to attempt cancellation of both
+  `move` and `delete` pending changes, ensuring consistency even if a delete
+  was implemented as a move-to-trash.
+- **IMAP Optimization**: Made `moveEmail` a no-op locally if the destination
+  mailbox matches the current one, preventing accidental re-deletion during Undo.
+
 ## Network Resilience: Exponential Backoff and Smart Retries
 
 Improved the sync engine's reliability on intermittent connections.

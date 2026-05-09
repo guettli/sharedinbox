@@ -330,6 +330,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return;
     }
     final repo = ref.read(emailRepositoryProvider);
+
+    // Fetch full email data before moving so we can restore them if user clicks Undo.
+    final originalEmails = (await Future.wait(
+      ids.map((id) => repo.getEmail(id)),
+    ))
+        .whereType<Email>()
+        .toList();
+
     for (final id in ids) {
       await repo.moveEmail(id, mailbox.path);
     }
@@ -341,6 +349,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       emailIds: ids,
       sourceMailboxPath: widget.mailboxPath,
       destinationMailboxPath: mailbox.path,
+      originalEmails: originalEmails,
     );
     ref.read(undoServiceProvider.notifier).pushAction(action);
   }
@@ -371,6 +380,15 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (confirmed != true) return;
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
+
+    // Fetch full email data before deleting so we can restore them if user clicks Undo.
+    // This is especially important for IMAP where we hard-delete the row locally.
+    final originalEmails = (await Future.wait(
+      ids.map((id) => repo.getEmail(id)),
+    ))
+        .whereType<Email>()
+        .toList();
+
     for (final id in ids) {
       await repo.deleteEmail(id);
     }
@@ -381,6 +399,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       type: UndoType.delete,
       emailIds: ids,
       sourceMailboxPath: widget.mailboxPath,
+      originalEmails: originalEmails,
     );
     ref.read(undoServiceProvider.notifier).pushAction(action);
   }
@@ -423,6 +442,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (chosen == null || !mounted) return;
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
+
+    // Fetch full email data before moving so we can restore them if user clicks Undo.
+    final originalEmails = (await Future.wait(
+      ids.map((id) => repo.getEmail(id)),
+    ))
+        .whereType<Email>()
+        .toList();
+
     for (final id in ids) {
       await repo.moveEmail(id, chosen);
     }
@@ -434,6 +461,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       emailIds: ids,
       sourceMailboxPath: widget.mailboxPath,
       destinationMailboxPath: chosen,
+      originalEmails: originalEmails,
     );
     ref.read(undoServiceProvider.notifier).pushAction(action);
   }
@@ -571,6 +599,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 ? UndoType.move
                 : UndoType.delete;
 
+            // Fetch full email data before moving/deleting.
+            final originalEmails = (await Future.wait(
+              t.emailIds.map((id) => repo.getEmail(id)),
+            ))
+                .whereType<Email>()
+                .toList();
+
             if (direction == DismissDirection.startToEnd) {
               final archive = await ref
                   .read(mailboxRepositoryProvider)
@@ -587,6 +622,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 emailIds: t.emailIds,
                 sourceMailboxPath: widget.mailboxPath,
                 destinationMailboxPath: archive.path,
+                originalEmails: originalEmails,
               );
               ref.read(undoServiceProvider.notifier).pushAction(action);
             } else {
@@ -600,6 +636,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 type: type,
                 emailIds: t.emailIds,
                 sourceMailboxPath: widget.mailboxPath,
+                originalEmails: originalEmails,
               );
               ref.read(undoServiceProvider.notifier).pushAction(action);
             }

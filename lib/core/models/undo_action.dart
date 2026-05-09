@@ -1,3 +1,5 @@
+import 'package:sharedinbox/core/models/email.dart';
+
 enum UndoType { move, delete }
 
 class UndoAction {
@@ -8,6 +10,7 @@ class UndoAction {
     required this.emailIds,
     required this.sourceMailboxPath,
     this.destinationMailboxPath,
+    this.originalEmails = const [],
   });
 
   final String id;
@@ -16,4 +19,7 @@ class UndoAction {
   final List<String> emailIds;
   final String sourceMailboxPath;
   final String? destinationMailboxPath;
+
+  /// Full email data for restoring hard-deleted rows (e.g. IMAP move/delete).
+  final List<Email> originalEmails;
 }

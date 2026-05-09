@@ -1439,6 +1439,10 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingle();
     final account = (await _accounts.getAccount(row.accountId))!;
 
+    if (row.mailboxPath == destMailboxPath) {
+      return;
+    }
+
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
         account.id,
@@ -1576,6 +1580,35 @@ class EmailRepositoryImpl implements EmailRepository {
       return count > 0;
     }
     return false;
+  }
+
+  @override
+  Future<void> restoreEmails(List<model.Email> emails) async {
+    for (final e in emails) {
+      await _db.into(_db.emails).insertOnConflictUpdate(
+            EmailsCompanion.insert(
+              id: e.id,
+              accountId: e.accountId,
+              mailboxPath: e.mailboxPath,
+              uid: e.uid,
+              subject: Value(e.subject),
+              sentAt: Value(e.sentAt),
+              receivedAt: e.receivedAt,
+              fromJson: Value(jsonEncode(e.from)),
+              toAddresses: Value(jsonEncode(e.to)),
+              ccJson: Value(jsonEncode(e.cc)),
+              preview: Value(e.preview),
+              isSeen: Value(e.isSeen),
+              isFlagged: Value(e.isFlagged),
+              hasAttachment: Value(e.hasAttachment),
+              threadId: Value(e.threadId),
+              messageId: Value(e.messageId),
+              inReplyTo: Value(e.inReplyTo),
+              references: Value(e.references),
+            ),
+          );
+      await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
+    }
   }
 
   /// Drains pending changes for [accountId] via the appropriate protocol.

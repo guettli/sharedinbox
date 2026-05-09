@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
@@ -99,6 +100,8 @@ void main() {
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
     when(mockEmailRepo.cancelPendingChange('e1', 'move'))
         .thenAnswer((_) async => true);
+    when(mockEmailRepo.cancelPendingChange('e1', 'delete'))
+        .thenAnswer((_) async => false);
 
     container.read(undoServiceProvider.notifier).pushAction(action);
     await container.read(undoServiceProvider.notifier).undo();
@@ -106,6 +109,41 @@ void main() {
     // Should cancel the original move, then perform the local move back,
     // then cancel the redundant reverse move.
     verify(mockEmailRepo.cancelPendingChange('e1', 'move')).called(2);
+    verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
+  });
+
+  test('undo calls restoreEmails if originalEmails is provided', () async {
+    final email = Email(
+      id: 'e1',
+      accountId: 'acc1',
+      mailboxPath: 'INBOX',
+      uid: 101,
+      receivedAt: DateTime.now(),
+      from: [],
+      to: [],
+      cc: [],
+      isSeen: true,
+      isFlagged: false,
+      hasAttachment: false,
+    );
+    final action = UndoAction(
+      id: '1',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      originalEmails: [email],
+    );
+
+    when(mockEmailRepo.restoreEmails(any)).thenAnswer((_) async {});
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(mockEmailRepo.cancelPendingChange(any, any))
+        .thenAnswer((_) async => false);
+
+    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).undo();
+
+    verify(mockEmailRepo.restoreEmails([email])).called(1);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 

@@ -31,33 +31,30 @@ class UndoService extends StateNotifier<UndoAction?> {
     state = _history.isNotEmpty ? _history.last : null;
 
     final repo = _ref.read(emailRepositoryProvider);
-    for (final id in action.emailIds) {
-      // Optimization: if the original change is still in the queue and hasn't
-      // been attempted yet, we can just remove it from the queue.
-      // Whether it was a move or a delete, the local state change needs
-      // to be reversed.
-      final cancelled = await repo.cancelPendingChange(
-        id,
-        action.type == UndoType.delete ? 'delete' : 'move',
-      );
+    
+    // For IMAP, the rows were hard-deleted, so we must restore them first.
+    if (action.originalEmails.isNotEmpty) {
+      await repo.restoreEmails(action.originalEmails);
+    }
 
-      // Whether cancelled or not, we move the email back to its source
-      // to restore the local DB state and (if not cancelled) enqueue
-      // the reverse change on the server.
+    for (final id in action.emailIds) {
+      // Try to cancel the original change. 
+      // Deletes might have been implemented as moves to Trash, so try both.
+      final cancelled = await repo.cancelPendingChange(id, 'delete') ||
+          await repo.cancelPendingChange(id, 'move');
+
+      // Move the email back to its source to reverse local DB state and
+      // (if not cancelled) enqueue the reverse change on the server.
       try {
         await repo.moveEmail(id, action.sourceMailboxPath);
 
         if (cancelled) {
           // If we cancelled the original change, and then moved it back,
-          // we've just enqueued a NEW 'move' change that is redundant
-          // (because the server never saw the first one).
-          // So we should cancel this one too!
+          // we've just enqueued a NEW 'move' change that is redundant.
           await repo.cancelPendingChange(id, 'move');
         }
       } catch (e) {
-        // If the row is gone (hard delete), we can't undo it locally.
-        // TODO: Could consider re-fetching if it was a JMAP delete that
-        // hasn't synced yet, but that's complex.
+        // If it still fails, nothing more we can do locally.
       }
     }
   }
