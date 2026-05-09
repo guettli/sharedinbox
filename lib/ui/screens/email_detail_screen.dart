@@ -152,6 +152,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   if (context.mounted) context.pop();
                 },
               ),
+              PopupMenuButton<String>(
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(
+                    value: 'headers',
+                    child: Text('Show Mail Headers'),
+                  ),
+                ],
+                onSelected: (value) {
+                  if (value == 'headers' && body != null) {
+                    _showHeaders(context, body);
+                  }
+                },
+              ),
             ],
           ),
           body: snap.connectionState == ConnectionState.waiting
@@ -371,6 +384,62 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         );
 
     if (context.mounted) context.pop();
+  }
+
+  void _showHeaders(BuildContext context, EmailBody body) {
+    if (body.headers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No headers available. Try re-syncing the email.')),
+      );
+      return;
+    }
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Mail Headers'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: body.headers.length,
+              itemBuilder: (ctx, i) {
+                final header = body.headers[i];
+                return Container(
+                  color: i.isEven
+                      ? Theme.of(ctx).colorScheme.surfaceContainerHighest
+                      : Theme.of(ctx).colorScheme.surface,
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: SelectableText(
+                          header.name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: SelectableText(header.value),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

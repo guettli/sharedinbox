@@ -242,12 +242,19 @@ class EmailRepositoryImpl implements EmailRepository {
             .toList(),
       );
 
+      final headersJson = jsonEncode(
+        (msg.headers ?? [])
+            .map((h) => {'name': h.name, 'value': h.value})
+            .toList(),
+      );
+
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
               textBody: Value(textBody),
               htmlBody: Value(htmlBody),
               attachmentsJson: Value(attachmentsJson),
+              headersJson: Value(headersJson),
               cachedAt: Value(DateTime.now()),
             ),
           );
@@ -256,6 +263,7 @@ class EmailRepositoryImpl implements EmailRepository {
         textBody: textBody,
         htmlBody: htmlBody,
         attachments: _parseAttachments(attachmentsJson),
+        headers: _parseHeaders(headersJson),
       );
     } finally {
       await client.logout();
@@ -287,6 +295,7 @@ class EmailRepositoryImpl implements EmailRepository {
           'ids': [jmapEmailId],
           'properties': [
             'id',
+            'headers',
             'textBody',
             'htmlBody',
             'bodyValues',
@@ -305,12 +314,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final (textBody, htmlBody, attachmentsJson) = _parseJmapBody(emailData);
 
+    final rawHeaders = emailData['headers'] as List<dynamic>? ?? [];
+    final headersJson = jsonEncode(
+      rawHeaders.map((h) {
+        final map = h as Map<String, dynamic>;
+        return {'name': map['name'] ?? '', 'value': map['value'] ?? ''};
+      }).toList(),
+    );
+
     await _db.into(_db.emailBodies).insertOnConflictUpdate(
           EmailBodiesCompanion.insert(
             emailId: emailId,
             textBody: Value(textBody),
             htmlBody: Value(htmlBody),
             attachmentsJson: Value(attachmentsJson),
+            headersJson: Value(headersJson),
             cachedAt: Value(DateTime.now()),
           ),
         );
@@ -320,6 +338,7 @@ class EmailRepositoryImpl implements EmailRepository {
       textBody: textBody,
       htmlBody: htmlBody,
       attachments: _parseAttachments(attachmentsJson),
+      headers: _parseHeaders(headersJson),
     );
   }
 
@@ -2372,7 +2391,21 @@ class EmailRepositoryImpl implements EmailRepository {
         textBody: row.textBody,
         htmlBody: row.htmlBody,
         attachments: _parseAttachments(row.attachmentsJson),
+        headers: _parseHeaders(row.headersJson),
       );
+
+  List<model.EmailHeader> _parseHeaders(String? jsonStr) {
+    if (jsonStr == null || jsonStr.isEmpty) return [];
+    try {
+      final list = jsonDecode(jsonStr) as List;
+      return list
+          .cast<Map<String, dynamic>>()
+          .map((m) => model.EmailHeader.fromJson(m))
+          .toList();
+    } catch (e) {
+      return [];
+    }
+  }
 
   List<model.EmailAttachment> _parseAttachments(String json) {
     final list = jsonDecode(json) as List<dynamic>;

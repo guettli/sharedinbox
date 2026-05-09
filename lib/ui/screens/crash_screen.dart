@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class CrashScreen extends StatelessWidget {
   const CrashScreen({
@@ -85,6 +86,19 @@ class CrashScreen extends StatelessWidget {
                 },
                 icon: const Icon(Icons.copy),
                 label: const Text('Copy to Clipboard'),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final url = Uri.parse(
+                    'https://codeberg.org/guettli/sharedinbox/issues/new',
+                  );
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  }
+                },
+                icon: const Icon(Icons.bug_report),
+                label: const Text('Report Issue on Codeberg'),
               ),
             ],
           ),

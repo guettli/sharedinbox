@@ -78,3 +78,12 @@ sharedinbox-runner/runner-data/
 snap/
 .gitconfig
 .gemini/
+.dartServer/
+.pub-cache/
+.android/
+.gradle/
+.emulator_console_auth_token
+.lesshst
+.metadata
+.tmux.conf
+

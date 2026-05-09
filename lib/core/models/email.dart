@@ -123,8 +123,38 @@ class EmailAddress {
 
   const EmailAddress({this.name, required this.email});
 
+  factory EmailAddress.fromJson(Map<String, dynamic> json) {
+    return EmailAddress(
+      name: json['name'] as String?,
+      email: json['email'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      if (name != null) 'name': name,
+      'email': email,
+    };
+  }
+
   @override
   String toString() => name != null ? '$name <$email>' : email;
+}
+
+class EmailHeader {
+  final String name;
+  final String value;
+
+  const EmailHeader({required this.name, required this.value});
+
+  factory EmailHeader.fromJson(Map<String, dynamic> json) {
+    return EmailHeader(
+      name: json['name'] as String,
+      value: json['value'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'name': name, 'value': value};
 }
 
 /// Full message body — fetched on demand, cached in the local DB.
@@ -133,12 +163,14 @@ class EmailBody {
   final String? textBody;
   final String? htmlBody;
   final List<EmailAttachment> attachments;
+  final List<EmailHeader> headers;
 
   const EmailBody({
     required this.emailId,
     this.textBody,
     this.htmlBody,
     required this.attachments,
+    this.headers = const [],
   });
 }
 

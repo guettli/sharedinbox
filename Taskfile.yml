@@ -6,9 +6,33 @@ tasks:
     desc: Run all checks (analyze + unit tests + widget tests + integration, in parallel)
     deps: [check]
 
+  _nix-check:
+    internal: true
+    run: once
+    cmds:
+      - cmd: |
+          if ! nix show-config experimental-features 2>/dev/null | grep -q "nix-command" || ! nix show-config experimental-features 2>/dev/null | grep -q "flakes"; then
+            echo "CRITICAL: Nix experimental features 'nix-command' and 'flakes' must be enabled."
+            echo "Attempting to fix by updating ~/.config/nix/nix.conf ..."
+            mkdir -p ~/.config/nix
+            CONF=~/.config/nix/nix.conf
+            if [ ! -f "$CONF" ]; then
+              echo "experimental-features = nix-command flakes" > "$CONF"
+            elif ! grep -q "experimental-features" "$CONF"; then
+              echo "experimental-features = nix-command flakes" >> "$CONF"
+            elif ! grep -E "experimental-features.*nix-command" "$CONF" || ! grep -E "experimental-features.*flakes" "$CONF"; then
+              echo "Your $CONF already has experimental-features but is missing 'nix-command' or 'flakes'."
+              echo "Please add them manually to the 'experimental-features' line."
+              exit 1
+            fi
+            echo "Local configuration updated. Please re-run your command."
+            exit 1
+          fi
+
   _preflight:
     internal: true
     run: once
+    deps: [_nix-check]
     preconditions:
       - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
         msg: "Not in nix dev shell. Run: nix develop"

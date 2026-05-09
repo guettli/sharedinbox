@@ -98,6 +98,8 @@ class EmailBodies extends Table {
   // Added in schema v9: when the body was last fetched from the server.
   // Null for rows cached before this column was added (treated as expired).
   DateTimeColumn get cachedAt => dateTime().nullable()();
+  // Added in schema v20: raw or parsed headers
+  TextColumn get headersJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {emailId};
@@ -244,7 +246,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -369,6 +371,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 19) {
             await m.createTable(syncHealth);
+          }
+          if (from < 20) {
+            await m.addColumn(emailBodies, emailBodies.headersJson);
           }
         },
       );
