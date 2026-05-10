@@ -90,11 +90,33 @@ class CrashScreen extends StatelessWidget {
               const SizedBox(height: 16),
               OutlinedButton.icon(
                 onPressed: () async {
-                  final url = Uri.parse(
-                    'https://codeberg.org/guettli/sharedinbox/issues/new',
+                  final title = Uri.encodeComponent(
+                    'Crash: ${exception.toString().split('\n').first}',
                   );
-                  if (await canLaunchUrl(url)) {
-                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  final body = Uri.encodeComponent(
+                    'Error: $exception\n\nStack Trace:\n$stackTrace',
+                  );
+                  final url = Uri.parse(
+                    'https://codeberg.org/guettli/sharedinbox/issues/new?title=$title&body=$body',
+                  );
+                  try {
+                    final launched = await launchUrl(
+                      url,
+                      mode: LaunchMode.externalApplication,
+                    );
+                    if (!launched && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Could not open browser.'),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error: $e')),
+                      );
+                    }
                   }
                 },
                 icon: const Icon(Icons.bug_report),
