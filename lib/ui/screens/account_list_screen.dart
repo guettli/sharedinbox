@@ -17,11 +17,6 @@ class AccountListScreen extends ConsumerWidget {
         title: const Text('SharedInbox'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: 'Undo Log',
-            onPressed: () => context.push('/accounts/undo-log'),
-          ),
-          IconButton(
             icon: const Icon(Icons.search),
             tooltip: 'Search all accounts',
             onPressed: () => context.push('/search'),
@@ -37,6 +32,14 @@ class AccountListScreen extends ConsumerWidget {
                 'SharedInbox',
                 style: TextStyle(color: Colors.white, fontSize: 24),
               ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Undo Log'),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                unawaited(context.push('/accounts/undo-log'));
+              },
             ),
             ListTile(
               leading: const Icon(Icons.update),
