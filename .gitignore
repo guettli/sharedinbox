@@ -91,3 +91,5 @@ snap/
 *.log
 runner-data/
 sharedinbox-runner/runner-data/
+.gemini/
+.rustup/

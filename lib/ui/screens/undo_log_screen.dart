@@ -56,22 +56,13 @@ class _UndoActionTile extends ConsumerWidget {
       subtitle: Text(_timeFmt.format(action.timestamp.toLocal())),
       trailing: TextButton(
         onPressed: () async {
-          // In a real log, "undoing" an old action might be complex
-          // if subsequent actions conflict. For now, we only support
-          // undoing the LATEST action via the global UndoService.
-          // To keep it simple, we check if this is the latest action.
-          final history = ref.read(undoServiceProvider);
-          final latest = history.isNotEmpty ? history.last : null;
-          if (latest?.id == action.id) {
-            await ref.read(undoServiceProvider.notifier).undo();
-          } else {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Only the latest action can be undone.'),
-                ),
-              );
-            }
+          await ref
+              .read(undoServiceProvider.notifier)
+              .undo(actionId: action.id);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Action undone.')),
+            );
           }
         },
         child: const Text('Undo'),
