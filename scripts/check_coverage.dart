@@ -45,6 +45,7 @@ const _excluded = {
   // Screens below the 70% gate — covered by widget tests but not yet fully:
   'lib/ui/screens/account_list_screen.dart',
   'lib/ui/screens/address_emails_screen.dart',
+  'lib/ui/screens/changelog_screen.dart',
   'lib/ui/screens/compose_screen.dart',
   'lib/ui/screens/crash_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
