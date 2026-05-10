@@ -21,11 +21,21 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     state = [];
   }
 
-  Future<void> undo() async {
+  Future<void> undo({String? actionId}) async {
     if (state.isEmpty) return;
 
-    final action = state.last;
-    state = state.sublist(0, state.length - 1);
+    final UndoAction action;
+    if (actionId == null) {
+      action = state.last;
+      state = state.sublist(0, state.length - 1);
+    } else {
+      try {
+        action = state.firstWhere((a) => a.id == actionId);
+        state = state.where((a) => a.id != actionId).toList();
+      } catch (e) {
+        return; // Action not found
+      }
+    }
 
     final repo = _ref.read(emailRepositoryProvider);
 

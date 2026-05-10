@@ -88,6 +88,36 @@ void main() {
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 
+  test('undo with actionId removes and undos specific action', () async {
+    final action1 = UndoAction(
+      id: '1',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+    );
+    final action2 = UndoAction(
+      id: '2',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e2'],
+      sourceMailboxPath: 'INBOX',
+    );
+
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(mockEmailRepo.cancelPendingChange(any, any))
+        .thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    notifier.pushAction(action1);
+    notifier.pushAction(action2);
+
+    await notifier.undo(actionId: '1');
+    expect(container.read(undoServiceProvider), [action2]);
+    verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
+    verifyNever(mockEmailRepo.moveEmail('e2', 'INBOX'));
+  });
+
   test('undo performs cancelPendingChange optimization', () async {
     final action = UndoAction(
       id: '1',
