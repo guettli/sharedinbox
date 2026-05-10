@@ -1,6 +1,7 @@
 # Flutter/Dart
 coverage/
 .dart_tool/
+.dart-tool/
 .packages
 pubspec.lock
 build/
@@ -54,6 +55,7 @@ linux/flutter/generated_plugins.cmake
 
 # FVM — .fvmrc is committed; .fvm/ contains the downloaded SDK (not committed)
 .fvm/
+fvm/
 .qwen
 .claude
 
@@ -81,9 +83,11 @@ snap/
 .dartServer/
 .pub-cache/
 .android/
+Android/
 .gradle/
 .emulator_console_auth_token
 .lesshst
 .metadata
 .tmux.conf
-
+.flutter
+.dart-cli-completion/

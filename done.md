@@ -4,6 +4,17 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Tasks (2026-05-10)
+
+- **Global Undo Log and History**: Implemented a persistent history of undoable
+  actions, allowing users to view and undo recent destructive operations.
+  - Added `UndoLogScreen` to display a chronologically reversed list of actions.
+  - Refactored `UndoService` to maintain a history of the last 10 actions.
+  - Added timestamp and description metadata to `UndoAction`.
+  - Added a "History" icon to the `AccountListScreen` app bar.
+- **Improved .gitignore**: Added more patterns to keep the repository clean
+  (FVM, Android studio files, Flutter/Dart tool directories).
+
 ## Tasks (2026-05-09)
 
 - **Fix Crash Page (Issue 3)**: Added a "Report this issue on Codeberg" button to the

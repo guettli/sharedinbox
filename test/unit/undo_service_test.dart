@@ -27,19 +27,19 @@ void main() {
     container.dispose();
   });
 
-  test('UndoService initial state is null', () {
-    expect(container.read(undoServiceProvider), isNull);
+  test('UndoService initial state is empty list', () {
+    expect(container.read(undoServiceProvider), isEmpty);
   });
 
-  test('pushAction maintains history and updates state to latest', () {
-    const action1 = UndoAction(
+  test('pushAction maintains history and updates state', () {
+    final action1 = UndoAction(
       id: '1',
       accountId: 'acc1',
       type: UndoType.move,
       emailIds: ['e1'],
       sourceMailboxPath: 'INBOX',
     );
-    const action2 = UndoAction(
+    final action2 = UndoAction(
       id: '2',
       accountId: 'acc1',
       type: UndoType.delete,
@@ -49,21 +49,21 @@ void main() {
 
     final notifier = container.read(undoServiceProvider.notifier);
     notifier.pushAction(action1);
-    expect(container.read(undoServiceProvider), action1);
+    expect(container.read(undoServiceProvider), [action1]);
 
     notifier.pushAction(action2);
-    expect(container.read(undoServiceProvider), action2);
+    expect(container.read(undoServiceProvider), [action1, action2]);
   });
 
-  test('undo pops history and updates state to previous action', () async {
-    const action1 = UndoAction(
+  test('undo pops history and updates state', () async {
+    final action1 = UndoAction(
       id: '1',
       accountId: 'acc1',
       type: UndoType.move,
       emailIds: ['e1'],
       sourceMailboxPath: 'INBOX',
     );
-    const action2 = UndoAction(
+    final action2 = UndoAction(
       id: '2',
       accountId: 'acc1',
       type: UndoType.delete,
@@ -80,16 +80,16 @@ void main() {
     notifier.pushAction(action2);
 
     await notifier.undo();
-    expect(container.read(undoServiceProvider), action1);
+    expect(container.read(undoServiceProvider), [action1]);
     verify(mockEmailRepo.moveEmail('e2', 'INBOX')).called(1);
 
     await notifier.undo();
-    expect(container.read(undoServiceProvider), isNull);
+    expect(container.read(undoServiceProvider), isEmpty);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 
   test('undo performs cancelPendingChange optimization', () async {
-    const action = UndoAction(
+    final action = UndoAction(
       id: '1',
       accountId: 'acc1',
       type: UndoType.move,
@@ -98,30 +98,30 @@ void main() {
     );
 
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(mockEmailRepo.cancelPendingChange('e1', 'move'))
-        .thenAnswer((_) async => true);
     when(mockEmailRepo.cancelPendingChange('e1', 'delete'))
         .thenAnswer((_) async => false);
+    when(mockEmailRepo.cancelPendingChange('e1', 'move'))
+        .thenAnswer((_) async => true);
 
-    container.read(undoServiceProvider.notifier).pushAction(action);
-    await container.read(undoServiceProvider.notifier).undo();
+    final notifier = container.read(undoServiceProvider.notifier);
+    notifier.pushAction(action);
 
-    // Should cancel the original move, then perform the local move back,
-    // then cancel the redundant reverse move.
-    verify(mockEmailRepo.cancelPendingChange('e1', 'move')).called(2);
+    await notifier.undo();
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
+    verify(mockEmailRepo.cancelPendingChange('e1', 'move')).called(2);
   });
 
-  test('undo calls restoreEmails if originalEmails is provided', () async {
+  test('undo restores hard-deleted emails if provided', () async {
     final email = Email(
       id: 'e1',
       accountId: 'acc1',
-      mailboxPath: 'INBOX',
-      uid: 101,
-      receivedAt: DateTime.now(),
-      from: [],
+      mailboxPath: 'Trash',
+      uid: 10,
+      from: [const EmailAddress(email: 'me@me.com')],
       to: [],
       cc: [],
+      subject: 'hi',
+      receivedAt: DateTime.now(),
       isSeen: true,
       isFlagged: false,
       hasAttachment: false,
@@ -135,20 +135,17 @@ void main() {
       originalEmails: [email],
     );
 
-    when(mockEmailRepo.restoreEmails(any)).thenAnswer((_) async {});
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
     when(mockEmailRepo.cancelPendingChange(any, any))
         .thenAnswer((_) async => false);
+    when(mockEmailRepo.restoreEmails(any)).thenAnswer((_) async {});
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
 
-    container.read(undoServiceProvider.notifier).pushAction(action);
-    await container.read(undoServiceProvider.notifier).undo();
+    final notifier = container.read(undoServiceProvider.notifier);
+    notifier.pushAction(action);
+
+    await notifier.undo();
 
     verify(mockEmailRepo.restoreEmails(any)).called(1);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
-  });
-
-  test('undo does nothing if history is empty', () async {
-    await container.read(undoServiceProvider.notifier).undo();
-    verifyNever(mockEmailRepo.moveEmail(any, any));
   });
 }

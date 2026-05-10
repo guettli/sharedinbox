@@ -133,7 +133,7 @@ final manageSieveProbeServiceProvider =
 });
 
 final undoServiceProvider =
-    StateNotifierProvider<UndoService, UndoAction?>((ref) {
+    StateNotifierProvider<UndoService, List<UndoAction>>((ref) {
   return UndoService(ref);
 });
 

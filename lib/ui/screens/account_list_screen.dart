@@ -17,6 +17,11 @@ class AccountListScreen extends ConsumerWidget {
         title: const Text('SharedInbox'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Undo Log',
+            onPressed: () => context.push('/accounts/undo-log'),
+          ),
+          IconButton(
             icon: const Icon(Icons.search),
             tooltip: 'Search all accounts',
             onPressed: () => context.push('/search'),

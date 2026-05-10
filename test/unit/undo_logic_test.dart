@@ -181,7 +181,7 @@ void main() {
     expect(inTrash, isNotEmpty, reason: 'Email should be in Trash');
 
     // 2. Push undo action and undo
-    const action = UndoAction(
+    final action = UndoAction(
       id: 'undo2',
       accountId: 'jmap1',
       type: UndoType.delete,

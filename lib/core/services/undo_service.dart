@@ -3,32 +3,29 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 
-class UndoService extends StateNotifier<UndoAction?> {
-  UndoService(this._ref) : super(null);
+class UndoService extends StateNotifier<List<UndoAction>> {
+  UndoService(this._ref) : super([]);
 
   final Ref _ref;
-  final ListQueue<UndoAction> _history = ListQueue<UndoAction>();
   static const int _maxHistory = 10;
 
   void pushAction(UndoAction action) {
-    _history.addLast(action);
-    if (_history.length > _maxHistory) {
-      _history.removeFirst();
+    final newList = [...state, action];
+    if (newList.length > _maxHistory) {
+      newList.removeAt(0);
     }
-    state = action;
+    state = newList;
   }
 
   void clear() {
-    _history.clear();
-    state = null;
+    state = [];
   }
 
   Future<void> undo() async {
-    if (_history.isEmpty) return;
+    if (state.isEmpty) return;
 
-    final action = _history.removeLast();
-    // Update state to the new last action or null
-    state = _history.isNotEmpty ? _history.last : null;
+    final action = state.last;
+    state = state.sublist(0, state.length - 1);
 
     final repo = _ref.read(emailRepositoryProvider);
 

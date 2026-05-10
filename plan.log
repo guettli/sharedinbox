@@ -1,5 +1,13 @@
 # Plan Log
 
+## 2026-05-10
+- Implemented global Undo Log with persistent history.
+- Refactored `UndoService` to store a list of recent actions instead of just the latest one.
+- Added `UndoLogScreen` to view and interact with undo history.
+- Added "History" icon to account list for better discoverability.
+- Updated `.gitignore` to better handle Dart/Flutter and Android tool artifacts.
+- Verified all changes with fast check suite (analyze + unit + widget tests).
+
 ## 2026-05-09
 - Fixed Crash Page (Issue 3): Added Codeberg reporting button.
 - Fixed Show Mail Headers (Issue 1): Added raw header storage and UI display.

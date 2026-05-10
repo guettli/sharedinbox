@@ -10,9 +10,10 @@ class UndoShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen<UndoAction?>(undoServiceProvider, (previous, next) {
-      if (next != null && previous?.id != next.id) {
-        _showUndoSnackbar(context, ref, next);
+    ref.listen<List<UndoAction>>(undoServiceProvider, (previous, next) {
+      if (next.isNotEmpty &&
+          (previous == null || previous.length < next.length)) {
+        _showUndoSnackbar(context, ref, next.last);
       }
     });
 
