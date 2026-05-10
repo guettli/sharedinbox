@@ -20,32 +20,30 @@ Then push
 
 ## Tasks
 
-### 1. Infrastructure Hardening and Code Quality
+### 1. High-Priority Infrastructure & Performance
+- **FTS5 Search Indexing**: Migrate the local search from SQLite `LIKE` queries to
+  a proper `FTS5` virtual table. This is critical for maintaining performance as
+  the local database grows into thousands of messages.
+- **Undo Log Persistence**: Move the `UndoService` state from memory to the
+  database. This ensures that the Undo Log survives app restarts and crashes,
+  preventing data loss of destructive action history.
+- **Search History**: Implement a "Recent Searches" UI component in the
+  `SearchScreen` to allow quick re-runs of common queries.
 
-Continue the momentum from the safety hardening and infrastructure work.
-The focus is on making the app ready for real-world use with robust error
-handling and performance optimizations.
+### 2. User Experience & Notifications
+- **UnifiedPush Integration**: Research and implement `UnifiedPush` support to
+  provide real-time background notifications for new emails without relying on
+  proprietary push services.
+- **UI Consistency Pass**: Conduct a thorough review of spacing, padding, and
+  typography across all screens to ensure a polished Material 3 experience.
+- **Draft Synchronization**: Update the `Drafts` repository to sync local drafts
+  with the server-side `Drafts` folder via IMAP/JMAP.
 
-- **Search Optimization**: Add a "Recent Searches" history and optimize local search
-  indexing for large accounts.
-- **UI Polishing**: Ensure consistent spacing and theming across all screens.
-- **Error Boundaries**: Add more granular error boundaries to prevent the entire
-  app from crashing if a single widget fails.
-
-### 2. Unified Attachment Handling and Improved Previews
-
-Refactor attachment logic to be more consistent and provide better user feedback.
-
-- **Previews**: Implement thumbnail generation for image attachments.
-- **Progress**: Show download progress in the UI when fetching attachments.
-- **Caching**: Implement a more robust caching mechanism with expiry.
-
-### 3. Advanced Search and Performance
-
-- **Indexing**: Optimize database indexes for search performance.
-- **UI**: Add advanced search filters (date range, attachment size, etc.).
-
-### 4. Fuzz Testing
-
-- **Fuzz Testing**: Add a basic fuzz test for the sync engine to handle simulated
-  real-world network latency and RFC edge cases.
+### 3. Safety & Resilience
+- **Encrypted Local Storage**: Add an optional layer of encryption to the Drift
+  database (using `sqlcipher`) to protect cached emails when the device is locked.
+- **Advanced Error Boundaries**: Implement more granular `ErrorWidget` wrappers
+  around critical components (like the HTML renderer) to prevent localized
+  rendering issues from crashing the whole screen.
+- **Fuzz Testing**: Expand the `reliability_runner` with a basic fuzz test for the
+  sync engine to simulate extreme network conditions and server edge cases.
