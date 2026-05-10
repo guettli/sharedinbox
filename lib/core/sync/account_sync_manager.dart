@@ -235,6 +235,10 @@ class _AccountSync implements _SyncLoop {
 
   Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
+
+    // Check for expired snoozes and move them back to Inbox before syncing.
+    await _emails.wakeUpEmails(account.id);
+
     final pendingFlushed =
         await _emails.flushPendingChanges(account.id, password);
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
@@ -447,6 +451,9 @@ class _JmapAccountSync implements _SyncLoop {
 
   Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
+
+    // Check for expired snoozes and move them back to Inbox before syncing.
+    await _emails.wakeUpEmails(account.id);
 
     // Drain outbound queue before pulling from server.
     final pendingFlushed =

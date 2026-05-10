@@ -74,6 +74,13 @@ abstract class EmailRepository {
   /// queue. Returns true if a pending change was found and removed.
   Future<bool> cancelPendingChange(String emailId, String changeType);
 
+  /// Snoozes the email until [until]. It will be moved to a "Snoozed" mailbox.
+  Future<void> snoozeEmail(String emailId, DateTime until);
+
+  /// Checks for expired snoozes and moves them back to their original mailbox.
+  /// Returns the number of emails woken up.
+  Future<int> wakeUpEmails(String accountId);
+
   /// Restores previously deleted/moved emails to the local database.
   /// Used for the "Undo" feature when the original rows were hard-deleted (IMAP).
   Future<void> restoreEmails(List<Email> emails);

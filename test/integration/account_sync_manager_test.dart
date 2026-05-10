@@ -135,6 +135,12 @@ class _FakeEmails implements EmailRepository {
   Future<bool> cancelPendingChange(String id, String type) async => false;
 
   @override
+  Future<void> snoozeEmail(String emailId, DateTime until) async {}
+
+  @override
+  Future<int> wakeUpEmails(String accountId) async => 0;
+
+  @override
   Future<void> restoreEmails(List<Email> emails) async {}
 
   @override

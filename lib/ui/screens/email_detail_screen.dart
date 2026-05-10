@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 
@@ -108,6 +109,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 tooltip: 'Move to folder',
                 onPressed:
                     header == null ? null : () => _moveTo(context, header),
+              ),
+              IconButton(
+                icon: const Icon(Icons.access_time),
+                tooltip: 'Snooze',
+                onPressed:
+                    header == null ? null : () => _snooze(context, header),
               ),
               IconButton(
                 icon: const Icon(Icons.delete),
@@ -384,6 +391,27 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         );
 
     if (context.mounted) context.pop();
+  }
+
+  Future<void> _snooze(BuildContext context, Email header) async {
+    final until = await showModalBottomSheet<DateTime>(
+      context: context,
+      builder: (ctx) => const SnoozePicker(),
+    );
+    if (until == null || !context.mounted) return;
+
+    await ref.read(emailRepositoryProvider).snoozeEmail(widget.emailId, until);
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Snoozed until ${DateFormat('MMM d, HH:mm').format(until)}',
+          ),
+        ),
+      );
+      context.pop();
+    }
   }
 
   void _showHeaders(BuildContext context, EmailBody body) {

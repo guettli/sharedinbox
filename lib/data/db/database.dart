@@ -84,6 +84,10 @@ class Emails extends Table {
   // Space-separated list of Message-IDs (RFC 2822 References header).
   TextColumn get references => text().nullable()();
 
+  // Added in schema v22:
+  DateTimeColumn get snoozedUntil => dateTime().nullable()();
+  TextColumn get snoozedFromMailboxPath => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -260,7 +264,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 21;
+  int get schemaVersion => 22;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -391,6 +395,16 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 21) {
             await m.createTable(undoActions);
+          }
+          if (from < 22) {
+            await m.addColumn(emails, emails.snoozedUntil);
+            await m.addColumn(emails, emails.snoozedFromMailboxPath);
+            await m.createIndex(
+              Index(
+                'emails_snoozed_until',
+                'CREATE INDEX emails_snoozed_until ON emails (accountId, snoozedUntil) WHERE snoozedUntil IS NOT NULL;',
+              ),
+            );
           }
         },
       );

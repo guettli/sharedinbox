@@ -19,6 +19,8 @@ class Email {
   final String? inReplyTo;
   // Space-separated RFC 2822 References header value.
   final String? references;
+  final DateTime? snoozedUntil;
+  final String? snoozedFromMailboxPath;
 
   const Email({
     required this.id,
@@ -39,6 +41,8 @@ class Email {
     this.messageId,
     this.inReplyTo,
     this.references,
+    this.snoozedUntil,
+    this.snoozedFromMailboxPath,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -69,6 +73,10 @@ class Email {
       messageId: json['messageId'] as String?,
       inReplyTo: json['inReplyTo'] as String?,
       references: json['references'] as String?,
+      snoozedUntil: json['snoozedUntil'] != null
+          ? DateTime.parse(json['snoozedUntil'] as String)
+          : null,
+      snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
     );
   }
 
@@ -92,6 +100,8 @@ class Email {
       'messageId': messageId,
       'inReplyTo': inReplyTo,
       'references': references,
+      'snoozedUntil': snoozedUntil?.toIso8601String(),
+      'snoozedFromMailboxPath': snoozedFromMailboxPath,
     };
   }
 
@@ -114,6 +124,8 @@ class Email {
     String? messageId,
     String? inReplyTo,
     String? references,
+    DateTime? snoozedUntil,
+    String? snoozedFromMailboxPath,
   }) {
     return Email(
       id: id ?? this.id,
@@ -134,6 +146,9 @@ class Email {
       messageId: messageId ?? this.messageId,
       inReplyTo: inReplyTo ?? this.inReplyTo,
       references: references ?? this.references,
+      snoozedUntil: snoozedUntil ?? this.snoozedUntil,
+      snoozedFromMailboxPath:
+          snoozedFromMailboxPath ?? this.snoozedFromMailboxPath,
     );
   }
 }

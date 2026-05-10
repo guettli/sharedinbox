@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
+import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 
 final _dateFmt = DateFormat('MMM d');
 
@@ -243,6 +244,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             tooltip: 'Move to folder',
             onPressed: _batchMove,
           ),
+          IconButton(
+            icon: const Icon(Icons.access_time),
+            tooltip: 'Snooze',
+            onPressed: _batchSnooze,
+          ),
         ],
       ),
     );
@@ -443,6 +449,31 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       originalEmails: originalEmails,
     );
     ref.read(undoServiceProvider.notifier).pushAction(action);
+  }
+
+  Future<void> _batchSnooze() async {
+    final ids = _selectedEmailIds;
+    final until = await showModalBottomSheet<DateTime>(
+      context: context,
+      builder: (ctx) => const SnoozePicker(),
+    );
+    if (until == null || !mounted) return;
+
+    _clearSelection();
+    final repo = ref.read(emailRepositoryProvider);
+    for (final id in ids) {
+      await repo.snoozeEmail(id, until);
+    }
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Snoozed ${ids.length} email${ids.length == 1 ? '' : 's'} until ${DateFormat('MMM d, HH:mm').format(until)}',
+        ),
+      ),
+    );
   }
 
   Widget _buildThreadList(List<EmailThread> threads) {

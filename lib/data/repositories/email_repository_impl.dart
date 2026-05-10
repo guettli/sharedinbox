@@ -560,6 +560,21 @@ class EmailRepositoryImpl implements EmailRepository {
             ) ??
             emailId;
         affectedThreads.add(threadId);
+
+        DateTime? snoozedUntil;
+        for (final String flag in msg.flags ?? <String>[]) {
+          if (flag.startsWith('snz:')) {
+            final ts = flag.substring(4);
+            // Format: YYYYMMDDTHHMMSSZ (no dashes/colons)
+            if (ts.length >= 15) {
+              final formatted =
+                  '${ts.substring(0, 4)}-${ts.substring(4, 6)}-${ts.substring(6, 8)}T${ts.substring(9, 11)}:${ts.substring(11, 13)}:${ts.substring(13, 15)}Z';
+              snoozedUntil = DateTime.tryParse(formatted);
+            }
+            break;
+          }
+        }
+
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
@@ -579,6 +594,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 messageId: Value(msgId),
                 inReplyTo: Value(inReplyTo),
                 references: Value(refs),
+                snoozedUntil: Value(snoozedUntil),
               ),
             );
       }
@@ -1080,9 +1096,22 @@ class EmailRepositoryImpl implements EmailRepository {
       final mailboxPath = mailboxIds?.keys.firstOrNull ?? '';
 
       final keywords = m['keywords'] as Map<String, dynamic>? ?? {};
-      final from = _encodeJmapAddresses(m['from']);
-      final to = _encodeJmapAddresses(m['to']);
-      final cc = _encodeJmapAddresses(m['cc']);
+      DateTime? snoozedUntil;
+      for (final String k in keywords.keys) {
+        if (k.startsWith('snz:')) {
+          final ts = k.substring(4);
+          if (ts.length >= 15) {
+            final formatted =
+                '${ts.substring(0, 4)}-${ts.substring(4, 6)}-${ts.substring(6, 8)}T${ts.substring(9, 11)}:${ts.substring(11, 13)}:${ts.substring(13, 15)}Z';
+            snoozedUntil = DateTime.tryParse(formatted);
+          }
+          break;
+        }
+      }
+
+      final from = _encodeJmapAddresses(m['from'] as List<dynamic>?);
+      final to = _encodeJmapAddresses(m['to'] as List<dynamic>?);
+      final cc = _encodeJmapAddresses(m['cc'] as List<dynamic>?);
       final sentAt = _parseDate(m['sentAt'] as String?);
       final receivedAt =
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
@@ -1118,6 +1147,7 @@ class EmailRepositoryImpl implements EmailRepository {
               messageId: Value(jmapMessageId),
               inReplyTo: Value(jmapInReplyTo),
               references: Value(jmapReferences),
+              snoozedUntil: Value(snoozedUntil),
             ),
           );
 
@@ -1612,6 +1642,113 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<void> snoozeEmail(String emailId, DateTime until) async {
+    final row = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(emailId)))
+        .getSingle();
+    final account = (await _accounts.getAccount(row.accountId))!;
+
+    // Find or create Snoozed mailbox.
+    var snoozedMailbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(account.id) & t.role.equals('snoozed'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    snoozedMailbox ??= await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(account.id) & t.name.equals('Snoozed'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    // Default path if not found; flush logic will attempt to create it.
+    final destPath = snoozedMailbox?.path ?? 'Snoozed';
+
+    // Optimistic local update.
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        mailboxPath: Value(destPath),
+        snoozedUntil: Value(until),
+        snoozedFromMailboxPath: Value(row.mailboxPath),
+      ),
+    );
+
+    await _enqueueChange(
+      account.id,
+      emailId,
+      'snooze',
+      jsonEncode({
+        'uid': row.uid,
+        'src': row.mailboxPath,
+        'dest': destPath,
+        'until': until.toIso8601String(),
+      }),
+    );
+
+    await _updateThread(
+      row.accountId,
+      row.mailboxPath,
+      row.threadId ?? emailId,
+    );
+    await _updateThread(
+      row.accountId,
+      destPath,
+      row.threadId ?? emailId,
+    );
+  }
+
+  @override
+  Future<int> wakeUpEmails(String accountId) async {
+    final now = DateTime.now();
+    final expired = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.snoozedUntil.isSmallerOrEqualValue(now),
+          ))
+        .get();
+
+    if (expired.isEmpty) return 0;
+
+    for (final row in expired) {
+      // Per instructions: "get to inbox moved by app".
+      final inbox = await (_db.select(_db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      final dest = inbox?.path ?? 'INBOX';
+
+      await _enqueueChange(
+        accountId,
+        row.id,
+        'unsnooze',
+        jsonEncode({
+          'uid': row.uid,
+          'src': row.mailboxPath,
+          'dest': dest,
+        }),
+      );
+
+      // Optimistic local update.
+      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+        EmailsCompanion(
+          mailboxPath: Value(dest),
+          snoozedUntil: const Value(null),
+          snoozedFromMailboxPath: const Value(null),
+        ),
+      );
+
+      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+      await _updateThread(accountId, dest, row.threadId ?? row.id);
+    }
+    return expired.length;
+  }
+
+  @override
   Future<void> restoreEmails(List<model.Email> emails) async {
     for (final e in emails) {
       await _db.into(_db.emails).insertOnConflictUpdate(
@@ -1779,6 +1916,37 @@ class EmailRepositoryImpl implements EmailRepository {
       case 'delete':
         await client.uidMarkDeleted(seq);
         await client.uidExpunge(seq);
+      case 'snooze':
+        final until = payload['until'] as String;
+        // ISO8601 with colons is fine for IMAP atoms, but we use a cleaner
+        // format just in case.
+        final timestamp = until.replaceAll(':', '').replaceAll('-', '');
+        final keyword = 'snz:$timestamp';
+        final dest = payload['dest'] as String;
+        try {
+          await client.createMailbox(dest);
+        } catch (_) {}
+        await client.uidStore(seq, [keyword], action: imap.StoreAction.add);
+        await client.uidMove(seq, targetMailboxPath: dest);
+      case 'unsnooze':
+        final dest = payload['dest'] as String;
+        try {
+          await client.createMailbox(dest);
+        } catch (_) {}
+        // Remove any existing snooze flags.
+        final fetch = await client.uidFetchMessages(seq, 'FLAGS');
+        if (fetch.messages.isNotEmpty) {
+          final flags = fetch.messages.first.flags ?? [];
+          final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
+          if (snzFlags.isNotEmpty) {
+            await client.uidStore(
+              seq,
+              snzFlags,
+              action: imap.StoreAction.remove,
+            );
+          }
+        }
+        await client.uidMove(seq, targetMailboxPath: dest);
     }
   }
 
@@ -1860,6 +2028,68 @@ class EmailRepositoryImpl implements EmailRepository {
             'Email/set',
             setArgs({
               'destroy': [jmapEmailId],
+            }),
+            '0',
+          ]
+        ]);
+
+      case 'snooze':
+        final until = payload['until'] as String;
+        final timestamp = until.replaceAll(':', '').replaceAll('-', '');
+        final keyword = 'snz:$timestamp';
+        final destMailboxId = payload['dest'] as String;
+        final srcMailboxId = payload['src'] as String;
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {
+                jmapEmailId: {
+                  'keywords/$keyword': true,
+                  'mailboxIds/$destMailboxId': true,
+                  'mailboxIds/$srcMailboxId': null,
+                },
+              },
+            }),
+            '0',
+          ]
+        ]);
+
+      case 'unsnooze':
+        final destMailboxId = payload['dest'] as String;
+        final srcMailboxId = payload['src'] as String;
+        // Fetch current keywords to identify which snz: keywords to remove.
+        final getResponses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': [jmapEmailId],
+              'properties': ['keywords'],
+            },
+            '0',
+          ]
+        ]);
+        final getResult = _responseArgs(getResponses, 0, 'Email/get');
+        final email = (getResult['list'] as List).firstOrNull as Map?;
+        final keywords = (email?['keywords'] as Map?) ?? {};
+        final toRemove = keywords.keys.where(
+          (k) => k.toString().startsWith('snz:'),
+        );
+
+        final update = {
+          'mailboxIds/$destMailboxId': true,
+          'mailboxIds/$srcMailboxId': null,
+        };
+        for (final k in toRemove) {
+          update['keywords/$k'] = null;
+        }
+
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {jmapEmailId: update},
             }),
             '0',
           ]
@@ -2383,6 +2613,8 @@ class EmailRepositoryImpl implements EmailRepository {
       messageId: row.messageId,
       inReplyTo: row.inReplyTo,
       references: row.references,
+      snoozedUntil: row.snoozedUntil,
+      snoozedFromMailboxPath: row.snoozedFromMailboxPath,
     );
   }
 

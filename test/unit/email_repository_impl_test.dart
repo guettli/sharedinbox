@@ -614,6 +614,74 @@ void main() {
     });
   });
 
+  group('Snooze', () {
+    test('snoozeEmail enqueues snooze change and updates local DB', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final until = DateTime(2026, 5, 10, 15);
+      await r.emails.snoozeEmail('acc-1:5', until);
+
+      final email = await r.emails.getEmail('acc-1:5');
+      expect(email!.snoozedUntil, until);
+      expect(email.mailboxPath, 'Snoozed');
+      expect(email.snoozedFromMailboxPath, 'INBOX');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.changeType, 'snooze');
+      expect(changes.first.payload, contains('2026-05-10T15:00:00.000'));
+    });
+
+    test('wakeUpEmails enqueues unsnooze for expired emails', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      // Seed Inbox mailbox
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:INBOX',
+              accountId: 'acc-1',
+              path: 'INBOX',
+              name: 'Inbox',
+              role: const Value('inbox'),
+            ),
+          );
+
+      final past = DateTime.now().subtract(const Duration(hours: 1));
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              snoozedUntil: Value(past),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+
+      final count = await r.emails.wakeUpEmails('acc-1');
+      expect(count, 1);
+
+      final email = await r.emails.getEmail('acc-1:5');
+      expect(email!.snoozedUntil, isNull);
+      expect(email.mailboxPath, 'INBOX');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.changeType, 'unsnooze');
+    });
+  });
+
   group('JMAP getEmailBody', () {
     http.Client mockBodyClient({
       String text = 'Hello from JMAP',
