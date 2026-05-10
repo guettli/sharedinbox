@@ -369,21 +369,21 @@ class AppDatabase extends _$AppDatabase {
             await m.createIndex(
               Index(
                 'emails_received_at',
-                'CREATE INDEX emails_received_at ON emails (accountId, mailboxPath, receivedAt DESC);',
+                'CREATE INDEX emails_received_at ON emails (account_id, mailbox_path, received_at DESC);',
               ),
             );
             // Index for finding emails in a thread.
             await m.createIndex(
               Index(
                 'emails_thread_id',
-                'CREATE INDEX emails_thread_id ON emails (accountId, mailboxPath, threadId);',
+                'CREATE INDEX emails_thread_id ON emails (account_id, mailbox_path, thread_id);',
               ),
             );
             // Index for pending changes queue.
             await m.createIndex(
               Index(
                 'pending_changes_account_id',
-                'CREATE INDEX pending_changes_account_id ON pending_changes (accountId);',
+                'CREATE INDEX pending_changes_account_id ON pending_changes (account_id);',
               ),
             );
           }
@@ -410,7 +410,7 @@ class AppDatabase extends _$AppDatabase {
             await m.createIndex(
               Index(
                 'emails_snoozed_until',
-                'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (accountId, snoozedUntil) WHERE snoozedUntil IS NOT NULL;',
+                'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (account_id, snoozed_until) WHERE snoozed_until IS NOT NULL;',
               ),
             );
           }
