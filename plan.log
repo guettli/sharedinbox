@@ -1,6 +1,13 @@
 # Plan Log
 
 ## 2026-05-10
+- Improved Undo Log (Issue #7): Added support for undoing any action from history.
+- Refactored `UndoService.undo()` to support targeted rollbacks by action ID.
+- Removed "latest only" restriction from `UndoLogScreen`.
+- Successfully deployed release APK to distribution server via `task deploy-android`.
+- Verified system integrity with unit, widget, and E2E integration tests.
+
+## 2026-05-10
 - Implemented global Undo Log with persistent history.
 - Refactored `UndoService` to store a list of recent actions instead of just the latest one.
 - Added `UndoLogScreen` to view and interact with undo history.

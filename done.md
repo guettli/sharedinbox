@@ -6,6 +6,13 @@ Tasks get moved from next.md to done.md
 
 ## Tasks (2026-05-10)
 
+- **Improved Undo Log and Android Deployment (Issue #7)**: Enhanced the Undo Log to support
+  undoing any action from history, not just the latest. This provides more flexibility
+  when managing multiple destructive actions.
+  - Refactored `UndoService.undo()` to accept an optional `actionId`, allowing targeted rollbacks.
+  - Updated `UndoLogScreen` to remove the "latest only" restriction and provide immediate feedback.
+  - Successfully built and deployed the release APK to the distribution server via `task deploy-android`.
+  - Verified the new undo logic with updated unit tests and ensured full system integrity via the CI check suite.
 - **Global Undo Log and History**: Implemented a persistent history of undoable
   actions, allowing users to view and undo recent destructive operations.
   - Added `UndoLogScreen` to display a chronologically reversed list of actions.
