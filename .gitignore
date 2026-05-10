@@ -1,4 +1,4 @@
-# Flutter/Dart
+# --- Flutter/Dart ---
 coverage/
 .dart_tool/
 .dart-tool/
@@ -8,27 +8,33 @@ build/
 *.g.dart
 *.freezed.dart
 
-# IDE
+# --- IDEs ---
 .idea/
 .vscode/
 *.iml
 
-# OS
+# --- OS / System ---
 .DS_Store
 Thumbs.db
 
-# Local environment overrides (copied from .env.example)
+# --- Environment & Secrets ---
 .env
 .env.local
+.envrc
+.direnv/
 
-# Android
+# --- Android ---
 android/.gradle/
 android/local.properties
 android/app/google-services.json
 android/key.properties
 android/app/src/main/java/io/flutter/plugins/
+.android/
+Android/
+.gradle/
+.emulator_console_auth_token
 
-# iOS
+# --- iOS ---
 ios/Pods/
 ios/Flutter/Generated.xcconfig
 ios/Flutter/ephemeral/
@@ -36,58 +42,51 @@ ios/Flutter/flutter_export_environment.sh
 ios/Runner/GeneratedPluginRegistrant.*
 *.xcworkspace/
 
-# macOS
+# --- macOS ---
 macos/Pods/
 macos/Flutter/GeneratedPluginRegistrant.swift
 macos/Flutter/ephemeral/
 
-# Linux generated plugin wiring (recreated by flutter pub get)
+# --- Linux ---
 linux/flutter/ephemeral/
 linux/flutter/generated_plugin_registrant.*
 linux/flutter/generated_plugins.cmake
 
-# Flutter generated metadata
+# --- Flutter Metadata ---
 .flutter-plugins
 .flutter-plugins-dependencies
+.metadata
 
-# direnv cache
-.direnv/
-
-# FVM — .fvmrc is committed; .fvm/ contains the downloaded SDK (not committed)
+# --- Tools & Cache ---
 .fvm/
 fvm/
 .qwen
 .claude
-
 .task
-
-*.log
-runner-data/
-sharedinbox-runner/runner-data/
-
 .atuin/
-.bash_logout
-.bashrc
 .cache/
 .config/
 .local/
 .nix-profile
 .npm/
-.profile
-.ssh/
-.zcompdump
-.zshrc
-snap/
-.gitconfig
-.gemini/
-.dartServer/
 .pub-cache/
-.android/
-Android/
-.gradle/
-.emulator_console_auth_token
-.lesshst
-.metadata
-.tmux.conf
+.dartServer/
 .flutter
 .dart-cli-completion/
+snap/
+
+# --- User Configuration (Home Dir Junk) ---
+.bash_logout
+.bashrc
+.profile
+.zcompdump
+.zshrc
+.gitconfig
+.lesshst
+.tmux.conf
+.ssh/
+
+# --- Logs & Data ---
+*.log
+runner-data/
+sharedinbox-runner/runner-data/

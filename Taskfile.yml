@@ -304,7 +304,21 @@ tasks:
 
   check-fast:
     desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
-    deps: [analyze, test, test-widget]
+    deps: [analyze, test, test-widget, check-hygiene]
+
+  check-hygiene:
+    desc: Verify that no forbidden files (like home dir config) are tracked
+    cmds:
+      - |
+        FORBIDDEN=".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf"
+        TRACKED=$(git ls-files $FORBIDDEN 2>/dev/null)
+        if [ -n "$TRACKED" ]; then
+          echo "ERROR: The following forbidden files are tracked in git:"
+          echo "$TRACKED"
+          echo "Please remove them with 'git rm --cached <file>'"
+          exit 1
+        fi
+        echo "Hygiene check passed."
 
   _integrations:
     internal: true
