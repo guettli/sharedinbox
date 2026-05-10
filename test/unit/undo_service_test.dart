@@ -5,20 +5,30 @@ import 'package:mockito/mockito.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'undo_service_test.mocks.dart';
 
-@GenerateMocks([EmailRepository])
+@GenerateMocks([EmailRepository, UndoRepository])
 void main() {
   late ProviderContainer container;
   late MockEmailRepository mockEmailRepo;
+  late MockUndoRepository mockUndoRepo;
 
   setUp(() {
     mockEmailRepo = MockEmailRepository();
+    mockUndoRepo = MockUndoRepository();
+
+    when(mockUndoRepo.saveAction(any)).thenAnswer((_) async {});
+    when(mockUndoRepo.deleteAction(any)).thenAnswer((_) async {});
+    when(mockUndoRepo.getHistory(limit: anyNamed('limit')))
+        .thenAnswer((_) async => []);
+
     container = ProviderContainer(
       overrides: [
         emailRepositoryProvider.overrideWithValue(mockEmailRepo),
+        undoRepositoryProvider.overrideWithValue(mockUndoRepo),
       ],
     );
   });
@@ -31,7 +41,7 @@ void main() {
     expect(container.read(undoServiceProvider), isEmpty);
   });
 
-  test('pushAction maintains history and updates state', () {
+  test('pushAction maintains history and updates state', () async {
     final action1 = UndoAction(
       id: '1',
       accountId: 'acc1',
@@ -48,6 +58,8 @@ void main() {
     );
 
     final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init(); // Wait for persistent load
+
     notifier.pushAction(action1);
     expect(container.read(undoServiceProvider), [action1]);
 
@@ -76,6 +88,7 @@ void main() {
         .thenAnswer((_) async => false);
 
     final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
     notifier.pushAction(action1);
     notifier.pushAction(action2);
 
@@ -109,6 +122,7 @@ void main() {
         .thenAnswer((_) async => false);
 
     final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
     notifier.pushAction(action1);
     notifier.pushAction(action2);
 
@@ -134,6 +148,7 @@ void main() {
         .thenAnswer((_) async => true);
 
     final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
     notifier.pushAction(action);
 
     await notifier.undo();
@@ -171,6 +186,7 @@ void main() {
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
 
     final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
     notifier.pushAction(action);
 
     await notifier.undo();

@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
@@ -32,6 +33,7 @@ void main() {
         dbProvider.overrideWithValue(db),
         accountRepositoryProvider.overrideWithValue(accounts),
         emailRepositoryProvider.overrideWithValue(repo),
+        undoRepositoryProvider.overrideWithValue(UndoRepositoryImpl(db)),
       ],
     );
 

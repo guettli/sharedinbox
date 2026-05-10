@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
@@ -6,6 +8,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -21,6 +24,7 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 /// Swappable IMAP connection factory — override in tests to use plaintext.
@@ -71,6 +75,10 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
     imapConnect: ref.watch(imapConnectProvider),
     smtpConnect: ref.watch(smtpConnectProvider),
   );
+});
+
+final undoRepositoryProvider = Provider<UndoRepository>((ref) {
+  return UndoRepositoryImpl(ref.watch(dbProvider));
 });
 
 final syncLogRepositoryProvider = Provider((ref) {
@@ -134,7 +142,9 @@ final manageSieveProbeServiceProvider =
 
 final undoServiceProvider =
     StateNotifierProvider<UndoService, List<UndoAction>>((ref) {
-  return UndoService(ref);
+  final service = UndoService(ref);
+  unawaited(service.init());
+  return service;
 });
 
 final accountByIdProvider =

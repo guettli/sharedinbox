@@ -25,6 +25,34 @@ class UndoAction {
   /// Full email data for restoring hard-deleted rows (e.g. IMAP move/delete).
   final List<Email> originalEmails;
 
+  factory UndoAction.fromJson(Map<String, dynamic> json) {
+    return UndoAction(
+      id: json['id'] as String,
+      accountId: json['accountId'] as String,
+      type: UndoType.values.firstWhere((e) => e.name == json['type']),
+      emailIds: List<String>.from(json['emailIds'] as List),
+      sourceMailboxPath: json['sourceMailboxPath'] as String,
+      destinationMailboxPath: json['destinationMailboxPath'] as String?,
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      originalEmails: (json['originalEmails'] as List<dynamic>)
+          .map((e) => Email.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'accountId': accountId,
+      'type': type.name,
+      'emailIds': emailIds,
+      'sourceMailboxPath': sourceMailboxPath,
+      'destinationMailboxPath': destinationMailboxPath,
+      'timestamp': timestamp.toIso8601String(),
+      'originalEmails': originalEmails.map((e) => e.toJson()).toList(),
+    };
+  }
+
   String get description {
     final count = emailIds.length;
     final s = count == 1 ? '' : 's';

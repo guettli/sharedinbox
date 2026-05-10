@@ -41,6 +41,60 @@ class Email {
     this.references,
   });
 
+  factory Email.fromJson(Map<String, dynamic> json) {
+    return Email(
+      id: json['id'] as String,
+      accountId: json['accountId'] as String,
+      mailboxPath: json['mailboxPath'] as String,
+      uid: json['uid'] as int,
+      subject: json['subject'] as String?,
+      sentAt: json['sentAt'] != null
+          ? DateTime.parse(json['sentAt'] as String)
+          : null,
+      receivedAt: DateTime.parse(json['receivedAt'] as String),
+      from: (json['from'] as List<dynamic>)
+          .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      to: (json['to'] as List<dynamic>)
+          .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      cc: (json['cc'] as List<dynamic>)
+          .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      preview: json['preview'] as String?,
+      isSeen: json['isSeen'] as bool,
+      isFlagged: json['isFlagged'] as bool,
+      hasAttachment: json['hasAttachment'] as bool,
+      threadId: json['threadId'] as String?,
+      messageId: json['messageId'] as String?,
+      inReplyTo: json['inReplyTo'] as String?,
+      references: json['references'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'accountId': accountId,
+      'mailboxPath': mailboxPath,
+      'uid': uid,
+      'subject': subject,
+      'sentAt': sentAt?.toIso8601String(),
+      'receivedAt': receivedAt.toIso8601String(),
+      'from': from.map((e) => e.toJson()).toList(),
+      'to': to.map((e) => e.toJson()).toList(),
+      'cc': cc.map((e) => e.toJson()).toList(),
+      'preview': preview,
+      'isSeen': isSeen,
+      'isFlagged': isFlagged,
+      'hasAttachment': hasAttachment,
+      'threadId': threadId,
+      'messageId': messageId,
+      'inReplyTo': inReplyTo,
+      'references': references,
+    };
+  }
+
   Email copyWith({
     String? id,
     String? accountId,

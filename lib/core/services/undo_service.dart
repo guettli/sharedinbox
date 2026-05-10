@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -9,16 +10,24 @@ class UndoService extends StateNotifier<List<UndoAction>> {
   final Ref _ref;
   static const int _maxHistory = 10;
 
+  Future<void> init() async {
+    final repo = _ref.read(undoRepositoryProvider);
+    state = await repo.getHistory();
+  }
+
   void pushAction(UndoAction action) {
     final newList = [...state, action];
     if (newList.length > _maxHistory) {
-      newList.removeAt(0);
+      final removed = newList.removeAt(0);
+      unawaited(_ref.read(undoRepositoryProvider).deleteAction(removed.id));
     }
     state = newList;
+    unawaited(_ref.read(undoRepositoryProvider).saveAction(action));
   }
 
   void clear() {
     state = [];
+    unawaited(_ref.read(undoRepositoryProvider).clearHistory());
   }
 
   Future<void> undo({String? actionId}) async {
@@ -36,6 +45,8 @@ class UndoService extends StateNotifier<List<UndoAction>> {
         return; // Action not found
       }
     }
+
+    unawaited(_ref.read(undoRepositoryProvider).deleteAction(action.id));
 
     final repo = _ref.read(emailRepositoryProvider);
 

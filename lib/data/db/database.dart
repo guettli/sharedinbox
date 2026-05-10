@@ -225,6 +225,19 @@ class Drafts extends Table {
   DateTimeColumn get updatedAt => dateTime()();
 }
 
+@DataClassName('UndoActionRow')
+class UndoActions extends Table {
+  TextColumn get id => text()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // JSON-encoded UndoAction
+  TextColumn get dataJson => text()();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 
 @DriftDatabase(
@@ -240,13 +253,14 @@ class Drafts extends Table {
     SyncLogs,
     SyncLogMailboxes,
     SyncHealth,
+    UndoActions,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -374,6 +388,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 20) {
             await m.addColumn(emailBodies, emailBodies.headersJson);
+          }
+          if (from < 21) {
+            await m.createTable(undoActions);
           }
         },
       );
