@@ -397,12 +397,20 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(undoActions);
           }
           if (from < 22) {
-            await m.addColumn(emails, emails.snoozedUntil);
-            await m.addColumn(emails, emails.snoozedFromMailboxPath);
+            final check = await customSelect('PRAGMA table_info(emails)').get();
+            final names = check.map((row) => row.read<String>('name')).toList();
+
+            if (!names.contains('snoozed_until')) {
+              await m.addColumn(emails, emails.snoozedUntil);
+            }
+            if (!names.contains('snoozed_from_mailbox_path')) {
+              await m.addColumn(emails, emails.snoozedFromMailboxPath);
+            }
+
             await m.createIndex(
               Index(
                 'emails_snoozed_until',
-                'CREATE INDEX emails_snoozed_until ON emails (accountId, snoozedUntil) WHERE snoozedUntil IS NOT NULL;',
+                'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (accountId, snoozedUntil) WHERE snoozedUntil IS NOT NULL;',
               ),
             );
           }
