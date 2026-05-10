@@ -5,6 +5,7 @@ import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
+import 'package:sharedinbox/ui/screens/changelog_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
@@ -35,6 +36,10 @@ final router = GoRouter(
             GoRoute(
               path: 'undo-log',
               builder: (ctx, state) => const UndoLogScreen(),
+            ),
+            GoRoute(
+              path: 'changelog',
+              builder: (ctx, state) => const ChangeLogScreen(),
             ),
             GoRoute(
               path: ':accountId/edit',

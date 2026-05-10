@@ -59,6 +59,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/
 
 dependency_overrides:
   # path_provider_android 2.3+ uses package:jni which crashes on startup

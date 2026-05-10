@@ -188,7 +188,7 @@ tasks:
 
   build-linux:
     desc: Build the Linux desktop app (debug)
-    deps: [_preflight, _linux-deps-check, _codegen]
+    deps: [_preflight, _linux-deps-check, _codegen, generate-changelog]
     method: timestamp
     sources:
       - lib/**/*.dart
@@ -201,7 +201,7 @@ tasks:
 
   build-linux-release:
     desc: Build the Linux desktop app (release)
-    deps: [_preflight, _linux-deps-check, _codegen]
+    deps: [_preflight, _linux-deps-check, _codegen, generate-changelog]
     method: timestamp
     sources:
       - lib/**/*.dart
@@ -235,6 +235,8 @@ tasks:
     internal: true
     run: once
     preconditions:
+      - list_directory:
+        dir_path: ${ANDROID_HOME:-$HOME/Android/Sdk}
       - sh: test -d "${ANDROID_HOME:-$HOME/Android/Sdk}"
         msg: |
           Android SDK not found. Install it with:
@@ -250,7 +252,7 @@ tasks:
 
   build-android:
     desc: Build a release APK
-    deps: [_preflight, _android-sdk-check, _pub-get]
+    deps: [_preflight, _android-sdk-check, _pub-get, generate-changelog]
     method: timestamp
     sources:
       - lib/**/*.dart

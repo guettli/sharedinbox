@@ -28,6 +28,27 @@ class AccountListScreen extends ConsumerWidget {
           ),
         ],
       ),
+      drawer: Drawer(
+        child: ListView(
+          children: [
+            const DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blueGrey),
+              child: Text(
+                'SharedInbox',
+                style: TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.update),
+              title: const Text('ChangeLog'),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                unawaited(context.push('/accounts/changelog'));
+              },
+            ),
+          ],
+        ),
+      ),
       body: StreamBuilder(
         stream: ref.watch(accountRepositoryProvider).observeAccounts(),
         builder: (ctx, snap) {

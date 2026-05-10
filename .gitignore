@@ -18,6 +18,7 @@ build/
 Thumbs.db
 
 # --- Environment & Secrets ---
+assets/changelog.txt
 .env
 .env.local
 .envrc
