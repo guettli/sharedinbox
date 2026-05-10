@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ChangeLogScreen extends StatelessWidget {
   const ChangeLogScreen({super.key});
@@ -22,11 +26,20 @@ class ChangeLogScreen extends StatelessWidget {
             );
           }
           final content = snapshot.data ?? 'No changelog entries found.';
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Text(
-              content,
-              style: const TextStyle(
+          return Markdown(
+            data: content,
+            onTapLink: (text, href, title) {
+              if (href != null) {
+                unawaited(
+                  launchUrl(
+                    Uri.parse(href),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                );
+              }
+            },
+            styleSheet: MarkdownStyleSheet(
+              p: const TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 13,
               ),
