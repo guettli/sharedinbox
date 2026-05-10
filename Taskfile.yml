@@ -49,9 +49,15 @@ tasks:
 
   setup:
     desc: Fully set up the dev environment (FVM, pub get, codegen, hooks)
-    deps: [_preflight, _codegen]
+    deps: [_preflight, _codegen, generate-changelog]
     cmds:
       - echo "Setup complete."
+
+  generate-changelog:
+    desc: Generate assets/changelog.txt from git history
+    cmds:
+      - mkdir -p assets
+      - git log -n 50 --pretty=format:"* %ad %s" --date=short > assets/changelog.txt
 
   _pub-get:
     internal: true
@@ -236,8 +242,6 @@ tasks:
     internal: true
     run: once
     preconditions:
-      - list_directory:
-        dir_path: ${ANDROID_HOME:-$HOME/Android/Sdk}
       - sh: test -d "${ANDROID_HOME:-$HOME/Android/Sdk}"
         msg: |
           Android SDK not found. Install it with:
