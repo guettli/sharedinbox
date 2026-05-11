@@ -93,3 +93,8 @@ runner-data/
 sharedinbox-runner/runner-data/
 .gemini/
 .rustup/
+
+.copilot/
+.dotnet/
+.vscode-server/
+.wget-hsts
