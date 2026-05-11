@@ -120,26 +120,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 icon: const Icon(Icons.delete),
                 tooltip: 'Delete',
                 onPressed: () async {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Delete email'),
-                      content: const Text(
-                        'Move this email to Trash?',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Delete'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (confirmed != true || !context.mounted) return;
                   final destPath = await repo.deleteEmail(widget.emailId);
 
                   if (header != null) {
@@ -400,7 +380,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
     if (until == null || !context.mounted) return;
 
-    await ref.read(emailRepositoryProvider).snoozeEmail(widget.emailId, until);
+    final repo = ref.read(emailRepositoryProvider);
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: header.accountId,
+      type: UndoType.snooze,
+      emailIds: [widget.emailId],
+      sourceMailboxPath: header.mailboxPath,
+      originalEmails: [header],
+    );
+    ref.read(undoServiceProvider.notifier).pushAction(action);
+    await repo.snoozeEmail(widget.emailId, until);
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

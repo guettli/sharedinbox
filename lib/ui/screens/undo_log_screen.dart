@@ -43,17 +43,38 @@ class _UndoActionTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final firstEmail = action.originalEmails.firstOrNull;
+    final subject = firstEmail?.subject ?? '(No Subject)';
+    final sender = firstEmail != null && firstEmail.from.isNotEmpty
+        ? (firstEmail.from.first.name ?? firstEmail.from.first.email)
+        : '(Unknown Sender)';
+    final count = action.emailIds.length;
+    final extraCount = count > 1 ? ' (+${count - 1} more)' : '';
+
     return ListTile(
       leading: Icon(
         action.type == UndoType.delete
             ? Icons.delete_outline
-            : Icons.move_to_inbox,
+            : (action.type == UndoType.snooze
+                ? Icons.access_time
+                : Icons.move_to_inbox),
         color: action.type == UndoType.delete
             ? Colors.redAccent
-            : Colors.blueAccent,
+            : (action.type == UndoType.snooze
+                ? Colors.orangeAccent
+                : Colors.blueAccent),
       ),
-      title: Text(action.description),
-      subtitle: Text(_timeFmt.format(action.timestamp.toLocal())),
+      title: Text('$subject$extraCount'),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(
+            '${action.type.name.toUpperCase()} from ${action.sourceMailboxPath} • ${_timeFmt.format(action.timestamp.toLocal())}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
       trailing: TextButton(
         onPressed: () async {
           await ref

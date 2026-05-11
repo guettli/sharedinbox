@@ -36,6 +36,7 @@ class UndoShell extends ConsumerWidget {
         ),
         action: SnackBarAction(
           label: 'Undo',
+          textColor: Colors.redAccent,
           onPressed: () => ref.read(undoServiceProvider.notifier).undo(),
         ),
       ),

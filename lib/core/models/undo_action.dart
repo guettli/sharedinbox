@@ -1,6 +1,6 @@
 import 'package:sharedinbox/core/models/email.dart';
 
-enum UndoType { move, delete }
+enum UndoType { move, delete, snooze }
 
 class UndoAction {
   UndoAction({
@@ -58,6 +58,8 @@ class UndoAction {
     final s = count == 1 ? '' : 's';
     if (type == UndoType.delete) {
       return 'Deleted $count email$s from $sourceMailboxPath';
+    } else if (type == UndoType.snooze) {
+      return 'Snoozed $count email$s from $sourceMailboxPath';
     } else {
       return 'Moved $count email$s from $sourceMailboxPath to $destinationMailboxPath';
     }

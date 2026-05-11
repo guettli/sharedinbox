@@ -249,4 +249,36 @@ void main() {
     expect(payload['mailboxPath'], 'Trash');
     expect(payload['dest'], 'INBOX');
   });
+
+  test('Undo snooze clears snooze metadata and moves back', () async {
+    const emailId = 'acc1:101';
+    final original = await repo.getEmail(emailId);
+
+    // 1. Snooze
+    final until = DateTime(2026, 5, 10, 15);
+    await repo.snoozeEmail(emailId, until);
+
+    // Verify it snoozed locally
+    var email = await repo.getEmail(emailId);
+    expect(email!.mailboxPath, 'Snoozed');
+    expect(email.snoozedUntil, until);
+
+    // 2. Undo
+    final action = UndoAction(
+      id: 'undo4',
+      accountId: 'acc1',
+      type: UndoType.snooze,
+      emailIds: [emailId],
+      sourceMailboxPath: 'INBOX',
+      originalEmails: [original!],
+    );
+    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).undo();
+
+    // 3. Verify it is back in Inbox and metadata is cleared
+    email = await repo.getEmail(emailId);
+    expect(email!.mailboxPath, 'INBOX');
+    expect(email.snoozedUntil, isNull);
+    expect(email.snoozedFromMailboxPath, isNull);
+  });
 }

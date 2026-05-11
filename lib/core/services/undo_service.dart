@@ -53,7 +53,8 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     for (final id in action.emailIds) {
       // 1. Try to cancel the original change (if not started yet).
       final cancelled = await repo.cancelPendingChange(id, 'delete') ||
-          await repo.cancelPendingChange(id, 'move');
+          await repo.cancelPendingChange(id, 'move') ||
+          await repo.cancelPendingChange(id, 'snooze');
 
       try {
         final original = action.originalEmails.isEmpty

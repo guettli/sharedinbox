@@ -1529,7 +1529,11 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     // Optimistic: move the cached row locally instead of hard-deleting.
     await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(mailboxPath: Value(destMailboxPath)),
+      EmailsCompanion(
+        mailboxPath: Value(destMailboxPath),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
     );
     await _updateThread(
       row.accountId,
@@ -1771,6 +1775,8 @@ class EmailRepositoryImpl implements EmailRepository {
               messageId: Value(e.messageId),
               inReplyTo: Value(e.inReplyTo),
               references: Value(e.references),
+              snoozedUntil: Value(e.snoozedUntil),
+              snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
             ),
           );
       await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
