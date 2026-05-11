@@ -1,0 +1,1664 @@
+{
+  "_meta": {
+    "description": "This file contains a serialized version of schema entities for drift.",
+    "version": "1.3.0"
+  },
+  "options": {
+    "store_date_time_values_as_text": false
+  },
+  "entities": [
+    {
+      "id": 0,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "accounts",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "display_name",
+            "getter_name": "displayName",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "email",
+            "getter_name": "email",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "imap_host",
+            "getter_name": "imapHost",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "imap_port",
+            "getter_name": "imapPort",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "imap_ssl",
+            "getter_name": "imapSsl",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"imap_ssl\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"imap_ssl\" IN (0, 1))"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "smtp_host",
+            "getter_name": "smtpHost",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "smtp_port",
+            "getter_name": "smtpPort",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "smtp_ssl",
+            "getter_name": "smtpSsl",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"smtp_ssl\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"smtp_ssl\" IN (0, 1))"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "account_type",
+            "getter_name": "accountType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'imap\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "jmap_url",
+            "getter_name": "jmapUrl",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "username",
+            "getter_name": "username",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "verbose",
+            "getter_name": "verbose",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"verbose\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"verbose\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manage_sieve_host",
+            "getter_name": "manageSieveHost",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manage_sieve_port",
+            "getter_name": "manageSievePort",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('4190')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manage_sieve_ssl",
+            "getter_name": "manageSieveSsl",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"manage_sieve_ssl\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"manage_sieve_ssl\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('1')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manage_sieve_available",
+            "getter_name": "manageSieveAvailable",
+            "moor_type": "bool",
+            "nullable": true,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"manage_sieve_available\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"manage_sieve_available\" IN (0, 1))"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "mailboxes",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "path",
+            "getter_name": "path",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "name",
+            "getter_name": "name",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unread_count",
+            "getter_name": "unreadCount",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "total_count",
+            "getter_name": "totalCount",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "role",
+            "getter_name": "role",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "emails",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "mailbox_path",
+            "getter_name": "mailboxPath",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "uid",
+            "getter_name": "uid",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "subject",
+            "getter_name": "subject",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "sent_at",
+            "getter_name": "sentAt",
+            "moor_type": "dateTime",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "received_at",
+            "getter_name": "receivedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "from_json",
+            "getter_name": "fromJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "to_addresses",
+            "getter_name": "toAddresses",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cc_json",
+            "getter_name": "ccJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "preview",
+            "getter_name": "preview",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "is_seen",
+            "getter_name": "isSeen",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"is_seen\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"is_seen\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "is_flagged",
+            "getter_name": "isFlagged",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"is_flagged\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"is_flagged\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "has_attachment",
+            "getter_name": "hasAttachment",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"has_attachment\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"has_attachment\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "thread_id",
+            "getter_name": "threadId",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "message_id",
+            "getter_name": "messageId",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "in_reply_to",
+            "getter_name": "inReplyTo",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "references",
+            "getter_name": "references",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "snoozed_until",
+            "getter_name": "snoozedUntil",
+            "moor_type": "dateTime",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "snoozed_from_mailbox_path",
+            "getter_name": "snoozedFromMailboxPath",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "references": [
+        2
+      ],
+      "type": "table",
+      "data": {
+        "name": "email_bodies",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "email_id",
+            "getter_name": "emailId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES emails (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES emails (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "emails",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "text_body",
+            "getter_name": "textBody",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "html_body",
+            "getter_name": "htmlBody",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "attachments_json",
+            "getter_name": "attachmentsJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cached_at",
+            "getter_name": "cachedAt",
+            "moor_type": "dateTime",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "headers_json",
+            "getter_name": "headersJson",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "email_id"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "threads",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "mailbox_path",
+            "getter_name": "mailboxPath",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "subject",
+            "getter_name": "subject",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "latest_date",
+            "getter_name": "latestDate",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "message_count",
+            "getter_name": "messageCount",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('1')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "has_unread",
+            "getter_name": "hasUnread",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"has_unread\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"has_unread\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "is_flagged",
+            "getter_name": "isFlagged",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"is_flagged\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"is_flagged\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "participants_json",
+            "getter_name": "participantsJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "preview",
+            "getter_name": "preview",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "latest_email_id",
+            "getter_name": "latestEmailId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "email_ids_json",
+            "getter_name": "emailIdsJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'[]\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "account_id",
+          "mailbox_path",
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "drafts",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "PRIMARY KEY AUTOINCREMENT",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "PRIMARY KEY AUTOINCREMENT"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              "auto-increment"
+            ]
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "reply_to_email_id",
+            "getter_name": "replyToEmailId",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "to_text",
+            "getter_name": "toText",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cc_text",
+            "getter_name": "ccText",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "subject_text",
+            "getter_name": "subjectText",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "body_text",
+            "getter_name": "bodyText",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": []
+      }
+    },
+    {
+      "id": 6,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "sync_states",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "resource_type",
+            "getter_name": "resourceType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "state",
+            "getter_name": "state",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "synced_at",
+            "getter_name": "syncedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "account_id",
+          "resource_type"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "pending_changes",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "PRIMARY KEY AUTOINCREMENT",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "PRIMARY KEY AUTOINCREMENT"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              "auto-increment"
+            ]
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "resource_type",
+            "getter_name": "resourceType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "resource_id",
+            "getter_name": "resourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "change_type",
+            "getter_name": "changeType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "payload",
+            "getter_name": "payload",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "created_at",
+            "getter_name": "createdAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "attempts",
+            "getter_name": "attempts",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_error",
+            "getter_name": "lastError",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": []
+      }
+    },
+    {
+      "id": 8,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "sync_logs",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "PRIMARY KEY AUTOINCREMENT",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "PRIMARY KEY AUTOINCREMENT"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              "auto-increment"
+            ]
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "result",
+            "getter_name": "result",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "error_message",
+            "getter_name": "errorMessage",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "protocol",
+            "getter_name": "protocol",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "items_synced",
+            "getter_name": "itemsSynced",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "mailboxes_synced",
+            "getter_name": "mailboxesSynced",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "pending_flushed",
+            "getter_name": "pendingFlushed",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "emails_skipped",
+            "getter_name": "emailsSkipped",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "bytes_transferred",
+            "getter_name": "bytesTransferred",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "started_at",
+            "getter_name": "startedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "finished_at",
+            "getter_name": "finishedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "protocol_log",
+            "getter_name": "protocolLog",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": []
+      }
+    },
+    {
+      "id": 9,
+      "references": [
+        8
+      ],
+      "type": "table",
+      "data": {
+        "name": "sync_log_mailboxes",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "PRIMARY KEY AUTOINCREMENT",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "PRIMARY KEY AUTOINCREMENT"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              "auto-increment"
+            ]
+          },
+          {
+            "name": "sync_log_id",
+            "getter_name": "syncLogId",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES sync_logs (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES sync_logs (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "sync_logs",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "mailbox_path",
+            "getter_name": "mailboxPath",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "fetched",
+            "getter_name": "fetched",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "skipped",
+            "getter_name": "skipped",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "bytes_transferred",
+            "getter_name": "bytesTransferred",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": []
+      }
+    },
+    {
+      "id": 10,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "sync_health",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "last_verified_at",
+            "getter_name": "lastVerifiedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "is_healthy",
+            "getter_name": "isHealthy",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"is_healthy\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"is_healthy\" IN (0, 1))"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "discrepancy_summary",
+            "getter_name": "discrepancySummary",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "account_id"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "references": [
+        0
+      ],
+      "type": "table",
+      "data": {
+        "name": "undo_actions",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "account_id",
+            "getter_name": "accountId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "REFERENCES accounts (id) ON DELETE CASCADE",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "REFERENCES accounts (id) ON DELETE CASCADE"
+            },
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [
+              {
+                "foreign_key": {
+                  "to": {
+                    "table": "accounts",
+                    "column": "id"
+                  },
+                  "initially_deferred": false,
+                  "on_update": null,
+                  "on_delete": "cascade"
+                }
+              }
+            ]
+          },
+          {
+            "name": "data_json",
+            "getter_name": "dataJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "created_at",
+            "getter_name": "createdAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    }
+  ],
+  "fixed_sql": [
+    {
+      "name": "accounts",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"accounts\" (\"id\" TEXT NOT NULL, \"display_name\" TEXT NOT NULL, \"email\" TEXT NOT NULL, \"imap_host\" TEXT NOT NULL, \"imap_port\" INTEGER NOT NULL, \"imap_ssl\" INTEGER NOT NULL CHECK (\"imap_ssl\" IN (0, 1)), \"smtp_host\" TEXT NOT NULL, \"smtp_port\" INTEGER NOT NULL, \"smtp_ssl\" INTEGER NOT NULL CHECK (\"smtp_ssl\" IN (0, 1)), \"account_type\" TEXT NOT NULL DEFAULT 'imap', \"jmap_url\" TEXT NULL, \"username\" TEXT NOT NULL DEFAULT '', \"verbose\" INTEGER NOT NULL DEFAULT 0 CHECK (\"verbose\" IN (0, 1)), \"manage_sieve_host\" TEXT NOT NULL DEFAULT '', \"manage_sieve_port\" INTEGER NOT NULL DEFAULT 4190, \"manage_sieve_ssl\" INTEGER NOT NULL DEFAULT 1 CHECK (\"manage_sieve_ssl\" IN (0, 1)), \"manage_sieve_available\" INTEGER NULL CHECK (\"manage_sieve_available\" IN (0, 1)), PRIMARY KEY (\"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "mailboxes",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"mailboxes\" (\"id\" TEXT NOT NULL, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"path\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"unread_count\" INTEGER NOT NULL DEFAULT 0, \"total_count\" INTEGER NOT NULL DEFAULT 0, \"role\" TEXT NULL, PRIMARY KEY (\"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "emails",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"emails\" (\"id\" TEXT NOT NULL, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"mailbox_path\" TEXT NOT NULL, \"uid\" INTEGER NOT NULL, \"subject\" TEXT NULL, \"sent_at\" INTEGER NULL, \"received_at\" INTEGER NOT NULL, \"from_json\" TEXT NOT NULL DEFAULT '[]', \"to_addresses\" TEXT NOT NULL DEFAULT '[]', \"cc_json\" TEXT NOT NULL DEFAULT '[]', \"preview\" TEXT NULL, \"is_seen\" INTEGER NOT NULL DEFAULT 0 CHECK (\"is_seen\" IN (0, 1)), \"is_flagged\" INTEGER NOT NULL DEFAULT 0 CHECK (\"is_flagged\" IN (0, 1)), \"has_attachment\" INTEGER NOT NULL DEFAULT 0 CHECK (\"has_attachment\" IN (0, 1)), \"thread_id\" TEXT NULL, \"message_id\" TEXT NULL, \"in_reply_to\" TEXT NULL, \"references\" TEXT NULL, \"snoozed_until\" INTEGER NULL, \"snoozed_from_mailbox_path\" TEXT NULL, PRIMARY KEY (\"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "email_bodies",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"email_bodies\" (\"email_id\" TEXT NOT NULL REFERENCES emails (id) ON DELETE CASCADE, \"text_body\" TEXT NULL, \"html_body\" TEXT NULL, \"attachments_json\" TEXT NOT NULL DEFAULT '[]', \"cached_at\" INTEGER NULL, \"headers_json\" TEXT NULL, PRIMARY KEY (\"email_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "threads",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"threads\" (\"id\" TEXT NOT NULL, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"mailbox_path\" TEXT NOT NULL, \"subject\" TEXT NULL, \"latest_date\" INTEGER NOT NULL, \"message_count\" INTEGER NOT NULL DEFAULT 1, \"has_unread\" INTEGER NOT NULL DEFAULT 0 CHECK (\"has_unread\" IN (0, 1)), \"is_flagged\" INTEGER NOT NULL DEFAULT 0 CHECK (\"is_flagged\" IN (0, 1)), \"participants_json\" TEXT NOT NULL DEFAULT '[]', \"preview\" TEXT NULL, \"latest_email_id\" TEXT NOT NULL, \"email_ids_json\" TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (\"account_id\", \"mailbox_path\", \"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "drafts",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"drafts\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"account_id\" TEXT NULL, \"reply_to_email_id\" TEXT NULL, \"to_text\" TEXT NOT NULL DEFAULT '', \"cc_text\" TEXT NOT NULL DEFAULT '', \"subject_text\" TEXT NOT NULL DEFAULT '', \"body_text\" TEXT NOT NULL DEFAULT '', \"updated_at\" INTEGER NOT NULL);"
+        }
+      ]
+    },
+    {
+      "name": "sync_states",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_states\" (\"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"resource_type\" TEXT NOT NULL, \"state\" TEXT NOT NULL, \"synced_at\" INTEGER NOT NULL, PRIMARY KEY (\"account_id\", \"resource_type\"));"
+        }
+      ]
+    },
+    {
+      "name": "pending_changes",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"pending_changes\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"resource_type\" TEXT NOT NULL, \"resource_id\" TEXT NOT NULL, \"change_type\" TEXT NOT NULL, \"payload\" TEXT NOT NULL, \"created_at\" INTEGER NOT NULL, \"attempts\" INTEGER NOT NULL DEFAULT 0, \"last_error\" TEXT NULL);"
+        }
+      ]
+    },
+    {
+      "name": "sync_logs",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_logs\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"result\" TEXT NOT NULL, \"error_message\" TEXT NULL, \"protocol\" TEXT NOT NULL DEFAULT '', \"items_synced\" INTEGER NOT NULL DEFAULT 0, \"mailboxes_synced\" INTEGER NOT NULL DEFAULT 0, \"pending_flushed\" INTEGER NOT NULL DEFAULT 0, \"emails_skipped\" INTEGER NOT NULL DEFAULT 0, \"bytes_transferred\" INTEGER NOT NULL DEFAULT 0, \"started_at\" INTEGER NOT NULL, \"finished_at\" INTEGER NOT NULL, \"protocol_log\" TEXT NULL);"
+        }
+      ]
+    },
+    {
+      "name": "sync_log_mailboxes",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_log_mailboxes\" (\"id\" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \"sync_log_id\" INTEGER NOT NULL REFERENCES sync_logs (id) ON DELETE CASCADE, \"mailbox_path\" TEXT NOT NULL, \"fetched\" INTEGER NOT NULL DEFAULT 0, \"skipped\" INTEGER NOT NULL DEFAULT 0, \"bytes_transferred\" INTEGER NOT NULL DEFAULT 0);"
+        }
+      ]
+    },
+    {
+      "name": "sync_health",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_health\" (\"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"last_verified_at\" INTEGER NOT NULL, \"is_healthy\" INTEGER NOT NULL CHECK (\"is_healthy\" IN (0, 1)), \"discrepancy_summary\" TEXT NULL, PRIMARY KEY (\"account_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "undo_actions",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"undo_actions\" (\"id\" TEXT NOT NULL, \"account_id\" TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE, \"data_json\" TEXT NOT NULL, \"created_at\" INTEGER NOT NULL, PRIMARY KEY (\"id\"));"
+        }
+      ]
+    }
+  ]
+}

@@ -269,6 +269,9 @@ class AppDatabase extends _$AppDatabase {
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          // NOTE: m.createTable(T) creates the LATEST version of table T.
+          // If you later add a column C to T in version X, you must guard
+          // addColumn(T, T.C) with `if (from >= creationVersionOfT && from < X)`.
           if (from < 2) {
             await m.addColumn(accounts, accounts.accountType);
             await m.addColumn(accounts, accounts.jmapUrl);
@@ -294,12 +297,12 @@ class AppDatabase extends _$AppDatabase {
           if (from < 9) {
             await m.addColumn(emailBodies, emailBodies.cachedAt);
           }
-          if (from < 10) {
+          if (from >= 7 && from < 10) {
             await m.addColumn(syncLogs, syncLogs.protocol);
             await m.addColumn(syncLogs, syncLogs.mailboxesSynced);
             await m.addColumn(syncLogs, syncLogs.pendingFlushed);
           }
-          if (from < 11) {
+          if (from >= 7 && from < 11) {
             await m.addColumn(syncLogs, syncLogs.emailsSkipped);
             await m.addColumn(syncLogs, syncLogs.bytesTransferred);
           }
@@ -308,7 +311,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 13) {
             await m.addColumn(accounts, accounts.verbose);
-            await m.addColumn(syncLogs, syncLogs.protocolLog);
+            if (from >= 7) {
+              await m.addColumn(syncLogs, syncLogs.protocolLog);
+            }
           }
           if (from < 14) {
             await m.addColumn(emails, emails.threadId);

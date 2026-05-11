@@ -93,6 +93,67 @@ void main() {
       expect(email.id, 'acc:1');
       expect(email.isSeen, isFalse);
     });
+
+    test('JSON roundtrip works', () {
+      final now = DateTime.now();
+      final email = Email(
+        id: 'acc:1',
+        accountId: 'acc',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        subject: 'Hello',
+        sentAt: now,
+        receivedAt: now,
+        from: const [EmailAddress(name: 'A', email: 'a@a.com')],
+        to: const [EmailAddress(email: 'b@b.com')],
+        cc: const [],
+        isSeen: true,
+        isFlagged: false,
+        hasAttachment: true,
+        threadId: 't1',
+        messageId: 'm1',
+        snoozedUntil: now,
+        snoozedFromMailboxPath: 'INBOX',
+      );
+
+      final json = email.toJson();
+      final decoded = Email.fromJson(json);
+
+      expect(decoded.id, email.id);
+      expect(decoded.subject, email.subject);
+      expect(decoded.isSeen, email.isSeen);
+      expect(decoded.hasAttachment, email.hasAttachment);
+      expect(decoded.threadId, email.threadId);
+      expect(decoded.snoozedUntil, isNotNull);
+      expect(decoded.snoozedFromMailboxPath, 'INBOX');
+    });
+
+    test('copyWith works', () {
+      final email = Email(
+        id: 'acc:1',
+        accountId: 'acc',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        receivedAt: DateTime(2024),
+        from: const [],
+        to: const [],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      final updated = email.copyWith(
+        isSeen: true,
+        subject: 'New Subject',
+        snoozedUntil: DateTime(2026),
+      );
+
+      expect(updated.isSeen, isTrue);
+      expect(updated.subject, 'New Subject');
+      expect(updated.snoozedUntil, DateTime(2026));
+      expect(updated.id, email.id);
+    });
   });
 
   group('EmailBody', () {

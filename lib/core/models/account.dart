@@ -97,4 +97,53 @@ class Account {
       verbose: verbose ?? this.verbose,
     );
   }
+
+  factory Account.fromJson(Map<String, dynamic> json) {
+    return Account(
+      id: json['id'] as String,
+      displayName: json['displayName'] as String,
+      email: json['email'] as String,
+      username: json['username'] as String? ?? '',
+      type: AccountType.values.firstWhere(
+        (e) => e.name == (json['type'] as String? ?? 'imap'),
+        orElse: () => AccountType.imap,
+      ),
+      imapHost: json['imapHost'] as String? ?? '',
+      imapPort: json['imapPort'] as int? ?? 993,
+      imapSsl: json['imapSsl'] as bool? ?? true,
+      smtpHost: json['smtpHost'] as String? ?? '',
+      smtpPort: json['smtpPort'] as int? ?? 465,
+      smtpSsl: json['smtpSsl'] as bool? ?? true,
+      manageSieveHost: json['manageSieveHost'] as String? ?? '',
+      manageSievePort: json['manageSievePort'] as int? ?? 4190,
+      manageSieveSsl: json['manageSieveSsl'] as bool? ?? true,
+      manageSieveAvailable: json['manageSieveAvailable'] as bool?,
+      jmapUrl: json['jmapUrl'] as String?,
+      verbose: json['verbose'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'displayName': displayName,
+      'email': email,
+      'username': username,
+      'type': type.name,
+      'imapHost': imapHost,
+      'imapPort': imapPort,
+      'imapSsl': imapSsl,
+      'smtpHost': smtpHost,
+      'smtpPort': smtpPort,
+      'smtpSsl': smtpSsl,
+      'manageSieveHost': manageSieveHost,
+      'manageSievePort': manageSievePort,
+      'manageSieveSsl': manageSieveSsl,
+      'manageSieveAvailable': manageSieveAvailable,
+      'jmapUrl': jmapUrl,
+      'verbose': verbose,
+    };
+  }
+
+  String get accountType => type.name;
 }

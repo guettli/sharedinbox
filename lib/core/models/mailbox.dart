@@ -19,6 +19,50 @@ class Mailbox {
     required this.totalCount,
     this.role,
   });
+
+  Mailbox copyWith({
+    String? id,
+    String? accountId,
+    String? path,
+    String? name,
+    int? unreadCount,
+    int? totalCount,
+    String? role,
+  }) {
+    return Mailbox(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      path: path ?? this.path,
+      name: name ?? this.name,
+      unreadCount: unreadCount ?? this.unreadCount,
+      totalCount: totalCount ?? this.totalCount,
+      role: role ?? this.role,
+    );
+  }
+
+  factory Mailbox.fromJson(Map<String, dynamic> json) {
+    return Mailbox(
+      id: json['id'] as String,
+      accountId: json['accountId'] as String,
+      path: json['path'] as String,
+      name: json['name'] as String,
+      unreadCount: json['unreadCount'] as int,
+      totalCount: json['totalCount'] as int,
+      role: json['role'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'accountId': accountId,
+      'path': path,
+      'name': name,
+      'unreadCount': unreadCount,
+      'totalCount': totalCount,
+      'role': role,
+    };
+  }
 }
 
 /// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by path.

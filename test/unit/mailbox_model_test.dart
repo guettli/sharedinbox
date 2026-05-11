@@ -128,5 +128,23 @@ void main() {
       // unknown role and null role both have priority 99, so they sort by path.
       expect(compareMailboxes(m1, m2), lessThan(0));
     });
+
+    test('copyWith works', () {
+      final updated = mailbox.copyWith(
+        unreadCount: 5,
+        role: 'inbox',
+      );
+      expect(updated.unreadCount, 5);
+      expect(updated.role, 'inbox');
+      expect(updated.id, mailbox.id);
+    });
+
+    test('JSON roundtrip works', () {
+      final json = mailbox.toJson();
+      final decoded = Mailbox.fromJson(json);
+      expect(decoded.id, mailbox.id);
+      expect(decoded.path, mailbox.path);
+      expect(decoded.unreadCount, mailbox.unreadCount);
+    });
   });
 }

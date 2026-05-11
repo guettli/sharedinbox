@@ -35,5 +35,27 @@ void main() {
       );
       expect(identical(account, same), isTrue);
     });
+
+    test('copyWith works', () {
+      final updated = account.copyWith(
+        displayName: 'Personal',
+        imapPort: 143,
+        type: AccountType.jmap,
+        manageSieveAvailable: true,
+      );
+      expect(updated.displayName, 'Personal');
+      expect(updated.imapPort, 143);
+      expect(updated.type, AccountType.jmap);
+      expect(updated.manageSieveAvailable, isTrue);
+      expect(updated.id, account.id);
+    });
+
+    test('JSON roundtrip works', () {
+      final json = account.toJson();
+      final decoded = Account.fromJson(json);
+      expect(decoded.id, account.id);
+      expect(decoded.email, account.email);
+      expect(decoded.type, account.type);
+    });
   });
 }
