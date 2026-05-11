@@ -4,6 +4,17 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Tasks (2026-05-11)
+
+- **Stabilize Email List UI during Selection (Issue #14)**: Prevented layout shifts when entering
+  selection mode in the email list.
+  - Consolidated `AppBar` logic to maintain a constant height by preserving the `SearchBar` space.
+  - Refactored `ListTile` to keep `trailing` widgets (date, flag) visible during selection.
+  - Wrapped `leading` widgets in a `SizedBox` to ensure consistent horizontal alignment.
+  - Retained `Dismissible` wrappers during selection (disabling swipe via `direction`) to avoid widget tree churn.
+  - Verified with widget and E2E integration tests.
+  - Deployed to Android.
+
 ## Tasks (2026-05-10)
 
 - **Improved Undo Log and Android Deployment (Issue #7)**: Enhanced the Undo Log to support
