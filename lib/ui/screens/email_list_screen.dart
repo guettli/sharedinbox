@@ -125,7 +125,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
 
     return Scaffold(
-      appBar: _selecting ? _selectionBar() : _normalBar(repo, accountAsync),
+      appBar: _buildAppBar(repo, accountAsync),
       drawer: _selecting
           ? null
           : FolderDrawer(
@@ -139,50 +139,63 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
-  AppBar _normalBar(
+  PreferredSizeWidget _buildAppBar(
     EmailRepository emailRepo,
     AsyncValue<Account?> accountAsync,
   ) {
+    final selectionCount =
+        _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
+
     return AppBar(
-      title: Text(widget.mailboxPath),
-      actions: [
-        accountAsync.when(
-          loading: () => const SizedBox.shrink(),
-          error: (_, __) => const SizedBox.shrink(),
-          data: (account) => Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Center(
-              child: Text(
-                account?.displayName ?? '',
-                style: Theme.of(context).textTheme.bodySmall,
+      leading: _selecting
+          ? IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _clearSelection,
+            )
+          : null,
+      title: _selecting
+          ? Text('$selectionCount selected')
+          : Text(widget.mailboxPath),
+      actions: _selecting
+          ? []
+          : [
+              accountAsync.when(
+                loading: () => const SizedBox.shrink(),
+                error: (_, __) => const SizedBox.shrink(),
+                data: (account) => Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Center(
+                    child: Text(
+                      account?.displayName ?? '',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.sync),
-          onPressed: () async {
-            try {
-              await emailRepo.syncEmails(
-                widget.accountId,
-                widget.mailboxPath,
-              );
-            } catch (e) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Sync failed: $e')),
-              );
-            }
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.edit),
-          onPressed: () => context.push(
-            '/compose',
-            extra: {'accountId': widget.accountId},
-          ),
-        ),
-      ],
+              IconButton(
+                icon: const Icon(Icons.sync),
+                onPressed: () async {
+                  try {
+                    await emailRepo.syncEmails(
+                      widget.accountId,
+                      widget.mailboxPath,
+                    );
+                  } catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Sync failed: $e')),
+                    );
+                  }
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit),
+                onPressed: () => context.push(
+                  '/compose',
+                  extra: {'accountId': widget.accountId},
+                ),
+              ),
+            ],
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(60),
         child: Padding(
@@ -191,8 +204,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             controller: _searchController,
             hintText: 'Search…',
             leading: const Icon(Icons.search),
+            enabled: !_selecting,
             trailing: [
-              if (_searchController.text.isNotEmpty)
+              if (_searchController.text.isNotEmpty && !_selecting)
                 IconButton(
                   icon: const Icon(Icons.clear),
                   onPressed: () => _searchController.clear(),
@@ -204,18 +218,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  AppBar _selectionBar() {
-    final count =
-        _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
-    return AppBar(
-      leading: IconButton(
-        icon: const Icon(Icons.close),
-        onPressed: _clearSelection,
-      ),
-      title: Text('$count selected'),
     );
   }
 
@@ -484,15 +486,19 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             t.participants.map((a) => a.name ?? a.email).take(3).join(', ');
 
         final tile = ListTile(
-          leading: _selecting
-              ? Checkbox(
-                  value: isSelected,
-                  onChanged: (_) => _toggleThreadSelection(t),
-                )
-              : Icon(
-                  t.hasUnread ? Icons.mail : Icons.mail_outline,
-                  color: t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
-                ),
+          leading: SizedBox(
+            width: 40,
+            child: _selecting
+                ? Checkbox(
+                    value: isSelected,
+                    onChanged: (_) => _toggleThreadSelection(t),
+                  )
+                : Icon(
+                    t.hasUnread ? Icons.mail : Icons.mail_outline,
+                    color:
+                        t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
+                  ),
+          ),
           title: Row(
             children: [
               Expanded(
@@ -535,20 +541,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             ],
           ),
           selected: isSelected,
-          trailing: _selecting
-              ? null
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (t.isFlagged)
-                      const Icon(Icons.star, color: Colors.amber, size: 16),
-                    const SizedBox(width: 4),
-                    Text(
-                      _dateFmt.format(t.latestDate),
-                      style: Theme.of(ctx).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (t.isFlagged)
+                const Icon(Icons.star, color: Colors.amber, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                _dateFmt.format(t.latestDate),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ],
+          ),
           onTap: _selecting
               ? () => _toggleThreadSelection(t)
               : t.messageCount > 1
@@ -561,12 +565,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           onLongPress: () => _toggleThreadSelection(t),
         );
 
-        if (_selecting) return tile;
-
         // For swipe actions on threads, operate on the latest email only
         // (single-email threads) or the whole thread.
         return Dismissible(
           key: ValueKey(t.threadId),
+          direction:
+              _selecting ? DismissDirection.none : DismissDirection.horizontal,
           background: _swipeBackground(
             alignment: Alignment.centerLeft,
             color: Colors.green,
@@ -646,15 +650,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             ? (e.from.first.name ?? e.from.first.email)
             : '(unknown)';
         return ListTile(
-          leading: _selecting
-              ? Checkbox(
-                  value: isSelected,
-                  onChanged: (_) => _toggleSearchSelection(e.id),
-                )
-              : Icon(
-                  e.isSeen ? Icons.mail_outline : Icons.mail,
-                  color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-                ),
+          leading: SizedBox(
+            width: 40,
+            child: _selecting
+                ? Checkbox(
+                    value: isSelected,
+                    onChanged: (_) => _toggleSearchSelection(e.id),
+                  )
+                : Icon(
+                    e.isSeen ? Icons.mail_outline : Icons.mail,
+                    color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+                  ),
+          ),
           title: Text(
             sender,
             style:
@@ -666,12 +673,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           selected: isSelected,
-          trailing: _selecting
-              ? null
-              : Text(
-                  e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
+          trailing: Text(
+            e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
+            style: Theme.of(ctx).textTheme.bodySmall,
+          ),
           onTap: _selecting
               ? () => _toggleSearchSelection(e.id)
               : () => context.push(
