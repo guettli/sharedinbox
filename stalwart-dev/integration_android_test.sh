@@ -135,10 +135,10 @@ cd "$ROOT"
 
 # Clear any leftover app state from previous runs (stale DB, cached APK process).
 # Only run if the package is installed — that way any failure is a real error.
-if "$ADB" -s "$EMULATOR_ID" shell pm list packages | grep -qF "com.example.sharedinbox"; then
-    "$ADB" -s "$EMULATOR_ID" shell am force-stop com.example.sharedinbox
-    "$ADB" -s "$EMULATOR_ID" shell pm clear com.example.sharedinbox
-    "$ADB" -s "$EMULATOR_ID" uninstall com.example.sharedinbox
+if "$ADB" -s "$EMULATOR_ID" shell pm list packages | grep -qF "de.sharedinbox.mua"; then
+    "$ADB" -s "$EMULATOR_ID" shell am force-stop de.sharedinbox.mua
+    "$ADB" -s "$EMULATOR_ID" shell pm clear de.sharedinbox.mua
+    "$ADB" -s "$EMULATOR_ID" uninstall de.sharedinbox.mua
 fi
 
 ts "flutter test start"

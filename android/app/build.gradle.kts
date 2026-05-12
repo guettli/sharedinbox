@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.sharedinbox"
+    namespace = "de.sharedinbox.mua"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -19,9 +19,20 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    signingConfigs {
+        create("release") {
+            // Hardcoded alias matching t.sh
+            keyAlias = "upload"
+            // Use the same password for both key and keystore
+            val pass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            storePassword = pass
+            keyPassword = pass
+            storeFile = file("upload-keystore.jks")
+        }
+    }
+
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.sharedinbox"
+        applicationId = "de.sharedinbox.mua"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -32,11 +43,14 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
-            // Minification is disabled: R8 strips plugin classes (flutter_secure_storage,
-            // sqlite3) that are needed at runtime, causing an immediate crash on launch.
+            // Use the signing config defined above for release builds.
+            // If the keystore file exists (e.g. in CI or manually placed), sign it.
+            signingConfig = if (signingConfigs.getByName("release").storeFile?.exists() == true) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+
             isMinifyEnabled = false
             isShrinkResources = false
         }

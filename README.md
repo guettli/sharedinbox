@@ -2,7 +2,7 @@
 
 IMAP/SMTP email client written in [Flutter](https://flutter.dev).
 
-Targets **Android, iOS, and Desktop** (Linux done; macOS, Windows, Android, iOS scaffolded).  
+Targets **Android, iOS, and Desktop** (Linux done; macOS, Windows, Android, iOS scaffolded).
 Supports **multiple accounts** — each synced independently via IMAP IDLE.
 
 ## Design philosophy: offline-first
@@ -41,9 +41,9 @@ The UI never touches the network. The sync engine runs in the background and wri
 
 ## For users
 
-Download the latest release from the [Releases page](https://github.com/guettli/sharedinbox3/releases) *(not yet published)*.
-
-Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs your INBOX in the background using IMAP IDLE and works offline — the network is only needed during initial sync and when sending mail.
+Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs your INBOX in the
+background using IMAP IDLE and works offline — the network is only needed during initial sync and
+when sending mail.
 
 ---
 

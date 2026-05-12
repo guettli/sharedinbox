@@ -1,4 +1,4 @@
-package com.example.sharedinbox
+package de.sharedinbox.mua
 
 import io.flutter.embedding.android.FlutterActivity
 

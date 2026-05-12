@@ -268,6 +268,19 @@ tasks:
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
+  build-android-bundle:
+    desc: Build a release App Bundle (AAB)
+    deps: [_preflight, _android-sdk-check, _pub-get, generate-changelog]
+    method: timestamp
+    sources:
+      - lib/**/*.dart
+      - android/**/*
+      - pubspec.yaml
+    generates:
+      - build/app/outputs/bundle/release/app-release.aab
+    cmds:
+      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build appbundle --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
+
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
     deps: [check, build-android]
