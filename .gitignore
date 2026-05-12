@@ -103,3 +103,5 @@ website/.hugo_build.lock
 .dotnet/
 .vscode-server/
 .wget-hsts
+
+tmp/

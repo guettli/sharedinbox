@@ -1,5 +1,5 @@
 # Dockerfile for a Codeberg Runner with Nix and a non-root worker
-FROM gitea/act_runner:latest
+FROM gitea/act_runner:latest-ubuntu
 
 # Install Nix requirements and basic tools
 RUN apt-get update && apt-get install -y curl xz-utils sudo && rm -rf /var/lib/apt/lists/*
@@ -21,6 +21,6 @@ RUN useradd -m -s /bin/bash worker && \
 RUN chown -R worker:worker /nix/var/nix/profiles/per-user/worker || true && \
     chmod -R 777 /nix/store /nix/var/nix/db
 
-# We still start as root so the act_runner entrypoint can initialize, 
+# We still start as root so the act_runner entrypoint can initialize,
 # but the 'act_runner' is configured to run jobs as a specific user if requested.
 # However, by default, act_runner executes inside this container.
