@@ -59,6 +59,9 @@
             # Coverage merging (flutter test --merge-coverage requires lcov)
             lcov
 
+            # Website
+            hugo
+
             # Utilities
             git
             curl

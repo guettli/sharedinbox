@@ -1,0 +1,38 @@
+name: Deploy Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.forgejo/workflows/website.yml'
+
+jobs:
+  deploy:
+    name: Build & Deploy Website
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.WEBSITE_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$SSH_PRIVATE_KEY" ]; then
+            mkdir -p ~/.ssh
+            echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+          else
+            echo "Error: WEBSITE_SSH_PRIVATE_KEY secret is not set."
+            exit 1
+          fi
+
+      - name: Deploy
+        env:
+          SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
+          SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
+        run: nix develop --command task website-deploy

@@ -94,6 +94,11 @@ sharedinbox-runner/runner-data/
 .gemini/
 .rustup/
 
+# --- Hugo ---
+website/public/
+website/resources/
+website/.hugo_build.lock
+
 .copilot/
 .dotnet/
 .vscode-server/

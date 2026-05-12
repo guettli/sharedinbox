@@ -1,0 +1,18 @@
+baseURL = 'https://sharedinbox.de/'
+languageCode = 'en-us'
+title = 'SharedInbox'
+theme = 'PaperMod'
+
+[params]
+    env = 'production'
+    title = 'SharedInbox'
+    description = 'IMAP/SMTP Email Client'
+    author = 'SharedInbox Team'
+
+    [params.homeInfoParams]
+        Title = "SharedInbox"
+        Content = "The modern IMAP/SMTP email client for your desktop and mobile."
+
+    [[params.socialIcons]]
+        name = "github"
+        url = "https://codeberg.org/guettli/sharedinbox"

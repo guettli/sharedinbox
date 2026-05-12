@@ -322,6 +322,27 @@ tasks:
     cmds:
       - fvm dart run scripts/check_coverage.dart
 
+  website-dev:
+    desc: Run Hugo development server
+    cmds:
+      - fvm flutter pub global run # Just a placeholder if nix shell hook isn't active
+      - nix develop --command hugo server --source website -D
+
+  website-build:
+    desc: Build the static website
+    cmds:
+      - nix develop --command hugo --source website --minify
+
+  website-deploy:
+    desc: Deploy the website via rsync to public_html
+    deps: [website-build]
+    cmds:
+      - |
+        rsync -avz --delete \
+          -e "ssh -o StrictHostKeyChecking=no" \
+          website/public/ \
+          ${SSH_USER}@${SSH_HOST}:public_html/
+
   check-fast:
     desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
     deps: [analyze, test, test-widget, check-hygiene]
