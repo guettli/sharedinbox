@@ -1,3 +1,8 @@
+Outdated!
+
+I started from scratch using Flutter: [guettli/sharedinbox: SharedInbox: a Mail User Agent supporting IMAP and JMAP - Codeberg.org](https://codeberg.org/guettli/sharedinbox/)
+---
+
 # SharedInbox [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 JMAP email client written using [Kotlin Compose
