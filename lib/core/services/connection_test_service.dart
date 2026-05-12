@@ -111,7 +111,9 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     }
     try {
       await client.quit();
-    } catch (_) {/* best-effort */}
+    } catch (_) {
+      /* best-effort */
+    }
   }
 
   Future<void> _testManageSieve(
@@ -137,12 +139,16 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     } catch (e) {
       try {
         await client.logout();
-      } catch (_) {/* best-effort */}
+      } catch (_) {
+        /* best-effort */
+      }
       throw Exception('ManageSieve: $e');
     }
     try {
       await client.logout();
-    } catch (_) {/* best-effort */}
+    } catch (_) {
+      /* best-effort */
+    }
   }
 
   Future<String> _testJmap(Account account, String password) async {
@@ -163,8 +169,9 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
           },
         ).timeout(const Duration(seconds: 10));
         if (resp.statusCode == 401 || resp.statusCode == 403) {
-          lastError =
-              Exception('Authentication failed: wrong username or password');
+          lastError = Exception(
+            'Authentication failed: wrong username or password',
+          );
           continue;
         }
         if (resp.statusCode != 200) {

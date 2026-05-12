@@ -36,22 +36,19 @@ class SieveRepository {
   Future<List<SieveScript>> listScripts(String accountId) async {
     final account = await _requireAccount(accountId);
     if (account.type == AccountType.imap) {
-      return _withManageSieve(
-        account,
-        (c) async {
-          final scripts = await c.listScripts();
-          return scripts
-              .map(
-                (s) => SieveScript(
-                  id: s.name,
-                  name: s.name,
-                  blobId: s.name,
-                  isActive: s.isActive,
-                ),
-              )
-              .toList();
-        },
-      );
+      return _withManageSieve(account, (c) async {
+        final scripts = await c.listScripts();
+        return scripts
+            .map(
+              (s) => SieveScript(
+                id: s.name,
+                name: s.name,
+                blobId: s.name,
+                isActive: s.isActive,
+              ),
+            )
+            .toList();
+      });
     }
     return _withJmap(account, (jmap) async {
       final responses = await jmap.call(
@@ -108,12 +105,7 @@ class SieveRepository {
         if (id != null && id != name) {
           await c.deleteScript(id);
         }
-        return SieveScript(
-          id: name,
-          name: name,
-          blobId: name,
-          isActive: false,
-        );
+        return SieveScript(id: name, name: name, blobId: name, isActive: false);
       });
     }
     return _withJmap(account, (jmap) async {

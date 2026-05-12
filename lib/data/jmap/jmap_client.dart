@@ -7,10 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
 
-const _coreUsing = [
-  'urn:ietf:params:jmap:core',
-  'urn:ietf:params:jmap:mail',
-];
+const _coreUsing = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'];
 
 const _submissionCapability = 'urn:ietf:params:jmap:submission';
 const _sieveCapability = 'urn:ietf:params:jmap:sieve';
@@ -72,7 +69,9 @@ class JmapClient {
     while (true) {
       resp = await httpClient.get(
         jmapUrl,
-        headers: {'Authorization': 'Basic $credentials'},
+        headers: {
+          'Authorization': 'Basic $credentials',
+        },
       ).timeout(const Duration(seconds: 10));
       if (resp.statusCode != 429 || attempt >= 4) {
         break;
@@ -135,10 +134,7 @@ class JmapClient {
       if (withSubmission) _submissionCapability,
       if (withSieve) _sieveCapability,
     ];
-    final body = jsonEncode({
-      'using': using,
-      'methodCalls': methodCalls,
-    });
+    final body = jsonEncode({'using': using, 'methodCalls': methodCalls});
 
     final resp = await _httpClient
         .post(
@@ -224,7 +220,9 @@ class JmapClient {
     );
     final resp = await _httpClient.get(
       url,
-      headers: {'Authorization': 'Basic $_credentials'},
+      headers: {
+        'Authorization': 'Basic $_credentials',
+      },
     ).timeout(const Duration(seconds: 30));
     if (resp.statusCode != 200) {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
