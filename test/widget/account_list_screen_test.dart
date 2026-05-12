@@ -5,8 +5,9 @@ import 'helpers.dart';
 
 void main() {
   group('AccountListScreen', () {
-    testWidgets('shows "No accounts yet." when repository is empty',
-        (tester) async {
+    testWidgets('shows "No accounts yet." when repository is empty', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
       );
@@ -16,8 +17,9 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
     });
 
-    testWidgets('shows account tile when repository has an account',
-        (tester) async {
+    testWidgets('shows account tile when repository has an account', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts',
@@ -44,8 +46,9 @@ void main() {
       expect(find.textContaining('IMAP'), findsOneWidget);
     });
 
-    testWidgets('shows check icon after successful connection test',
-        (tester) async {
+    testWidgets('shows check icon after successful connection test', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts',
@@ -87,21 +90,23 @@ void main() {
     });
 
     testWidgets(
-        '"Add account" button in empty state navigates to add-account screen',
-        (tester) async {
-      await tester.pumpWidget(
-        buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
-      );
-      await tester.pumpAndSettle();
+      '"Add account" button in empty state navigates to add-account screen',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(initialLocation: '/accounts', overrides: baseOverrides()),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Add account'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Add account'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Email address'), findsOneWidget);
-    });
+        expect(find.text('Email address'), findsOneWidget);
+      },
+    );
 
-    testWidgets('tapping an account tile navigates to its mailboxes',
-        (tester) async {
+    testWidgets('tapping an account tile navigates to its mailboxes', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts',
@@ -131,8 +136,9 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
     });
 
-    testWidgets('AppBar does not overflow at minimum supported window size',
-        (tester) async {
+    testWidgets('AppBar does not overflow at minimum supported window size', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(400, 300);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);

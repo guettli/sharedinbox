@@ -11,12 +11,7 @@ import 'package:sharedinbox/data/db/database.dart';
 /// Periodically verifies local state against the server's "ground truth".
 /// Results are stored in the [SyncHealth] table.
 class ReliabilityRunner {
-  ReliabilityRunner(
-    this._db,
-    this._accounts,
-    this._mailboxes,
-    this._emails,
-  );
+  ReliabilityRunner(this._db, this._accounts, this._mailboxes, this._emails);
 
   final AppDatabase _db;
   final AccountRepository _accounts;
@@ -65,8 +60,10 @@ class ReliabilityRunner {
 
       for (final mailbox in mailboxes) {
         if (!_running) break;
-        final result =
-            await _emails.verifySyncReliability(accountId, mailbox.path);
+        final result = await _emails.verifySyncReliability(
+          accountId,
+          mailbox.path,
+        );
         if (!result.isHealthy) {
           totalMissingLocally += result.missingLocally.length;
           totalMissingOnServer += result.missingOnServer.length;

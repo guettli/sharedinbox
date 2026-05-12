@@ -22,8 +22,9 @@ void main() {
 
     when(mockUndoRepo.saveAction(any)).thenAnswer((_) async {});
     when(mockUndoRepo.deleteAction(any)).thenAnswer((_) async {});
-    when(mockUndoRepo.getHistory(limit: anyNamed('limit')))
-        .thenAnswer((_) async => []);
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
 
     container = ProviderContainer(
       overrides: [
@@ -84,8 +85,9 @@ void main() {
     );
 
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(mockEmailRepo.cancelPendingChange(any, any))
-        .thenAnswer((_) async => false);
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
@@ -118,8 +120,9 @@ void main() {
     );
 
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(mockEmailRepo.cancelPendingChange(any, any))
-        .thenAnswer((_) async => false);
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
@@ -142,10 +145,12 @@ void main() {
     );
 
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(mockEmailRepo.cancelPendingChange('e1', 'delete'))
-        .thenAnswer((_) async => false);
-    when(mockEmailRepo.cancelPendingChange('e1', 'move'))
-        .thenAnswer((_) async => true);
+    when(
+      mockEmailRepo.cancelPendingChange('e1', 'delete'),
+    ).thenAnswer((_) async => false);
+    when(
+      mockEmailRepo.cancelPendingChange('e1', 'move'),
+    ).thenAnswer((_) async => true);
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
@@ -180,8 +185,9 @@ void main() {
       originalEmails: [email],
     );
 
-    when(mockEmailRepo.cancelPendingChange(any, any))
-        .thenAnswer((_) async => false);
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
     when(mockEmailRepo.restoreEmails(any)).thenAnswer((_) async {});
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
 

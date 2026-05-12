@@ -113,11 +113,10 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
   /// well-known endpoint nor the autoconfig XML was found.
   Future<ImapSmtpDiscovery?> _tryMxFallback(String domain) async {
     try {
-      final url = Uri.https(
-        'dns.google',
-        '/resolve',
-        {'name': domain, 'type': 'MX'},
-      );
+      final url = Uri.https('dns.google', '/resolve', {
+        'name': domain,
+        'type': 'MX',
+      });
       final resp = await _client.get(url).timeout(const Duration(seconds: 5));
       if (resp.statusCode != 200) return null;
 

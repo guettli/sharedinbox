@@ -50,10 +50,9 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen> {
   Future<void> _loadContent() async {
     setState(() => _loadingContent = true);
     try {
-      final content = await ref.read(sieveRepositoryProvider).getScriptContent(
-            widget.accountId,
-            widget.script!.blobId,
-          );
+      final content = await ref
+          .read(sieveRepositoryProvider)
+          .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
         setState(() => _loadingContent = false);

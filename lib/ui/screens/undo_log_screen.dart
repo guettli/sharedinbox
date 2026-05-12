@@ -81,9 +81,9 @@ class _UndoActionTile extends ConsumerWidget {
               .read(undoServiceProvider.notifier)
               .undo(actionId: action.id);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Action undone.')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('Action undone.')));
           }
         },
         child: const Text('Undo'),

@@ -10,9 +10,14 @@ jobs:
     name: Full Project Check
     # Match the label of your self-hosted runner
     runs-on: self-hosted
-    
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enable Nix flakes
+        run: |
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Run Full Check Suite
         # Using nix develop ensures the runner doesn't need flutter/dart/stalwart installed globally.
@@ -27,6 +32,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enable Nix flakes
+        run: |
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Build Linux
         # The Taskfile task 'build-linux' currently builds --debug.

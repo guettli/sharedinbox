@@ -79,7 +79,9 @@ class ManageSieveClient {
       await sub.cancel();
       try {
         await socket.close();
-      } catch (_) {/* best-effort */}
+      } catch (_) {
+        /* best-effort */
+      }
       rethrow;
     }
   }
@@ -127,9 +129,7 @@ class ManageSieveClient {
     await _writeLine('AUTHENTICATE "PLAIN" "$initial"');
     final resp = await _readResponse();
     if (resp.status != _Status.ok) {
-      throw ManageSieveException(
-        'Authentication failed: ${resp.message}',
-      );
+      throw ManageSieveException('Authentication failed: ${resp.message}');
     }
   }
 

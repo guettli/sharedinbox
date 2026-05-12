@@ -24,12 +24,7 @@ class TlsModeMismatchException implements Exception {
 /// If [error] is a TLS handshake failure caused by a wrong-version-number
 /// (i.e. the server is not speaking TLS), throw a [TlsModeMismatchException]
 /// with [host]/[port] context. Otherwise rethrow [error] unchanged.
-Never rethrowAsTlsHint(
-  Object error,
-  StackTrace stack,
-  String host,
-  int port,
-) {
+Never rethrowAsTlsHint(Object error, StackTrace stack, String host, int port) {
   if (error.toString().contains('WRONG_VERSION_NUMBER')) {
     Error.throwWithStackTrace(
       TlsModeMismatchException(host, port, error),

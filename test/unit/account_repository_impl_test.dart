@@ -82,10 +82,7 @@ void main() {
 
     test('getPassword throws StateError when no password stored', () async {
       final repo = _makeRepo();
-      expect(
-        () => repo.getPassword('missing'),
-        throwsA(isA<StateError>()),
-      );
+      expect(() => repo.getPassword('missing'), throwsA(isA<StateError>()));
     });
 
     test('removeAccount deletes account and password', () async {
@@ -94,10 +91,7 @@ void main() {
       await repo.removeAccount('acc-1');
 
       expect(await repo.getAccount('acc-1'), isNull);
-      expect(
-        () => repo.getPassword('acc-1'),
-        throwsA(isA<StateError>()),
-      );
+      expect(() => repo.getPassword('acc-1'), throwsA(isA<StateError>()));
     });
 
     test('addAccount is idempotent (upsert)', () async {

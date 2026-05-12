@@ -126,144 +126,148 @@ void main() {
     await db.close();
   });
 
-  test('concurrent IMAP + JMAP sync caches all emails without errors',
-      timeout: const Timeout(Duration(seconds: 30)), () async {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    const msgCount = 2;
+  test(
+    'concurrent IMAP + JMAP sync caches all emails without errors',
+    timeout: const Timeout(Duration(seconds: 30)),
+    () async {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      const msgCount = 2;
 
-    // ── 1. Send emails in both directions ─────────────────────────────────────
-    // alice → bob  (alice uses IMAP; bob uses JMAP)
-    // bob   → alice (cross-direction)
-    for (var i = 0; i < msgCount; i++) {
-      await _sendMessage(
-        host: imapHost,
-        port: smtpPort,
-        from: aliceUser,
-        pass: alicePass,
-        to: bobUser,
-        subject: 'alice-to-bob-$ts-$i',
+      // ── 1. Send emails in both directions ─────────────────────────────────────
+      // alice → bob  (alice uses IMAP; bob uses JMAP)
+      // bob   → alice (cross-direction)
+      for (var i = 0; i < msgCount; i++) {
+        await _sendMessage(
+          host: imapHost,
+          port: smtpPort,
+          from: aliceUser,
+          pass: alicePass,
+          to: bobUser,
+          subject: 'alice-to-bob-$ts-$i',
+        );
+        await _sendMessage(
+          host: imapHost,
+          port: smtpPort,
+          from: bobUser,
+          pass: bobPass,
+          to: aliceUser,
+          subject: 'bob-to-alice-$ts-$i',
+        );
+      }
+      // Give Stalwart a moment to deliver all messages.
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+
+      // ── 2. Insert accounts ─────────────────────────────────────────────────────
+      final aliceAccount = model.Account(
+        id: 'alice',
+        displayName: 'Alice',
+        email: aliceUser,
+        imapHost: imapHost,
+        imapPort: imapPort,
+        imapSsl: false,
+        smtpHost: imapHost,
+        smtpPort: smtpPort,
       );
-      await _sendMessage(
-        host: imapHost,
-        port: smtpPort,
-        from: bobUser,
-        pass: bobPass,
-        to: aliceUser,
-        subject: 'bob-to-alice-$ts-$i',
+      final bobAccount = model.Account(
+        id: 'bob',
+        displayName: 'Bob',
+        email: bobUser,
+        type: model.AccountType.jmap,
+        jmapUrl: '$jmapUrl/.well-known/jmap',
+        smtpHost: imapHost,
+        smtpPort: smtpPort,
       );
-    }
-    // Give Stalwart a moment to deliver all messages.
-    await Future<void>.delayed(const Duration(milliseconds: 800));
 
-    // ── 2. Insert accounts ─────────────────────────────────────────────────────
-    final aliceAccount = model.Account(
-      id: 'alice',
-      displayName: 'Alice',
-      email: aliceUser,
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: imapHost,
-      smtpPort: smtpPort,
-    );
-    final bobAccount = model.Account(
-      id: 'bob',
-      displayName: 'Bob',
-      email: bobUser,
-      type: model.AccountType.jmap,
-      jmapUrl: '$jmapUrl/.well-known/jmap',
-      smtpHost: imapHost,
-      smtpPort: smtpPort,
-    );
+      await accounts.addAccount(aliceAccount, alicePass);
+      await accounts.addAccount(bobAccount, bobPass);
 
-    await accounts.addAccount(aliceAccount, alicePass);
-    await accounts.addAccount(bobAccount, bobPass);
+      final httpClient = http.Client();
+      addTearDown(httpClient.close);
 
-    final httpClient = http.Client();
-    addTearDown(httpClient.close);
+      final mailboxRepo = MailboxRepositoryImpl(
+        db,
+        accounts,
+        imapConnect: _connectImapPlaintext,
+        httpClient: httpClient,
+      );
+      final emailRepo = EmailRepositoryImpl(
+        db,
+        accounts,
+        imapConnect: _connectImapPlaintext,
+        httpClient: httpClient,
+      );
 
-    final mailboxRepo = MailboxRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: _connectImapPlaintext,
-      httpClient: httpClient,
-    );
-    final emailRepo = EmailRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: _connectImapPlaintext,
-      httpClient: httpClient,
-    );
-
-    // ── 3. Sync mailboxes concurrently ─────────────────────────────────────────
-    await Future.wait([
-      mailboxRepo.syncMailboxes('alice'),
-      mailboxRepo.syncMailboxes('bob'),
-    ]);
-
-    final allMailboxes = await db.select(db.mailboxes).get();
-    expect(
-      allMailboxes,
-      isNotEmpty,
-      reason: 'mailboxes should be cached after sync',
-    );
-
-    // Grab INBOX paths for each account.
-    // IMAP: path is the mailbox path string (e.g. "INBOX").
-    // JMAP: path is the server-assigned JMAP mailbox ID; match by role or name.
-    final aliceInbox = allMailboxes
-        .firstWhere(
-          (m) => m.accountId == 'alice' && m.path.toUpperCase() == 'INBOX',
-        )
-        .path;
-    final bobInbox = allMailboxes
-        .firstWhere(
-          (m) =>
-              m.accountId == 'bob' &&
-              (m.role == 'inbox' || m.name.toLowerCase() == 'inbox'),
-        )
-        .path;
-
-    // ── 4. Sync emails concurrently — run twice to exercise incremental sync ───
-    for (var round = 0; round < 2; round++) {
+      // ── 3. Sync mailboxes concurrently ─────────────────────────────────────────
       await Future.wait([
-        emailRepo.syncEmails('alice', aliceInbox),
-        emailRepo.syncEmails('bob', bobInbox),
+        mailboxRepo.syncMailboxes('alice'),
+        mailboxRepo.syncMailboxes('bob'),
       ]);
-    }
 
-    // ── 5. Verify DB consistency ───────────────────────────────────────────────
-    final allEmails = await db.select(db.emails).get();
+      final allMailboxes = await db.select(db.mailboxes).get();
+      expect(
+        allMailboxes,
+        isNotEmpty,
+        reason: 'mailboxes should be cached after sync',
+      );
 
-    // No duplicate email IDs.
-    final ids = allEmails.map((e) => e.id).toList();
-    expect(
-      ids.toSet().length,
-      equals(ids.length),
-      reason: 'duplicate email IDs in DB',
-    );
+      // Grab INBOX paths for each account.
+      // IMAP: path is the mailbox path string (e.g. "INBOX").
+      // JMAP: path is the server-assigned JMAP mailbox ID; match by role or name.
+      final aliceInbox = allMailboxes
+          .firstWhere(
+            (m) => m.accountId == 'alice' && m.path.toUpperCase() == 'INBOX',
+          )
+          .path;
+      final bobInbox = allMailboxes
+          .firstWhere(
+            (m) =>
+                m.accountId == 'bob' &&
+                (m.role == 'inbox' || m.name.toLowerCase() == 'inbox'),
+          )
+          .path;
 
-    // Alice and bob each received at least msgCount messages.
-    final aliceEmails = allEmails.where((e) => e.accountId == 'alice').toList();
-    final bobEmails = allEmails.where((e) => e.accountId == 'bob').toList();
-    expect(
-      aliceEmails.length,
-      greaterThanOrEqualTo(msgCount),
-      reason: "alice's inbox should contain synced emails",
-    );
-    expect(
-      bobEmails.length,
-      greaterThanOrEqualTo(msgCount),
-      reason: "bob's inbox should contain synced emails",
-    );
+      // ── 4. Sync emails concurrently — run twice to exercise incremental sync ───
+      for (var round = 0; round < 2; round++) {
+        await Future.wait([
+          emailRepo.syncEmails('alice', aliceInbox),
+          emailRepo.syncEmails('bob', bobInbox),
+        ]);
+      }
 
-    // All rows have a non-empty account ID.
-    for (final e in allEmails) {
-      expect(e.accountId, isNotEmpty);
-    }
+      // ── 5. Verify DB consistency ───────────────────────────────────────────────
+      final allEmails = await db.select(db.emails).get();
 
-    // No pending changes left in the queue.
-    final pending = await db.select(db.pendingChanges).get();
-    expect(pending, isEmpty, reason: 'no outbound mutations expected');
-  });
+      // No duplicate email IDs.
+      final ids = allEmails.map((e) => e.id).toList();
+      expect(
+        ids.toSet().length,
+        equals(ids.length),
+        reason: 'duplicate email IDs in DB',
+      );
+
+      // Alice and bob each received at least msgCount messages.
+      final aliceEmails =
+          allEmails.where((e) => e.accountId == 'alice').toList();
+      final bobEmails = allEmails.where((e) => e.accountId == 'bob').toList();
+      expect(
+        aliceEmails.length,
+        greaterThanOrEqualTo(msgCount),
+        reason: "alice's inbox should contain synced emails",
+      );
+      expect(
+        bobEmails.length,
+        greaterThanOrEqualTo(msgCount),
+        reason: "bob's inbox should contain synced emails",
+      );
+
+      // All rows have a non-empty account ID.
+      for (final e in allEmails) {
+        expect(e.accountId, isNotEmpty);
+      }
+
+      // No pending changes left in the queue.
+      final pending = await db.select(db.pendingChanges).get();
+      expect(pending, isEmpty, reason: 'no outbound mutations expected');
+    },
+  );
 }

@@ -130,10 +130,7 @@ void main() {
     });
 
     test('copyWith works', () {
-      final updated = mailbox.copyWith(
-        unreadCount: 5,
-        role: 'inbox',
-      );
+      final updated = mailbox.copyWith(unreadCount: 5, role: 'inbox');
       expect(updated.unreadCount, 5);
       expect(updated.role, 'inbox');
       expect(updated.id, mailbox.id);

@@ -229,10 +229,16 @@ void main() {
 
   group('SyncEmailsResult', () {
     test('operator + adds fields', () {
-      const r1 =
-          SyncEmailsResult(fetched: 1, skipped: 2, bytesTransferred: 100);
-      const r2 =
-          SyncEmailsResult(fetched: 3, skipped: 4, bytesTransferred: 200);
+      const r1 = SyncEmailsResult(
+        fetched: 1,
+        skipped: 2,
+        bytesTransferred: 100,
+      );
+      const r2 = SyncEmailsResult(
+        fetched: 3,
+        skipped: 4,
+        bytesTransferred: 200,
+      );
       final r3 = r1 + r2;
       expect(r3.fetched, 4);
       expect(r3.skipped, 6);

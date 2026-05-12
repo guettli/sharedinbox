@@ -21,11 +21,7 @@ abstract class EmailRepository {
 
   Future<EmailBody> getEmailBody(String emailId);
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
-  Future<void> setFlag(
-    String emailId, {
-    bool? seen,
-    bool? flagged,
-  });
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged});
   Future<void> moveEmail(String emailId, String destMailboxPath);
 
   /// Deletes the email. Returns the path of the mailbox it was moved to

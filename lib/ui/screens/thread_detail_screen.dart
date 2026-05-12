@@ -30,9 +30,7 @@ class ThreadDetailScreen extends ConsumerWidget {
     final repo = ref.watch(emailRepositoryProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Thread'),
-      ),
+      appBar: AppBar(title: const Text('Thread')),
       body: StreamBuilder<List<Email>>(
         stream: repo.observeEmailsInThread(accountId, mailboxPath, threadId),
         builder: (context, snapshot) {

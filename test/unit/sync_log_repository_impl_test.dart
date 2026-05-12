@@ -75,8 +75,9 @@ void main() {
       finishedAt: end,
     );
 
-    final rows = await (db.select(db.syncLogs)
-          ..where((r) => r.result.equals('error')))
+    final rows = await (db.select(
+      db.syncLogs,
+    )..where((r) => r.result.equals('error')))
         .get();
     expect(rows, hasLength(1));
     expect(rows.first.result, 'error');

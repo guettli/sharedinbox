@@ -306,7 +306,9 @@ class FakeConnectionTestService implements ConnectionTestService {
 
 class _NoOpManageSieveProbeService implements ManageSieveProbeService {
   @override
-  Future<void> probe(Account account) async {/* no-op in tests */}
+  Future<void> probe(Account account) async {
+    /* no-op in tests */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,9 +342,8 @@ Widget buildApp({
           ),
           GoRoute(
             path: ':accountId/search',
-            builder: (ctx, state) => SearchScreen(
-              accountId: state.pathParameters['accountId']!,
-            ),
+            builder: (ctx, state) =>
+                SearchScreen(accountId: state.pathParameters['accountId']!),
           ),
           GoRoute(
             path: ':accountId/emails/by-address/:address',
@@ -399,8 +400,9 @@ Widget buildApp({
     // their own override before this default in [overrides].
     overrides: [
       ...overrides,
-      manageSieveProbeServiceProvider
-          .overrideWith((ref) => _NoOpManageSieveProbeService()),
+      manageSieveProbeServiceProvider.overrideWith(
+        (ref) => _NoOpManageSieveProbeService(),
+      ),
     ],
     child: MaterialApp.router(
       routerConfig: testRouter,

@@ -169,10 +169,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        if (header != null) ...[
-          _buildHeader(ctx, header),
-          const Divider(),
-        ],
+        if (header != null) ...[_buildHeader(ctx, header), const Divider()],
         if (hasHtml) ...[
           if (!_loadRemoteImages)
             Align(
@@ -188,9 +185,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
           Html(
             data: body.htmlBody!,
-            extensions: [
-              if (!_loadRemoteImages) _BlockRemoteImagesExtension(),
-            ],
+            extensions: [if (!_loadRemoteImages) _BlockRemoteImagesExtension()],
           ),
         ] else
           SelectableText(
@@ -238,9 +233,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       await OpenFilex.open(path);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Opening file failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Opening file failed: $e')));
     } finally {
       if (mounted) setState(() => _downloading.remove(att.filename));
     }
@@ -430,8 +425,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   color: i.isEven
                       ? Theme.of(ctx).colorScheme.surfaceContainerHighest
                       : Theme.of(ctx).colorScheme.surface,
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 4,
+                    horizontal: 8,
+                  ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -442,10 +439,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Expanded(
-                        flex: 2,
-                        child: SelectableText(header.value),
-                      ),
+                      Expanded(flex: 2, child: SelectableText(header.value)),
                     ],
                   ),
                 );

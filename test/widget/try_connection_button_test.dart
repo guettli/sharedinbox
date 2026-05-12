@@ -15,18 +15,14 @@ void main() {
   group('TryConnectionButton', () {
     testWidgets('shows "Try connection" button when idle', (tester) async {
       await tester.pumpWidget(
-        _wrap(
-          const TryConnectionButton(testing: false, onPressed: null),
-        ),
+        _wrap(const TryConnectionButton(testing: false, onPressed: null)),
       );
       expect(find.text('Try connection'), findsOneWidget);
     });
 
     testWidgets('shows spinner when testing', (tester) async {
       await tester.pumpWidget(
-        _wrap(
-          const TryConnectionButton(testing: true, onPressed: null),
-        ),
+        _wrap(const TryConnectionButton(testing: true, onPressed: null)),
       );
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.text('Try connection'), findsNothing);

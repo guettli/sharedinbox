@@ -25,11 +25,7 @@ class CrashScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(
-                Icons.error_outline,
-                color: Colors.red,
-                size: 64,
-              ),
+              const Icon(Icons.error_outline, color: Colors.red, size: 64),
               const SizedBox(height: 16),
               Text(
                 'SharedInbox encountered an unexpected error and needs to be restarted.',
@@ -68,8 +64,10 @@ class CrashScreen extends StatelessWidget {
                   ),
                   child: Text(
                     stackTrace.toString(),
-                    style:
-                        const TextStyle(fontFamily: 'monospace', fontSize: 10),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                    ),
                   ),
                 ),
               ],
@@ -113,9 +111,9 @@ class CrashScreen extends StatelessWidget {
                     }
                   } catch (e) {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Error: $e')),
-                      );
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('Error: $e')));
                     }
                   }
                 },

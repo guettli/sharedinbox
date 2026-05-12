@@ -49,9 +49,8 @@ final router = GoRouter(
             ),
             GoRoute(
               path: ':accountId/sync-log',
-              builder: (ctx, state) => SyncLogScreen(
-                accountId: state.pathParameters['accountId']!,
-              ),
+              builder: (ctx, state) =>
+                  SyncLogScreen(accountId: state.pathParameters['accountId']!),
             ),
             GoRoute(
               path: ':accountId/sieve',
@@ -68,9 +67,8 @@ final router = GoRouter(
             ),
             GoRoute(
               path: ':accountId/search',
-              builder: (ctx, state) => SearchScreen(
-                accountId: state.pathParameters['accountId']!,
-              ),
+              builder: (ctx, state) =>
+                  SearchScreen(accountId: state.pathParameters['accountId']!),
             ),
             GoRoute(
               path: ':accountId/emails/by-address/:address',
@@ -116,10 +114,7 @@ final router = GoRouter(
             ),
           ],
         ),
-        GoRoute(
-          path: '/search',
-          builder: (ctx, state) => const SearchScreen(),
-        ),
+        GoRoute(path: '/search', builder: (ctx, state) => const SearchScreen()),
         GoRoute(
           path: '/compose',
           builder: (ctx, state) {

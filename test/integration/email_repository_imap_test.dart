@@ -30,8 +30,9 @@ Future<ImapClient> _imapConnect({
   required String user,
   required String pass,
 }) async {
-  final client =
-      ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
+  final client = ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
   await client.connectToServer(host, port, isSecure: false);
   await client.login(user, pass);
   return client;
@@ -113,8 +114,9 @@ void main() {
     String username,
     String password,
   ) async {
-    final client =
-        ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
+    final client = ImapClient(
+      defaultResponseTimeout: const Duration(seconds: 20),
+    );
     await client.connectToServer(a.imapHost, a.imapPort, isSecure: false);
     await client.login(username, password);
     return client;
@@ -200,44 +202,47 @@ void main() {
   });
 
   test(
-      'syncEmails incremental sync fetches only messages newer than checkpoint',
-      () async {
-    await appendToInbox('first');
+    'syncEmails incremental sync fetches only messages newer than checkpoint',
+    () async {
+      await appendToInbox('first');
 
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
-    await r.emails.syncEmails('test', 'INBOX');
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
 
-    final afterFirst = await r.emails.observeEmails('test', 'INBOX').first;
-    expect(afterFirst, hasLength(1));
-    expect(afterFirst.first.subject, 'first');
+      final afterFirst = await r.emails.observeEmails('test', 'INBOX').first;
+      expect(afterFirst, hasLength(1));
+      expect(afterFirst.first.subject, 'first');
 
-    await appendToInbox('second');
-    await r.emails.syncEmails('test', 'INBOX');
+      await appendToInbox('second');
+      await r.emails.syncEmails('test', 'INBOX');
 
-    final afterSecond = await r.emails.observeEmails('test', 'INBOX').first;
-    expect(afterSecond, hasLength(2));
-    expect(afterSecond.map((e) => e.subject).toSet(), {'first', 'second'});
-  });
+      final afterSecond = await r.emails.observeEmails('test', 'INBOX').first;
+      expect(afterSecond, hasLength(2));
+      expect(afterSecond.map((e) => e.subject).toSet(), {'first', 'second'});
+    },
+  );
 
-  test('CONDSTORE fast-path: second sync skips fetch when nothing changed',
-      () async {
-    await appendToInbox('condstore-test');
+  test(
+    'CONDSTORE fast-path: second sync skips fetch when nothing changed',
+    () async {
+      await appendToInbox('condstore-test');
 
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
 
-    // First sync — full sync, saves modseq checkpoint.
-    await r.emails.syncEmails('test', 'INBOX');
-    final stateAfterFirst = await r.db.select(r.db.syncStates).get();
-    expect(stateAfterFirst, hasLength(1));
+      // First sync — full sync, saves modseq checkpoint.
+      await r.emails.syncEmails('test', 'INBOX');
+      final stateAfterFirst = await r.db.select(r.db.syncStates).get();
+      expect(stateAfterFirst, hasLength(1));
 
-    // Second sync with no server changes — CONDSTORE fast-path should skip
-    // fetching. DB email count must stay the same.
-    await r.emails.syncEmails('test', 'INBOX');
-    final emails = await r.emails.observeEmails('test', 'INBOX').first;
-    expect(emails, hasLength(1));
-  });
+      // Second sync with no server changes — CONDSTORE fast-path should skip
+      // fetching. DB email count must stay the same.
+      await r.emails.syncEmails('test', 'INBOX');
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      expect(emails, hasLength(1));
+    },
+  );
 
   test('CONDSTORE flag refresh updates flags in local DB', () async {
     await appendToInbox('flag-refresh-test');
@@ -258,10 +263,7 @@ void main() {
     );
     try {
       await imap.selectMailboxByPath('INBOX');
-      final seq = MessageSequence.fromIds(
-        [emails.first.uid],
-        isUid: true,
-      );
+      final seq = MessageSequence.fromIds([emails.first.uid], isUid: true);
       await imap.uidMarkSeen(seq);
     } finally {
       await imap.logout();
@@ -330,53 +332,57 @@ void main() {
     expect(cached.textBody, body.textBody);
   });
 
-  test('blob expiry: re-fetches body when cachedAt is null (legacy row)',
-      () async {
-    await appendToInbox('legacy-body-test', body: 'Fresh from server');
+  test(
+    'blob expiry: re-fetches body when cachedAt is null (legacy row)',
+    () async {
+      await appendToInbox('legacy-body-test', body: 'Fresh from server');
 
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
-    await r.emails.syncEmails('test', 'INBOX');
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
 
-    final emails = await r.emails.observeEmails('test', 'INBOX').first;
-    final emailId = emails.first.id;
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
 
-    // Simulate a legacy row with no cachedAt.
-    await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
-          EmailBodiesCompanion.insert(
-            emailId: emailId,
-            textBody: const Value('stale text'),
-            cachedAt: const Value(null),
-          ),
-        );
+      // Simulate a legacy row with no cachedAt.
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: const Value('stale text'),
+              cachedAt: const Value(null),
+            ),
+          );
 
-    final body = await r.emails.getEmailBody(emailId);
-    expect(body.textBody, contains('Fresh from server'));
-  });
+      final body = await r.emails.getEmailBody(emailId);
+      expect(body.textBody, contains('Fresh from server'));
+    },
+  );
 
-  test('blob expiry: re-fetches body when cachedAt is older than 7 days',
-      () async {
-    await appendToInbox('old-body-test', body: 'Current content');
+  test(
+    'blob expiry: re-fetches body when cachedAt is older than 7 days',
+    () async {
+      await appendToInbox('old-body-test', body: 'Current content');
 
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
-    await r.emails.syncEmails('test', 'INBOX');
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
 
-    final emails = await r.emails.observeEmails('test', 'INBOX').first;
-    final emailId = emails.first.id;
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
 
-    // Simulate a row cached 8 days ago.
-    await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
-          EmailBodiesCompanion.insert(
-            emailId: emailId,
-            textBody: const Value('old text'),
-            cachedAt: Value(DateTime.now().subtract(const Duration(days: 8))),
-          ),
-        );
+      // Simulate a row cached 8 days ago.
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: const Value('old text'),
+              cachedAt: Value(DateTime.now().subtract(const Duration(days: 8))),
+            ),
+          );
 
-    final body = await r.emails.getEmailBody(emailId);
-    expect(body.textBody, contains('Current content'));
-  });
+      final body = await r.emails.getEmailBody(emailId);
+      expect(body.textBody, contains('Current content'));
+    },
+  );
 
   test('sendEmail delivers via SMTP and appends copy to Sent folder', () async {
     final subject = 'send-${DateTime.now().millisecondsSinceEpoch}';
@@ -426,8 +432,11 @@ void main() {
     final r = makeRepo();
     await r.accounts.addAccount(account, userPass);
 
-    final results =
-        await r.emails.searchEmails('test', 'INBOX', 'xyzzy-no-match');
+    final results = await r.emails.searchEmails(
+      'test',
+      'INBOX',
+      'xyzzy-no-match',
+    );
     expect(results, isEmpty);
   });
 

@@ -5,8 +5,9 @@ import 'helpers.dart';
 
 void main() {
   group('EditAccountScreen', () {
-    testWidgets('shows account email and type label after loading',
-        (tester) async {
+    testWidgets('shows account email and type label after loading', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/edit',
@@ -65,8 +66,9 @@ void main() {
       expect(find.text('No accounts yet.'), findsNothing);
     });
 
-    testWidgets('saving with new password runs connection test',
-        (tester) async {
+    testWidgets('saving with new password runs connection test', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(800, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);

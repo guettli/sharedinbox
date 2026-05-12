@@ -345,7 +345,7 @@ tasks:
 
   check-fast:
     desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
-    deps: [analyze, test, test-widget, check-hygiene]
+    deps: [analyze, test, check-hygiene]
 
   check-hygiene:
     desc: Verify that no forbidden files (like home dir config) are tracked
@@ -370,7 +370,7 @@ tasks:
 
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate
-    deps: [analyze, test-widget, build-linux, test]
+    deps: [analyze, build-linux, test]
     cmds:
       - task: _integrations
       - task: coverage

@@ -125,10 +125,7 @@ class _SyncLogTile extends StatelessWidget {
         entry.isOk
             ? '${entry.emailsFetched} new · ${entry.emailsSkipped} up-to-date · took $durationLabel'
             : 'Error · took $durationLabel',
-        style: TextStyle(
-          fontSize: 12,
-          color: entry.isOk ? null : errorColor,
-        ),
+        style: TextStyle(fontSize: 12, color: entry.isOk ? null : errorColor),
       ),
       children: [
         Padding(
@@ -211,9 +208,7 @@ class _SyncLogTile extends StatelessWidget {
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ),
-            Expanded(
-              child: Text(value, style: const TextStyle(fontSize: 12)),
-            ),
+            Expanded(child: Text(value, style: const TextStyle(fontSize: 12))),
           ],
         ),
       );

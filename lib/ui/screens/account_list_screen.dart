@@ -188,9 +188,9 @@ class _AccountTile extends ConsumerWidget {
         break;
       case _AccountAction.verifySync:
         unawaited(
-          ProviderScope.containerOf(context)
-              .read(reliabilityRunnerProvider)
-              .checkNow(),
+          ProviderScope.containerOf(
+            context,
+          ).read(reliabilityRunnerProvider).checkNow(),
         );
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -225,9 +225,9 @@ class _AccountTile extends ConsumerWidget {
           ),
         );
         if ((confirmed ?? false) && context.mounted) {
-          await ProviderScope.containerOf(context)
-              .read(accountRepositoryProvider)
-              .removeAccount(account.id);
+          await ProviderScope.containerOf(
+            context,
+          ).read(accountRepositoryProvider).removeAccount(account.id);
         }
     }
   }

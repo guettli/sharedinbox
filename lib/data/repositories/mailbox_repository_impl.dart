@@ -72,8 +72,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     account_model.Account account,
     String password,
   ) async {
-    final client =
-        await _imapConnect(account, _effectiveUsername(account), password);
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
     try {
       final mailboxes = await client.listMailboxes(recursive: true);
       for (final mb in mailboxes) {
@@ -83,10 +86,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
         var unread = 0;
         var total = 0;
         try {
-          final status = await client.statusMailbox(
-            mb,
-            [imap.StatusFlags.messages, imap.StatusFlags.unseen],
-          );
+          final status = await client.statusMailbox(mb, [
+            imap.StatusFlags.messages,
+            imap.StatusFlags.unseen,
+          ]);
           unread = status.messagesUnseen;
           total = status.messagesExists;
         } catch (e) {
@@ -145,7 +148,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         'Mailbox/get',
         {'accountId': jmap.accountId, 'ids': null},
         '0',
-      ]
+      ],
     ]);
 
     final result = _responseArgs(responses, 0, 'Mailbox/get');
@@ -154,7 +157,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
     await _upsertJmapMailboxes(accountId, mailboxes);
     await _saveSyncState(accountId, 'Mailbox', newState);
-    log('JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState');
+    log(
+      'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState',
+    );
     return mailboxes.length;
   }
 
@@ -169,7 +174,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         'Mailbox/changes',
         {'accountId': jmap.accountId, 'sinceState': sinceState},
         '0',
-      ]
+      ],
     ]);
 
     final changes = _responseArgs(responses, 0, 'Mailbox/changes');
@@ -186,7 +191,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
           'Mailbox/get',
           {'accountId': jmap.accountId, 'ids': toFetch},
           '1',
-        ]
+        ],
       ]);
       final getResult = _responseArgs(getResponses, 0, 'Mailbox/get');
       await _upsertJmapMailboxes(accountId, getResult['list'] as List<dynamic>);
@@ -194,14 +199,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
     // Remove destroyed mailboxes
     for (final jmapId in destroyed) {
-      await (_db.delete(_db.mailboxes)
-            ..where((t) => t.id.equals('$accountId:$jmapId')))
+      await (_db.delete(
+        _db.mailboxes,
+      )..where((t) => t.id.equals('$accountId:$jmapId')))
           .go();
     }
 
     await _saveSyncState(accountId, 'Mailbox', newState);
-    log('JMAP incremental mailbox sync: +${created.length} '
-        '~${updated.length} -${destroyed.length}, state=$newState');
+    log(
+      'JMAP incremental mailbox sync: +${created.length} '
+      '~${updated.length} -${destroyed.length}, state=$newState',
+    );
     return toFetch.length + destroyed.length;
   }
 

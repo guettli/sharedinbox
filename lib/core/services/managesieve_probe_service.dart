@@ -23,7 +23,9 @@ Future<bool> _defaultManageSieveProbe({
     );
     try {
       await client.logout();
-    } catch (_) {/* best-effort */}
+    } catch (_) {
+      /* best-effort */
+    }
     return true;
   } catch (e) {
     log('ManageSieve probe failed for $host:$port — $e');

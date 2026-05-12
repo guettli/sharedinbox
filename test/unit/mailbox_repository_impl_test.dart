@@ -155,47 +155,50 @@ void main() {
       }
 
       final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
-      expect(
-        mailboxes.map((m) => m.path).toList(),
-        ['Drafts', 'INBOX', 'Sent'],
-      );
+      expect(mailboxes.map((m) => m.path).toList(), [
+        'Drafts',
+        'INBOX',
+        'Sent',
+      ]);
     });
 
-    test('observeMailboxes only returns mailboxes for the given account',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'observeMailboxes only returns mailboxes for the given account',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
 
-      const other = Account(
-        id: 'acc-2',
-        displayName: 'Bob',
-        email: 'bob@example.com',
-        imapHost: 'imap.example.com',
-        smtpHost: 'smtp.example.com',
-      );
-      await r.accounts.addAccount(other, 'pw2');
+        const other = Account(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        await r.accounts.addAccount(other, 'pw2');
 
-      await r.db.into(r.db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: 'acc-1:INBOX',
-              accountId: 'acc-1',
-              path: 'INBOX',
-              name: 'Inbox',
-            ),
-          );
-      await r.db.into(r.db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: 'acc-2:INBOX',
-              accountId: 'acc-2',
-              path: 'INBOX',
-              name: 'Inbox',
-            ),
-          );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:INBOX',
+                accountId: 'acc-1',
+                path: 'INBOX',
+                name: 'Inbox',
+              ),
+            );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-2:INBOX',
+                accountId: 'acc-2',
+                path: 'INBOX',
+                name: 'Inbox',
+              ),
+            );
 
-      final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
-      expect(mailboxes, hasLength(1));
-      expect(mailboxes.first.id, 'acc-1:INBOX');
-    });
+        final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
+        expect(mailboxes, hasLength(1));
+        expect(mailboxes.first.id, 'acc-1:INBOX');
+      },
+    );
 
     test('observeMailboxes maps unread/total counts', () async {
       final r = _makeRepos();
@@ -377,30 +380,32 @@ void main() {
         );
       });
 
-      test('syncMailboxes throws JmapException on API error response',
-          () async {
-        final r = _makeRepos(
-          httpClient: _mockJmap(
-            apiResponses: [
-              {
-                'sessionState': 'sess1',
-                'methodResponses': [
-                  [
-                    'error',
-                    <String, dynamic>{'type': 'serverFail'},
-                    '0',
+      test(
+        'syncMailboxes throws JmapException on API error response',
+        () async {
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                {
+                  'sessionState': 'sess1',
+                  'methodResponses': [
+                    [
+                      'error',
+                      <String, dynamic>{'type': 'serverFail'},
+                      '0',
+                    ],
                   ],
-                ],
-              },
-            ],
-          ),
-        );
-        await r.accounts.addAccount(_jmapAccount, 'pw');
-        await expectLater(
-          r.mailboxes.syncMailboxes('jmap-1'),
-          throwsA(isA<JmapException>()),
-        );
-      });
+                },
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await expectLater(
+            r.mailboxes.syncMailboxes('jmap-1'),
+            throwsA(isA<JmapException>()),
+          );
+        },
+      );
     });
 
     test('findMailboxByRole returns null when no matching mailbox', () async {

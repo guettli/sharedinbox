@@ -99,7 +99,9 @@ final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
 final syncHealthProvider =
     StreamProvider.autoDispose.family<SyncHealthRow?, String>((ref, accountId) {
   final db = ref.watch(dbProvider);
-  return (db.select(db.syncHealth)..where((t) => t.accountId.equals(accountId)))
+  return (db.select(
+    db.syncHealth,
+  )..where((t) => t.accountId.equals(accountId)))
       .watchSingleOrNull();
 });
 
@@ -115,8 +117,9 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
   return manager;
 });
 
-final accountDiscoveryServiceProvider =
-    Provider<AccountDiscoveryService>((ref) {
+final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((
+  ref,
+) {
   return AccountDiscoveryServiceImpl(ref.watch(httpClientProvider));
 });
 
@@ -135,8 +138,9 @@ final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {
   );
 });
 
-final manageSieveProbeServiceProvider =
-    Provider<ManageSieveProbeService>((ref) {
+final manageSieveProbeServiceProvider = Provider<ManageSieveProbeService>((
+  ref,
+) {
   return ManageSieveProbeService(ref.watch(accountRepositoryProvider));
 });
 

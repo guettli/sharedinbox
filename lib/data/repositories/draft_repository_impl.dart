@@ -83,7 +83,9 @@ class DraftRepositoryImpl implements DraftRepository {
 
   @override
   Future<SavedDraft?> getDraft(int id) async {
-    final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
+    final row = await (_db.select(
+      _db.drafts,
+    )..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }

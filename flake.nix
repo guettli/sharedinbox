@@ -68,6 +68,7 @@
             jq
             sqlite
             python3  # used by stalwart-dev/start to pick random ports
+            tea      # Gitea CLI
           ]);
 
           shellHook = ''

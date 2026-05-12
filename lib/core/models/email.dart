@@ -200,10 +200,7 @@ class EmailAddress {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      if (name != null) 'name': name,
-      'email': email,
-    };
+    return {if (name != null) 'name': name, 'email': email};
   }
 
   @override
@@ -316,8 +313,11 @@ class SyncEmailsResult {
   final int skipped;
   final int bytesTransferred;
 
-  static const zero =
-      SyncEmailsResult(fetched: 0, skipped: 0, bytesTransferred: 0);
+  static const zero = SyncEmailsResult(
+    fetched: 0,
+    skipped: 0,
+    bytesTransferred: 0,
+  );
 
   SyncEmailsResult operator +(SyncEmailsResult other) => SyncEmailsResult(
         fetched: fetched + other.fetched,

@@ -39,36 +39,38 @@ void main() {
     });
 
     test(
-        'returns JmapDiscovery with session URL when well-known/jmap returns 200',
-        () async {
-      final svc = _service({
-        'https://example.com/.well-known/jmap': http.Response('{}', 200),
-      });
-      final result = await svc.discover('user@example.com');
-      expect(result, isA<JmapDiscovery>());
-      expect(
-        (result as JmapDiscovery).sessionUrl,
-        'https://example.com/.well-known/jmap',
-      );
-    });
+      'returns JmapDiscovery with session URL when well-known/jmap returns 200',
+      () async {
+        final svc = _service({
+          'https://example.com/.well-known/jmap': http.Response('{}', 200),
+        });
+        final result = await svc.discover('user@example.com');
+        expect(result, isA<JmapDiscovery>());
+        expect(
+          (result as JmapDiscovery).sessionUrl,
+          'https://example.com/.well-known/jmap',
+        );
+      },
+    );
 
     test(
-        'returns JmapDiscovery with redirect target when well-known/jmap returns 307',
-        () async {
-      final svc = _service({
-        'https://example.com/.well-known/jmap': http.Response(
-          '',
-          307,
-          headers: {'location': '/jmap/session'},
-        ),
-      });
-      final result = await svc.discover('user@example.com');
-      expect(result, isA<JmapDiscovery>());
-      expect(
-        (result as JmapDiscovery).sessionUrl,
-        'https://example.com/jmap/session',
-      );
-    });
+      'returns JmapDiscovery with redirect target when well-known/jmap returns 307',
+      () async {
+        final svc = _service({
+          'https://example.com/.well-known/jmap': http.Response(
+            '',
+            307,
+            headers: {'location': '/jmap/session'},
+          ),
+        });
+        final result = await svc.discover('user@example.com');
+        expect(result, isA<JmapDiscovery>());
+        expect(
+          (result as JmapDiscovery).sessionUrl,
+          'https://example.com/jmap/session',
+        );
+      },
+    );
 
     test('returns UnknownDiscovery when well-known/jmap returns 404', () async {
       final svc = _service({
@@ -80,8 +82,10 @@ void main() {
 
     test('returns ImapSmtpDiscovery from primary autoconfig URL', () async {
       final svc = _service({
-        'https://autoconfig.example.com/mail/config-v1.1.xml':
-            http.Response(_autoconfigXml, 200),
+        'https://autoconfig.example.com/mail/config-v1.1.xml': http.Response(
+          _autoconfigXml,
+          200,
+        ),
       });
       final result = await svc.discover('user@example.com');
       expect(result, isA<ImapSmtpDiscovery>());
@@ -94,21 +98,25 @@ void main() {
       expect(imap.smtpSsl, isFalse);
     });
 
-    test('returns ImapSmtpDiscovery from fallback well-known autoconfig URL',
-        () async {
-      final svc = _service({
-        'https://example.com/.well-known/autoconfig/mail/config-v1.1.xml':
-            http.Response(_autoconfigXml, 200),
-      });
-      final result = await svc.discover('user@example.com');
-      expect(result, isA<ImapSmtpDiscovery>());
-    });
+    test(
+      'returns ImapSmtpDiscovery from fallback well-known autoconfig URL',
+      () async {
+        final svc = _service({
+          'https://example.com/.well-known/autoconfig/mail/config-v1.1.xml':
+              http.Response(_autoconfigXml, 200),
+        });
+        final result = await svc.discover('user@example.com');
+        expect(result, isA<ImapSmtpDiscovery>());
+      },
+    );
 
     test('prefers JMAP over IMAP when both respond', () async {
       final svc = _service({
         'https://example.com/.well-known/jmap': http.Response('{}', 200),
-        'https://autoconfig.example.com/mail/config-v1.1.xml':
-            http.Response(_autoconfigXml, 200),
+        'https://autoconfig.example.com/mail/config-v1.1.xml': http.Response(
+          _autoconfigXml,
+          200,
+        ),
       });
       final result = await svc.discover('user@example.com');
       expect(result, isA<JmapDiscovery>());
@@ -120,24 +128,26 @@ void main() {
       expect(result, isA<UnknownDiscovery>());
     });
 
-    test('returns ImapSmtpDiscovery from MX record when autoconfig not found',
-        () async {
-      final svc = _service({
-        'https://dns.google/resolve?name=example.com&type=MX': http.Response(
-          '{"Status":0,"Answer":[{"type":15,"data":"10 mail.example.com."}]}',
-          200,
-        ),
-      });
-      final result = await svc.discover('user@example.com');
-      expect(result, isA<ImapSmtpDiscovery>());
-      final imap = result as ImapSmtpDiscovery;
-      expect(imap.imapHost, 'mail.example.com');
-      expect(imap.imapPort, 993);
-      expect(imap.imapSsl, isTrue);
-      expect(imap.smtpHost, 'mail.example.com');
-      expect(imap.smtpPort, 465);
-      expect(imap.smtpSsl, isTrue);
-    });
+    test(
+      'returns ImapSmtpDiscovery from MX record when autoconfig not found',
+      () async {
+        final svc = _service({
+          'https://dns.google/resolve?name=example.com&type=MX': http.Response(
+            '{"Status":0,"Answer":[{"type":15,"data":"10 mail.example.com."}]}',
+            200,
+          ),
+        });
+        final result = await svc.discover('user@example.com');
+        expect(result, isA<ImapSmtpDiscovery>());
+        final imap = result as ImapSmtpDiscovery;
+        expect(imap.imapHost, 'mail.example.com');
+        expect(imap.imapPort, 993);
+        expect(imap.imapSsl, isTrue);
+        expect(imap.smtpHost, 'mail.example.com');
+        expect(imap.smtpPort, 465);
+        expect(imap.smtpSsl, isTrue);
+      },
+    );
 
     test('MX fallback picks lowest priority record', () async {
       final svc = _service({

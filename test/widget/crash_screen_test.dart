@@ -23,8 +23,9 @@ class MockUrlLauncher extends Mock
 }
 
 void main() {
-  testWidgets('CrashScreen shows error details and has a report button',
-      (tester) async {
+  testWidgets('CrashScreen shows error details and has a report button', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(800, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() => tester.view.resetPhysicalSize());

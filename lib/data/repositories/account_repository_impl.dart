@@ -13,14 +13,17 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Stream<List<model.Account>> observeAccounts() {
-    return _db.select(_db.accounts).watch().map(
-          (rows) => rows.map(_toModel).toList(),
-        );
+    return _db
+        .select(_db.accounts)
+        .watch()
+        .map((rows) => rows.map(_toModel).toList());
   }
 
   @override
   Future<model.Account?> getAccount(String id) async {
-    final row = await (_db.select(_db.accounts)..where((t) => t.id.equals(id)))
+    final row = await (_db.select(
+      _db.accounts,
+    )..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
@@ -53,7 +56,9 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Future<void> updateAccount(model.Account account, {String? password}) async {
-    await (_db.update(_db.accounts)..where((t) => t.id.equals(account.id)))
+    await (_db.update(
+      _db.accounts,
+    )..where((t) => t.id.equals(account.id)))
         .write(
       AccountsCompanion(
         displayName: Value(account.displayName),

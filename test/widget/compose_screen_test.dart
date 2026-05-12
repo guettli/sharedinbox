@@ -16,10 +16,12 @@ void main() {
         buildApp(
           initialLocation: '/compose',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
             draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
           ],
@@ -33,8 +35,9 @@ void main() {
       expect(find.text('Body'), findsOneWidget);
     });
 
-    testWidgets('prefills To and Subject when provided as constructor params',
-        (tester) async {
+    testWidgets('prefills To and Subject when provided as constructor params', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(
@@ -42,10 +45,12 @@ void main() {
             prefillSubject: 'Re: Hello',
           ),
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
             draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
           ],
@@ -60,16 +65,19 @@ void main() {
       expect(find.widgetWithText(TextFormField, 'Re: Hello'), findsOneWidget);
     });
 
-    testWidgets('shows static From field when one account is loaded',
-        (tester) async {
+    testWidgets('shows static From field when one account is loaded', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/compose',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
             draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
           ],
@@ -80,8 +88,9 @@ void main() {
       expect(find.text('Alice <alice@example.com>'), findsOneWidget);
     });
 
-    testWidgets('shows From dropdown when multiple accounts are loaded',
-        (tester) async {
+    testWidgets('shows From dropdown when multiple accounts are loaded', (
+      tester,
+    ) async {
       const second = Account(
         id: 'acc-2',
         displayName: 'Bob',
@@ -96,8 +105,9 @@ void main() {
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([kTestAccount, second]),
             ),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
             draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
           ],
@@ -108,8 +118,9 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
-    testWidgets('restores saved draft when no prefill is provided',
-        (tester) async {
+    testWidgets('restores saved draft when no prefill is provided', (
+      tester,
+    ) async {
       final fakeDrafts = FakeDraftRepository();
       await fakeDrafts.saveDraft(
         toText: 'carol@example.com',
@@ -121,10 +132,12 @@ void main() {
         _buildDirect(
           screen: const ComposeScreen(),
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
             draftRepositoryProvider.overrideWithValue(fakeDrafts),
           ],
@@ -152,9 +165,7 @@ Widget _buildDirect({
 }) {
   final router = GoRouter(
     initialLocation: '/',
-    routes: [
-      GoRoute(path: '/', builder: (ctx, state) => screen),
-    ],
+    routes: [GoRoute(path: '/', builder: (ctx, state) => screen)],
   );
   return ProviderScope(
     overrides: overrides,

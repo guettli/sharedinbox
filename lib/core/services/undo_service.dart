@@ -68,8 +68,9 @@ class UndoService extends StateNotifier<List<UndoAction>> {
           final currentPath = cancelled
               ? action.sourceMailboxPath
               : (action.destinationMailboxPath ?? action.sourceMailboxPath);
-          await repo
-              .restoreEmails([original.copyWith(mailboxPath: currentPath)]);
+          await repo.restoreEmails([
+            original.copyWith(mailboxPath: currentPath),
+          ]);
         }
 
         // 3. Move it back to source.

@@ -26,11 +26,7 @@ void main() {
     mockHttpClient = MockClient();
     mockStorage = MockSecureStorage();
     final accounts = AccountRepositoryImpl(db, mockStorage);
-    repo = EmailRepositoryImpl(
-      db,
-      accounts,
-      httpClient: mockHttpClient,
-    );
+    repo = EmailRepositoryImpl(db, accounts, httpClient: mockHttpClient);
   });
 
   tearDown(() async {

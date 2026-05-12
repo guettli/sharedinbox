@@ -235,9 +235,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           .addAccount(accountToSave, _passwordCtrl.text);
       // Probe ManageSieve in the background; the menu starts visible (null)
       // and disappears on probe failure via the observeAccounts stream.
-      unawaited(
-        ref.read(manageSieveProbeServiceProvider).probe(accountToSave),
-      );
+      unawaited(ref.read(manageSieveProbeServiceProvider).probe(accountToSave));
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
@@ -384,10 +382,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               onPressed: () => _tryConnection(_jmapFormKey, _buildJmapAccount),
             ),
             const SizedBox(height: 8),
-            FilledButton(
-              onPressed: _saveJmap,
-              child: const Text('Save'),
-            ),
+            FilledButton(onPressed: _saveJmap, child: const Text('Save')),
           ],
         ),
       ),
@@ -439,10 +434,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               onPressed: () => _tryConnection(_imapFormKey, _buildImapAccount),
             ),
             const SizedBox(height: 8),
-            FilledButton(
-              onPressed: _saveImap,
-              child: const Text('Save'),
-            ),
+            FilledButton(onPressed: _saveImap, child: const Text('Save')),
           ],
         ),
       ),
@@ -461,10 +453,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _emailCtrl.text.trim(),
             style: Theme.of(context).textTheme.titleMedium,
           ),
-          Text(
-            accountTypeLabel,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          Text(accountTypeLabel, style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
     );

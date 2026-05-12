@@ -13,10 +13,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository([kTestMailbox])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -31,10 +33,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository([kTestMailbox])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -45,16 +49,19 @@ void main() {
       expect(find.text('3'), findsOneWidget);
     });
 
-    testWidgets('tapping a mailbox tile navigates to its email list',
-        (tester) async {
+    testWidgets('tapping a mailbox tile navigates to its email list', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository([kTestMailbox])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -80,10 +87,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository([emptyMailbox])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([emptyMailbox]),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),

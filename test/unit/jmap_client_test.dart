@@ -43,13 +43,7 @@ http.Client _sessionClient({
       );
     }
     return http.Response(
-      jsonEncode(
-        apiBody ??
-            {
-              'sessionState': 'st1',
-              'methodResponses': [],
-            },
-      ),
+      jsonEncode(apiBody ?? {'sessionState': 'st1', 'methodResponses': []}),
       apiStatus,
     );
   });
@@ -137,10 +131,7 @@ void main() {
   });
 
   group('JmapClient.call', () {
-    Future<JmapClient> connected({
-      int apiStatus = 200,
-      dynamic apiBody,
-    }) =>
+    Future<JmapClient> connected({int apiStatus = 200, dynamic apiBody}) =>
         JmapClient.connect(
           httpClient: _sessionClient(apiStatus: apiStatus, apiBody: apiBody),
           jmapUrl: Uri.parse(_sessionUrl),
@@ -154,7 +145,7 @@ void main() {
           'Mailbox/get',
           <String, dynamic>{'state': 'st2', 'list': []},
           '0',
-        ]
+        ],
       ];
       final client = await connected(
         apiBody: {'sessionState': 'st1', 'methodResponses': responses},
@@ -164,7 +155,7 @@ void main() {
           'Mailbox/get',
           {'accountId': _accountId, 'ids': null},
           '0',
-        ]
+        ],
       ]);
       expect(result, hasLength(1));
       expect((result[0] as List<dynamic>)[0], 'Mailbox/get');
@@ -178,7 +169,7 @@ void main() {
             'Mailbox/get',
             {'accountId': _accountId},
             '0',
-          ]
+          ],
         ]),
         throwsA(isA<JmapException>()),
       );
@@ -194,7 +185,7 @@ void main() {
             'Mailbox/get',
             {'accountId': _accountId},
             '0',
-          ]
+          ],
         ]),
         throwsA(isA<JmapException>()),
       );

@@ -11,9 +11,7 @@ class ChangeLogScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('ChangeLog'),
-      ),
+      appBar: AppBar(title: const Text('ChangeLog')),
       body: FutureBuilder<String>(
         future: rootBundle.loadString('assets/changelog.txt'),
         builder: (context, snapshot) {
@@ -39,10 +37,7 @@ class ChangeLogScreen extends StatelessWidget {
               }
             },
             styleSheet: MarkdownStyleSheet(
-              p: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-              ),
+              p: const TextStyle(fontFamily: 'monospace', fontSize: 13),
             ),
           );
         },

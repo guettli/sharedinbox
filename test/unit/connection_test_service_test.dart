@@ -35,10 +35,8 @@ ConnectionTestServiceImpl _makeService({
   Exception? imapError,
 }) {
   final mockHttp = MockClient(
-    (_) async => http.Response(
-      httpStatus == 200 ? _jmapSessionJson : '',
-      httpStatus,
-    ),
+    (_) async =>
+        http.Response(httpStatus == 200 ? _jmapSessionJson : '', httpStatus),
   );
   return ConnectionTestServiceImpl(
     mockHttp,
@@ -97,10 +95,7 @@ void main() {
         imapConnect: (_, __, ___) async => throw Exception('auth failed'),
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
-      expect(
-        () => svc.testConnection(_imapAccount, 'pw'),
-        throwsException,
-      );
+      expect(() => svc.testConnection(_imapAccount, 'pw'), throwsException);
     });
 
     test('reports SMTP failure after IMAP success', () async {
@@ -192,9 +187,7 @@ void main() {
       final svc = _makeService(httpStatus: 500);
       expect(
         () => svc.testConnection(_jmapAccount, 'pw'),
-        throwsA(
-          predicate((e) => e.toString().contains('Connection failed')),
-        ),
+        throwsA(predicate((e) => e.toString().contains('Connection failed'))),
       );
     });
 

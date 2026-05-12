@@ -7,13 +7,11 @@ import 'helpers.dart';
 
 void main() {
   group('AddAccountScreen', () {
-    testWidgets('step 1: shows email field and Continue button',
-        (tester) async {
+    testWidgets('step 1: shows email field and Continue button', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/add',
-          overrides: baseOverrides(),
-        ),
+        buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()),
       );
       await tester.pumpAndSettle();
 
@@ -24,10 +22,7 @@ void main() {
 
     testWidgets('step 1: empty submit shows validation error', (tester) async {
       await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/add',
-          overrides: baseOverrides(),
-        ),
+        buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()),
       );
       await tester.pumpAndSettle();
 
@@ -39,10 +34,7 @@ void main() {
 
     testWidgets('step 1: invalid email shows validation error', (tester) async {
       await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/add',
-          overrides: baseOverrides(),
-        ),
+        buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()),
       );
       await tester.pumpAndSettle();
 
@@ -73,14 +65,16 @@ void main() {
       expect(find.text('IMAP / SMTP'), findsOneWidget);
     });
 
-    testWidgets('JMAP discovery navigates directly to JMAP form',
-        (tester) async {
+    testWidgets('JMAP discovery navigates directly to JMAP form', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/add',
           overrides: baseOverrides(
-            discovery:
-                JmapDiscovery(sessionUrl: 'https://mail.example.com/jmap'),
+            discovery: JmapDiscovery(
+              sessionUrl: 'https://mail.example.com/jmap',
+            ),
           ),
         ),
       );
@@ -97,8 +91,9 @@ void main() {
       expect(find.text('https://mail.example.com/jmap'), findsOneWidget);
     });
 
-    testWidgets('IMAP discovery navigates directly to IMAP form',
-        (tester) async {
+    testWidgets('IMAP discovery navigates directly to IMAP form', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/add',
@@ -150,8 +145,9 @@ void main() {
       expect(find.text('JMAP API URL'), findsOneWidget);
     });
 
-    testWidgets('choose-type: tapping IMAP/SMTP shows IMAP form',
-        (tester) async {
+    testWidgets('choose-type: tapping IMAP/SMTP shows IMAP form', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/add',
@@ -174,14 +170,16 @@ void main() {
       expect(find.text('SMTP'), findsOneWidget);
     });
 
-    testWidgets('successful JMAP save pops back to accounts list',
-        (tester) async {
+    testWidgets('successful JMAP save pops back to accounts list', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/add',
           overrides: baseOverrides(
-            discovery:
-                JmapDiscovery(sessionUrl: 'https://mail.example.com/jmap'),
+            discovery: JmapDiscovery(
+              sessionUrl: 'https://mail.example.com/jmap',
+            ),
           ),
         ),
       );
@@ -213,8 +211,9 @@ void main() {
         buildApp(
           initialLocation: '/accounts/add',
           overrides: baseOverrides(
-            discovery:
-                JmapDiscovery(sessionUrl: 'https://mail.example.com/jmap'),
+            discovery: JmapDiscovery(
+              sessionUrl: 'https://mail.example.com/jmap',
+            ),
             connectionError: Exception('auth failed'),
           ),
         ),
@@ -242,8 +241,9 @@ void main() {
       expect(find.textContaining('Connection failed'), findsOneWidget);
     });
 
-    testWidgets('successful IMAP save pops back to accounts list',
-        (tester) async {
+    testWidgets('successful IMAP save pops back to accounts list', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(800, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -288,45 +288,46 @@ void main() {
     });
 
     testWidgets(
-        'IMAP form hides SSL toggle for non-localhost, shows for localhost',
-        (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/add',
-          overrides: baseOverrides(discovery: UnknownDiscovery()),
-        ),
-      );
-      await tester.pumpAndSettle();
+      'IMAP form hides SSL toggle for non-localhost, shows for localhost',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/add',
+            overrides: baseOverrides(discovery: UnknownDiscovery()),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('emailField')),
-        'user@example.com',
-      );
-      await tester.tap(find.text('Continue'));
-      await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('emailField')),
+          'user@example.com',
+        );
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('IMAP / SMTP'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('IMAP / SMTP'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('IMAP'), findsOneWidget);
-      // No SSL toggles shown when hosts are empty (non-localhost).
-      expect(find.byType(SwitchListTile), findsNothing);
+        expect(find.text('IMAP'), findsOneWidget);
+        // No SSL toggles shown when hosts are empty (non-localhost).
+        expect(find.byType(SwitchListTile), findsNothing);
 
-      // Entering localhost as IMAP host reveals the IMAP SSL toggle.
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'Host').first,
-        'localhost',
-      );
-      await tester.pumpAndSettle();
-      expect(find.byType(SwitchListTile), findsOneWidget);
+        // Entering localhost as IMAP host reveals the IMAP SSL toggle.
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Host').first,
+          'localhost',
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(SwitchListTile), findsOneWidget);
 
-      // Entering localhost as SMTP host reveals both SSL toggles.
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'Host').last,
-        'localhost',
-      );
-      await tester.pumpAndSettle();
-      expect(find.byType(SwitchListTile), findsNWidgets(2));
-    });
+        // Entering localhost as SMTP host reveals both SSL toggles.
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Host').last,
+          'localhost',
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(SwitchListTile), findsNWidgets(2));
+      },
+    );
   });
 }

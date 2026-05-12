@@ -59,9 +59,9 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to activate: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to activate: $e')));
       }
     }
   }
@@ -92,9 +92,9 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
@@ -106,9 +106,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       body: _buildBody(),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          await context.push(
-            '/accounts/${widget.accountId}/sieve/edit',
-          );
+          await context.push('/accounts/${widget.accountId}/sieve/edit');
           await _load();
         },
         child: const Icon(Icons.add),
@@ -129,10 +127,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
             children: [
               Text(_error!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: _load,
-                child: const Text('Retry'),
-              ),
+              FilledButton(onPressed: _load, child: const Text('Retry')),
             ],
           ),
         ),
@@ -200,10 +195,7 @@ class _ScriptTile extends StatelessWidget {
           }
         },
         itemBuilder: (_) => [
-          const PopupMenuItem(
-            value: _ScriptAction.edit,
-            child: Text('Edit'),
-          ),
+          const PopupMenuItem(value: _ScriptAction.edit, child: Text('Edit')),
           if (!script.isActive)
             const PopupMenuItem(
               value: _ScriptAction.activate,
@@ -217,10 +209,7 @@ class _ScriptTile extends StatelessWidget {
         ],
       ),
       onTap: () async {
-        await context.push(
-          '/accounts/$accountId/sieve/edit',
-          extra: script,
-        );
+        await context.push('/accounts/$accountId/sieve/edit', extra: script);
         onEdited();
       },
     );

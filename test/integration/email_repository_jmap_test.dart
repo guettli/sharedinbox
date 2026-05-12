@@ -31,8 +31,9 @@ Future<ImapClient> _imapConnect({
   required String user,
   required String pass,
 }) async {
-  final client =
-      ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
+  final client = ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
   await client.connectToServer(host, port, isSecure: false);
   await client.login(user, pass);
   return client;
@@ -172,24 +173,26 @@ void main() {
     expect(emails.first.isSeen, isFalse);
   });
 
-  test('syncEmails saves state and incremental sync picks up new messages',
-      () async {
-    final r = makeRepo();
-    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+  test(
+    'syncEmails saves state and incremental sync picks up new messages',
+    () async {
+      final r = makeRepo();
+      final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
 
-    await appendToInbox('first');
-    await r.emails.syncEmails('test-jmap', inboxId);
-    expect(
-      await r.emails.observeEmails('test-jmap', inboxId).first,
-      hasLength(1),
-    );
+      await appendToInbox('first');
+      await r.emails.syncEmails('test-jmap', inboxId);
+      expect(
+        await r.emails.observeEmails('test-jmap', inboxId).first,
+        hasLength(1),
+      );
 
-    await appendToInbox('second');
-    await r.emails.syncEmails('test-jmap', inboxId);
-    final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
-    expect(emails, hasLength(2));
-    expect(emails.map((e) => e.subject).toSet(), {'first', 'second'});
-  });
+      await appendToInbox('second');
+      await r.emails.syncEmails('test-jmap', inboxId);
+      final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
+      expect(emails, hasLength(2));
+      expect(emails.map((e) => e.subject).toSet(), {'first', 'second'});
+    },
+  );
 
   test('syncEmails removes email deleted on server from local DB', () async {
     await appendToInbox('keep');
@@ -247,42 +250,44 @@ void main() {
     expect(cached.textBody, body.textBody);
   });
 
-  test('sendEmail submits via JMAP EmailSubmission and creates Sent copy',
-      () async {
-    final subject = 'jmap-send-${DateTime.now().millisecondsSinceEpoch}';
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
-    await r.mailboxes.syncMailboxes('test-jmap');
+  test(
+    'sendEmail submits via JMAP EmailSubmission and creates Sent copy',
+    () async {
+      final subject = 'jmap-send-${DateTime.now().millisecondsSinceEpoch}';
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.mailboxes.syncMailboxes('test-jmap');
 
-    await r.emails.sendEmail(
-      'test-jmap',
-      EmailDraft(
-        from: EmailAddress(name: 'Alice', email: userEmail),
-        to: [EmailAddress(name: 'Alice', email: userEmail)],
-        cc: [],
-        subject: subject,
-        body: 'Integration test message via JMAP',
-      ),
-    );
+      await r.emails.sendEmail(
+        'test-jmap',
+        EmailDraft(
+          from: EmailAddress(name: 'Alice', email: userEmail),
+          to: [EmailAddress(name: 'Alice', email: userEmail)],
+          cc: [],
+          subject: subject,
+          body: 'Integration test message via JMAP',
+        ),
+      );
 
-    // A sent copy should appear in the Sent mailbox.
-    final sentRow = await (r.db.select(r.db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals('test-jmap') & t.role.equals('sent'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-    final sentId = sentRow?.path;
+      // A sent copy should appear in the Sent mailbox.
+      final sentRow = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals('test-jmap') & t.role.equals('sent'),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      final sentId = sentRow?.path;
 
-    if (sentId != null) {
-      await r.emails.syncEmails('test-jmap', sentId);
-      final sentEmails =
-          await r.emails.observeEmails('test-jmap', sentId).first;
-      expect(sentEmails.any((e) => e.subject == subject), isTrue);
-    } else {
-      // If no Sent mailbox exists, just verify sendEmail didn't throw.
-    }
-  });
+      if (sentId != null) {
+        await r.emails.syncEmails('test-jmap', sentId);
+        final sentEmails =
+            await r.emails.observeEmails('test-jmap', sentId).first;
+        expect(sentEmails.any((e) => e.subject == subject), isTrue);
+      } else {
+        // If no Sent mailbox exists, just verify sendEmail didn't throw.
+      }
+    },
+  );
 
   test('flushPendingChanges marks email as seen on server', () async {
     await appendToInbox('flag-test');

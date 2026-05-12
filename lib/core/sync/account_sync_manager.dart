@@ -54,8 +54,13 @@ class AccountSyncManager {
               _imapConnect,
               _syncLog,
             ),
-          AccountType.jmap =>
-            _JmapAccountSync(account, _mailboxes, _emails, _accounts, _syncLog),
+          AccountType.jmap => _JmapAccountSync(
+              account,
+              _mailboxes,
+              _emails,
+              _accounts,
+              _syncLog,
+            ),
         };
         _active[account.id] = loop;
         loop.start();
@@ -144,8 +149,9 @@ class _AccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        final (_SyncStats stats, String? capturedLog) =
-            await _runSync(account.verbose);
+        final (_SyncStats stats, String? capturedLog) = await _runSync(
+          account.verbose,
+        );
         await _syncLog.log(
           accountId: account.id,
           success: true,
@@ -239,8 +245,10 @@ class _AccountSync implements _SyncLoop {
     // Check for expired snoozes and move them back to Inbox before syncing.
     await _emails.wakeUpEmails(account.id);
 
-    final pendingFlushed =
-        await _emails.flushPendingChanges(account.id, password);
+    final pendingFlushed = await _emails.flushPendingChanges(
+      account.id,
+      password,
+    );
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
@@ -359,8 +367,9 @@ class _JmapAccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       try {
-        final (_SyncStats stats, String? capturedLog) =
-            await _runSync(account.verbose);
+        final (_SyncStats stats, String? capturedLog) = await _runSync(
+          account.verbose,
+        );
         await _syncLog.log(
           accountId: account.id,
           success: true,
@@ -456,8 +465,10 @@ class _JmapAccountSync implements _SyncLoop {
     await _emails.wakeUpEmails(account.id);
 
     // Drain outbound queue before pulling from server.
-    final pendingFlushed =
-        await _emails.flushPendingChanges(account.id, password);
+    final pendingFlushed = await _emails.flushPendingChanges(
+      account.id,
+      password,
+    );
 
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
 

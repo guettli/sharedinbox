@@ -213,9 +213,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       // Re-probe when the cached availability was cleared above.
       if (updated.type == AccountType.imap &&
           updated.manageSieveAvailable == null) {
-        unawaited(
-          ref.read(manageSieveProbeServiceProvider).probe(updated),
-        );
+        unawaited(ref.read(manageSieveProbeServiceProvider).probe(updated));
       }
       if (mounted) context.pop();
     } catch (e) {

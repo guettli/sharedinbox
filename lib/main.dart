@@ -33,20 +33,12 @@ void main({List<Override> overrides = const []}) async {
 
         await initDatabasePath();
         runApp(
-          ProviderScope(
-            overrides: overrides,
-            child: const SharedInboxApp(),
-          ),
+          ProviderScope(overrides: overrides, child: const SharedInboxApp()),
         );
       },
       (error, stack) {
         // Catch unhandled async errors.
-        runApp(
-          CrashScreen(
-            exception: error,
-            stackTrace: stack,
-          ),
-        );
+        runApp(CrashScreen(exception: error, stackTrace: stack));
       },
     ),
   );

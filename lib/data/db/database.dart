@@ -363,8 +363,9 @@ class AppDatabase extends _$AppDatabase {
                   emailIdsJson: Value(
                     jsonEncode(threadEmails.map((e) => e.id).toList()),
                   ),
-                  participantsJson:
-                      Value(latest.fromJson), // Good enough for migration
+                  participantsJson: Value(
+                    latest.fromJson,
+                  ), // Good enough for migration
                 ),
               );
             }

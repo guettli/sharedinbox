@@ -45,12 +45,7 @@ void main() {
   });
 
   test('login and list mailboxes', () async {
-    final client = await _connect(
-      userA,
-      passA,
-      host: imapHost,
-      port: imapPort,
-    );
+    final client = await _connect(userA, passA, host: imapHost, port: imapPort);
     addTearDown(() => client.logout().ignore());
 
     // listMailboxes() returns List<Mailbox> directly

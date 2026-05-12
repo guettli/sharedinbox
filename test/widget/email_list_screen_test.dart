@@ -15,10 +15,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -34,12 +36,15 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );
@@ -55,12 +60,15 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );
@@ -74,10 +82,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -91,16 +101,19 @@ void main() {
       expect(find.text('Search…'), findsOneWidget);
     });
 
-    testWidgets('submitting a search query shows "No results" when empty',
-        (tester) async {
+    testWidgets('submitting a search query shows "No results" when empty', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -117,17 +130,20 @@ void main() {
       expect(find.text('No results'), findsOneWidget);
     });
 
-    testWidgets('submitting a search query shows matching emails',
-        (tester) async {
+    testWidgets('submitting a search query shows matching emails', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Found it');
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(searchResults: [email]),
             ),
@@ -151,10 +167,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -167,16 +185,19 @@ void main() {
       // No assertion needed — we just verify the tap doesn't throw.
     });
 
-    testWidgets('tapping edit button navigates to compose screen',
-        (tester) async {
+    testWidgets('tapping edit button navigates to compose screen', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -194,10 +215,12 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
           ],
         ),
@@ -209,19 +232,23 @@ void main() {
       expect(find.text('INBOX'), findsOneWidget);
     });
 
-    testWidgets('long-press enters selection mode with selection bar',
-        (tester) async {
+    testWidgets('long-press enters selection mode with selection bar', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Select me');
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );
@@ -235,19 +262,23 @@ void main() {
       expect(find.byIcon(Icons.close), findsOneWidget);
     });
 
-    testWidgets('selection bar close button exits selection mode',
-        (tester) async {
+    testWidgets('selection bar close button exits selection mode', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Select me');
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );
@@ -263,17 +294,20 @@ void main() {
       expect(find.byType(BottomAppBar), findsNothing);
     });
 
-    testWidgets('tapping clear icon in search bar clears results',
-        (tester) async {
+    testWidgets('tapping clear icon in search bar clears results', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Found it');
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(emails: [], searchResults: [email]),
             ),
@@ -303,12 +337,15 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );
@@ -325,23 +362,28 @@ void main() {
       expect(find.text('INBOX'), findsOneWidget);
     });
 
-    testWidgets('tapping a search result navigates to email detail',
-        (tester) async {
+    testWidgets('tapping a search result navigates to email detail', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Result email');
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(
                 searchResults: [email],
                 emailDetail: email,
-                emailBody:
-                    const EmailBody(emailId: 'acc-1:42', attachments: []),
+                emailBody: const EmailBody(
+                  emailId: 'acc-1:42',
+                  attachments: [],
+                ),
               ),
             ),
           ],
@@ -384,12 +426,15 @@ void main() {
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
           overrides: [
-            accountRepositoryProvider
-                .overrideWithValue(FakeAccountRepository([kTestAccount])),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
-            emailRepositoryProvider
-                .overrideWithValue(FakeEmailRepository(emails: [email])),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
           ],
         ),
       );

@@ -190,9 +190,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       await OpenFilex.open(path);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to open file: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to open file: $e')));
     } finally {
       if (mounted) setState(() => _opening = false);
     }
@@ -204,9 +204,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   Future<void> _send() async {
     if (_accountId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select an account first')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Select an account first')));
       return;
     }
     setState(() => _sending = true);
@@ -229,8 +229,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             .toList(),
         subject: _subject.text,
         body: _body.text,
-        attachmentFilePaths:
-            List.unmodifiable(_attachments.map((a) => a.path).toList()),
+        attachmentFilePaths: List.unmodifiable(
+          _attachments.map((a) => a.path).toList(),
+        ),
       );
       await ref.read(emailRepositoryProvider).sendEmail(_accountId!, draft);
       // Delete the draft only after a successful send.
@@ -240,8 +241,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (mounted) context.pop();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Send failed: $e')));
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -257,10 +259,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8),
               child: Center(
-                child: Text(
-                  'Saved',
-                  style: TextStyle(fontSize: 12),
-                ),
+                child: Text('Saved', style: TextStyle(fontSize: 12)),
               ),
             ),
           IconButton(

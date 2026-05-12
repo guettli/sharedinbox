@@ -20,8 +20,9 @@ Future<ImapClient> _imapConnectPlain(
   String username,
   String password,
 ) async {
-  final client =
-      ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
+  final client = ImapClient(
+    defaultResponseTimeout: const Duration(seconds: 20),
+  );
   await client.connectToServer(
     account.imapHost,
     account.imapPort,
@@ -64,11 +65,7 @@ void main() {
     secureStorage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, secureStorage);
     await accounts.addAccount(account, userPass);
-    repo = EmailRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: _imapConnectPlain,
-    );
+    repo = EmailRepositoryImpl(db, accounts, imapConnect: _imapConnectPlain);
 
     final client = await _imapConnectPlain(account, userEmail, userPass);
     await client.selectMailboxByPath('INBOX');
@@ -107,26 +104,27 @@ void main() {
   });
 
   test(
-      'verifySyncReliability identifies extra local emails (missing on server)',
-      () async {
-    // 1. Manually insert a row into local DB that doesn't exist on server
-    await db.into(db.emails).insert(
-          EmailsCompanion.insert(
-            id: 'test:999',
-            accountId: 'test',
-            mailboxPath: 'INBOX',
-            uid: 999,
-            subject: const Value('Ghost'),
-            receivedAt: DateTime.now(),
-          ),
-        );
+    'verifySyncReliability identifies extra local emails (missing on server)',
+    () async {
+      // 1. Manually insert a row into local DB that doesn't exist on server
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'test:999',
+              accountId: 'test',
+              mailboxPath: 'INBOX',
+              uid: 999,
+              subject: const Value('Ghost'),
+              receivedAt: DateTime.now(),
+            ),
+          );
 
-    // 2. Verify reliability
-    final result = await repo.verifySyncReliability('test', 'INBOX');
-    expect(result.isHealthy, isFalse);
-    expect(result.missingOnServer, contains('test:999'));
-    expect(result.missingLocally, isEmpty);
-  });
+      // 2. Verify reliability
+      final result = await repo.verifySyncReliability('test', 'INBOX');
+      expect(result.isHealthy, isFalse);
+      expect(result.missingOnServer, contains('test:999'));
+      expect(result.missingLocally, isEmpty);
+    },
+  );
 
   test('verifySyncReliability identifies flag mismatches', () async {
     // 1. Sync one email
@@ -195,8 +193,10 @@ void main() {
       await client.logout();
 
       // 2. Need to find the JMAP mailbox ID for INBOX
-      final mailboxRepo =
-          MailboxRepositoryImpl(db, AccountRepositoryImpl(db, secureStorage));
+      final mailboxRepo = MailboxRepositoryImpl(
+        db,
+        AccountRepositoryImpl(db, secureStorage),
+      );
       await mailboxRepo.syncMailboxes('test-jmap');
       final mailboxes = await mailboxRepo.observeMailboxes('test-jmap').first;
       final inbox = mailboxes.firstWhere((m) => m.role == 'inbox');

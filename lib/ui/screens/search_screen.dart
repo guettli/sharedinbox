@@ -78,8 +78,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               .where(
                 (e) =>
                     e.accountId == accId &&
-                    [...e.from, ...e.to, ...e.cc]
-                        .any((a) => a.email == addrEmail),
+                    [
+                      ...e.from,
+                      ...e.to,
+                      ...e.cc,
+                    ].any((a) => a.email == addrEmail),
               )
               .length;
           addresses.add((addr, count, accId));
@@ -147,11 +150,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         if (r.addresses.isNotEmpty) ...[
           const _SectionHeader('Addresses'),
           for (final (addr, count, accId) in r.addresses)
-            _AddressTile(
-              addr: addr,
-              count: count,
-              accountId: accId,
-            ),
+            _AddressTile(addr: addr, count: count, accountId: accId),
         ],
         if (r.emails.isNotEmpty) ...[
           const _SectionHeader('Messages'),

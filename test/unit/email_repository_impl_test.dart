@@ -161,11 +161,8 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
 Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
-({
-  AppDatabase db,
-  AccountRepositoryImpl accounts,
-  EmailRepositoryImpl emails,
-}) _makeRepos({http.Client? httpClient}) {
+({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
+    _makeRepos({http.Client? httpClient}) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
   final accounts = AccountRepositoryImpl(db, storage);
@@ -421,53 +418,57 @@ void main() {
 
     // ── IMAP method tests ────────────────────────────────────────────────────
 
-    test('setFlag seen=true enqueues flag_seen change and updates local DB',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-            ),
-          );
+    test(
+      'setFlag seen=true enqueues flag_seen change and updates local DB',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
 
-      await r.emails.setFlag('acc-1:5', seen: true);
+        await r.emails.setFlag('acc-1:5', seen: true);
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes, hasLength(1));
-      expect(changes.first.changeType, 'flag_seen');
-      expect(changes.first.payload, contains('"seen":true'));
-      final email = await r.emails.getEmail('acc-1:5');
-      expect(email!.isSeen, isTrue);
-    });
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes, hasLength(1));
+        expect(changes.first.changeType, 'flag_seen');
+        expect(changes.first.payload, contains('"seen":true'));
+        final email = await r.emails.getEmail('acc-1:5');
+        expect(email!.isSeen, isTrue);
+      },
+    );
 
-    test('setFlag seen=false enqueues flag_seen change with seen=false',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-              isSeen: const Value(true),
-            ),
-          );
+    test(
+      'setFlag seen=false enqueues flag_seen change with seen=false',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+                isSeen: const Value(true),
+              ),
+            );
 
-      await r.emails.setFlag('acc-1:5', seen: false);
+        await r.emails.setFlag('acc-1:5', seen: false);
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'flag_seen');
-      expect(changes.first.payload, contains('"seen":false'));
-      final email = await r.emails.getEmail('acc-1:5');
-      expect(email!.isSeen, isFalse);
-    });
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'flag_seen');
+        expect(changes.first.payload, contains('"seen":false'));
+        final email = await r.emails.getEmail('acc-1:5');
+        expect(email!.isSeen, isFalse);
+      },
+    );
 
     test('setFlag flagged=true enqueues flag_flagged change', () async {
       final r = _makeRepos();
@@ -491,74 +492,78 @@ void main() {
     });
 
     test(
-        'setFlag flagged=false enqueues flag_flagged change with flagged=false',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-              isFlagged: const Value(true),
-            ),
-          );
+      'setFlag flagged=false enqueues flag_flagged change with flagged=false',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+                isFlagged: const Value(true),
+              ),
+            );
 
-      await r.emails.setFlag('acc-1:5', flagged: false);
+        await r.emails.setFlag('acc-1:5', flagged: false);
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'flag_flagged');
-      expect(changes.first.payload, contains('"flagged":false'));
-    });
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'flag_flagged');
+        expect(changes.first.payload, contains('"flagged":false'));
+      },
+    );
 
     test(
-        'moveEmail enqueues move change and updates local mailboxPath (optimistic)',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-            ),
-          );
+      'moveEmail enqueues move change and updates local mailboxPath (optimistic)',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
 
-      await r.emails.moveEmail('acc-1:5', 'Archive');
+        await r.emails.moveEmail('acc-1:5', 'Archive');
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'move');
-      expect(changes.first.payload, contains('Archive'));
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'move');
+        expect(changes.first.payload, contains('Archive'));
 
-      final email = await r.emails.getEmail('acc-1:5');
-      expect(email, isNotNull);
-      expect(email!.mailboxPath, 'Archive');
-    });
+        final email = await r.emails.getEmail('acc-1:5');
+        expect(email, isNotNull);
+        expect(email!.mailboxPath, 'Archive');
+      },
+    );
 
-    test('deleteEmail enqueues delete change and removes email from local DB',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-            ),
-          );
+    test(
+      'deleteEmail enqueues delete change and removes email from local DB',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
 
-      await r.emails.deleteEmail('acc-1:5');
+        await r.emails.deleteEmail('acc-1:5');
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'delete');
-      expect(await r.emails.getEmail('acc-1:5'), isNull);
-    });
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'delete');
+        expect(await r.emails.getEmail('acc-1:5'), isNull);
+      },
+    );
   });
 
   group('IMAP flushPendingChanges', () {
@@ -729,11 +734,11 @@ void main() {
                           '2': {'value': html, 'isTruncated': false},
                         },
                         'attachments': [],
-                      }
+                      },
                     ],
                   },
                   '0',
-                ]
+                ],
               ],
             }),
             200,
@@ -800,11 +805,11 @@ void main() {
                         'htmlBody': [],
                         'bodyValues': <String, dynamic>{},
                         'attachments': [],
-                      }
+                      },
                     ],
                   },
                   '0',
-                ]
+                ],
               ],
             }),
             200,
@@ -975,10 +980,12 @@ void main() {
 
       final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
       expect(emails, hasLength(4));
-      expect(
-        emails.map((e) => e.subject).toSet(),
-        {'Page1-A', 'Page1-B', 'Page2-A', 'Page2-B'},
-      );
+      expect(emails.map((e) => e.subject).toSet(), {
+        'Page1-A',
+        'Page1-B',
+        'Page2-A',
+        'Page2-B',
+      });
 
       final states = await r.db.select(r.db.syncStates).get();
       expect(states.first.state, 'est1');
@@ -1002,21 +1009,23 @@ void main() {
           );
     }
 
-    test('setFlag seen enqueues flag_seen change and updates local DB',
-        () async {
-      final r = _makeRepos();
-      await seedJmapEmail(r.db, r.accounts);
+    test(
+      'setFlag seen enqueues flag_seen change and updates local DB',
+      () async {
+        final r = _makeRepos();
+        await seedJmapEmail(r.db, r.accounts);
 
-      await r.emails.setFlag('jmap-1:e1', seen: true);
+        await r.emails.setFlag('jmap-1:e1', seen: true);
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes, hasLength(1));
-      expect(changes.first.changeType, 'flag_seen');
-      expect(changes.first.payload, contains('true'));
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes, hasLength(1));
+        expect(changes.first.changeType, 'flag_seen');
+        expect(changes.first.payload, contains('true'));
 
-      final email = await r.emails.getEmail('jmap-1:e1');
-      expect(email?.isSeen, isTrue);
-    });
+        final email = await r.emails.getEmail('jmap-1:e1');
+        expect(email?.isSeen, isTrue);
+      },
+    );
 
     test('setFlag flagged enqueues flag_flagged change', () async {
       final r = _makeRepos();
@@ -1028,33 +1037,37 @@ void main() {
       expect(changes.first.changeType, 'flag_flagged');
     });
 
-    test('moveEmail enqueues move change and updates local mailbox path',
-        () async {
-      final r = _makeRepos();
-      await seedJmapEmail(r.db, r.accounts);
+    test(
+      'moveEmail enqueues move change and updates local mailbox path',
+      () async {
+        final r = _makeRepos();
+        await seedJmapEmail(r.db, r.accounts);
 
-      await r.emails.moveEmail('jmap-1:e1', 'mbx2');
+        await r.emails.moveEmail('jmap-1:e1', 'mbx2');
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'move');
-      expect(changes.first.payload, contains('mbx2'));
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'move');
+        expect(changes.first.payload, contains('mbx2'));
 
-      final email = await r.emails.getEmail('jmap-1:e1');
-      expect(email, isNotNull);
-      expect(email?.mailboxPath, 'mbx2');
-    });
+        final email = await r.emails.getEmail('jmap-1:e1');
+        expect(email, isNotNull);
+        expect(email?.mailboxPath, 'mbx2');
+      },
+    );
 
-    test('deleteEmail enqueues delete change and removes email from local DB',
-        () async {
-      final r = _makeRepos();
-      await seedJmapEmail(r.db, r.accounts);
+    test(
+      'deleteEmail enqueues delete change and removes email from local DB',
+      () async {
+        final r = _makeRepos();
+        await seedJmapEmail(r.db, r.accounts);
 
-      await r.emails.deleteEmail('jmap-1:e1');
+        await r.emails.deleteEmail('jmap-1:e1');
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.changeType, 'delete');
-      expect(await r.emails.getEmail('jmap-1:e1'), isNull);
-    });
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.changeType, 'delete');
+        expect(await r.emails.getEmail('jmap-1:e1'), isNull);
+      },
+    );
   });
 
   group('JMAP flushPendingChanges', () {
@@ -1246,130 +1259,134 @@ void main() {
       expect(states.first.state, 'est2');
     });
 
-    test('stateMismatch clears sync state and marks change as failed',
-        () async {
-      final client = MockClient((req) async {
-        if (req.url.path.contains('well-known')) {
-          return http.Response(
-            jsonEncode({
-              'apiUrl': 'https://jmap.example.com/api/',
-              'accounts': {'acct1': {}},
-              'primaryAccounts': {
-                'urn:ietf:params:jmap:core': 'acct1',
-                'urn:ietf:params:jmap:mail': 'acct1',
-              },
-              'capabilities': {},
-              'username': 'alice@example.com',
-              'state': 'sess1',
-            }),
-            200,
-          );
-        }
-        // Server responds with stateMismatch error inside Email/set
-        return http.Response(
-          jsonEncode({
-            'sessionState': 's1',
-            'methodResponses': [
-              [
-                'Email/set',
-                {'accountId': 'acct1', 'type': 'stateMismatch'},
-                '0',
-              ],
-            ],
-          }),
-          200,
-        );
-      });
-
-      final r = _makeRepos(httpClient: client);
-      await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
-            SyncStatesCompanion.insert(
-              accountId: 'jmap-1',
-              resourceType: 'Email',
-              state: 'est1',
-              syncedAt: DateTime.now(),
-            ),
-          );
-      await r.db.into(r.db.pendingChanges).insert(
-            PendingChangesCompanion.insert(
-              accountId: 'jmap-1',
-              resourceType: 'Email',
-              resourceId: 'jmap-1:e1',
-              changeType: 'flag_seen',
-              payload: '{"seen":true}',
-              createdAt: DateTime.now(),
-            ),
-          );
-
-      await r.emails.flushPendingChanges('jmap-1', 'pw');
-
-      // Sync state should be cleared so next cycle does a full re-sync
-      expect(await r.db.select(r.db.syncStates).get(), isEmpty);
-
-      // Change should still be present but with attempt count bumped
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.first.attempts, 1);
-    });
-
-    test('discards change immediately on notUpdated (permanent error)',
-        () async {
-      final client = MockClient((req) async {
-        if (req.url.path.contains('well-known')) {
-          return http.Response(
-            jsonEncode({
-              'apiUrl': 'https://jmap.example.com/api/',
-              'accounts': {'acct1': {}},
-              'primaryAccounts': {
-                'urn:ietf:params:jmap:core': 'acct1',
-                'urn:ietf:params:jmap:mail': 'acct1',
-              },
-              'capabilities': {},
-              'username': 'alice@example.com',
-              'state': 'sess1',
-            }),
-            200,
-          );
-        }
-        // Server responds with notUpdated — permanent per-item error
-        return http.Response(
-          jsonEncode({
-            'sessionState': 's1',
-            'methodResponses': [
-              [
-                'Email/set',
-                {
-                  'accountId': 'acct1',
-                  'notUpdated': {
-                    'e1': {'type': 'notFound'},
-                  },
+    test(
+      'stateMismatch clears sync state and marks change as failed',
+      () async {
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
                 },
-                '0',
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          // Server responds with stateMismatch error inside Email/set
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Email/set',
+                  {'accountId': 'acct1', 'type': 'stateMismatch'},
+                  '0',
+                ],
               ],
-            ],
-          }),
-          200,
-        );
-      });
-
-      final r = _makeRepos(httpClient: client);
-      await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.pendingChanges).insert(
-            PendingChangesCompanion.insert(
-              accountId: 'jmap-1',
-              resourceType: 'Email',
-              resourceId: 'jmap-1:e1',
-              changeType: 'flag_seen',
-              payload: '{"seen":true}',
-              createdAt: DateTime.now(),
-            ),
+            }),
+            200,
           );
+        });
 
-      await r.emails.flushPendingChanges('jmap-1', 'pw');
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                resourceId: 'jmap-1:e1',
+                changeType: 'flag_seen',
+                payload: '{"seen":true}',
+                createdAt: DateTime.now(),
+              ),
+            );
 
-      // Permanent error — change is immediately evicted
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-    });
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+        // Sync state should be cleared so next cycle does a full re-sync
+        expect(await r.db.select(r.db.syncStates).get(), isEmpty);
+
+        // Change should still be present but with attempt count bumped
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes.first.attempts, 1);
+      },
+    );
+
+    test(
+      'discards change immediately on notUpdated (permanent error)',
+      () async {
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          // Server responds with notUpdated — permanent per-item error
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Email/set',
+                  {
+                    'accountId': 'acct1',
+                    'notUpdated': {
+                      'e1': {'type': 'notFound'},
+                    },
+                  },
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                resourceId: 'jmap-1:e1',
+                changeType: 'flag_seen',
+                payload: '{"seen":true}',
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+        // Permanent error — change is immediately evicted
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      },
+    );
 
     test('evicts change after max attempts (5)', () async {
       final r = _makeRepos(httpClient: mockFlush(500));
@@ -1459,9 +1476,7 @@ void main() {
           apiResponses: [
             _emailGetResponse(
               state: 'est1',
-              list: [
-                _jmapEmail(id: 'e1', mailboxId: 'mbx1'),
-              ],
+              list: [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
             ),
           ],
         ),

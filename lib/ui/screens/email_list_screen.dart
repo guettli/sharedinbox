@@ -104,11 +104,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
     setState(() => _searchLoading = true);
     try {
-      final results = await ref.read(emailRepositoryProvider).searchEmails(
-            widget.accountId,
-            widget.mailboxPath,
-            query.trim(),
-          );
+      final results = await ref
+          .read(emailRepositoryProvider)
+          .searchEmails(widget.accountId, widget.mailboxPath, query.trim());
       if (mounted) setState(() => _searchResults = results);
     } finally {
       if (mounted) setState(() => _searchLoading = false);
@@ -182,9 +180,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                     );
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Sync failed: $e')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
                   }
                 },
               ),
@@ -288,10 +286,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           if (threads.isEmpty) {
             return ListView(
               children: const [
-                SizedBox(
-                  height: 300,
-                  child: Center(child: Text('No emails')),
-                ),
+                SizedBox(height: 300, child: Center(child: Text('No emails'))),
               ],
             );
           }
@@ -309,9 +304,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         .findMailboxByRole(widget.accountId, role);
     if (!mounted) return;
     if (mailbox == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(notFoundMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(notFoundMessage)));
       return;
     }
     final repo = ref.read(emailRepositoryProvider);
