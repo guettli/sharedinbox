@@ -8,26 +8,29 @@ draft: false
 
 ## 1. Data Controller
 
-Thomas Güttler
-Email: tilldu@googlemail.com
+Thomas Güttler Email: info@thomas-guettler.de
 
 ## 2. Overview
 
-SharedInbox is an email client for desktop and mobile. This policy explains what data we process and how.
+SharedInbox is an email client for desktop and mobile. This policy explains what data we process and
+how.
 
-## 3. The SharedInbox App
+## 3. The SharedInbox Mail App
 
 ### What data the app processes
 
 The app processes the following data **exclusively on your device**:
 
-- **Email account credentials** (username, password, server addresses) — stored locally in your device's secure storage and never transmitted to us.
-- **Email messages and attachments** — fetched directly from your email provider's IMAP server and displayed in the app. We never receive, store, or process your emails.
+- **Email account credentials** (username, password, server addresses) — stored locally in your
+  device's secure storage and never transmitted to us.
+- **Email messages and attachments** — fetched directly from your email provider's IMAP server and
+  displayed in the app. We never receive, store, or process your emails.
 - **App settings and configuration** — stored locally on your device.
 
 ### Network connections
 
-The app connects only to the email servers you configure (IMAP/SMTP). It does not connect to any SharedInbox servers, analytics services, or third-party tracking services.
+The app connects only to the email servers you configure (IMAP/SMTP). It does not connect to any
+SharedInbox servers, analytics services, or third-party tracking services.
 
 ### No telemetry
 
@@ -35,9 +38,11 @@ We do not collect crash reports, usage statistics, or any other telemetry from t
 
 ## 4. This Website (sharedinbox.de)
 
-This website is a static site. It does not use cookies, trackers, or analytics. No personal data is collected when you visit this site.
+This website is a static site. It does not use cookies, trackers, or analytics. No personal data is
+collected when you visit this site.
 
-The web server may store standard access logs (IP address, requested URL, timestamp) for up to 7 days for security and operational purposes.
+The web server may store standard access logs (IP address, requested URL, timestamp) for up to 7
+days for security and operational purposes.
 
 ## 5. Your Rights (GDPR)
 
@@ -48,9 +53,10 @@ If you are located in the European Union, you have the right to:
 - Object to or restrict processing
 - Lodge a complaint with your local data protection authority
 
-Since the app processes all data locally on your device and we have no access to it, there is no personal data we hold server-side.
+Since the app processes all data locally on your device and we have no access to it, there is no
+personal data we hold server-side.
 
-To exercise your rights or for any privacy questions, contact us at: **tilldu@googlemail.com**
+To exercise your rights or for any privacy questions, contact us at: **info@thomas-guettler.de**
 
 ## 6. Changes to This Policy
 

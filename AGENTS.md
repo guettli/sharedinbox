@@ -46,3 +46,4 @@ task test
 *   **Execution:** CI must only invoke `task` commands (e.g., `nix develop --command task check`).
     All environment setup is handled by Nix (`flake.nix`), and all task orchestration is handled by
     `Taskfile.yml`.
+* The cli-tool `fgj` is available to query/wait for CI.

@@ -2,6 +2,8 @@
 
 To publish the Flutter app to the Play Store, you need to transition from a "development" state to a "production-ready" state.
 
+Data Protection blabla page!
+
 ## 1. What has been done
 *   **Application ID:** Changed to `de.sharedinbox.mua` (verified in `build.gradle.kts`, `MainActivity.kt`, and integration tests).
 *   **Build Logic:** `android/app/build.gradle.kts` now supports:
