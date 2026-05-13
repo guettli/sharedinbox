@@ -132,6 +132,8 @@ class FakeMailboxRepository implements MailboxRepository {
   @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
       _mailboxes.where((m) => m.role == role).firstOrNull;
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -279,6 +281,9 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<void> retryMutation(int id) async {}
+
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }
 
 // ---------------------------------------------------------------------------

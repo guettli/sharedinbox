@@ -98,6 +98,9 @@ class FakeEmailRepository implements EmailRepository {
     String mailboxPath,
   ) async =>
       ReliabilityResult.healthy;
+
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }
 
 class _Log {
@@ -148,4 +151,6 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
   Future<int> syncMailboxes(String id) async => 1;
   @override
   Future<Mailbox?> findMailboxByRole(String id, String role) async => null;
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }

@@ -8,4 +8,7 @@ abstract class MailboxRepository {
 
   /// Returns the first mailbox with the given [role] for [accountId], or null.
   Future<Mailbox?> findMailboxByRole(String accountId, String role);
+
+  /// Deletes all locally-cached mailbox rows for [accountId].
+  Future<void> clearForResync(String accountId);
 }

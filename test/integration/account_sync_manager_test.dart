@@ -96,6 +96,9 @@ class _FakeMailboxes implements MailboxRepository {
   @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
       null;
+
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }
 
 class _FakeEmails implements EmailRepository {
@@ -191,6 +194,9 @@ class _FakeEmails implements EmailRepository {
 
   @override
   Future<void> retryMutation(int id) async {}
+
+  @override
+  Future<void> clearForResync(String accountId) async {}
 }
 
 class _FakeLogs implements SyncLogRepository {

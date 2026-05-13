@@ -303,4 +303,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     if (mb.isJunk) return 'junk';
     return null;
   }
+
+  @override
+  Future<void> clearForResync(String accountId) async {
+    await (_db.delete(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .go();
+  }
 }

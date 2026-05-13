@@ -99,4 +99,9 @@ abstract class EmailRepository {
     String accountId,
     String mailboxPath,
   );
+
+  /// Deletes all locally-cached email rows and pending changes for [accountId],
+  /// while preserving EmailBodies so already-downloaded content is not lost.
+  /// Also resets sync-state checkpoints so the next sync fetches everything fresh.
+  Future<void> clearForResync(String accountId);
 }

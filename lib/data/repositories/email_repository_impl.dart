@@ -2739,4 +2739,27 @@ class EmailRepositoryImpl implements EmailRepository {
       const PendingChangesCompanion(attempts: Value(0), lastError: Value(null)),
     );
   }
+
+  @override
+  Future<void> clearForResync(String accountId) async {
+    // Disable FK constraints so EmailBodies rows survive the emails deletion.
+    // When emails are re-inserted after the next sync with the same IDs, the
+    // cached body content will be reused without a network round-trip.
+    await _db.customStatement('PRAGMA foreign_keys = OFF');
+    try {
+      await _db.transaction(() async {
+        await (_db.delete(_db.emails)
+              ..where((t) => t.accountId.equals(accountId)))
+            .go();
+        await (_db.delete(_db.pendingChanges)
+              ..where((t) => t.accountId.equals(accountId)))
+            .go();
+        await (_db.delete(_db.syncStates)
+              ..where((t) => t.accountId.equals(accountId)))
+            .go();
+      });
+    } finally {
+      await _db.customStatement('PRAGMA foreign_keys = ON');
+    }
+  }
 }

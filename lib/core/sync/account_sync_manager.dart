@@ -88,6 +88,43 @@ class AccountSyncManager {
   void syncNow(String accountId) {
     _active[accountId]?.kick();
   }
+
+  /// Clears all locally-cached emails and mailboxes for [accountId], then
+  /// immediately starts a fresh sync cycle. Use this as an escape hatch when
+  /// the local DB is believed to be out of sync with the server.
+  Future<void> forceResync(String accountId) async {
+    _active.remove(accountId)?.stop();
+
+    await _emails.clearForResync(accountId);
+    await _mailboxes.clearForResync(accountId);
+
+    final accounts = await _accounts.observeAccounts().first;
+    final account = accounts.cast<Account?>().firstWhere(
+          (a) => a?.id == accountId,
+          orElse: () => null,
+        );
+    if (account == null) return;
+
+    final loop = switch (account.type) {
+      AccountType.imap => _AccountSync(
+          account,
+          _accounts,
+          _mailboxes,
+          _emails,
+          _imapConnect,
+          _syncLog,
+        ),
+      AccountType.jmap => _JmapAccountSync(
+          account,
+          _mailboxes,
+          _emails,
+          _accounts,
+          _syncLog,
+        ),
+    };
+    _active[accountId] = loop;
+    loop.start();
+  }
 }
 
 // ── Shared interface ──────────────────────────────────────────────────────────
