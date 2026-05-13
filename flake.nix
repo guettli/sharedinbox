@@ -81,7 +81,10 @@
             curl
             jq
             sqlite
-            python3  # used by stalwart-dev/start to pick random ports
+            # python3 base + Google Play API client (for scripts/deploy_playstore.py)
+            (python3.withPackages (ps: with ps; [
+              google-api-python-client
+            ]))  # used by stalwart-dev/start and deploy_playstore.py
             fgj      # Codeberg/Forgejo CLI (like gh for GitHub)
           ]);
 

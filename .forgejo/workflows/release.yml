@@ -8,10 +8,14 @@ jobs:
   deploy-playstore:
     name: Build & Deploy to Play Store
     runs-on: self-hosted
-    if: false
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enable Nix flakes
+        run: |
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Prepare Keystore
         env:
@@ -24,15 +28,8 @@ jobs:
             exit 1
           fi
 
-      - name: Build App Bundle
+      - name: Build & Deploy to Play Store
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: nix develop --command task build-android-bundle
-
-      # Play Store upload disabled for now
-      # - name: Upload to Play Store
-      #   env:
-      #     PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
-      #   run: |
-      #     echo "$PLAY_STORE_CONFIG_JSON" > play-store-key.json
-      #     # nix develop --command fvm flutter pub run supply ...
+          PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
+        run: nix develop --command task deploy-android-bundle

@@ -12,7 +12,7 @@ Data Protection blabla page!
 *   **Taskfile:** Added `task build-android-bundle` to generate the `.aab` file.
 *   **CI Workflow:** Created `.forgejo/workflows/release.yml` which triggers on merge to `main`.
 
-## 2. What you need to do next
+
 ### A. Create the Keystore
 Run the helper script I created for you:
 ```bash
@@ -26,6 +26,7 @@ Go to **Settings > Actions > Secrets** in your Codeberg repo and add:
 2.  **`ANDROID_KEYSTORE_PASSWORD`**: Your keystore password.
 3.  **`PLAY_STORE_CONFIG_JSON`**: The JSON key from your Google Play Service Account.
 
+
 ### C. First Manual Upload
 Google Play requires the **very first upload** to be done manually through the web console:
 1.  Generate your keystore using `./t.sh`.
@@ -36,6 +37,9 @@ Google Play requires the **very first upload** to be done manually through the w
     ```
 3.  Upload the resulting `.aab` from `build/app/outputs/bundle/release/app-release.aab` to the Play Console (Internal Testing or Production track).
 4.  This "locks in" your signing key.
+
+## 2. What you need to do next
+
 
 ## 3. Firebase Test Lab
 Once you have the Service Account JSON, you can add a task to `Taskfile.yml` to run automated tests on real devices:

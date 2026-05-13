@@ -15,7 +15,7 @@ repos:
       - id: forbidden-files-hook
         name: check for forbidden home-directory files
         language: system
-        entry: task check-hygiene
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command task check-hygiene'
         pass_filenames: false
         always_run: true
       - id: dart-check

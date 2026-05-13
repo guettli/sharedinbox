@@ -268,6 +268,15 @@ tasks:
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
+  deploy-android-bundle:
+    desc: Build release AAB and upload to Play Store internal track
+    deps: [build-android-bundle]
+    preconditions:
+      - sh: test -n "$PLAY_STORE_CONFIG_JSON"
+        msg: "PLAY_STORE_CONFIG_JSON is not set"
+    cmds:
+      - python3 scripts/deploy_playstore.py
+
   build-android-bundle:
     desc: Build a release App Bundle (AAB)
     deps: [_preflight, _android-sdk-check, _pub-get, generate-changelog]
