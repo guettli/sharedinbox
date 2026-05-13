@@ -329,9 +329,17 @@ tasks:
       - nix develop --command hugo server --source website -D
 
   website-build:
-    desc: Build the static website
+    desc: Build the static website (embeds current git hash via HUGO_PARAMS_GITVERSION)
+    env:
+      HUGO_PARAMS_GITVERSION:
+        sh: git rev-parse --short HEAD
     cmds:
       - nix develop --command hugo --source website --minify
+
+  website-verify:
+    desc: Check that the deployed site serves the current git version
+    cmds:
+      - scripts/website-verify.sh
 
   website-deploy:
     desc: Deploy the website via rsync to public_html

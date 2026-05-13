@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'website/**'
+      - 'scripts/website-verify.sh'
       - '.forgejo/workflows/website.yml'
 
 jobs:
@@ -40,3 +41,6 @@ jobs:
           SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
         run: nix develop --command task website-deploy
+
+      - name: Verify
+        run: nix develop --command task website-verify
