@@ -17,6 +17,21 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
+      - name: Install Android SDK (cached on runner between runs)
+        run: |
+          SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
+          if [ ! -d "$SDK/platforms/android-34" ]; then
+            echo "Android SDK not found, installing..."
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
+            mkdir -p "$SDK/cmdline-tools"
+            unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
+            [ -d "$SDK/cmdline-tools/cmdline-tools" ] && mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+          else
+            echo "Android SDK cached, skipping install."
+          fi
+
       - name: Prepare Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
