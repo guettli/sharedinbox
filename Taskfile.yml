@@ -34,7 +34,7 @@ tasks:
     run: once
     deps: [_nix-check]
     preconditions:
-      - sh: test "${DIRENV_DIR#-}" = "{{.TASKFILE_DIR}}"
+      - sh: test -n "${IN_NIX_SHELL}"
         msg: "Not in nix dev shell. Run: nix develop"
     cmds:
       - scripts/silent_on_success.sh pre-commit install
@@ -367,6 +367,11 @@ tasks:
     cmds:
       - task: integration
       - task: integration-ui
+
+  ci-logs:
+    desc: "Fetch latest CI job logs from Codeberg. Usage: task ci-logs [RUN=8] [JOB=0]"
+    cmds:
+      - scripts/ci_logs.sh "{{.RUN}}" "{{.JOB}}"
 
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate

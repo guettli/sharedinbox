@@ -28,6 +28,20 @@
           gdk-pixbuf
           harfbuzz
         ];
+        fgj = pkgs.stdenv.mkDerivation {
+          pname = "fgj";
+          version = "0.4.0";
+          src = pkgs.fetchurl {
+            url = "https://codeberg.org/romaintb/fgj/releases/download/v0.4.0/fgj_linux_amd64";
+            sha256 = "07pia03facvvxq9i1dgl7p47ccv1iqj4drpkp45gvw26d4afkbj7";
+          };
+          dontUnpack = true;
+          installPhase = ''
+            mkdir -p $out/bin
+            cp $src $out/bin/fgj
+            chmod +x $out/bin/fgj
+          '';
+        };
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -68,10 +82,13 @@
             jq
             sqlite
             python3  # used by stalwart-dev/start to pick random ports
-            tea      # Gitea CLI
+            fgj      # Codeberg/Forgejo CLI (like gh for GitHub)
           ]);
 
           shellHook = ''
+            # nix develop --command does not set IN_NIX_SHELL; set it so _preflight passes in CI
+            export IN_NIX_SHELL=1
+
             # Disable Flutter telemetry inside dev shell
             export FLUTTER_SUPPRESS_ANALYTICS=true
 
