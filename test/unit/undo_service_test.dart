@@ -61,10 +61,10 @@ void main() {
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init(); // Wait for persistent load
 
-    notifier.pushAction(action1);
+    await notifier.pushAction(action1);
     expect(container.read(undoServiceProvider), [action1]);
 
-    notifier.pushAction(action2);
+    await notifier.pushAction(action2);
     expect(container.read(undoServiceProvider), [action1, action2]);
   });
 
@@ -91,8 +91,8 @@ void main() {
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
-    notifier.pushAction(action1);
-    notifier.pushAction(action2);
+    await notifier.pushAction(action1);
+    await notifier.pushAction(action2);
 
     await notifier.undo();
     expect(container.read(undoServiceProvider), [action1]);
@@ -126,8 +126,8 @@ void main() {
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
-    notifier.pushAction(action1);
-    notifier.pushAction(action2);
+    await notifier.pushAction(action1);
+    await notifier.pushAction(action2);
 
     await notifier.undo(actionId: '1');
     expect(container.read(undoServiceProvider), [action2]);
@@ -154,7 +154,7 @@ void main() {
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
-    notifier.pushAction(action);
+    await notifier.pushAction(action);
 
     await notifier.undo();
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
@@ -193,11 +193,93 @@ void main() {
 
     final notifier = container.read(undoServiceProvider.notifier);
     await notifier.init();
-    notifier.pushAction(action);
+    await notifier.pushAction(action);
 
     await notifier.undo();
 
     verify(mockEmailRepo.restoreEmails(any)).called(1);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
+  });
+
+  test('init loads persisted history from repository', () async {
+    final persisted = UndoAction(
+      id: '99',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e99'],
+      sourceMailboxPath: 'INBOX',
+    );
+
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => [persisted]);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    expect(container.read(undoServiceProvider), [persisted]);
+  });
+
+  test('pushAction after restart appends to persisted history', () async {
+    final persisted = UndoAction(
+      id: '1',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+    );
+    final newAction = UndoAction(
+      id: '2',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e2'],
+      sourceMailboxPath: 'INBOX',
+    );
+
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => [persisted]);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(newAction);
+
+    expect(container.read(undoServiceProvider), [persisted, newAction]);
+  });
+
+  test('pushAction concurrent with init waits for init to complete', () async {
+    final persisted = UndoAction(
+      id: '1',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+    );
+    final raced = UndoAction(
+      id: '2',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e2'],
+      sourceMailboxPath: 'INBOX',
+    );
+
+    // Simulate slow DB load
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer(
+      (_) => Future.delayed(
+        const Duration(milliseconds: 10),
+        () => [persisted],
+      ),
+    );
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    final initFuture = notifier.init();
+    // pushAction issued before init completes — it must still see persisted history
+    final pushFuture = notifier.pushAction(raced);
+
+    await Future.wait([initFuture, pushFuture]);
+
+    expect(container.read(undoServiceProvider), [persisted, raced]);
   });
 }

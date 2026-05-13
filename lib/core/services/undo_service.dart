@@ -10,12 +10,19 @@ class UndoService extends StateNotifier<List<UndoAction>> {
   final Ref _ref;
   static const int _maxHistory = 10;
 
+  // Resolves once init() has loaded persisted history. Default to an already-
+  // resolved future so operations are safe even if init() is never called.
+  Future<void> _ready = Future.value();
+
   Future<void> init() async {
-    final repo = _ref.read(undoRepositoryProvider);
-    state = await repo.getHistory();
+    _ready = _ref.read(undoRepositoryProvider).getHistory().then((history) {
+      if (mounted) state = history;
+    });
+    await _ready;
   }
 
-  void pushAction(UndoAction action) {
+  Future<void> pushAction(UndoAction action) async {
+    await _ready;
     final newList = [...state, action];
     if (newList.length > _maxHistory) {
       final removed = newList.removeAt(0);
@@ -25,12 +32,14 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     unawaited(_ref.read(undoRepositoryProvider).saveAction(action));
   }
 
-  void clear() {
+  Future<void> clear() async {
+    await _ready;
     state = [];
     unawaited(_ref.read(undoRepositoryProvider).clearHistory());
   }
 
   Future<void> undo({String? actionId}) async {
+    await _ready;
     if (state.isEmpty) return;
 
     final UndoAction action;

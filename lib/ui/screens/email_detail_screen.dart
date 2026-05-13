@@ -123,17 +123,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   final destPath = await repo.deleteEmail(widget.emailId);
 
                   if (header != null) {
-                    ref.read(undoServiceProvider.notifier).pushAction(
-                          UndoAction(
-                            id: DateTime.now().toIso8601String(),
-                            accountId: header.accountId,
-                            type: UndoType.delete,
-                            emailIds: [widget.emailId],
-                            sourceMailboxPath: header.mailboxPath,
-                            destinationMailboxPath: destPath,
-                            originalEmails: [header],
+                    unawaited(
+                      ref.read(undoServiceProvider.notifier).pushAction(
+                            UndoAction(
+                              id: DateTime.now().toIso8601String(),
+                              accountId: header.accountId,
+                              type: UndoType.delete,
+                              emailIds: [widget.emailId],
+                              sourceMailboxPath: header.mailboxPath,
+                              destinationMailboxPath: destPath,
+                              originalEmails: [header],
+                            ),
                           ),
-                        );
+                    );
                   }
 
                   if (context.mounted) context.pop();
@@ -354,16 +356,18 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
 
-    ref.read(undoServiceProvider.notifier).pushAction(
-          UndoAction(
-            id: DateTime.now().toIso8601String(),
-            accountId: header.accountId,
-            type: UndoType.move,
-            emailIds: [widget.emailId],
-            sourceMailboxPath: header.mailboxPath,
-            destinationMailboxPath: chosen,
+    unawaited(
+      ref.read(undoServiceProvider.notifier).pushAction(
+            UndoAction(
+              id: DateTime.now().toIso8601String(),
+              accountId: header.accountId,
+              type: UndoType.move,
+              emailIds: [widget.emailId],
+              sourceMailboxPath: header.mailboxPath,
+              destinationMailboxPath: chosen,
+            ),
           ),
-        );
+    );
 
     if (context.mounted) context.pop();
   }
@@ -384,7 +388,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       sourceMailboxPath: header.mailboxPath,
       originalEmails: [header],
     );
-    ref.read(undoServiceProvider.notifier).pushAction(action);
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
     await repo.snoozeEmail(widget.emailId, until);
 
     if (context.mounted) {

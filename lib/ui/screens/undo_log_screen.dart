@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -22,7 +24,8 @@ class UndoLogScreen extends ConsumerWidget {
             tooltip: 'Clear history',
             onPressed: history.isEmpty
                 ? null
-                : () => ref.read(undoServiceProvider.notifier).clear(),
+                : () =>
+                    unawaited(ref.read(undoServiceProvider.notifier).clear()),
           ),
         ],
       ),

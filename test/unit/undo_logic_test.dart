@@ -109,7 +109,7 @@ void main() {
       sourceMailboxPath: 'INBOX',
       originalEmails: [original!],
     );
-    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).pushAction(action);
     await container.read(undoServiceProvider.notifier).undo();
 
     // 3. Verify it is back in Inbox
@@ -190,7 +190,7 @@ void main() {
       emailIds: [emailId],
       sourceMailboxPath: 'INBOX',
     );
-    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).pushAction(action);
     await container.read(undoServiceProvider.notifier).undo();
 
     // 3. Verify it is back in Inbox
@@ -230,7 +230,7 @@ void main() {
         destinationMailboxPath: destPath,
         originalEmails: [original!],
       );
-      container.read(undoServiceProvider.notifier).pushAction(action);
+      await container.read(undoServiceProvider.notifier).pushAction(action);
       await container.read(undoServiceProvider.notifier).undo();
 
       // 4. Verify local state
@@ -273,7 +273,7 @@ void main() {
       sourceMailboxPath: 'INBOX',
       originalEmails: [original!],
     );
-    container.read(undoServiceProvider.notifier).pushAction(action);
+    await container.read(undoServiceProvider.notifier).pushAction(action);
     await container.read(undoServiceProvider.notifier).undo();
 
     // 3. Verify it is back in Inbox and metadata is cleared

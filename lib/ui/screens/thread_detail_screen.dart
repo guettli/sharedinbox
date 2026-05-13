@@ -256,17 +256,19 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
       final destPath = await repo.deleteEmail(widget.email.id);
 
       if (original != null) {
-        ref.read(undoServiceProvider.notifier).pushAction(
-              UndoAction(
-                id: DateTime.now().toIso8601String(),
-                accountId: widget.email.accountId,
-                type: UndoType.delete,
-                emailIds: [widget.email.id],
-                sourceMailboxPath: widget.email.mailboxPath,
-                destinationMailboxPath: destPath,
-                originalEmails: [original],
+        unawaited(
+          ref.read(undoServiceProvider.notifier).pushAction(
+                UndoAction(
+                  id: DateTime.now().toIso8601String(),
+                  accountId: widget.email.accountId,
+                  type: UndoType.delete,
+                  emailIds: [widget.email.id],
+                  sourceMailboxPath: widget.email.mailboxPath,
+                  destinationMailboxPath: destPath,
+                  originalEmails: [original],
+                ),
               ),
-            );
+        );
       }
     }
   }

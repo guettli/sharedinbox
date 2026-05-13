@@ -331,7 +331,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       destinationMailboxPath: mailbox.path,
       originalEmails: originalEmails,
     );
-    ref.read(undoServiceProvider.notifier).pushAction(action);
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
   Future<void> _batchArchive() =>
@@ -364,7 +364,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       destinationMailboxPath: lastDestPath,
       originalEmails: originalEmails,
     );
-    ref.read(undoServiceProvider.notifier).pushAction(action);
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
   Future<void> _batchMarkSpam() =>
@@ -426,7 +426,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       destinationMailboxPath: chosen,
       originalEmails: originalEmails,
     );
-    ref.read(undoServiceProvider.notifier).pushAction(action);
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
   Future<void> _batchSnooze() async {
@@ -458,7 +458,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       sourceMailboxPath: widget.mailboxPath,
       originalEmails: originalEmails,
     );
-    ref.read(undoServiceProvider.notifier).pushAction(action);
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
 
     if (!mounted) return;
 
@@ -609,7 +609,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 destinationMailboxPath: archive.path,
                 originalEmails: originalEmails,
               );
-              ref.read(undoServiceProvider.notifier).pushAction(action);
+              unawaited(
+                ref.read(undoServiceProvider.notifier).pushAction(action),
+              );
             } else {
               String? lastDestPath;
               for (final id in t.emailIds) {
@@ -625,7 +627,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 destinationMailboxPath: lastDestPath,
                 originalEmails: originalEmails,
               );
-              ref.read(undoServiceProvider.notifier).pushAction(action);
+              unawaited(
+                ref.read(undoServiceProvider.notifier).pushAction(action),
+              );
             }
           },
           child: tile,
