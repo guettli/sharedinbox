@@ -11,12 +11,16 @@ jobs:
   deploy:
     name: Build & Deploy Website
     runs-on: self-hosted
-    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Enable Nix flakes
+        run: |
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Setup SSH
         env:

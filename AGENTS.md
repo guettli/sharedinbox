@@ -1,10 +1,8 @@
-# SharedInbox Flutter — Agent Guide
+# SharedInbox — Development Guide
 
 ## Code conventions
 
-- No `if` chains where a pattern/match or data-driven approach works.
-- Fail loudly — `throw StateError(...)` beats silent fallbacks.
-- New source files go under `lib/core/` (interfaces/models), `lib/data/` (implementations), or `lib/ui/` (screens/widgets).
+- Avoid `else`, use "early return".
 
 ## Drift (DB)
 
@@ -12,14 +10,15 @@
 - After any schema change run: `dart run build_runner build --delete-conflicting-outputs`
 - Generated `database.g.dart` is committed — do not hand-edit it.
 
-## enough_mail (vendored)
+## enough_mail
 
-- Located at `packages/enough_mail/` — edit freely.
+- Standard pub dependency (`enough_mail: ^2.1.7` in `pubspec.yaml`) — not vendored.
 - IMAP client helpers are in `lib/data/imap/imap_client_factory.dart`.
 
 ## Running
 
-Flutter build dependencies (libgtk-3-dev, libepoxy-dev, libsecret-1-dev, etc.) are installed via apt — see the Flutter Linux docs. The nix dev shell provides only tools: `task`, `fvm`, `stalwart-mail`.
+Flutter build dependencies (libgtk-3-dev, libepoxy-dev, libsecret-1-dev, etc.) are installed via apt
+— see the Flutter Linux docs. The nix dev shell provides only tools: `task`, `fvm`, `stalwart-mail`.
 
 Enter the nix dev shell first: `nix develop`
 
@@ -38,4 +37,12 @@ task test
 
 1. Create `lib/ui/screens/my_screen.dart`.
 2. Add a `GoRoute` in `lib/ui/router.dart`.
-3. No separate ViewModel file needed — use `ConsumerWidget` / `ConsumerStatefulWidget` directly with Riverpod providers.
+3. No separate ViewModel file needed — use `ConsumerWidget` / `ConsumerStatefulWidget` directly with
+   Riverpod providers.
+
+## Continuous Integration (CI)
+
+*   **Strategy:** "Thin CI, Heavy Taskfile".
+*   **Execution:** CI must only invoke `task` commands (e.g., `nix develop --command task check`).
+    All environment setup is handled by Nix (`flake.nix`), and all task orchestration is handled by
+    `Taskfile.yml`.
