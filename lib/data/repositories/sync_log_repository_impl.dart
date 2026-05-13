@@ -99,4 +99,14 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
       return entries;
     });
   }
+
+  @override
+  Stream<String?> observeLastError(String accountId) {
+    return (_db.select(_db.syncLogs)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.desc(t.startedAt)])
+          ..limit(1))
+        .watchSingleOrNull()
+        .map((row) => (row?.result == 'error') ? row?.errorMessage : null);
+  }
 }

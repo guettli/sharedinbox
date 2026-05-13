@@ -65,6 +65,10 @@ abstract class SyncLogRepository {
   });
 
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId);
+
+  /// Emits the error message of the most recent sync attempt for [accountId],
+  /// or null when the last sync succeeded (or no syncs have run yet).
+  Stream<String?> observeLastError(String accountId);
 }
 
 class NoOpSyncLogRepository implements SyncLogRepository {
@@ -90,4 +94,7 @@ class NoOpSyncLogRepository implements SyncLogRepository {
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
       Stream.value([]);
+
+  @override
+  Stream<String?> observeLastError(String accountId) => Stream.value(null);
 }

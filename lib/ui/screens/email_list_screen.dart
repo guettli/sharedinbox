@@ -35,6 +35,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   bool _searchLoading = false;
   bool get _searching => _searchController.text.isNotEmpty;
 
+  // Error banner — tracks the last error message that the user dismissed.
+  String? _dismissedError;
+
   // Thread-level selection (key = threadId).
   final Set<String> _selectedThreadIds = {};
   // Last-emitted thread list, used to resolve emailIds for batch operations.
@@ -131,9 +134,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               currentMailboxPath: widget.mailboxPath,
             ),
       bottomNavigationBar: _selecting ? _selectionBottomBar() : null,
-      body: (_searchResults != null || _searchLoading)
-          ? _buildSearchBody()
-          : _buildStreamBody(repo),
+      body: Column(
+        children: [
+          _buildSyncErrorBanner(),
+          Expanded(
+            child: (_searchResults != null || _searchLoading)
+                ? _buildSearchBody()
+                : _buildStreamBody(repo),
+          ),
+        ],
+      ),
     );
   }
 
@@ -265,6 +275,39 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return const Center(child: Text('No results'));
     }
     return _buildEmailList(_searchResults!);
+  }
+
+  Widget _buildSyncErrorBanner() {
+    final errorAsync = ref.watch(syncLastErrorProvider(widget.accountId));
+    final error = errorAsync.valueOrNull;
+    if (error == null || error == _dismissedError) {
+      return const SizedBox.shrink();
+    }
+    return MaterialBanner(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      content: Text(
+        error,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      leading: Icon(
+        Icons.sync_problem,
+        color: Theme.of(context).colorScheme.error,
+      ),
+      backgroundColor: Theme.of(context).colorScheme.errorContainer,
+      actions: [
+        TextButton(
+          onPressed: () {
+            ref.read(syncManagerProvider).syncNow(widget.accountId);
+          },
+          child: const Text('Retry'),
+        ),
+        TextButton(
+          onPressed: () => setState(() => _dismissedError = error),
+          child: const Text('Dismiss'),
+        ),
+      ],
+    );
   }
 
   Widget _buildStreamBody(EmailRepository emailRepo) {

@@ -85,6 +85,11 @@ final syncLogRepositoryProvider = Provider((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
 });
 
+final syncLastErrorProvider =
+    StreamProvider.autoDispose.family<String?, String>((ref, accountId) {
+  return ref.watch(syncLogRepositoryProvider).observeLastError(accountId);
+});
+
 final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
   final runner = ReliabilityRunner(
     ref.watch(dbProvider),

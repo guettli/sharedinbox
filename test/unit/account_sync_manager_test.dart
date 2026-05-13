@@ -132,6 +132,9 @@ class FakeSyncLogRepository implements SyncLogRepository {
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
       Stream.value([]);
+
+  @override
+  Stream<String?> observeLastError(String accountId) => Stream.value(null);
 }
 
 class FakeMailboxRepositoryWithInbox implements MailboxRepository {
