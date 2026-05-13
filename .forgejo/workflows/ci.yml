@@ -39,6 +39,4 @@ jobs:
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Build Linux
-        # The Taskfile task 'build-linux' currently builds --debug.
-        # You can add a 'build-linux-release' task or override it here.
-        run: nix develop --command fvm flutter build linux --release
+        run: nix develop --command task build-linux-release
