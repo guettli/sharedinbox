@@ -279,7 +279,7 @@ tasks:
 
   build-android-bundle:
     desc: Build a release App Bundle (AAB)
-    deps: [_preflight, _android-sdk-check, _pub-get, generate-changelog]
+    deps: [_preflight, _android-sdk-check, _codegen, generate-changelog]
     method: timestamp
     sources:
       - lib/**/*.dart
