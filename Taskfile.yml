@@ -334,7 +334,7 @@ tasks:
       HUGO_PARAMS_GITVERSION:
         sh: git rev-parse --short HEAD
     cmds:
-      - nix develop --command hugo --source website --minify
+      - hugo --source website --minify
 
   website-verify:
     desc: Check that the deployed site serves the current git version
