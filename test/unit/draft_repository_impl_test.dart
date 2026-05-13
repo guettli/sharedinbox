@@ -1,8 +1,24 @@
 import 'package:flutter_test/flutter_test.dart';
-
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 
 import 'db_test_helper.dart';
+
+class _StubAccounts implements AccountRepository {
+  @override
+  Stream<List<Account>> observeAccounts() => const Stream.empty();
+  @override
+  Future<Account?> getAccount(String id) async => null;
+  @override
+  Future<void> addAccount(Account account, String password) async {}
+  @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+  @override
+  Future<void> removeAccount(String id) async {}
+  @override
+  Future<String> getPassword(String accountId) async => '';
+}
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -11,7 +27,7 @@ void main() {
     test(
       'saveDraft creates a new row and returns it with a non-zero id',
       () async {
-        final repo = DraftRepositoryImpl(openTestDatabase());
+        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
         final draft = await repo.saveDraft(
           toText: 'bob@example.com',
           ccText: '',
@@ -25,7 +41,7 @@ void main() {
     );
 
     test('saveDraft with id updates existing row', () async {
-      final repo = DraftRepositoryImpl(openTestDatabase());
+      final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
       final created = await repo.saveDraft(
         toText: 'a@example.com',
         ccText: '',
@@ -47,19 +63,19 @@ void main() {
     });
 
     test('getDraft returns null for unknown id', () async {
-      final repo = DraftRepositoryImpl(openTestDatabase());
+      final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
       expect(await repo.getDraft(99999), isNull);
     });
 
     test('findDraft returns null when no draft exists', () async {
-      final repo = DraftRepositoryImpl(openTestDatabase());
+      final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
       expect(await repo.findDraft(), isNull);
     });
 
     test(
       'findDraft returns most recent draft for matching replyToEmailId',
       () async {
-        final repo = DraftRepositoryImpl(openTestDatabase());
+        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
         await repo.saveDraft(
           replyToEmailId: 'email-1',
           toText: 'a@example.com',
@@ -83,7 +99,7 @@ void main() {
     test(
       'findDraft with null replyToEmailId finds new-message drafts',
       () async {
-        final repo = DraftRepositoryImpl(openTestDatabase());
+        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
         // This draft is a reply and should NOT be returned.
         await repo.saveDraft(
           replyToEmailId: 'email-1',
@@ -104,7 +120,7 @@ void main() {
     );
 
     test('deleteDraft removes the row', () async {
-      final repo = DraftRepositoryImpl(openTestDatabase());
+      final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
       final draft = await repo.saveDraft(
         toText: 'a@example.com',
         ccText: '',

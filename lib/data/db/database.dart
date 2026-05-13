@@ -230,6 +230,8 @@ class Drafts extends Table {
   TextColumn get subjectText => text().withDefault(const Constant(''))();
   TextColumn get bodyText => text().withDefault(const Constant(''))();
   DateTimeColumn get updatedAt => dateTime()();
+  // Added in schema v24: IMAP UID string ("mailbox:uid") on the server.
+  TextColumn get imapServerId => text().nullable()();
 }
 
 @DataClassName('UndoActionRow')
@@ -267,7 +269,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 23;
+  int get schemaVersion => 24;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -425,6 +427,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 23) {
             await m.addColumn(emails, emails.listUnsubscribeHeader);
+          }
+          if (from >= 4 && from < 24) {
+            await m.addColumn(drafts, drafts.imapServerId);
           }
         },
       );

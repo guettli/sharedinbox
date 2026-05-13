@@ -21,4 +21,10 @@ abstract class DraftRepository {
 
   /// Permanently removes the draft with [id].
   Future<void> deleteDraft(int id);
+
+  /// Syncs local drafts with the server IMAP Drafts folder for [accountId].
+  /// Uploads local drafts that have no [SavedDraft.imapServerId]; imports
+  /// server drafts that are not already tracked locally.
+  /// No-op when the implementation has no IMAP connection configured.
+  Future<void> syncDrafts(String accountId, String password);
 }

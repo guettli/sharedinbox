@@ -7,6 +7,7 @@ class SavedDraft {
   final String subjectText;
   final String bodyText;
   final DateTime updatedAt;
+  final String? imapServerId;
 
   const SavedDraft({
     required this.id,
@@ -17,5 +18,6 @@ class SavedDraft {
     required this.subjectText,
     required this.bodyText,
     required this.updatedAt,
+    this.imapServerId,
   });
 }

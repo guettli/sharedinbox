@@ -114,6 +114,9 @@ class FakeDraftRepository implements DraftRepository {
 
   @override
   Future<void> deleteDraft(int id) async => _drafts.remove(id);
+
+  @override
+  Future<void> syncDrafts(String accountId, String password) async {}
 }
 
 class FakeMailboxRepository implements MailboxRepository {

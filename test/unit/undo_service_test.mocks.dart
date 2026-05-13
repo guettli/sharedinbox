@@ -452,6 +452,16 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
           ),
         )),
       ) as _i4.Future<_i2.ReliabilityResult>);
+
+  @override
+  _i4.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
+        Invocation.method(
+          #clearForResync,
+          [accountId],
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
 }
 
 /// A class which mocks [UndoRepository].

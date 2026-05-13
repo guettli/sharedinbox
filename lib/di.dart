@@ -65,7 +65,11 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
 });
 
 final draftRepositoryProvider = Provider<DraftRepository>((ref) {
-  return DraftRepositoryImpl(ref.watch(dbProvider));
+  return DraftRepositoryImpl(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+  );
 });
 
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
@@ -117,6 +121,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     ref.watch(emailRepositoryProvider),
     syncLog: ref.watch(syncLogRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    drafts: ref.watch(draftRepositoryProvider),
   );
   ref.onDispose(manager.dispose);
   return manager;

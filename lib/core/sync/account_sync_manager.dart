@@ -4,6 +4,7 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -22,14 +23,17 @@ class AccountSyncManager {
     this._emails, {
     ImapConnectFn imapConnect = connectImap,
     SyncLogRepository syncLog = const NoOpSyncLogRepository(),
+    DraftRepository? drafts,
   })  : _imapConnect = imapConnect,
-        _syncLog = syncLog;
+        _syncLog = syncLog,
+        _drafts = drafts;
 
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
+  final DraftRepository? _drafts;
 
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
@@ -53,6 +57,7 @@ class AccountSyncManager {
               _emails,
               _imapConnect,
               _syncLog,
+              _drafts,
             ),
           AccountType.jmap => _JmapAccountSync(
               account,
@@ -113,6 +118,7 @@ class AccountSyncManager {
           _emails,
           _imapConnect,
           _syncLog,
+          _drafts,
         ),
       AccountType.jmap => _JmapAccountSync(
           account,
@@ -145,6 +151,7 @@ class _AccountSync implements _SyncLoop {
     this._emails,
     this._imapConnect,
     this._syncLog,
+    this._drafts,
   );
 
   final Account account;
@@ -153,6 +160,7 @@ class _AccountSync implements _SyncLoop {
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
+  final DraftRepository? _drafts;
 
   imap.ImapClient? _idleClient;
   bool _running = false;
@@ -278,6 +286,8 @@ class _AccountSync implements _SyncLoop {
 
   Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
+
+    await _drafts?.syncDrafts(account.id, password);
 
     // Check for expired snoozes and move them back to Inbox before syncing.
     await _emails.wakeUpEmails(account.id);
