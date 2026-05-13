@@ -408,7 +408,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _field(_passwordCtrl, 'Password', obscure: true),
             const Divider(height: 32),
             Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
-            _field(_imapHostCtrl, 'Host'),
+            _field(_imapHostCtrl, 'Host', validator: validateHostname),
             _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
             if (isLocalhost(_imapHostCtrl.text.trim()))
               SwitchListTile(
@@ -418,7 +418,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
-            _field(_smtpHostCtrl, 'Host'),
+            _field(_smtpHostCtrl, 'Host', validator: validateHostname),
             _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
             if (isLocalhost(_smtpHostCtrl.text.trim()))
               SwitchListTile(
@@ -475,6 +475,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     bool obscure = false,
     bool required = true,
     TextInputType? keyboardType,
+    String? Function(String?)? validator,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -486,9 +487,10 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           labelText: label,
           border: const OutlineInputBorder(),
         ),
-        validator: required
-            ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-            : null,
+        validator: validator ??
+            (required
+                ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+                : null),
       ),
     );
   }

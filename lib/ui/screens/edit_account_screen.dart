@@ -324,11 +324,11 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 'IMAP (SSL/TLS)',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
-              _field(_imapHostCtrl, 'Host'),
+              _field(_imapHostCtrl, 'Host', validator: validateHostname),
               _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
-              _field(_smtpHostCtrl, 'Host'),
+              _field(_smtpHostCtrl, 'Host', validator: validateHostname),
               _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
               if (isLocalhost(_smtpHostCtrl.text.trim()))
                 SwitchListTile(
@@ -348,6 +348,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                     _sieveHostCtrl,
                     'Host (leave blank to use IMAP host)',
                     required: false,
+                    validator: validateOptionalHostname,
                   ),
                   _field(
                     _sievePortCtrl,
@@ -408,6 +409,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     bool obscure = false,
     bool required = true,
     TextInputType? keyboardType,
+    String? Function(String?)? validator,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -420,9 +422,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
           labelText: label,
           border: const OutlineInputBorder(),
         ),
-        validator: required
-            ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-            : null,
+        validator: validator ??
+            (required
+                ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+                : null),
       ),
     );
   }
