@@ -21,6 +21,8 @@ class Email {
   final String? references;
   final DateTime? snoozedUntil;
   final String? snoozedFromMailboxPath;
+  // RFC 2369 List-Unsubscribe header value, e.g. "<mailto:...>, <https://...>".
+  final String? listUnsubscribeHeader;
 
   const Email({
     required this.id,
@@ -43,6 +45,7 @@ class Email {
     this.references,
     this.snoozedUntil,
     this.snoozedFromMailboxPath,
+    this.listUnsubscribeHeader,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -77,6 +80,7 @@ class Email {
           ? DateTime.parse(json['snoozedUntil'] as String)
           : null,
       snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
+      listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
     );
   }
 
@@ -102,6 +106,7 @@ class Email {
       'references': references,
       'snoozedUntil': snoozedUntil?.toIso8601String(),
       'snoozedFromMailboxPath': snoozedFromMailboxPath,
+      'listUnsubscribeHeader': listUnsubscribeHeader,
     };
   }
 
@@ -126,6 +131,7 @@ class Email {
     String? references,
     DateTime? snoozedUntil,
     String? snoozedFromMailboxPath,
+    String? listUnsubscribeHeader,
   }) {
     return Email(
       id: id ?? this.id,
@@ -149,6 +155,8 @@ class Email {
       snoozedUntil: snoozedUntil ?? this.snoozedUntil,
       snoozedFromMailboxPath:
           snoozedFromMailboxPath ?? this.snoozedFromMailboxPath,
+      listUnsubscribeHeader:
+          listUnsubscribeHeader ?? this.listUnsubscribeHeader,
     );
   }
 }

@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 
@@ -267,6 +268,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             _dateFmt.format(email.sentAt!),
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
+        if (email.listUnsubscribeHeader != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _UnsubscribeChip(header: email.listUnsubscribeHeader!),
+          ),
       ],
     );
   }
@@ -458,6 +464,39 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Parses a List-Unsubscribe header and returns the first usable URI.
+/// Prefers mailto: so unsubscribing sends an email; falls back to https:.
+Uri? _parseUnsubscribeUri(String header) {
+  final matches = RegExp(r'<([^>]+)>').allMatches(header);
+  Uri? fallback;
+  for (final m in matches) {
+    final raw = m.group(1)!.trim();
+    final uri = Uri.tryParse(raw);
+    if (uri == null) continue;
+    if (uri.scheme == 'mailto') return uri;
+    if ((uri.scheme == 'https' || uri.scheme == 'http') && fallback == null) {
+      fallback = uri;
+    }
+  }
+  return fallback;
+}
+
+class _UnsubscribeChip extends StatelessWidget {
+  const _UnsubscribeChip({required this.header});
+  final String header;
+
+  @override
+  Widget build(BuildContext context) {
+    final uri = _parseUnsubscribeUri(header);
+    if (uri == null) return const SizedBox.shrink();
+    return ActionChip(
+      avatar: const Icon(Icons.unsubscribe_outlined, size: 16),
+      label: const Text('Unsubscribe'),
+      onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
     );
   }
 }

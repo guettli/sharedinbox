@@ -88,6 +88,9 @@ class Emails extends Table {
   DateTimeColumn get snoozedUntil => dateTime().nullable()();
   TextColumn get snoozedFromMailboxPath => text().nullable()();
 
+  // Added in schema v23: RFC 2369 List-Unsubscribe header value.
+  TextColumn get listUnsubscribeHeader => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -264,7 +267,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 22;
+  int get schemaVersion => 23;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -419,6 +422,9 @@ class AppDatabase extends _$AppDatabase {
                 'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (account_id, snoozed_until) WHERE snoozed_until IS NOT NULL;',
               ),
             );
+          }
+          if (from < 23) {
+            await m.addColumn(emails, emails.listUnsubscribeHeader);
           }
         },
       );

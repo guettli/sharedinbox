@@ -528,7 +528,7 @@ class EmailRepositoryImpl implements EmailRepository {
     imap.MessageSequence sequence,
   ) async {
     const fetchItems =
-        '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES)])';
+        '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -569,6 +569,7 @@ class EmailRepositoryImpl implements EmailRepository {
         final msgId = envelope.messageId?.trim();
         final inReplyTo = envelope.inReplyTo?.trim();
         final refs = msg.getHeaderValue('References')?.trim();
+        final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
         final threadId = _computeThreadId(
               emailId: emailId,
               messageId: msgId,
@@ -612,6 +613,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 inReplyTo: Value(inReplyTo),
                 references: Value(refs),
                 snoozedUntil: Value(snoozedUntil),
+                listUnsubscribeHeader: Value(listUnsubscribe),
               ),
             );
       }
@@ -950,6 +952,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'htmlBody',
     'bodyValues',
     'attachments',
+    'header:List-Unsubscribe:asText',
   ];
 
   static const _emailGetBodyOptions = {
@@ -1151,6 +1154,8 @@ class EmailRepositoryImpl implements EmailRepository {
       final jmapReferences = _joinJmapStringList(
         m['references'] as List<dynamic>?,
       );
+      final jmapListUnsubscribe =
+          (m['header:List-Unsubscribe:asText'] as String?)?.trim();
 
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -1173,6 +1178,7 @@ class EmailRepositoryImpl implements EmailRepository {
               inReplyTo: Value(jmapInReplyTo),
               references: Value(jmapReferences),
               snoozedUntil: Value(snoozedUntil),
+              listUnsubscribeHeader: Value(jmapListUnsubscribe),
             ),
           );
 
@@ -2663,6 +2669,7 @@ class EmailRepositoryImpl implements EmailRepository {
       references: row.references,
       snoozedUntil: row.snoozedUntil,
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
+      listUnsubscribeHeader: row.listUnsubscribeHeader,
     );
   }
 
