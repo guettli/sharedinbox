@@ -28,7 +28,7 @@ jobs:
     name: Build Linux Release
     runs-on: self-hosted
     needs: check
-    if: github.ref == 'refs/heads/main'
+    if: gitea.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4

@@ -14,5 +14,10 @@ theme = 'PaperMod'
         Content = "The modern IMAP/SMTP email client for your desktop and mobile."
 
     [[params.socialIcons]]
-        name = "github"
+        name = "codeberg"
         url = "https://codeberg.org/guettli/sharedinbox"
+
+[[menu.main]]
+    name = "Privacy Policy"
+    url = "/privacy/"
+    weight = 10

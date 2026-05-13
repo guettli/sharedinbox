@@ -143,7 +143,7 @@ Run them locally:
 task test-widget   # or: flutter test test/widget/
 ```
 
-They also run in CI on every push (see the **Widget tests** step in `.github/workflows/ci.yml`).
+They also run in CI on every push (see the **Widget tests** step in `.forgejo/workflows/ci.yml`).
 
 ### After changing the DB schema
 
