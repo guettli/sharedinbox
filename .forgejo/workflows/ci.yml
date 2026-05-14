@@ -8,8 +8,8 @@ on:
 jobs:
   check:
     name: Full Project Check
-    # Match the label of your self-hosted runner
     runs-on: self-hosted
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -19,10 +19,24 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
-      - name: Run Full Check Suite
-        # Using nix develop ensures the runner doesn't need flutter/dart/stalwart installed globally.
-        # 'task check' runs analyze, unit tests, widget tests, and integration tests.
-        run: nix develop --command task check
+      - name: Analyze
+        run: nix develop --command task analyze
+
+      - name: Unit + Widget tests
+        run: nix develop --command task test
+
+      - name: Build Linux
+        run: nix develop --command task build-linux
+
+      - name: Integration tests
+        run: nix develop --command task integration
+
+      - name: UI E2E tests
+        timeout-minutes: 6
+        run: nix develop --command task integration-ui
+
+      - name: Coverage gate
+        run: nix develop --command task coverage
 
   build-linux:
     name: Build Linux Release
