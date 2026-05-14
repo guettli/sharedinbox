@@ -1448,7 +1448,8 @@ class EmailRepositoryImpl implements EmailRepository {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
-        .getSingle();
+        .getSingleOrNull();
+    if (row == null) return;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
@@ -1582,7 +1583,8 @@ class EmailRepositoryImpl implements EmailRepository {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
-        .getSingle();
+        .getSingleOrNull();
+    if (row == null) return;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     if (row.mailboxPath == destMailboxPath) {
@@ -1650,7 +1652,8 @@ class EmailRepositoryImpl implements EmailRepository {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
-        .getSingle();
+        .getSingleOrNull();
+    if (row == null) return null;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
