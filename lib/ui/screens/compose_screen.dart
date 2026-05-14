@@ -412,7 +412,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               ? text.substring(lastComma + 1).trim()
               : text.trim();
           if (token.length < 2) return const [];
-          return ref.read(emailRepositoryProvider).searchAddresses(null, token);
+          final results = await ref
+              .read(emailRepositoryProvider)
+              .searchAddresses(null, token);
+          // Guard: if focus left the field while the query was running,
+          // return empty so RawAutocomplete doesn't call show() after hide()
+          // has already been called — that races into an assertion in overlay.dart.
+          if (!focusNode.hasFocus) return const [];
+          return results;
         },
         fieldViewBuilder: (ctx, fieldCtrl, fieldFocusNode, onFieldSubmitted) {
           return TextFormField(

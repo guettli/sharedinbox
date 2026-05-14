@@ -69,6 +69,7 @@ void main() {
   });
 
   test('undo pops history and updates state', () async {
+    // action1 has no destinationMailboxPath → no inverse action pushed.
     final action1 = UndoAction(
       id: '1',
       accountId: 'acc1',
@@ -76,12 +77,14 @@ void main() {
       emailIds: ['e1'],
       sourceMailboxPath: 'INBOX',
     );
+    // action2 has a destinationMailboxPath → inverse action IS pushed after undo.
     final action2 = UndoAction(
       id: '2',
       accountId: 'acc1',
       type: UndoType.delete,
       emailIds: ['e2'],
       sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Trash',
     );
 
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
@@ -94,16 +97,87 @@ void main() {
     await notifier.pushAction(action1);
     await notifier.pushAction(action2);
 
+    // Undo action2 (delete); a reverse move action is pushed in its place.
     await notifier.undo();
-    expect(container.read(undoServiceProvider), [action1]);
+    final stateAfterUndo2 = container.read(undoServiceProvider);
+    expect(stateAfterUndo2.length, 2);
+    expect(stateAfterUndo2[0].id, '1');
+    expect(stateAfterUndo2[1].id, '2-inv');
+    expect(stateAfterUndo2[1].sourceMailboxPath, 'Trash');
+    expect(stateAfterUndo2[1].destinationMailboxPath, 'INBOX');
     verify(mockEmailRepo.moveEmail('e2', 'INBOX')).called(1);
 
-    await notifier.undo();
-    expect(container.read(undoServiceProvider), isEmpty);
+    // Undo action1 (no dest → no inverse); log shrinks to just the inverse.
+    await notifier.undo(actionId: '1');
+    final stateAfterUndo1 = container.read(undoServiceProvider);
+    expect(stateAfterUndo1.length, 1);
+    expect(stateAfterUndo1[0].id, '2-inv');
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 
+  test('undo pushes inverse action into log when destinationMailboxPath is set',
+      () async {
+    final action = UndoAction(
+      id: 'del1',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Trash',
+    );
+
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+    await notifier.undo(actionId: 'del1');
+
+    final log = container.read(undoServiceProvider);
+    expect(log.length, 1);
+    final inv = log.first;
+    expect(inv.id, 'del1-inv');
+    expect(inv.type, UndoType.move);
+    expect(inv.emailIds, ['e1']);
+    expect(inv.sourceMailboxPath, 'Trash');
+    expect(inv.destinationMailboxPath, 'INBOX');
+    verify(
+      mockUndoRepo.saveAction(
+        argThat(predicate<UndoAction>((a) => a.id == 'del1-inv')),
+      ),
+    ).called(1);
+  });
+
+  test('undo without destinationMailboxPath does not push inverse action',
+      () async {
+    final action = UndoAction(
+      id: 'mv1',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      // no destinationMailboxPath
+    );
+
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+    await notifier.undo(actionId: 'mv1');
+
+    final log = container.read(undoServiceProvider);
+    expect(log, isEmpty);
+  });
+
   test('undo with actionId removes and undos specific action', () async {
+    // action1 has no destination → no inverse action
     final action1 = UndoAction(
       id: '1',
       accountId: 'acc1',
@@ -129,6 +203,7 @@ void main() {
     await notifier.pushAction(action1);
     await notifier.pushAction(action2);
 
+    // action1 has no destinationMailboxPath → no inverse pushed, so action2 remains.
     await notifier.undo(actionId: '1');
     expect(container.read(undoServiceProvider), [action2]);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);

@@ -96,5 +96,26 @@ class UndoService extends StateNotifier<List<UndoAction>> {
         // Best effort.
       }
     }
+
+    // Add a reverse action so the undo log always retains a record and the
+    // user can re-apply the original operation. sourceMailboxPath on the
+    // inverse is the original destination (e.g. Trash) so that undoing the
+    // inverse moves emails back there; destinationMailboxPath records where
+    // they are now (the original source, e.g. INBOX).
+    final inverseDest = action.destinationMailboxPath;
+    if (inverseDest != null) {
+      await pushAction(
+        UndoAction(
+          id: '${action.id}-inv',
+          accountId: action.accountId,
+          type: UndoType.move,
+          emailIds: action.emailIds,
+          sourceMailboxPath: inverseDest,
+          destinationMailboxPath: action.sourceMailboxPath,
+          originalEmails: action.originalEmails,
+          timestamp: DateTime.now(),
+        ),
+      );
+    }
   }
 }
