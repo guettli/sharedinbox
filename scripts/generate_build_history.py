@@ -38,16 +38,19 @@ def list_apks(ssh_user: str, ssh_host: str) -> list[str]:
     return [l.strip() for l in result.stdout.splitlines() if l.strip()]
 
 
-def get_commit_title(hash_val: str) -> str:
+def get_commit_info(hash_val: str) -> tuple[str, str]:
+    """Return (title, datetime_iso) for the given commit hash."""
     url = f"https://codeberg.org/api/v1/repos/{CODEBERG_REPO}/git/commits/{hash_val}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "sharedinbox-ci"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
-        return data.get("commit", {}).get("message", "").split("\n")[0]
+        title = data.get("commit", {}).get("message", "").split("\n")[0]
+        dt = data.get("commit", {}).get("committer", {}).get("date", "")
+        return title, dt
     except Exception as exc:
-        print(f"  warning: could not fetch commit title for {hash_val}: {exc}", file=sys.stderr)
-        return hash_val
+        print(f"  warning: could not fetch commit info for {hash_val}: {exc}", file=sys.stderr)
+        return hash_val, ""
 
 
 def main() -> None:
@@ -74,14 +77,26 @@ def main() -> None:
         year, month, day, filename, hash_val = m.groups()
         date_key = f"{year}/{month}/{day}"
         download_url = f"{BASE_URL}/builds/{year}/{month}/{day}/{filename}"
-        commit_title = get_commit_title(hash_val)
-        days.setdefault(date_key, []).append((hash_val, download_url, commit_title))
+        commit_title, commit_dt = get_commit_info(hash_val)
+        days.setdefault(date_key, []).append((hash_val, download_url, commit_title, commit_dt))
 
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
-    (CONTENT_DIR / "_index.md").write_text(
-        "---\ntitle: Builds\n---\nDaily Android builds of SharedInbox.\n",
-        encoding="utf-8",
-    )
+
+    # _index.md: flat list of all builds, newest first
+    index_lines = ["---\ntitle: Builds\n---\n\n"]
+    for date_key in sorted(days, reverse=True):
+        year, month, day = date_key.split("/")
+        date_iso = f"{year}-{month}-{day}"
+        index_lines.append(f"## {date_iso}\n\n")
+        for hash_val, download_url, commit_title, commit_dt in days[date_key]:
+            commit_url = f"{CODEBERG_BASE}/{CODEBERG_REPO}/commit/{hash_val}"
+            dt_str = f" · {commit_dt}" if commit_dt else ""
+            index_lines.append(
+                f"- [{commit_title}]({commit_url}){dt_str}  \n"
+                f"  [Download APK]({download_url}) (`{hash_val}`)\n"
+            )
+        index_lines.append("\n")
+    (CONTENT_DIR / "_index.md").write_text("".join(index_lines), encoding="utf-8")
 
     for date_key in sorted(days):
         year, month, day = date_key.split("/")
@@ -90,11 +105,12 @@ def main() -> None:
         day_dir.mkdir(parents=True, exist_ok=True)
 
         lines = [f"---\ntitle: 'Builds for {date_iso}'\ndate: {date_iso}T00:00:00Z\n---\n\n"]
-        for hash_val, download_url, commit_title in days[date_key]:
+        for hash_val, download_url, commit_title, commit_dt in days[date_key]:
             commit_url = f"{CODEBERG_BASE}/{CODEBERG_REPO}/commit/{hash_val}"
+            dt_str = f" · {commit_dt}" if commit_dt else ""
             lines.append(
-                f"- [`{hash_val}`]({download_url}) — {commit_title}  \n"
-                f"  [View commit]({commit_url})\n"
+                f"- [{commit_title}]({commit_url}){dt_str}  \n"
+                f"  [Download APK]({download_url}) (`{hash_val}`)\n"
             )
         (day_dir / f"{day}.md").write_text("".join(lines), encoding="utf-8")
 
