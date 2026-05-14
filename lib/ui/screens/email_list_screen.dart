@@ -180,22 +180,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                   ),
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.sync),
-                onPressed: () async {
-                  try {
-                    await emailRepo.syncEmails(
-                      widget.accountId,
-                      widget.mailboxPath,
-                    );
-                  } catch (e) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-                  }
-                },
-              ),
+              _buildSyncButton(emailRepo),
               IconButton(
                 icon: const Icon(Icons.edit),
                 onPressed: () => context.push(
@@ -226,6 +211,44 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildSyncButton(EmailRepository emailRepo) {
+    final isSyncing =
+        ref.watch(isSyncingProvider(widget.accountId)).valueOrNull ?? false;
+    final hasError =
+        ref.watch(syncLastErrorProvider(widget.accountId)).valueOrNull != null;
+    return IconButton(
+      tooltip: isSyncing
+          ? 'Syncing…'
+          : hasError
+              ? 'Sync error'
+              : 'Sync',
+      icon: isSyncing
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : hasError
+              ? const Icon(Icons.sync_problem, color: Colors.red)
+              : const Icon(Icons.sync),
+      onPressed: isSyncing
+          ? null
+          : () async {
+              try {
+                await emailRepo.syncEmails(
+                  widget.accountId,
+                  widget.mailboxPath,
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Sync failed: $e')),
+                );
+              }
+            },
     );
   }
 

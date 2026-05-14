@@ -44,6 +44,16 @@ class AccountSyncManager {
   StreamSubscription<List<Account>>? _accountsSub;
   StreamSubscription<String>? _onChangesSub;
 
+  final _syncPhaseCtrl = StreamController<(String, bool)>.broadcast();
+
+  /// Emits `true` when [accountId] starts syncing, `false` when it stops.
+  Stream<bool> watchSyncing(String accountId) =>
+      _syncPhaseCtrl.stream.where((e) => e.$1 == accountId).map((e) => e.$2);
+
+  void _emitSyncing(String accountId, {required bool syncing}) {
+    if (!_syncPhaseCtrl.isClosed) _syncPhaseCtrl.add((accountId, syncing));
+  }
+
   void start() {
     _onChangesSub = _emails.onChangesQueued.listen((accountId) {
       _active[accountId]?.kick();
@@ -54,6 +64,7 @@ class AccountSyncManager {
 
       for (final account in accounts) {
         if (_active.containsKey(account.id)) continue;
+        final id = account.id;
         final loop = switch (account.type) {
           AccountType.imap => _AccountSync(
               account,
@@ -64,6 +75,8 @@ class AccountSyncManager {
               _syncLog,
               _drafts,
               _onNewMail,
+              onSyncStart: () => _emitSyncing(id, syncing: true),
+              onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
           AccountType.jmap => _JmapAccountSync(
               account,
@@ -71,6 +84,8 @@ class AccountSyncManager {
               _emails,
               _accounts,
               _syncLog,
+              onSyncStart: () => _emitSyncing(id, syncing: true),
+              onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
         };
         _active[account.id] = loop;
@@ -92,6 +107,7 @@ class AccountSyncManager {
       s.stop();
     }
     _active.clear();
+    unawaited(_syncPhaseCtrl.close());
   }
 
   /// Wakes the idle/wait phase of the given account's sync loop so a new
@@ -126,6 +142,8 @@ class AccountSyncManager {
           _syncLog,
           _drafts,
           _onNewMail,
+          onSyncStart: () => _emitSyncing(accountId, syncing: true),
+          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
       AccountType.jmap => _JmapAccountSync(
           account,
@@ -133,6 +151,8 @@ class AccountSyncManager {
           _emails,
           _accounts,
           _syncLog,
+          onSyncStart: () => _emitSyncing(accountId, syncing: true),
+          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
     };
     _active[accountId] = loop;
@@ -159,8 +179,11 @@ class _AccountSync implements _SyncLoop {
     this._imapConnect,
     this._syncLog,
     this._drafts,
-    this._onNewMail,
-  );
+    this._onNewMail, {
+    void Function()? onSyncStart,
+    void Function()? onSyncEnd,
+  })  : _onSyncStart = onSyncStart,
+        _onSyncEnd = onSyncEnd;
 
   final Account account;
   final AccountRepository _accounts;
@@ -170,6 +193,8 @@ class _AccountSync implements _SyncLoop {
   final SyncLogRepository _syncLog;
   final DraftRepository? _drafts;
   final OnNewMailCallback? _onNewMail;
+  final void Function()? _onSyncStart;
+  final void Function()? _onSyncEnd;
 
   imap.ImapClient? _idleClient;
   bool _running = false;
@@ -202,6 +227,7 @@ class _AccountSync implements _SyncLoop {
   Future<void> _loop() async {
     while (_running) {
       final startedAt = DateTime.now();
+      _onSyncStart?.call();
       try {
         final (_SyncStats stats, String? capturedLog) = await _runSync(
           account.verbose,
@@ -221,8 +247,10 @@ class _AccountSync implements _SyncLoop {
           protocolLog: capturedLog,
         );
         _backoffSeconds = 5;
+        _onSyncEnd?.call();
         await _idle();
       } catch (e, st) {
+        _onSyncEnd?.call();
         final isPermanent = _isPermanentError(e);
         try {
           await _syncLog.log(
@@ -392,14 +420,19 @@ class _JmapAccountSync implements _SyncLoop {
     this._mailboxes,
     this._emails,
     this._accounts,
-    this._syncLog,
-  );
+    this._syncLog, {
+    void Function()? onSyncStart,
+    void Function()? onSyncEnd,
+  })  : _onSyncStart = onSyncStart,
+        _onSyncEnd = onSyncEnd;
 
   final Account account;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final AccountRepository _accounts;
   final SyncLogRepository _syncLog;
+  final void Function()? _onSyncStart;
+  final void Function()? _onSyncEnd;
 
   bool _running = false;
   int _backoffSeconds = 5;
@@ -431,6 +464,7 @@ class _JmapAccountSync implements _SyncLoop {
   Future<void> _loop() async {
     while (_running) {
       final startedAt = DateTime.now();
+      _onSyncStart?.call();
       try {
         final (_SyncStats stats, String? capturedLog) = await _runSync(
           account.verbose,
@@ -450,8 +484,10 @@ class _JmapAccountSync implements _SyncLoop {
           protocolLog: capturedLog,
         );
         _backoffSeconds = 5;
+        _onSyncEnd?.call();
         await _wait();
       } catch (e, st) {
+        _onSyncEnd?.call();
         final isPermanent = _isPermanentError(e);
         try {
           await _syncLog.log(

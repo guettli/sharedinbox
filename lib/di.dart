@@ -115,6 +115,11 @@ final syncHealthProvider =
       .watchSingleOrNull();
 });
 
+final isSyncingProvider =
+    StreamProvider.autoDispose.family<bool, String>((ref, accountId) {
+  return ref.watch(syncManagerProvider).watchSyncing(accountId);
+});
+
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {
   final manager = AccountSyncManager(
     ref.watch(accountRepositoryProvider),
