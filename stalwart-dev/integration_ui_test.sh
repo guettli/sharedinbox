@@ -139,9 +139,10 @@ done
 _e2e_exit=0
 for _attempt in 1 2; do
     ts "E2E attempt $_attempt (DISPLAY=$DISPLAY)"
-    timeout 360 fvm flutter test integration_test/ -d linux
-    _e2e_exit=$?
-    [ $_e2e_exit -eq 0 ] && break
+    # Use || to capture exit code without triggering set -e on failure.
+    _e2e_exit=0
+    timeout 360 fvm flutter test integration_test/ -d linux || _e2e_exit=$?
+    [ "$_e2e_exit" -eq 0 ] && break || true
     if [ $_attempt -lt 2 ]; then
         ts "E2E attempt $_attempt failed (exit $_e2e_exit), restarting Xvfb and retrying..."
         pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
