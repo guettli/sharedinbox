@@ -234,6 +234,13 @@ class Drafts extends Table {
   TextColumn get imapServerId => text().nullable()();
 }
 
+@DataClassName('SearchHistoryRow')
+class SearchHistoryEntries extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get query => text()();
+  DateTimeColumn get searchedAt => dateTime()();
+}
+
 @DataClassName('UndoActionRow')
 class UndoActions extends Table {
   TextColumn get id => text()();
@@ -263,13 +270,14 @@ class UndoActions extends Table {
     SyncLogMailboxes,
     SyncHealth,
     UndoActions,
+    SearchHistoryEntries,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 26;
+  int get schemaVersion => 27;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -491,6 +499,9 @@ class AppDatabase extends _$AppDatabase {
               INSERT INTO email_fts(rowid, subject, preview, from_json)
               SELECT rowid, subject, preview, from_json FROM emails
             ''');
+          }
+          if (from < 27) {
+            await m.createTable(searchHistoryEntries);
           }
         },
       );

@@ -10,6 +10,11 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/email_tile.dart';
 
+final _searchHistoryProvider =
+    FutureProvider.autoDispose<List<String>>((ref) async {
+  return ref.watch(searchHistoryRepositoryProvider).getRecentSearches();
+});
+
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, this.accountId});
   final String? accountId;
@@ -20,13 +25,24 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _ctrl = TextEditingController();
+  final _focusNode = FocusNode();
   Timer? _debounce;
   _SearchResults? _results;
   bool _loading = false;
+  bool _fieldFocused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(() {
+      if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
+    });
+  }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _focusNode.dispose();
     _debounce?.cancel();
     super.dispose();
   }
@@ -45,6 +61,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Future<void> _search(String query) async {
     setState(() => _loading = true);
+    unawaited(
+      ref
+          .read(searchHistoryRepositoryProvider)
+          .saveSearch(query)
+          .then((_) => ref.invalidate(_searchHistoryProvider)),
+    );
     try {
       final emailRepo = ref.read(emailRepositoryProvider);
       final mailboxRepo = ref.read(mailboxRepositoryProvider);
@@ -112,6 +134,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       appBar: AppBar(
         title: TextField(
           controller: _ctrl,
+          focusNode: _focusNode,
           autofocus: true,
           decoration: const InputDecoration(
             hintText: 'Search folders, addresses, emails…',
@@ -137,6 +160,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget _buildBody() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_results == null) {
+      if (_fieldFocused && _ctrl.text.isEmpty) {
+        return _buildHistoryPanel();
+      }
       return const Center(child: Text('Type 3+ characters to search'));
     }
     final r = _results!;
@@ -167,6 +193,66 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             ),
         ],
       ],
+    );
+  }
+
+  Widget _buildHistoryPanel() {
+    final history = ref.watch(_searchHistoryProvider);
+    return history.when(
+      loading: () => const Center(child: Text('Type 3+ characters to search')),
+      error: (_, __) =>
+          const Center(child: Text('Type 3+ characters to search')),
+      data: (terms) {
+        if (terms.isEmpty) {
+          return const Center(child: Text('Type 3+ characters to search'));
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Recent searches',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await ref
+                          .read(searchHistoryRepositoryProvider)
+                          .clearHistory();
+                      ref.invalidate(_searchHistoryProvider);
+                    },
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final term in terms)
+                    ActionChip(
+                      label: Text(term),
+                      onPressed: () {
+                        _ctrl.text = term;
+                        _ctrl.selection = TextSelection.fromPosition(
+                          TextPosition(offset: term.length),
+                        );
+                        unawaited(_search(term));
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

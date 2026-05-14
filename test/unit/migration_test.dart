@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 26);
+      expect(db.schemaVersion, 27);
       await db.close();
     });
 
@@ -171,6 +171,11 @@ void main() {
       // Verify FTS table was created and is queryable.
       await db.customSelect('SELECT count(*) FROM email_fts').get();
 
+      // v27: search_history_entries table.
+      await db
+          .customSelect('SELECT count(*) FROM search_history_entries')
+          .get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -301,11 +306,16 @@ void main() {
       );
       await db.customSelect('SELECT count(*) FROM email_fts').get();
 
+      // v27: search_history_entries table.
+      await db
+          .customSelect('SELECT count(*) FROM search_history_entries')
+          .get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 26', () async {
+    test('fresh install creates all tables at schemaVersion 27', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -328,6 +338,7 @@ void main() {
           'threads',
           'sync_health',
           'undo_actions',
+          'search_history_entries',
         ]),
       );
 

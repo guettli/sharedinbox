@@ -20,6 +20,9 @@ void main() {
               FakeMailboxRepository(),
             ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
           ],
         ),
       );
@@ -42,6 +45,9 @@ void main() {
               FakeMailboxRepository(),
             ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
           ],
         ),
       );
@@ -68,6 +74,9 @@ void main() {
               FakeMailboxRepository(),
             ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
           ],
         ),
       );
@@ -96,6 +105,9 @@ void main() {
             ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(searchResults: [email]),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
             ),
           ],
         ),
@@ -132,6 +144,9 @@ void main() {
               FakeMailboxRepository([archiveMailbox]),
             ),
             emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
           ],
         ),
       );
@@ -162,6 +177,9 @@ void main() {
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(searchResults: [email]),
             ),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
           ],
         ),
       );
@@ -175,8 +193,9 @@ void main() {
       await tester.tap(find.byIcon(Icons.clear));
       await tester.pumpAndSettle();
 
+      // Results are gone; the recent-search chip for the prior query appears.
       expect(find.text('Found email'), findsNothing);
-      expect(find.text('Type 3+ characters to search'), findsOneWidget);
+      expect(find.text('found'), findsOneWidget);
     });
   });
 }

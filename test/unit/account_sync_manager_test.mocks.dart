@@ -215,9 +215,9 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
 
   @override
   _i4.Stream<List<_i2.Email>> observeEmails(
-    String accountId,
-    String mailboxPath, {
-    int limit = 50,
+    String? accountId,
+    String? mailboxPath, {
+    int? limit = 50,
   }) =>
       (super.noSuchMethod(
         Invocation.method(
@@ -233,9 +233,9 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
 
   @override
   _i4.Stream<List<_i2.EmailThread>> observeThreads(
-    String accountId,
-    String mailboxPath, {
-    int limit = 50,
+    String? accountId,
+    String? mailboxPath, {
+    int? limit = 50,
   }) =>
       (super.noSuchMethod(
         Invocation.method(

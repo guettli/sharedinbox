@@ -43,10 +43,7 @@ Files: `lib/ui/screens/email_list_screen.dart`, `lib/core/utils/format_utils.dar
 
 ### R4 — Done: https://codeberg.org/guettli/sharedinbox/pulls/23
 
-### R5 🟡 Handle TLS certificate changes gracefully
-`tls_error.dart` detects TLS errors but they bubble up as generic errors in the sync loop.
-Detect `TlsError` specifically in `_AccountSync` and show a user-facing dialog offering to re-add the account or trust the new certificate.
-Files: `lib/data/imap/tls_error.dart`, `lib/core/sync/account_sync_manager.dart`.
+### R5 — Done: https://codeberg.org/guettli/sharedinbox/pulls/45
 
 ### R6 — Done: https://codeberg.org/guettli/sharedinbox/pulls/24
 
@@ -107,6 +104,8 @@ Files: `lib/ui/screens/email_list_screen.dart`, `lib/core/repositories/email_rep
 
 ### T2 — Done: https://codeberg.org/guettli/sharedinbox/pulls/31
 
+### T3 — Done: https://codeberg.org/guettli/sharedinbox/pulls/43
+
 ### T3 🟡 Contract tests for all Repository interfaces
 The interfaces in `core/repositories/` have no shared contract test suite. Concrete impls can silently diverge.
 Add a shared `EmailRepositoryContract` abstract test class; run it against both `EmailRepositoryImpl` and any future mock/fake. Mirror this for `MailboxRepository` and `AccountRepository`.
@@ -127,10 +126,7 @@ Files: `test/widget/email_list_screen_test.dart`.
 
 ### A2 — Done: https://codeberg.org/guettli/sharedinbox/pulls/33
 
-### A3 🟡 Make AccountSyncManager testable without real IMAP connections
-`AccountSyncManager` accepts `ImapConnectFn` as a dependency but `_JmapAccountSync` constructs its HTTP client internally.
-Pass an injectable `http.Client` to `_JmapAccountSync` (already done in `EmailRepositoryImpl`; mirror the pattern here).
-Files: `lib/core/sync/account_sync_manager.dart`, `test/unit/account_sync_manager_test.dart`.
+### A3 — Done: https://codeberg.org/guettli/sharedinbox/pulls/46
 
 ### A4 🟡 Replace raw JSON strings in DB with structured encoding
 `fromJson`, `toAddresses`, `ccJson`, `references` are stored as raw JSON strings parsed on every model conversion.

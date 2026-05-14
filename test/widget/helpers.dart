@@ -17,6 +17,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -508,3 +509,20 @@ Email testEmail({
       isFlagged: isFlagged,
       hasAttachment: hasAttachment,
     );
+
+class FakeSearchHistoryRepository implements SearchHistoryRepository {
+  final List<String> _history = [];
+
+  @override
+  Future<List<String>> getRecentSearches() async => List.unmodifiable(_history);
+
+  @override
+  Future<void> saveSearch(String query) async {
+    _history.remove(query);
+    _history.insert(0, query);
+    if (_history.length > 10) _history.removeLast();
+  }
+
+  @override
+  Future<void> clearHistory() async => _history.clear();
+}
