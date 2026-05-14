@@ -216,7 +216,29 @@ tasks:
     generates:
       - build/linux/x64/release/bundle/sharedinbox
     cmds:
-      - scripts/silent_on_success.sh fvm flutter build linux --release --no-pub
+      - scripts/silent_on_success.sh fvm flutter build linux --release --no-pub --dart-define=GIT_HASH=$(git rev-parse --short HEAD)
+
+  deploy-linux-to-server:
+    desc: Package and deploy the Linux release bundle to the server, update latest.json
+    deps: [build-linux-release]
+    preconditions:
+      - sh: test -n "$SSH_USER"
+        msg: "SSH_USER is not set"
+      - sh: test -n "$SSH_HOST"
+        msg: "SSH_HOST is not set"
+    cmds:
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        DATE_PATH=$(date -u +%Y/%m/%d)
+        REMOTE_DIR="public_html/builds/$DATE_PATH"
+        TARBALL="sharedinbox-linux-amd64-$HASH.tar.gz"
+        tar -czf /tmp/$TARBALL -C build/linux/x64/release bundle
+        ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+        scp -o StrictHostKeyChecking=no /tmp/$TARBALL "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$TARBALL"
+        DOWNLOAD_URL="https://sharedinbox.de/builds/$DATE_PATH/$TARBALL"
+        echo "{\"version\":\"$HASH\",\"linux\":\"$DOWNLOAD_URL\"}" | \
+          ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+        echo "Uploaded $TARBALL and updated latest.json"
 
 
   _android-avd-setup:

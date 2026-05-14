@@ -43,6 +43,22 @@ jobs:
       - name: Build Linux
         run: nix develop --no-warn-dirty --command task build-linux-release
 
+      - name: Set up SSH key
+        continue-on-error: true
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Deploy Linux to server
+        continue-on-error: true
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: nix develop --no-warn-dirty --command task deploy-linux-to-server
+
   deploy-playstore:
     name: Build & Deploy to Play Store
     runs-on: self-hosted

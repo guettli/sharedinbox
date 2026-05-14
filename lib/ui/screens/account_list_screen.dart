@@ -3,9 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AccountListScreen extends ConsumerWidget {
   const AccountListScreen({super.key});
@@ -52,21 +53,28 @@ class AccountListScreen extends ConsumerWidget {
           ],
         ),
       ),
-      body: StreamBuilder(
-        stream: ref.watch(accountRepositoryProvider).observeAccounts(),
-        builder: (ctx, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final accounts = snap.data!;
-          if (accounts.isEmpty) {
-            return const _OnboardingView();
-          }
-          return ListView.builder(
-            itemCount: accounts.length,
-            itemBuilder: (ctx, i) => _AccountTile(account: accounts[i]),
-          );
-        },
+      body: Column(
+        children: [
+          const _UpdateBanner(),
+          Expanded(
+            child: StreamBuilder(
+              stream: ref.watch(accountRepositoryProvider).observeAccounts(),
+              builder: (ctx, snap) {
+                if (!snap.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final accounts = snap.data!;
+                if (accounts.isEmpty) {
+                  return const _OnboardingView();
+                }
+                return ListView.builder(
+                  itemCount: accounts.length,
+                  itemBuilder: (ctx, i) => _AccountTile(account: accounts[i]),
+                );
+              },
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => context.push('/accounts/add'),
@@ -340,4 +348,32 @@ enum _AccountAction { syncLog, verifySync, edit, emailFilters, delete }
 bool _sieveSupported(Account account) {
   if (account.type == AccountType.jmap) return true;
   return account.manageSieveAvailable != false;
+}
+
+/// Shown on Linux desktop when a newer build is available on the server.
+class _UpdateBanner extends ConsumerWidget {
+  const _UpdateBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final update = ref.watch(updateInfoProvider);
+    return update.when(
+      data: (info) {
+        if (info == null) return const SizedBox.shrink();
+        return MaterialBanner(
+          content: Text('Update available: ${info.latestVersion}'),
+          leading: const Icon(Icons.system_update),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  unawaited(launchUrl(Uri.parse(info.downloadUrl))),
+              child: const Text('Download'),
+            ),
+          ],
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
 }

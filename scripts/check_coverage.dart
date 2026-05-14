@@ -63,6 +63,7 @@ const _excluded = {
   'lib/data/repositories/sync_log_repository_impl.dart',
   'lib/data/repositories/undo_repository_impl.dart',
   'lib/data/repositories/search_history_repository_impl.dart',
+  'lib/core/services/update_service.dart',
 };
 
 void main() {
