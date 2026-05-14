@@ -94,6 +94,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         _selectedSearchIds.clear();
       });
 
+  void _selectAll() {
+    setState(() {
+      if (_searching) {
+        _selectedSearchIds.addAll(_searchResults?.map((e) => e.id) ?? []);
+      } else {
+        _selectedThreadIds.addAll(_currentThreads.map((t) => t.threadId));
+      }
+    });
+  }
+
   void _toggleSearchSelection(String emailId) {
     setState(() {
       if (_selectedSearchIds.contains(emailId)) {
@@ -178,7 +188,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ? Text('$selectionCount selected')
           : Text(widget.mailboxPath),
       actions: _selecting
-          ? []
+          ? [
+              IconButton(
+                icon: const Icon(Icons.select_all),
+                tooltip: 'Select all',
+                onPressed: _selectAll,
+              ),
+            ]
           : [
               accountAsync.when(
                 loading: () => const SizedBox.shrink(),
