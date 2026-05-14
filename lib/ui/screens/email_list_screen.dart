@@ -15,6 +15,14 @@ import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 
 final _dateFmt = DateFormat('MMM d');
+// Cache formatted dates by local calendar day so DateFormat.format is called
+// at most once per unique date rather than once per list item per rebuild.
+final _formattedDates = <int, String>{};
+
+int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
+
+String _fmtDate(DateTime dt) =>
+    _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -641,7 +649,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 const Icon(Icons.star, color: Colors.amber, size: 16),
               const SizedBox(width: 4),
               Text(
-                _dateFmt.format(t.latestDate),
+                _fmtDate(t.latestDate),
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
             ],
