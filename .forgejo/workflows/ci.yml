@@ -19,6 +19,9 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
+      - name: Generate changelog
+        run: nix develop --command task generate-changelog
+
       - name: Analyze
         run: nix develop --command task analyze
 
