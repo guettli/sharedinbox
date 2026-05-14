@@ -18,6 +18,11 @@ theme = 'PaperMod'
         url = "https://codeberg.org/guettli/sharedinbox"
 
 [[menu.main]]
+    name = "Builds"
+    url = "/builds/"
+    weight = 5
+
+[[menu.main]]
     name = "Privacy Policy"
     url = "/privacy/"
     weight = 10

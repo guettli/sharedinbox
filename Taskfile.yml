@@ -356,12 +356,43 @@ tasks:
     cmds:
       - scripts/website-verify.sh
 
+  deploy-apk-to-server:
+    desc: SCP the release APK to the server at public_html/builds/YYYY/MM/DD/
+    deps: [build-android]
+    preconditions:
+      - sh: test -n "$SSH_USER"
+        msg: "SSH_USER is not set"
+      - sh: test -n "$SSH_HOST"
+        msg: "SSH_HOST is not set"
+    cmds:
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        DATE_PATH=$(date -u +%Y/%m/%d)
+        REMOTE_DIR="public_html/builds/$DATE_PATH"
+        APK_NAME="sharedinbox-mua-$HASH.apk"
+        ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+        scp -o StrictHostKeyChecking=no \
+          build/app/outputs/flutter-apk/app-release.apk \
+          "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$APK_NAME"
+        echo "Uploaded $APK_NAME to $REMOTE_DIR"
+
+  generate-build-history:
+    desc: Generate Hugo build-history pages from APKs on the server
+    preconditions:
+      - sh: test -n "$SSH_USER"
+        msg: "SSH_USER is not set"
+      - sh: test -n "$SSH_HOST"
+        msg: "SSH_HOST is not set"
+    cmds:
+      - python3 scripts/generate_build_history.py
+
   website-deploy:
     desc: Deploy the website via rsync to public_html
     deps: [website-build]
     cmds:
       - |
         rsync -avz --delete \
+          --exclude='*.apk' \
           -e "ssh -o StrictHostKeyChecking=no" \
           website/public/ \
           ${SSH_USER}@${SSH_HOST}:public_html/

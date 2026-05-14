@@ -98,6 +98,7 @@ sharedinbox-runner/runner-data/
 website/public/
 website/resources/
 website/.hugo_build.lock
+website/content/builds/
 
 .copilot/
 .dotnet/
