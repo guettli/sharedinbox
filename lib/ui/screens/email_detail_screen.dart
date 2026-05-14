@@ -18,6 +18,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 
+void _openLink(String? url, Map<String, String> attrs, dynamic _) {
+  if (url == null) return;
+  final uri = Uri.tryParse(url);
+  if (uri != null) {
+    unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
+  }
+}
+
 class EmailDetailScreen extends ConsumerStatefulWidget {
   const EmailDetailScreen({super.key, required this.emailId});
   final String emailId;
@@ -553,7 +561,11 @@ class _SafeHtmlState extends State<_SafeHtml> {
       (_) => ErrorWidget.builder = prev,
     );
 
-    return Html(data: widget.data, extensions: widget.extensions);
+    return Html(
+      data: widget.data,
+      extensions: widget.extensions,
+      onLinkTap: _openLink,
+    );
   }
 }
 

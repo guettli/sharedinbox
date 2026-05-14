@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d, HH:mm');
 
@@ -168,6 +169,18 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                       extensions: [
                         if (!_loadRemoteImages) _BlockRemoteImagesExtension(),
                       ],
+                      onLinkTap: (url, _, __) {
+                        if (url == null) return;
+                        final uri = Uri.tryParse(url);
+                        if (uri != null) {
+                          unawaited(
+                            launchUrl(
+                              uri,
+                              mode: LaunchMode.externalApplication,
+                            ),
+                          );
+                        }
+                      },
                     ),
                   ] else
                     SelectableText(
