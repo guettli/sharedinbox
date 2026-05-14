@@ -237,6 +237,14 @@ class _FakeEmails implements EmailRepository {
   Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
 
   @override
+  Future<List<EmailAddress>> searchAddresses(
+    String? a,
+    String q, {
+    int limit = 10,
+  }) async =>
+      [];
+
+  @override
   Stream<void> watchJmapPush(String accountId, String password) =>
       const Stream.empty();
 

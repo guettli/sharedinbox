@@ -39,6 +39,8 @@ class ComposeScreen extends ConsumerStatefulWidget {
 class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _to = TextEditingController();
   final _cc = TextEditingController();
+  final _toFocus = FocusNode();
+  final _ccFocus = FocusNode();
   final _subject = TextEditingController();
   final _body = TextEditingController();
   String? _accountId;
@@ -139,6 +141,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       c.removeListener(_onTextChanged);
       c.dispose();
     }
+    _toFocus.dispose();
+    _ccFocus.dispose();
     // Flush any pending save synchronously — we can't await in dispose, but
     // scheduling a microtask still runs before the isolate exits.
     if (_draftDirty) {
@@ -330,8 +334,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 ),
               ),
             ),
-          _field(_to, 'To', keyboardType: TextInputType.emailAddress),
-          _field(_cc, 'Cc', keyboardType: TextInputType.emailAddress),
+          _addressField(_to, _toFocus, 'To'),
+          _addressField(_cc, _ccFocus, 'Cc'),
           _field(_subject, 'Subject'),
           const SizedBox(height: 8),
           TextFormField(
@@ -380,6 +384,89 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _addressField(
+    TextEditingController ctrl,
+    FocusNode focusNode,
+    String label,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: RawAutocomplete<EmailAddress>(
+        textEditingController: ctrl,
+        focusNode: focusNode,
+        displayStringForOption: (option) {
+          final text = ctrl.text;
+          final lastComma = text.lastIndexOf(',');
+          final prefix =
+              lastComma >= 0 ? '${text.substring(0, lastComma + 1)} ' : '';
+          return '$prefix${option.email}, ';
+        },
+        optionsBuilder: (value) async {
+          final text = value.text;
+          final lastComma = text.lastIndexOf(',');
+          final token = lastComma >= 0
+              ? text.substring(lastComma + 1).trim()
+              : text.trim();
+          if (token.length < 2) return const [];
+          return ref.read(emailRepositoryProvider).searchAddresses(null, token);
+        },
+        fieldViewBuilder: (ctx, fieldCtrl, fieldFocusNode, onFieldSubmitted) {
+          return TextFormField(
+            controller: fieldCtrl,
+            focusNode: fieldFocusNode,
+            keyboardType: TextInputType.emailAddress,
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+            ),
+            onFieldSubmitted: (_) => onFieldSubmitted(),
+          );
+        },
+        optionsViewBuilder: (ctx, onSelected, options) {
+          return Align(
+            alignment: Alignment.topLeft,
+            child: Material(
+              elevation: 4,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  itemBuilder: (ctx, i) {
+                    final option = options.elementAt(i);
+                    return InkWell(
+                      onTap: () => onSelected(option),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: option.name != null
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(option.name!),
+                                  Text(
+                                    option.email,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ],
+                              )
+                            : Text(option.email),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

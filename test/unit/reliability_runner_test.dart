@@ -119,6 +119,13 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
   @override
+  Future<List<EmailAddress>> searchAddresses(
+    String? a,
+    String q, {
+    int limit = 10,
+  }) async =>
+      [];
+  @override
   Stream<List<FailedMutation>> observeFailedMutations(String a) =>
       Stream.value([]);
   @override

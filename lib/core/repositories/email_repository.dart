@@ -57,6 +57,14 @@ abstract class EmailRepository {
   /// accounts if null) whose from, to, or cc fields contain [address].
   Future<List<Email>> getEmailsByAddress(String? accountId, String address);
 
+  /// Returns unique email addresses from the local cache whose email or display
+  /// name contains [query]. Results are deduplicated and capped at [limit].
+  Future<List<EmailAddress>> searchAddresses(
+    String? accountId,
+    String query, {
+    int limit = 10,
+  });
+
   /// Sends any queued local mutations for [accountId] to the server.
   /// Returns the number of changes successfully applied.
   Future<int> flushPendingChanges(String accountId, String password);

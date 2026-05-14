@@ -2597,6 +2597,51 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<List<model.EmailAddress>> searchAddresses(
+    String? accountId,
+    String query, {
+    int limit = 10,
+  }) async {
+    if (query.length < 2) return [];
+    final pattern = '%${query.toLowerCase()}%';
+    final rows = await (_db.select(_db.emails)
+          ..where((t) {
+            Expression<bool> cond = const Constant(true);
+            if (accountId != null) cond = t.accountId.equals(accountId);
+            cond = cond &
+                (t.fromJson.like(pattern) |
+                    t.toAddresses.like(pattern) |
+                    t.ccJson.like(pattern));
+            return cond;
+          })
+          ..limit(100))
+        .get();
+
+    final seen = <String>{};
+    final results = <model.EmailAddress>[];
+    final lowerQuery = query.toLowerCase();
+    for (final row in rows) {
+      for (final jsonStr in [row.fromJson, row.toAddresses, row.ccJson]) {
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        for (final e in list) {
+          final map = e as Map<String, dynamic>;
+          final addr = model.EmailAddress(
+            name: map['name'] as String?,
+            email: map['email'] as String,
+          );
+          if ((addr.email.toLowerCase().contains(lowerQuery) ||
+                  (addr.name?.toLowerCase().contains(lowerQuery) ?? false)) &&
+              seen.add(addr.email.toLowerCase())) {
+            results.add(addr);
+            if (results.length >= limit) return results;
+          }
+        }
+      }
+    }
+    return results;
+  }
+
+  @override
   Future<List<model.Email>> searchEmails(
     String accountId,
     String mailboxPath,
