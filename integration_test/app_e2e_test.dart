@@ -167,11 +167,6 @@ void main() {
         // DEFUNCT/DISPOSED: keyboard-dismiss or teardown layout errors on
         // Android/Linux that have no effect on real functionality.
         if (msg.contains('DEFUNCT') || msg.contains('DISPOSED')) return;
-        // _zOrderIndex: OverlayPortalController.hide() is called twice during
-        // rapid navigation in tests (once on focus loss, once on widget unmount).
-        // overlay.dart itself notes this should not happen during rebuilds;
-        // it's a Flutter framework race that only reproduces in headless tests.
-        if (msg.contains('_zOrderIndex')) return;
         bindingError?.call(details);
       };
       addTearDown(() => FlutterError.onError = bindingError);
@@ -269,6 +264,10 @@ void main() {
         find.widgetWithText(TextFormField, 'To'),
         userEmail,
       );
+      // Pump so RawAutocomplete's OverlayPortal has a frame to close before
+      // focus moves to the next field — prevents the double hide() race that
+      // triggers the _zOrderIndex assertion in overlay.dart.
+      await tester.pump();
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Subject'),
         subject,
@@ -278,6 +277,10 @@ void main() {
       await tester.ensureVisible(bodyField);
       await tester.enterText(bodyField, 'Hello from integration test!');
 
+      // Unfocus before sending so the autocomplete overlay closes cleanly
+      // before ComposeScreen is popped, avoiding a second hide() on unmount.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
       _log('send email');
       await tester.tap(find.byIcon(Icons.send));
       // Wait for ComposeScreen to pop back to EmailListScreen after send.
