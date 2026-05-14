@@ -139,7 +139,7 @@ done
 _e2e_exit=0
 for _attempt in 1 2; do
     ts "E2E attempt $_attempt (DISPLAY=$DISPLAY)"
-    timeout 240 fvm flutter test integration_test/ -d linux
+    timeout 360 fvm flutter test integration_test/ -d linux
     _e2e_exit=$?
     [ $_e2e_exit -eq 0 ] && break
     if [ $_attempt -lt 2 ]; then

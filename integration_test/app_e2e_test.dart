@@ -155,7 +155,7 @@ void main() {
           accountConnectionStatusProvider.overrideWith((ref, _) async {}),
         ],
       );
-      await pumpUntil(tester, find.text('No accounts yet.'));
+      await pumpUntil(tester, find.text('Welcome to SharedInbox'));
       _log('app settled');
 
       // ── Add account ────────────────────────────────────────────────────────
