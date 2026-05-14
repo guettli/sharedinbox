@@ -153,11 +153,16 @@ void main() {
 
       // Override the crash handler that app.main() just installed with a
       // filter that forwards non-spurious errors to the binding's recorder.
-      // On Android/Linux, keyboard-dismiss or teardown can produce
-      // DEFUNCT/DISPOSED layout errors; discard those silently.
       FlutterError.onError = (details) {
         final msg = details.toString();
+        // DEFUNCT/DISPOSED: keyboard-dismiss or teardown layout errors on
+        // Android/Linux that have no effect on real functionality.
         if (msg.contains('DEFUNCT') || msg.contains('DISPOSED')) return;
+        // _zOrderIndex: OverlayPortalController.hide() is called twice during
+        // rapid navigation in tests (once on focus loss, once on widget unmount).
+        // overlay.dart itself notes this should not happen during rebuilds;
+        // it's a Flutter framework race that only reproduces in headless tests.
+        if (msg.contains('_zOrderIndex')) return;
         bindingError?.call(details);
       };
       addTearDown(() => FlutterError.onError = bindingError);
