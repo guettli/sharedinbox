@@ -261,6 +261,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
         ],
       ),
     );
+    if (!mounted) return;
     if (confirmed == true) {
       final repo = ref.read(emailRepositoryProvider);
       // Fetch data first for IMAP undo support
@@ -268,6 +269,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
 
       final destPath = await repo.deleteEmail(widget.email.id);
 
+      if (!mounted) return;
       if (original != null) {
         unawaited(
           ref.read(undoServiceProvider.notifier).pushAction(
