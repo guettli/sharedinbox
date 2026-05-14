@@ -14,6 +14,12 @@ We use issues, follow this label state machine:
 - **State/InProgress** — Set this when you start working on an issue
 - **State/Question** — Set this when you hit a blocker or need clarification
 
+List open issues ready to pick up:
+
+```bash
+fgj issue list --json --state open | jq '[.[] | select(.labels[].name == "State/Ready")] | .[] | {number, title, html_url}'
+```
+
 Rules:
 
 - Never start work on an issue without `State/Ready`
