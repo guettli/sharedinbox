@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 25);
+      expect(db.schemaVersion, 26);
       await db.close();
     });
 
@@ -158,6 +158,19 @@ void main() {
         ]),
       );
 
+      // v26: FTS5 virtual table and triggers exist.
+      final allTriggers = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
+          .get();
+      final triggerNames =
+          allTriggers.map((r) => r.read<String>('name')).toSet();
+      expect(
+        triggerNames,
+        containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
+      );
+      // Verify FTS table was created and is queryable.
+      await db.customSelect('SELECT count(*) FROM email_fts').get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -276,11 +289,23 @@ void main() {
       expect(indexNames, contains('mailboxes_account_id'));
       expect(indexNames, contains('threads_latest_date'));
 
+      // v26: FTS5 virtual table and triggers.
+      final allTriggers = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
+          .get();
+      final triggerNames =
+          allTriggers.map((r) => r.read<String>('name')).toSet();
+      expect(
+        triggerNames,
+        containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
+      );
+      await db.customSelect('SELECT count(*) FROM email_fts').get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 25', () async {
+    test('fresh install creates all tables at schemaVersion 26', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 

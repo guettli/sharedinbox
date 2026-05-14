@@ -269,10 +269,47 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 25;
+  int get schemaVersion => 26;
+
+  Future<void> _createEmailFts() async {
+    await customStatement('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS email_fts USING fts5(
+        subject, preview, from_json,
+        content='emails',
+        content_rowid='rowid'
+      )
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_fts_ai
+      AFTER INSERT ON emails BEGIN
+        INSERT INTO email_fts(rowid, subject, preview, from_json)
+        VALUES (new.rowid, new.subject, new.preview, new.from_json);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_fts_au
+      AFTER UPDATE OF subject, preview, from_json ON emails BEGIN
+        INSERT INTO email_fts(email_fts, rowid, subject, preview, from_json)
+        VALUES ('delete', old.rowid, old.subject, old.preview, old.from_json);
+        INSERT INTO email_fts(rowid, subject, preview, from_json)
+        VALUES (new.rowid, new.subject, new.preview, new.from_json);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_fts_ad
+      AFTER DELETE ON emails BEGIN
+        INSERT INTO email_fts(email_fts, rowid, subject, preview, from_json)
+        VALUES ('delete', old.rowid, old.subject, old.preview, old.from_json);
+      END
+    ''');
+  }
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+          await _createEmailFts();
+        },
         onUpgrade: (m, from, to) async {
           // NOTE: m.createTable(T) creates the LATEST version of table T.
           // If you later add a column C to T in version X, you must guard
@@ -446,6 +483,14 @@ class AppDatabase extends _$AppDatabase {
                 'CREATE INDEX IF NOT EXISTS threads_latest_date ON threads (account_id, mailbox_path, latest_date DESC);',
               ),
             );
+          }
+          if (from < 26) {
+            await _createEmailFts();
+            // Backfill FTS index from existing rows.
+            await customStatement('''
+              INSERT INTO email_fts(rowid, subject, preview, from_json)
+              SELECT rowid, subject, preview, from_json FROM emails
+            ''');
           }
         },
       );

@@ -2470,28 +2470,39 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String query,
   ) async {
+    final ftsQuery = _toFtsQuery(query);
+    if (ftsQuery.isEmpty) return [];
+
+    final sql = accountId != null
+        ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
+            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY rank LIMIT 50'
+        : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
+            ' WHERE email_fts MATCH ? ORDER BY rank LIMIT 50';
+    final variables = accountId != null
+        ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
+        : [Variable<String>(ftsQuery)];
+
+    final queryRows = await _db
+        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
+    final emailRows = await Future.wait(
+      queryRows.map((r) => _db.emails.mapFromRow(r)),
+    );
+    return emailRows.map(_toModel).toList();
+  }
+
+  /// Converts a user query string into an FTS5 match expression.
+  /// Each whitespace-separated word becomes a prefix term (word*) so that
+  /// partial words still match. Special FTS5 characters are stripped.
+  static String _toFtsQuery(String query) {
     final words = query
-        .toLowerCase()
+        .trim()
         .split(RegExp(r'\s+'))
         .where((w) => w.isNotEmpty)
+        .map((w) => w.replaceAll(RegExp(r'[^\w]'), ''))
+        .where((w) => w.isNotEmpty)
         .toList();
-    final rows = await (_db.select(_db.emails)
-          ..where((t) {
-            Expression<bool> condition = const Constant(true);
-            if (accountId != null) {
-              condition = t.accountId.equals(accountId);
-            }
-            for (final word in words) {
-              final pattern = '%$word%';
-              condition = condition &
-                  (t.subject.like(pattern) | t.preview.like(pattern));
-            }
-            return condition;
-          })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
-          ..limit(50))
-        .get();
-    return rows.map(_toModel).toList();
+    if (words.isEmpty) return '';
+    return words.map((w) => '$w*').join(' ');
   }
 
   @override
