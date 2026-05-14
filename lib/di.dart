@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -17,7 +18,7 @@ import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
-import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Email, EmailBody;
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -167,6 +168,27 @@ final undoServiceProvider =
   unawaited(service.init());
   return service;
 });
+
+/// Loads email header + body and marks the email as seen.
+/// Owned by [EmailDetailScreen]; decouples data loading from the widget tree.
+final emailDetailProvider = AsyncNotifierProvider.autoDispose
+    .family<EmailDetailNotifier, (Email?, EmailBody), String>(
+  EmailDetailNotifier.new,
+);
+
+class EmailDetailNotifier
+    extends AutoDisposeFamilyAsyncNotifier<(Email?, EmailBody), String> {
+  @override
+  Future<(Email?, EmailBody)> build(String emailId) async {
+    final repo = ref.read(emailRepositoryProvider);
+    final results = await Future.wait([
+      repo.getEmail(emailId),
+      repo.getEmailBody(emailId),
+    ]);
+    unawaited(repo.setFlag(emailId, seen: true));
+    return (results[0] as Email?, results[1] as EmailBody);
+  }
+}
 
 final accountByIdProvider =
     StreamProvider.autoDispose.family<model.Account?, String>((ref, accountId) {

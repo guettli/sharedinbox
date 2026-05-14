@@ -26,144 +26,130 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
-  late final Future<(Email?, EmailBody)> _dataFuture;
   bool _isFlagged = false;
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
 
   @override
-  void initState() {
-    super.initState();
-    final repo = ref.read(emailRepositoryProvider);
-    _dataFuture = Future.wait([
-      repo.getEmail(widget.emailId),
-      repo.getEmailBody(widget.emailId),
-    ]).then((results) {
-      final email = results[0] as Email?;
-      if (email != null && mounted) {
-        setState(() => _isFlagged = email.isFlagged);
-      }
-      return (email, results[1] as EmailBody);
-    });
-    unawaited(repo.setFlag(widget.emailId, seen: true));
-  }
-
-  @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
-    return FutureBuilder<(Email?, EmailBody)>(
-      future: _dataFuture,
-      builder: (ctx, snap) {
-        final header = snap.data?.$1;
-        final body = snap.data?.$2;
+    final detail = ref.watch(emailDetailProvider(widget.emailId));
 
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(
-              header?.subject ?? '(loading…)',
-              overflow: TextOverflow.ellipsis,
+    ref.listen<AsyncValue<(Email?, EmailBody)>>(
+      emailDetailProvider(widget.emailId),
+      (_, next) {
+        final email = next.valueOrNull?.$1;
+        if (email != null && mounted) {
+          setState(() => _isFlagged = email.isFlagged);
+        }
+      },
+    );
+
+    final header = detail.valueOrNull?.$1;
+    final body = detail.valueOrNull?.$2;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          header?.subject ?? '(loading…)',
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.reply),
+            tooltip: 'Reply',
+            onPressed: header == null
+                ? null
+                : () => _reply(context, header, body, replyAll: false),
+          ),
+          IconButton(
+            icon: const Icon(Icons.reply_all),
+            tooltip: 'Reply all',
+            onPressed: header == null
+                ? null
+                : () => _reply(context, header, body, replyAll: true),
+          ),
+          IconButton(
+            icon: const Icon(Icons.forward),
+            tooltip: 'Forward',
+            onPressed:
+                header == null ? null : () => _forward(context, header, body),
+          ),
+          IconButton(
+            icon: const Icon(Icons.mark_email_unread_outlined),
+            tooltip: 'Mark as unread',
+            onPressed: () async {
+              await repo.setFlag(widget.emailId, seen: false);
+              if (context.mounted) context.pop();
+            },
+          ),
+          IconButton(
+            icon: Icon(
+              _isFlagged ? Icons.star : Icons.star_border,
+              color: _isFlagged ? Colors.amber : null,
             ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.reply),
-                tooltip: 'Reply',
-                onPressed: header == null
-                    ? null
-                    : () => _reply(context, header, body, replyAll: false),
-              ),
-              IconButton(
-                icon: const Icon(Icons.reply_all),
-                tooltip: 'Reply all',
-                onPressed: header == null
-                    ? null
-                    : () => _reply(context, header, body, replyAll: true),
-              ),
-              IconButton(
-                icon: const Icon(Icons.forward),
-                tooltip: 'Forward',
-                onPressed: header == null
-                    ? null
-                    : () => _forward(context, header, body),
-              ),
-              IconButton(
-                icon: const Icon(Icons.mark_email_unread_outlined),
-                tooltip: 'Mark as unread',
-                onPressed: () async {
-                  await repo.setFlag(widget.emailId, seen: false);
-                  if (context.mounted) context.pop();
-                },
-              ),
-              IconButton(
-                icon: Icon(
-                  _isFlagged ? Icons.star : Icons.star_border,
-                  color: _isFlagged ? Colors.amber : null,
-                ),
-                tooltip: _isFlagged ? 'Unflag' : 'Flag',
-                onPressed: () async {
-                  final next = !_isFlagged;
-                  await repo.setFlag(widget.emailId, flagged: next);
-                  if (mounted) setState(() => _isFlagged = next);
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.drive_file_move_outline),
-                tooltip: 'Move to folder',
-                onPressed:
-                    header == null ? null : () => _moveTo(context, header),
-              ),
-              IconButton(
-                icon: const Icon(Icons.access_time),
-                tooltip: 'Snooze',
-                onPressed:
-                    header == null ? null : () => _snooze(context, header),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete),
-                tooltip: 'Delete',
-                onPressed: () async {
-                  final destPath = await repo.deleteEmail(widget.emailId);
+            tooltip: _isFlagged ? 'Unflag' : 'Flag',
+            onPressed: () async {
+              final next = !_isFlagged;
+              await repo.setFlag(widget.emailId, flagged: next);
+              if (mounted) setState(() => _isFlagged = next);
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.drive_file_move_outline),
+            tooltip: 'Move to folder',
+            onPressed: header == null ? null : () => _moveTo(context, header),
+          ),
+          IconButton(
+            icon: const Icon(Icons.access_time),
+            tooltip: 'Snooze',
+            onPressed: header == null ? null : () => _snooze(context, header),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'Delete',
+            onPressed: () async {
+              final destPath = await repo.deleteEmail(widget.emailId);
 
-                  if (header != null) {
-                    unawaited(
-                      ref.read(undoServiceProvider.notifier).pushAction(
-                            UndoAction(
-                              id: DateTime.now().toIso8601String(),
-                              accountId: header.accountId,
-                              type: UndoType.delete,
-                              emailIds: [widget.emailId],
-                              sourceMailboxPath: header.mailboxPath,
-                              destinationMailboxPath: destPath,
-                              originalEmails: [header],
-                            ),
-                          ),
-                    );
-                  }
+              if (header != null) {
+                unawaited(
+                  ref.read(undoServiceProvider.notifier).pushAction(
+                        UndoAction(
+                          id: DateTime.now().toIso8601String(),
+                          accountId: header.accountId,
+                          type: UndoType.delete,
+                          emailIds: [widget.emailId],
+                          sourceMailboxPath: header.mailboxPath,
+                          destinationMailboxPath: destPath,
+                          originalEmails: [header],
+                        ),
+                      ),
+                );
+              }
 
-                  if (context.mounted) context.pop();
-                },
-              ),
-              PopupMenuButton<String>(
-                itemBuilder: (ctx) => [
-                  const PopupMenuItem(
-                    value: 'headers',
-                    child: Text('Show Mail Headers'),
-                  ),
-                ],
-                onSelected: (value) {
-                  if (value == 'headers' && body != null) {
-                    _showHeaders(context, body);
-                  }
-                },
+              if (context.mounted) context.pop();
+            },
+          ),
+          PopupMenuButton<String>(
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'headers',
+                child: Text('Show Mail Headers'),
               ),
             ],
+            onSelected: (value) {
+              if (value == 'headers' && body != null) {
+                _showHeaders(context, body);
+              }
+            },
           ),
-          body: snap.connectionState == ConnectionState.waiting
-              ? const Center(child: CircularProgressIndicator())
-              : snap.hasError
-                  ? Center(child: Text('Error: ${snap.error}'))
-                  : _buildBody(ctx, header, body!),
-        );
-      },
+        ],
+      ),
+      body: detail.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Error: $e')),
+        data: (d) => _buildBody(context, d.$1, d.$2),
+      ),
     );
   }
 
