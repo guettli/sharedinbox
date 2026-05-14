@@ -288,7 +288,7 @@ tasks:
     generates:
       - build/app/outputs/bundle/release/app-release.aab
     cmds:
-      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build appbundle --release --no-pub --build-number $(( $(date +%y) - 20 ))$(date +%m%d%H%M) --build-name $(date +%y%m%d-%H%M) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
+      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build appbundle --release --no-pub --build-number $(date +%s) --build-name $(date +%y%m%d-%H%M) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
