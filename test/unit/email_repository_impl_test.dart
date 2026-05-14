@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +16,7 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
+import 'fake_imap.dart' show FakeImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -162,15 +163,19 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
 ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-    _makeRepos({http.Client? httpClient}) {
+    _makeRepos({
+  http.Client? httpClient,
+  Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
+  Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
+}) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
   final accounts = AccountRepositoryImpl(db, storage);
   final emails = EmailRepositoryImpl(
     db,
     accounts,
-    imapConnect: _noImapConnect,
-    smtpConnect: _noSmtpConnect,
+    imapConnect: imapConnect ?? _noImapConnect,
+    smtpConnect: smtpConnect ?? _noSmtpConnect,
     httpClient: httpClient,
   );
   return (db: db, accounts: accounts, emails: emails);
@@ -1935,6 +1940,163 @@ void main() {
       expect(row.lastError, isNull);
     });
   });
+
+  group('concurrent moves', () {
+    test(
+        'two simultaneous moves enqueue two changes and leave email in last destination',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Fire both moves without awaiting to exercise concurrent enqueue logic.
+      final f1 = r.emails.moveEmail('acc-1:5', 'Archive');
+      final f2 = r.emails.moveEmail('acc-1:5', 'Trash');
+      await Future.wait([f1, f2]);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(2));
+      expect(changes.map((c) => c.changeType), everyElement('move'));
+
+      final destinations =
+          changes.map((c) => (jsonDecode(c.payload) as Map)['dest']).toSet();
+      expect(destinations, containsAll(['Archive', 'Trash']));
+
+      final email = await r.emails.getEmail('acc-1:5');
+      expect(
+        email!.mailboxPath,
+        anyOf('Archive', 'Trash'),
+        reason:
+            'email must be optimistically moved to one of the two destinations',
+      );
+    });
+  });
+
+  group('IMAP SMTP auth failure', () {
+    test('sendEmail propagates SMTP authentication error', () async {
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) => Future.error(
+          Exception('535 5.7.8 Authentication credentials invalid'),
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      const draft = EmailDraft(
+        from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+        to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+        cc: [],
+        subject: 'Test',
+        body: 'Body',
+      );
+
+      await expectLater(
+        r.emails.sendEmail('acc-1', draft),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('535'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('IMAP UID validity change', () {
+    test('full re-sync wipes stale emails when uidValidity changes', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _FakeImapClientUidValidity(456),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Pre-seed two emails from the old server epoch (uidValidity=123).
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Seed an IMAP checkpoint with the old uidValidity so the code detects
+      // a mismatch and triggers a full re-sync.
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: '{"uidValidity":123,"lastUid":2,"highestModSeq":null}',
+              syncedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // Old emails must be wiped; the fake server returns zero messages.
+      final remaining = await r.db.select(r.db.emails).get();
+      expect(remaining, isEmpty);
+
+      // Checkpoint must be updated to the new uidValidity.
+      final stateRow = await (r.db.select(r.db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals('acc-1') &
+                  t.resourceType.equals('IMAP:INBOX'),
+            ))
+          .getSingleOrNull();
+      expect(stateRow, isNotNull);
+      final state = jsonDecode(stateRow!.state) as Map<String, dynamic>;
+      expect(state['uidValidity'], 456);
+    });
+  });
+}
+
+// ── Additional fake IMAP client for UID-validity tests ───────────────────────
+
+class _FakeImapClientUidValidity extends FakeImapClient {
+  _FakeImapClientUidValidity(this._uidValidity);
+  final int _uidValidity;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+        uidValidity: _uidValidity,
+      );
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'ALL',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async =>
+      imap.SearchImapResult();
 }
 
 // ── SSE test helper ──────────────────────────────────────────────────────────
