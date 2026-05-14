@@ -201,6 +201,7 @@ class _AccountSync implements _SyncLoop {
   bool _running = false;
   int _backoffSeconds = 5;
   Completer<void>? _stopSignal;
+  Timer? _waitTimer;
 
   @override
   void start() {
@@ -303,11 +304,16 @@ class _AccountSync implements _SyncLoop {
   Future<void> _waitSeconds(int seconds) async {
     if (!_running) return;
     _stopSignal = Completer<void>();
-    await Future.any([
-      Future.delayed(Duration(seconds: seconds)),
-      _stopSignal!.future,
-    ]);
-    _stopSignal = null;
+    _waitTimer = Timer(Duration(seconds: seconds), () {
+      if (!_stopSignal!.isCompleted) _stopSignal!.complete();
+    });
+    try {
+      await _stopSignal!.future;
+    } finally {
+      _waitTimer?.cancel();
+      _waitTimer = null;
+      _stopSignal = null;
+    }
   }
 
   Future<(_SyncStats, String?)> _runSync(bool verbose) async {
@@ -394,11 +400,16 @@ class _AccountSync implements _SyncLoop {
 
       // Cap IDLE at 25 minutes (RFC 2177). Also wakes up when stop() is
       // called or a new message / expunge event arrives.
-      await Future.any([
-        newMessageCompleter.future,
-        Future.delayed(const Duration(minutes: 25)),
-        _stopSignal!.future,
-      ]);
+      final idleTimer = Timer(const Duration(minutes: 25), () {
+        if (_stopSignal != null && !_stopSignal!.isCompleted) {
+          _stopSignal!.complete();
+        }
+      });
+      try {
+        await Future.any([newMessageCompleter.future, _stopSignal!.future]);
+      } finally {
+        idleTimer.cancel();
+      }
 
       await client.idleDone();
       await sub.cancel();
@@ -439,6 +450,7 @@ class _JmapAccountSync implements _SyncLoop {
   bool _running = false;
   int _backoffSeconds = 5;
   Completer<void>? _stopSignal;
+  Timer? _waitTimer;
 
   static const _pollInterval = Duration(seconds: 30);
 
@@ -542,11 +554,16 @@ class _JmapAccountSync implements _SyncLoop {
   Future<void> _waitSeconds(int seconds) async {
     if (!_running) return;
     _stopSignal = Completer<void>();
-    await Future.any([
-      Future.delayed(Duration(seconds: seconds)),
-      _stopSignal!.future,
-    ]);
-    _stopSignal = null;
+    _waitTimer = Timer(Duration(seconds: seconds), () {
+      if (!_stopSignal!.isCompleted) _stopSignal!.complete();
+    });
+    try {
+      await _stopSignal!.future;
+    } finally {
+      _waitTimer?.cancel();
+      _waitTimer = null;
+      _stopSignal = null;
+    }
   }
 
   Future<(_SyncStats, String?)> _runSync(bool verbose) async {
@@ -618,11 +635,16 @@ class _JmapAccountSync implements _SyncLoop {
       onError: (_) {},
     );
 
-    await Future.any([
-      pushReady.future,
-      Future.delayed(_pollInterval),
-      _stopSignal!.future,
-    ]);
+    final pollTimer = Timer(_pollInterval, () {
+      if (_stopSignal != null && !_stopSignal!.isCompleted) {
+        _stopSignal!.complete();
+      }
+    });
+    try {
+      await Future.any([pushReady.future, _stopSignal!.future]);
+    } finally {
+      pollTimer.cancel();
+    }
 
     await pushSub.cancel();
     _stopSignal = null;
