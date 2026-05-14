@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -10,8 +12,16 @@ import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 
+Future<imap.ImapClient> _fakeImapConnect(
+  Account account,
+  String username,
+  String password,
+) async =>
+    throw const SocketException('fake — no real IMAP server in tests');
+
 void main() {
-  test('AccountSyncManager schedules sync for multiple accounts', () async {
+  test('AccountSyncManager schedules IMAP sync for multiple accounts',
+      () async {
     final accounts = _FakeAccounts('pw');
     final mailboxes = _FakeMailboxes();
     final emails = _FakeEmails();
@@ -22,6 +32,7 @@ void main() {
       mailboxes,
       emails,
       syncLog: logs,
+      imapConnect: _fakeImapConnect,
     );
 
     final a1 = _account('1');
@@ -38,6 +49,34 @@ void main() {
 
     manager.dispose();
   });
+
+  test('AccountSyncManager schedules JMAP sync for multiple accounts',
+      () async {
+    final accounts = _FakeAccounts('pw');
+    final mailboxes = _FakeMailboxes();
+    final emails = _FakeEmails();
+    final logs = _FakeLogs();
+
+    final manager = AccountSyncManager(
+      accounts,
+      mailboxes,
+      emails,
+      syncLog: logs,
+    );
+
+    final a1 = _jmapAccount('1');
+    final a2 = _jmapAccount('2');
+
+    manager.start();
+    accounts.push([a1, a2]);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
+    expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
+
+    manager.dispose();
+  });
 }
 
 Account _account(String id) => Account(
@@ -47,6 +86,17 @@ Account _account(String id) => Account(
       imapHost: 'localhost',
       imapPort: 143,
       imapSsl: false,
+      smtpHost: 'localhost',
+      smtpPort: 25,
+      smtpSsl: false,
+    );
+
+Account _jmapAccount(String id) => Account(
+      id: id,
+      displayName: 'Account $id',
+      email: '$id@example.com',
+      type: AccountType.jmap,
+      jmapUrl: 'http://localhost:8080/.well-known/jmap',
       smtpHost: 'localhost',
       smtpPort: 25,
       smtpSsl: false,
