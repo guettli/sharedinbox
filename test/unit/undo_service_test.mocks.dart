@@ -333,6 +333,25 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<List<_i2.Email>>);
 
   @override
+  _i4.Future<List<_i2.EmailAddress>> searchAddresses(
+    String? accountId,
+    String? query, {
+    int? limit = 10,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #searchAddresses,
+          [
+            accountId,
+            query,
+          ],
+          {#limit: limit},
+        ),
+        returnValue:
+            _i4.Future<List<_i2.EmailAddress>>.value(<_i2.EmailAddress>[]),
+      ) as _i4.Future<List<_i2.EmailAddress>>);
+
+  @override
   _i4.Future<int> flushPendingChanges(
     String? accountId,
     String? password,

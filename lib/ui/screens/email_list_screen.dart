@@ -374,6 +374,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           child: const Text('Retry'),
         ),
         TextButton(
+          onPressed: () => context.push(
+            '/accounts/${widget.accountId}/sync-log',
+          ),
+          child: const Text('View log'),
+        ),
+        TextButton(
           onPressed: () => setState(() => _dismissedError = error),
           child: const Text('Dismiss'),
         ),
