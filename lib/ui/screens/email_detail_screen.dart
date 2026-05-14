@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,20 +61,27 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             tooltip: 'Reply',
             onPressed: header == null
                 ? null
-                : () => _reply(context, header, body, replyAll: false),
+                : () {
+                    unawaited(_reply(context, header, body, replyAll: false));
+                  },
           ),
           IconButton(
             icon: const Icon(Icons.reply_all),
             tooltip: 'Reply all',
             onPressed: header == null
                 ? null
-                : () => _reply(context, header, body, replyAll: true),
+                : () {
+                    unawaited(_reply(context, header, body, replyAll: true));
+                  },
           ),
           IconButton(
             icon: const Icon(Icons.forward),
             tooltip: 'Forward',
-            onPressed:
-                header == null ? null : () => _forward(context, header, body),
+            onPressed: header == null
+                ? null
+                : () {
+                    unawaited(_forward(context, header, body));
+                  },
           ),
           IconButton(
             icon: const Icon(Icons.mark_email_unread_outlined),
@@ -263,26 +271,31 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  String _quotedBody(Email header, EmailBody? body) {
+  Future<String> _quotedBody(Email header, EmailBody? body) async {
     final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
     final from =
         header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
-    final text = body?.textBody ?? htmlToPlain(body?.htmlBody ?? '');
+    final rawText = body?.textBody;
+    final text = (rawText != null && rawText.isNotEmpty)
+        ? rawText
+        : await compute(htmlToPlain, body?.htmlBody ?? '');
     final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
     return '\n\n— On $date, $from wrote:\n$quoted';
   }
 
-  void _reply(
+  Future<void> _reply(
     BuildContext context,
     Email header,
     EmailBody? body, {
     required bool replyAll,
-  }) {
+  }) async {
     final to = header.from.isNotEmpty ? header.from.first.email : '';
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
     final cc = replyAll ? header.to.map((a) => a.email).join(', ') : '';
+    final quoted = await _quotedBody(header, body);
+    if (!context.mounted) return;
     unawaited(
       context.push(
         '/compose',
@@ -290,23 +303,29 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           'replyToEmailId': widget.emailId,
           'prefillTo': to,
           'prefillSubject': subject,
-          'prefillBody': _quotedBody(header, body),
+          'prefillBody': quoted,
           if (cc.isNotEmpty) 'prefillCc': cc,
         },
       ),
     );
   }
 
-  void _forward(BuildContext context, Email header, EmailBody? body) {
+  Future<void> _forward(
+    BuildContext context,
+    Email header,
+    EmailBody? body,
+  ) async {
     final subject = (header.subject?.startsWith('Fwd:') ?? false)
         ? header.subject!
         : 'Fwd: ${header.subject ?? ''}';
+    final quoted = await _quotedBody(header, body);
+    if (!context.mounted) return;
     unawaited(
       context.push(
         '/compose',
         extra: {
           'prefillSubject': subject,
-          'prefillBody': _quotedBody(header, body),
+          'prefillBody': quoted,
         },
       ),
     );
