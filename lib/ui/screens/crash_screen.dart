@@ -78,7 +78,10 @@ class CrashScreen extends StatelessWidget {
                   await Clipboard.setData(ClipboardData(text: data));
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copied to clipboard')),
+                      const SnackBar(
+                        duration: Duration(seconds: 5),
+                        content: Text('Copied to clipboard'),
+                      ),
                     );
                   }
                 },
@@ -105,6 +108,7 @@ class CrashScreen extends StatelessWidget {
                     if (!launched && context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
+                          duration: Duration(seconds: 5),
                           content: Text('Could not open browser.'),
                         ),
                       );
@@ -113,7 +117,12 @@ class CrashScreen extends StatelessWidget {
                     if (context.mounted) {
                       ScaffoldMessenger.of(
                         context,
-                      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+                      ).showSnackBar(
+                        SnackBar(
+                          duration: const Duration(seconds: 5),
+                          content: Text('Error: $e'),
+                        ),
+                      );
                     }
                   }
                 },

@@ -192,7 +192,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to open file: $e')));
+      ).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          content: Text('Failed to open file: $e'),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _opening = false);
     }
@@ -206,7 +211,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (_accountId == null) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Select an account first')));
+      ).showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Text('Select an account first'),
+        ),
+      );
       return;
     }
     setState(() => _sending = true);
@@ -243,7 +253,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      ).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          content: Text('Send failed: $e'),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _sending = false);
     }

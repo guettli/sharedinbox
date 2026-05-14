@@ -181,7 +181,10 @@ class _AccountTile extends ConsumerWidget {
         );
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Starting sync verification...')),
+            const SnackBar(
+              duration: Duration(seconds: 5),
+              content: Text('Starting sync verification...'),
+            ),
           );
         }
         break;

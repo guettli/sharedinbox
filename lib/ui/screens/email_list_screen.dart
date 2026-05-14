@@ -290,7 +290,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               } catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Sync failed: $e')),
+                  SnackBar(
+                    duration: const Duration(seconds: 5),
+                    content: Text('Sync failed: $e'),
+                  ),
                 );
               }
             },
@@ -421,7 +424,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (mailbox == null) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(notFoundMessage)));
+      ).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          content: Text(notFoundMessage),
+        ),
+      );
       return;
     }
     final repo = ref.read(emailRepositoryProvider);
@@ -579,6 +587,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        duration: const Duration(seconds: 5),
         content: Text(
           'Snoozed ${ids.length} email${ids.length == 1 ? '' : 's'} until ${DateFormat('MMM d, HH:mm').format(until)}',
         ),

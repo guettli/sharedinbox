@@ -61,7 +61,12 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Failed to activate: $e')));
+        ).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 5),
+            content: Text('Failed to activate: $e'),
+          ),
+        );
       }
     }
   }
@@ -94,7 +99,12 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        ).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 5),
+            content: Text('Failed to delete: $e'),
+          ),
+        );
       }
     }
   }

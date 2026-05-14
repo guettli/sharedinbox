@@ -417,6 +417,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          duration: const Duration(seconds: 5),
           content: Text(
             'Snoozed until ${DateFormat('MMM d, HH:mm').format(until)}',
           ),
@@ -430,6 +431,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (body.headers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
+          duration: Duration(seconds: 5),
           content: Text('No headers available. Try re-syncing the email.'),
         ),
       );

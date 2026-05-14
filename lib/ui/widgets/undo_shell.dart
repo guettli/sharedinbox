@@ -29,6 +29,7 @@ class UndoShell extends ConsumerWidget {
     scaffoldMessenger.clearSnackBars();
     scaffoldMessenger.showSnackBar(
       SnackBar(
+        duration: const Duration(seconds: 5),
         content: Text(
           action.type == UndoType.delete
               ? '${action.emailIds.length} email(s) moved to Trash'
