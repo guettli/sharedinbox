@@ -421,6 +421,48 @@ void main() {
       expect(results3, isEmpty);
     });
 
+    test('searchAddresses returns results sorted by most recently used',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      final older = DateTime(2024);
+      final newer = DateTime(2024, 6);
+
+      // Two emails — older one has alice@, newer one has bob@.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:old',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: older,
+              toAddresses: const Value(
+                '[{"name":"Alice","email":"alice@example.com"}]',
+              ),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:new',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 2,
+              receivedAt: newer,
+              toAddresses: const Value(
+                '[{"name":"Bob","email":"bob@example.com"}]',
+              ),
+            ),
+          );
+
+      // Query matching both; newer (bob) should come first.
+      final results = await r.emails.searchAddresses(null, 'example');
+      expect(
+        results.map((a) => a.email).toList(),
+        ['bob@example.com', 'alice@example.com'],
+      );
+    });
+
     // ── IMAP method tests ────────────────────────────────────────────────────
 
     test(

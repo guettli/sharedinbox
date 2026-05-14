@@ -2614,6 +2614,7 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return cond;
           })
+          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
           ..limit(100))
         .get();
 
