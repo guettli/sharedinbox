@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 25);
       await db.close();
     });
 
@@ -141,6 +141,23 @@ void main() {
         ]),
       );
 
+      // v18, v22, v25: indexes.
+      final allIndexes = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
+          .get();
+      final indexNames = allIndexes.map((r) => r.read<String>('name')).toSet();
+      expect(
+        indexNames,
+        containsAll([
+          'emails_received_at', // v18
+          'emails_thread_id', // v18
+          'pending_changes_account_id', // v18
+          'emails_snoozed_until', // v22
+          'mailboxes_account_id', // v25
+          'threads_latest_date', // v25
+        ]),
+      );
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -187,6 +204,17 @@ void main() {
         );
       ''');
       rawDb.execute('''
+        CREATE TABLE mailboxes (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          name TEXT NOT NULL,
+          unread_count INTEGER NOT NULL DEFAULT 0,
+          total_count INTEGER NOT NULL DEFAULT 0,
+          role TEXT NULL
+        );
+      ''');
+      rawDb.execute('''
         CREATE TABLE emails (
           id TEXT NOT NULL PRIMARY KEY,
           account_id TEXT NOT NULL,
@@ -210,6 +238,23 @@ void main() {
           snoozed_from_mailbox_path TEXT NULL
         );
       ''');
+      rawDb.execute('''
+        CREATE TABLE threads (
+          account_id TEXT NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          id TEXT NOT NULL,
+          subject TEXT NULL,
+          latest_date INTEGER NOT NULL,
+          message_count INTEGER NOT NULL DEFAULT 1,
+          has_unread INTEGER NOT NULL DEFAULT 0 CHECK ("has_unread" IN (0, 1)),
+          is_flagged INTEGER NOT NULL DEFAULT 0 CHECK ("is_flagged" IN (0, 1)),
+          participants_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          latest_email_id TEXT NOT NULL,
+          email_ids_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (account_id, mailbox_path, id)
+        );
+      ''');
       rawDb.execute('PRAGMA user_version = 22;');
       rawDb.close();
 
@@ -223,11 +268,19 @@ void main() {
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));
 
+      // v25: new indexes on mailboxes and threads.
+      final allIndexes = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
+          .get();
+      final indexNames = allIndexes.map((r) => r.read<String>('name')).toSet();
+      expect(indexNames, contains('mailboxes_account_id'));
+      expect(indexNames, contains('threads_latest_date'));
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 24', () async {
+    test('fresh install creates all tables at schemaVersion 25', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 

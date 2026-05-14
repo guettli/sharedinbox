@@ -269,7 +269,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 24;
+  int get schemaVersion => 25;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -430,6 +430,22 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from >= 4 && from < 24) {
             await m.addColumn(drafts, drafts.imapServerId);
+          }
+          if (from < 25) {
+            // For observeMailboxes: filter by account_id, sort by path.
+            await m.createIndex(
+              Index(
+                'mailboxes_account_id',
+                'CREATE INDEX IF NOT EXISTS mailboxes_account_id ON mailboxes (account_id, path);',
+              ),
+            );
+            // For observeThreads: filter by account_id+mailbox_path, sort by latest_date.
+            await m.createIndex(
+              Index(
+                'threads_latest_date',
+                'CREATE INDEX IF NOT EXISTS threads_latest_date ON threads (account_id, mailbox_path, latest_date DESC);',
+              ),
+            );
           }
         },
       );
