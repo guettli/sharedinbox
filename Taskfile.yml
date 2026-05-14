@@ -368,7 +368,18 @@ tasks:
 
   check-fast:
     desc: Pre-commit checks — analyze + unit+widget tests + coverage gate (no build, no integration)
-    deps: [analyze, check-coverage, check-hygiene]
+    deps: [analyze, check-coverage, check-hygiene, check-layers]
+
+  check-layers:
+    desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed)
+    cmds:
+      - |
+        VIOLATIONS=$(grep -rn "package:sharedinbox/data/" lib/ui/ 2>/dev/null || true)
+        if [ -n "$VIOLATIONS" ]; then
+          echo "ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):"
+          echo "$VIOLATIONS"
+          exit 1
+        fi
 
   check-hygiene:
     desc: Verify that no forbidden files (like home dir config) are tracked
