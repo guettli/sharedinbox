@@ -92,6 +92,7 @@ jobs:
         run: nix develop --no-warn-dirty --command task deploy-android-bundle
 
       - name: Set up SSH key
+        continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
@@ -100,6 +101,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
 
       - name: Deploy APK to server
+        continue-on-error: true
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -107,12 +109,14 @@ jobs:
         run: nix develop --no-warn-dirty --command task deploy-apk-to-server
 
       - name: Generate build history
+        continue-on-error: true
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: nix develop --no-warn-dirty --command task generate-build-history
 
       - name: Deploy website
+        continue-on-error: true
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
