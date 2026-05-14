@@ -23,8 +23,15 @@ fgj issue list --json --state open | jq '[.[] | select(.labels[].name == "State/
 Rules:
 
 - Never start work on an issue without `State/Ready`
-- Switch `State/Ready` → `State/InProgress` as your first action when picking up an issue
+- Switch `State/Ready` → `State/InProgress` as your **first action** when picking up an issue — before reading any code:
+  ```bash
+  fgj issue edit <NUMBER> --remove-label "State/Ready" --add-label "State/InProgress"
+  ```
 - If blocked, replace current state label with `State/Question` and leave a comment explaining the blocker
+- When done and CI is green, close the issue:
+  ```bash
+  fgj issue close <NUMBER>
+  ```
 
 ## Code conventions
 
