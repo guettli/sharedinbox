@@ -4,11 +4,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
+/// Reads all column names for [tableName] from [db].
+Future<List<String>> _tableColumns(AppDatabase db, String tableName) async {
+  final rows = await db.customSelect('PRAGMA table_info($tableName)').get();
+  return rows.map((r) => r.read<String>('name')).toList();
+}
+
 void main() {
   group('Migration', () {
-    test('upgrade from v1 to latest', () async {
-      // 1. Create a V1 database using raw sqlite3.
-      final dbFile = File('test_migration.db');
+    test('schemaVersion matches expected value', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      expect(db.schemaVersion, 24);
+      await db.close();
+    });
+
+    test('upgrade from v1 to latest checks all added columns', () async {
+      final dbFile = File('test_migration_v1.db');
       if (dbFile.existsSync()) dbFile.deleteSync();
 
       final rawDb = sqlite.sqlite3.open(dbFile.path);
@@ -67,41 +78,187 @@ void main() {
       rawDb.execute('PRAGMA user_version = 1;');
       rawDb.close();
 
-      // 2. Open it with AppDatabase (v22).
       final db = AppDatabase(NativeDatabase(dbFile));
 
-      // Trigger migration by performing a simple query.
+      // Trigger migration by performing a query.
       final accs = await db.select(db.accounts).get();
       expect(accs, hasLength(1));
       expect(accs.first.displayName, 'Alice');
-      expect(accs.first.accountType, 'imap'); // default value
+      expect(accs.first.accountType, 'imap');
 
-      // 3. Verify that all columns exist.
-      // If migration failed, it would have thrown an exception during opening or query.
-      final tableInfo =
-          await db.customSelect('PRAGMA table_info(emails)').get();
-      final columns = tableInfo.map((r) => r.read<String>('name')).toList();
-
-      expect(columns, contains('thread_id'));
-      expect(columns, contains('snoozed_until'));
-      expect(columns, contains('snoozed_from_mailbox_path'));
-
-      final accountsInfo =
-          await db.customSelect('PRAGMA table_info(accounts)').get();
-      final accountColumns =
-          accountsInfo.map((r) => r.read<String>('name')).toList();
-      expect(accountColumns, contains('account_type'));
-      expect(accountColumns, contains('username'));
+      // v2–v3: accounts columns.
+      final accountColumns = await _tableColumns(db, 'accounts');
+      expect(
+        accountColumns,
+        containsAll(['account_type', 'jmap_url', 'username']),
+      );
       expect(accountColumns, contains('manage_sieve_host'));
+
+      // v14: threading columns.
+      final emailColumns = await _tableColumns(db, 'emails');
+      expect(
+        emailColumns,
+        containsAll(['thread_id', 'message_id', 'in_reply_to', 'references']),
+      );
+
+      // v22: snooze columns.
+      expect(
+        emailColumns,
+        containsAll(['snoozed_until', 'snoozed_from_mailbox_path']),
+      );
+
+      // v23: list-unsubscribe header column.
+      expect(emailColumns, contains('list_unsubscribe_header'));
+
+      // v8: mailboxes role column.
+      final mailboxColumns = await _tableColumns(db, 'mailboxes');
+      expect(mailboxColumns, contains('role'));
+
+      // v9: email_bodies cached_at column.
+      final bodyColumns = await _tableColumns(db, 'email_bodies');
+      expect(bodyColumns, contains('cached_at'));
+      expect(bodyColumns, contains('headers_json'));
+
+      // v4: drafts table with v24 imap_server_id column.
+      final draftColumns = await _tableColumns(db, 'drafts');
+      expect(draftColumns, contains('imap_server_id'));
+
+      // v5, v6, v7, v12, v17, v19, v21: new tables.
+      final allTables = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='table'")
+          .get();
+      final tableNames = allTables.map((r) => r.read<String>('name')).toList();
+      expect(
+        tableNames,
+        containsAll([
+          'sync_states', // v5
+          'pending_changes', // v6
+          'sync_logs', // v7
+          'sync_log_mailboxes', // v12
+          'threads', // v17
+          'sync_health', // v19
+          'undo_actions', // v21
+        ]),
+      );
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install (v22) works', () async {
-      final db = AppDatabase(NativeDatabase.memory());
-      // Just ensure we can create everything and query.
+    test(
+        'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
+        () async {
+      final dbFile = File('test_migration_v22.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+
+      // Build a v22 database schema directly with raw SQL.
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        CREATE TABLE accounts (
+          id TEXT NOT NULL PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          imap_host TEXT NOT NULL,
+          imap_port INTEGER NOT NULL DEFAULT 993,
+          imap_ssl INTEGER NOT NULL DEFAULT 1 CHECK ("imap_ssl" IN (0, 1)),
+          smtp_host TEXT NOT NULL DEFAULT '',
+          smtp_port INTEGER NOT NULL DEFAULT 465,
+          smtp_ssl INTEGER NOT NULL DEFAULT 1 CHECK ("smtp_ssl" IN (0, 1)),
+          account_type TEXT NOT NULL DEFAULT 'imap',
+          jmap_url TEXT NULL,
+          username TEXT NULL,
+          manage_sieve_host TEXT NULL,
+          manage_sieve_port INTEGER NULL,
+          manage_sieve_ssl INTEGER NULL,
+          manage_sieve_available INTEGER NOT NULL DEFAULT 0 CHECK ("manage_sieve_available" IN (0, 1)),
+          verbose INTEGER NOT NULL DEFAULT 0 CHECK ("verbose" IN (0, 1))
+        );
+      ''');
+      rawDb.execute('''
+        CREATE TABLE drafts (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NULL,
+          reply_to_email_id TEXT NULL,
+          to_text TEXT NOT NULL DEFAULT '',
+          cc_text TEXT NOT NULL DEFAULT '',
+          subject_text TEXT NOT NULL DEFAULT '',
+          body_text TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER NOT NULL
+        );
+      ''');
+      rawDb.execute('''
+        CREATE TABLE emails (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          uid INTEGER NOT NULL,
+          subject TEXT NULL,
+          sent_at INTEGER NULL,
+          received_at INTEGER NOT NULL,
+          from_json TEXT NOT NULL DEFAULT '[]',
+          to_addresses TEXT NOT NULL DEFAULT '[]',
+          cc_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          is_seen INTEGER NOT NULL DEFAULT 0 CHECK ("is_seen" IN (0, 1)),
+          is_flagged INTEGER NOT NULL DEFAULT 0 CHECK ("is_flagged" IN (0, 1)),
+          has_attachment INTEGER NOT NULL DEFAULT 0 CHECK ("has_attachment" IN (0, 1)),
+          thread_id TEXT NULL,
+          message_id TEXT NULL,
+          in_reply_to TEXT NULL,
+          "references" TEXT NULL,
+          snoozed_until INTEGER NULL,
+          snoozed_from_mailbox_path TEXT NULL
+        );
+      ''');
+      rawDb.execute('PRAGMA user_version = 22;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      // Trigger migration.
       await db.select(db.accounts).get();
+
+      final emailColumns = await _tableColumns(db, 'emails');
+      expect(emailColumns, contains('list_unsubscribe_header'));
+
+      final draftColumns = await _tableColumns(db, 'drafts');
+      expect(draftColumns, contains('imap_server_id'));
+
+      await db.close();
+      if (dbFile.existsSync()) dbFile.deleteSync();
+    });
+
+    test('fresh install creates all tables at schemaVersion 24', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      await db.select(db.accounts).get();
+
+      final allTables = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type='table'")
+          .get();
+      final tableNames = allTables.map((r) => r.read<String>('name')).toSet();
+      expect(
+        tableNames,
+        containsAll([
+          'accounts',
+          'mailboxes',
+          'emails',
+          'email_bodies',
+          'drafts',
+          'sync_states',
+          'pending_changes',
+          'sync_logs',
+          'sync_log_mailboxes',
+          'threads',
+          'sync_health',
+          'undo_actions',
+        ]),
+      );
+
+      final emailColumns = await _tableColumns(db, 'emails');
+      expect(emailColumns, contains('list_unsubscribe_header'));
+
+      final draftColumns = await _tableColumns(db, 'drafts');
+      expect(draftColumns, contains('imap_server_id'));
+
       await db.close();
     });
   });
