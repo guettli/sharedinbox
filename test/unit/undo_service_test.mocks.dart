@@ -198,6 +198,23 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<void>);
 
   @override
+  _i4.Future<void> markAllAsRead(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #markAllAsRead,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
+
+  @override
   _i4.Future<void> moveEmail(
     String? emailId,
     String? destMailboxPath,

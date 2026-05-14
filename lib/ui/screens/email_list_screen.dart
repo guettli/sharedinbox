@@ -193,6 +193,22 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                   extra: {'accountId': widget.accountId},
                 ),
               ),
+              PopupMenuButton<String>(
+                onSelected: (value) async {
+                  if (value == 'mark_all_read') {
+                    await emailRepo.markAllAsRead(
+                      widget.accountId,
+                      widget.mailboxPath,
+                    );
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'mark_all_read',
+                    child: Text('Mark all as read'),
+                  ),
+                ],
+              ),
             ],
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(60),

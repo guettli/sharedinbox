@@ -103,6 +103,8 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
   @override
+  Future<void> markAllAsRead(String accountId, String mailboxPath) async {}
+  @override
   Future<void> moveEmail(String id, String dest) async {}
   @override
   Future<String?> deleteEmail(String id) async => null;

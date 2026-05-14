@@ -126,6 +126,35 @@ abstract class EmailRepositoryContract {
       expect(email!.isFlagged, isTrue);
     });
 
+    test('markAllAsRead marks every unread email in the mailbox', () async {
+      final repo = await makeRepo();
+      await insertEmail(
+        repo,
+        id: 'er-acc:20',
+        mailboxPath: 'INBOX',
+        isSeen: false,
+      );
+      await insertEmail(
+        repo,
+        id: 'er-acc:21',
+        mailboxPath: 'INBOX',
+        isSeen: false,
+      );
+      await insertEmail(
+        repo,
+        id: 'er-acc:22',
+        mailboxPath: 'Sent',
+        isSeen: false,
+      );
+
+      await repo.markAllAsRead(_account.id, 'INBOX');
+
+      expect((await repo.getEmail('er-acc:20'))!.isSeen, isTrue);
+      expect((await repo.getEmail('er-acc:21'))!.isSeen, isTrue);
+      // Email in a different mailbox should be untouched.
+      expect((await repo.getEmail('er-acc:22'))!.isSeen, isFalse);
+    });
+
     test('observeThreads starts empty', () async {
       final repo = await makeRepo();
       expect(

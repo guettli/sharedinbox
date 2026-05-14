@@ -1521,6 +1521,63 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<void> markAllAsRead(String accountId, String mailboxPath) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final unread = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                t.isSeen.equals(false),
+          ))
+        .get();
+    if (unread.isEmpty) return;
+
+    await _db.transaction(() async {
+      for (final row in unread) {
+        if (account.type == account_model.AccountType.jmap) {
+          await _enqueueChange(
+            accountId,
+            row.id,
+            'flag_seen',
+            jsonEncode({'seen': true}),
+          );
+        } else {
+          await _enqueueChange(
+            accountId,
+            row.id,
+            'flag_seen',
+            jsonEncode({
+              'uid': row.uid,
+              'mailboxPath': row.mailboxPath,
+              'seen': true,
+            }),
+          );
+        }
+      }
+
+      // Bulk mark all unread emails in this mailbox as seen.
+      await (_db.update(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(mailboxPath) &
+                  t.isSeen.equals(false),
+            ))
+          .write(const EmailsCompanion(isSeen: Value(true)));
+
+      // Update all threads in this mailbox to reflect no unread.
+      await (_db.update(_db.threads)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(mailboxPath),
+            ))
+          .write(const ThreadsCompanion(hasUnread: Value(false)));
+    });
+  }
+
+  @override
   Future<void> moveEmail(String emailId, String destMailboxPath) async {
     final row = await (_db.select(
       _db.emails,
