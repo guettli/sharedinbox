@@ -5,6 +5,8 @@ import json
 import os
 import sys
 
+import google_auth_httplib2
+import httplib2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -12,6 +14,7 @@ from googleapiclient.http import MediaFileUpload
 PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
 TRACK = "internal"
+_TIMEOUT = 300  # seconds — AAB uploads can be large
 
 
 def main():
@@ -29,9 +32,12 @@ def main():
         scopes=["https://www.googleapis.com/auth/androidpublisher"],
     )
 
-    service = build("androidpublisher", "v3", credentials=creds)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=_TIMEOUT)
+    )
+    service = build("androidpublisher", "v3", http=authorized_http)
 
-    edit = service.edits().insert(body={}, packageName=PACKAGE_NAME).execute()
+    edit = service.edits().insert(body={}, packageName=PACKAGE_NAME).execute(num_retries=3)
     edit_id = edit["id"]
 
     media = MediaFileUpload(AAB_PATH, mimetype="application/octet-stream", resumable=True)
@@ -39,7 +45,7 @@ def main():
         service.edits()
         .bundles()
         .upload(packageName=PACKAGE_NAME, editId=edit_id, media_body=media)
-        .execute()
+        .execute(num_retries=3)
     )
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
@@ -49,9 +55,9 @@ def main():
         editId=edit_id,
         track=TRACK,
         body={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
-    ).execute()
+    ).execute(num_retries=3)
 
-    service.edits().commit(packageName=PACKAGE_NAME, editId=edit_id).execute()
+    service.edits().commit(packageName=PACKAGE_NAME, editId=edit_id).execute(num_retries=3)
     print(f"Deployed version {version_code} to {TRACK} track")
 
 
