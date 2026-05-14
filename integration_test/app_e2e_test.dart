@@ -130,12 +130,12 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      // Capture the test binding's error recorder BEFORE app.main() so we can
-      // restore it in teardown. app.main() sets its own FlutterError.onError
-      // (crash-screen handler); we must override it AFTER the call so our
-      // filter takes precedence, yet teardown still restores to the binding's
-      // recorder (not to the crash handler).
+      // Capture the test binding's error recorder and error-widget builder
+      // BEFORE app.main() so teardown can restore both. app.main() overwrites
+      // FlutterError.onError (crash-screen handler) and ErrorWidget.builder;
+      // the test binding verifies both are unchanged after the test completes.
       final bindingError = FlutterError.onError;
+      final bindingErrorWidgetBuilder = ErrorWidget.builder;
 
       _log('app start');
       app.main(
@@ -165,7 +165,10 @@ void main() {
         if (msg.contains('_zOrderIndex')) return;
         bindingError?.call(details);
       };
-      addTearDown(() => FlutterError.onError = bindingError);
+      addTearDown(() {
+        FlutterError.onError = bindingError;
+        ErrorWidget.builder = bindingErrorWidgetBuilder;
+      });
 
       await pumpUntil(tester, find.text('Welcome to SharedInbox'));
       _log('app settled');
