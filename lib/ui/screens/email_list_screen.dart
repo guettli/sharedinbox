@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/email_tile.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 
@@ -711,10 +712,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       itemBuilder: (ctx, i) {
         final e = emails[i];
         final isSelected = _selectedSearchIds.contains(e.id);
-        final sender = e.from.isNotEmpty
-            ? (e.from.first.name ?? e.from.first.email)
-            : '(unknown)';
-        return ListTile(
+        return EmailTile(
+          email: e,
+          selected: isSelected,
           leading: SizedBox(
             width: 40,
             child: _selecting
@@ -722,25 +722,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                     value: isSelected,
                     onChanged: (_) => _toggleSearchSelection(e.id),
                   )
-                : Icon(
-                    e.isSeen ? Icons.mail_outline : Icons.mail,
-                    color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-                  ),
-          ),
-          title: Text(
-            sender,
-            style:
-                e.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Text(
-            e.subject ?? '(no subject)',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          selected: isSelected,
-          trailing: Text(
-            e.sentAt != null ? _dateFmt.format(e.sentAt!) : '',
-            style: Theme.of(ctx).textTheme.bodySmall,
+                : null,
           ),
           onTap: _selecting
               ? () => _toggleSearchSelection(e.id)

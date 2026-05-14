@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/email_tile.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, this.accountId});
@@ -155,7 +156,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         if (r.emails.isNotEmpty) ...[
           const _SectionHeader('Messages'),
           for (final e in r.emails)
-            _EmailTile(email: e, accountId: e.accountId),
+            EmailTile(
+              email: e,
+              showLocation: true,
+              onTap: () => context.push(
+                '/accounts/${e.accountId}/mailboxes'
+                '/${Uri.encodeComponent(e.mailboxPath)}'
+                '/emails/${Uri.encodeComponent(e.id)}',
+              ),
+            ),
         ],
       ],
     );
@@ -242,45 +251,6 @@ class _AddressTile extends StatelessWidget {
       onTap: () => context.push(
         '/accounts/$accountId/emails/by-address'
         '/${Uri.encodeComponent(addr.email)}',
-      ),
-    );
-  }
-}
-
-class _EmailTile extends StatelessWidget {
-  const _EmailTile({required this.email, required this.accountId});
-  final Email email;
-  final String accountId;
-
-  @override
-  Widget build(BuildContext context) {
-    final sender = email.from.isNotEmpty
-        ? (email.from.first.name ?? email.from.first.email)
-        : '(unknown)';
-    return ListTile(
-      leading: Icon(
-        email.isSeen ? Icons.mail_outline : Icons.mail,
-        color: email.isSeen ? null : Theme.of(context).colorScheme.primary,
-      ),
-      title: Text(sender),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            email.subject ?? '(no subject)',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          Text(
-            '$accountId • ${email.mailboxPath}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-      onTap: () => context.push(
-        '/accounts/$accountId/mailboxes'
-        '/${Uri.encodeComponent(email.mailboxPath)}'
-        '/emails/${Uri.encodeComponent(email.id)}',
       ),
     );
   }
