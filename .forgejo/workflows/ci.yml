@@ -60,12 +60,12 @@ jobs:
         run: nix develop --no-warn-dirty --command task deploy-linux-to-server
 
   build-windows:
+    # Enable once a self-hosted runner with label "windows-runner" is registered.
     name: Build & Deploy Windows Release
     runs-on: windows-runner
     needs: check
-    if: github.ref == 'refs/heads/main'
+    if: false
     continue-on-error: true
-    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
