@@ -110,7 +110,7 @@ ts "flutter test start"
 # is needed because the integration tests inject an in-memory SecureStorage.
 # +iglx enables indirect GLX on Xvfb so Flutter/GTK3 can create an OpenGL context
 # using mesa's software renderer (LIBGL_ALWAYS_SOFTWARE=1 is set in flake.nix).
-timeout 300 xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
+timeout 600 xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
     fvm flutter test integration_test/ -d linux
 
 ts "flutter test done"

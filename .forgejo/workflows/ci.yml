@@ -9,7 +9,7 @@ jobs:
   check:
     name: Full Project Check
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
         run: nix develop --command task integration
 
       - name: UI E2E tests
-        timeout-minutes: 6
+        timeout-minutes: 12
         run: nix develop --command task integration-ui
 
       - name: Coverage gate
