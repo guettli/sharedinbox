@@ -5,7 +5,7 @@ import 'helpers.dart';
 
 void main() {
   group('AccountListScreen', () {
-    testWidgets('shows "No accounts yet." when repository is empty', (
+    testWidgets('shows onboarding walkthrough when repository is empty', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -13,7 +13,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('No accounts yet.'), findsOneWidget);
+      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
       expect(find.text('Add account'), findsOneWidget);
     });
 

@@ -60,20 +60,7 @@ class AccountListScreen extends ConsumerWidget {
           }
           final accounts = snap.data!;
           if (accounts.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('No accounts yet.'),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () => context.push('/accounts/add'),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add account'),
-                  ),
-                ],
-              ),
-            );
+            return const _OnboardingView();
           }
           return ListView.builder(
             itemCount: accounts.length,
@@ -230,6 +217,112 @@ class _AccountTile extends ConsumerWidget {
           ).read(accountRepositoryProvider).removeAccount(account.id);
         }
     }
+  }
+}
+
+class _OnboardingView extends StatelessWidget {
+  const _OnboardingView();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.mail_outline,
+              size: 64,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Welcome to SharedInbox',
+              style: theme.textTheme.headlineSmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Get started in three steps:',
+              style: theme.textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            const _Step(
+              number: '1',
+              title: 'Add an account',
+              description: 'Connect your IMAP or JMAP email account.',
+            ),
+            const _Step(
+              number: '2',
+              title: 'Wait for sync',
+              description:
+                  'SharedInbox downloads your messages in the background.',
+            ),
+            const _Step(
+              number: '3',
+              title: 'Open your inbox',
+              description:
+                  'Tap the account to browse mailboxes and read emails.',
+            ),
+            const SizedBox(height: 32),
+            FilledButton.icon(
+              onPressed: () => context.push('/accounts/add'),
+              icon: const Icon(Icons.add),
+              label: const Text('Add account'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Step extends StatelessWidget {
+  const _Step({
+    required this.number,
+    required this.title,
+    required this.description,
+  });
+
+  final String number;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: theme.colorScheme.primaryContainer,
+            child: Text(
+              number,
+              style: TextStyle(
+                color: theme.colorScheme.onPrimaryContainer,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.titleSmall),
+                Text(description, style: theme.textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

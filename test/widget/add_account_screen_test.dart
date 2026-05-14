@@ -203,7 +203,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.text('No accounts yet.'), findsOneWidget);
+      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
     });
 
     testWidgets('JMAP connection failure shows error message', (tester) async {
@@ -284,7 +284,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.text('No accounts yet.'), findsOneWidget);
+      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
     });
 
     testWidgets(
