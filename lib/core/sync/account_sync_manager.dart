@@ -12,6 +12,8 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
 
+typedef OnNewMailCallback = Future<void> Function(String accountEmail);
+
 /// Manages background sync for all accounts.
 ///
 /// IMAP accounts get an IDLE-based sync loop (_AccountSync).
@@ -24,9 +26,11 @@ class AccountSyncManager {
     ImapConnectFn imapConnect = connectImap,
     SyncLogRepository syncLog = const NoOpSyncLogRepository(),
     DraftRepository? drafts,
+    OnNewMailCallback? onNewMail,
   })  : _imapConnect = imapConnect,
         _syncLog = syncLog,
-        _drafts = drafts;
+        _drafts = drafts,
+        _onNewMail = onNewMail;
 
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
@@ -34,6 +38,7 @@ class AccountSyncManager {
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
   final DraftRepository? _drafts;
+  final OnNewMailCallback? _onNewMail;
 
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
@@ -58,6 +63,7 @@ class AccountSyncManager {
               _imapConnect,
               _syncLog,
               _drafts,
+              _onNewMail,
             ),
           AccountType.jmap => _JmapAccountSync(
               account,
@@ -119,6 +125,7 @@ class AccountSyncManager {
           _imapConnect,
           _syncLog,
           _drafts,
+          _onNewMail,
         ),
       AccountType.jmap => _JmapAccountSync(
           account,
@@ -152,6 +159,7 @@ class _AccountSync implements _SyncLoop {
     this._imapConnect,
     this._syncLog,
     this._drafts,
+    this._onNewMail,
   );
 
   final Account account;
@@ -161,6 +169,7 @@ class _AccountSync implements _SyncLoop {
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
   final DraftRepository? _drafts;
+  final OnNewMailCallback? _onNewMail;
 
   imap.ImapClient? _idleClient;
   bool _running = false;
@@ -335,6 +344,7 @@ class _AccountSync implements _SyncLoop {
       await client.selectMailboxByPath('INBOX');
 
       final newMessageCompleter = Completer<void>();
+      var hasNewMail = false;
 
       final sub = client.eventBus
           .on<imap.ImapEvent>()
@@ -342,7 +352,11 @@ class _AccountSync implements _SyncLoop {
             (e) =>
                 e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
           )
-          .listen((_) {
+          .listen((e) {
+        if (e is imap.ImapMessagesExistEvent &&
+            e.newMessagesExists > e.oldMessagesExists) {
+          hasNewMail = true;
+        }
         if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
       });
 
@@ -358,6 +372,10 @@ class _AccountSync implements _SyncLoop {
 
       await client.idleDone();
       await sub.cancel();
+
+      if (hasNewMail) {
+        unawaited(_onNewMail?.call(account.email));
+      }
     } finally {
       await client.logout();
       _idleClient = null;

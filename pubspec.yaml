@@ -45,6 +45,10 @@ dependencies:
   url_launcher: ^6.3.2
   flutter_markdown: ^0.7.7+1
 
+  # Background sync and local notifications
+  flutter_local_notifications: ^18.0.1
+  workmanager: ^0.5.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

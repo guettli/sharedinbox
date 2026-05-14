@@ -52,6 +52,7 @@ const _excluded = {
   'lib/ui/widgets/try_connection_button.dart',
   'lib/ui/widgets/undo_shell.dart',
   'lib/core/sync/account_sync_manager.dart',
+  'lib/core/sync/background_sync.dart',
   'lib/core/sync/reliability_runner.dart',
   'lib/data/jmap/jmap_client.dart',
   'lib/data/jmap/sieve_repository.dart',

@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
+import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
@@ -122,6 +123,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     syncLog: ref.watch(syncLogRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
+    onNewMail: showNewMailNotification,
   );
   ref.onDispose(manager.dispose);
   return manager;

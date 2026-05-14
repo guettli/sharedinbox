@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
@@ -32,6 +35,10 @@ void main({List<Override> overrides = const []}) async {
         };
 
         await initDatabasePath();
+        if (Platform.isAndroid) {
+          await initNotifications();
+          await registerBackgroundSync();
+        }
         runApp(
           ProviderScope(overrides: overrides, child: const SharedInboxApp()),
         );
