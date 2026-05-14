@@ -1,7 +1,6 @@
 ---
 name: Issue
 about: Report a bug or request a feature
-labels: State/Ready
 ---
 
 
