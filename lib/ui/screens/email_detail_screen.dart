@@ -57,8 +57,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final header = detail.valueOrNull?.$1;
     final body = detail.valueOrNull?.$2;
 
+    final isMobile = defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !isMobile,
         title: Text(
           header?.subject ?? '(loading…)',
           overflow: TextOverflow.ellipsis,
