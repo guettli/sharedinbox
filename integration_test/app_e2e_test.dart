@@ -151,8 +151,17 @@ void main() {
         ],
       );
 
-      // Override the crash handler that app.main() just installed with a
-      // filter that forwards non-spurious errors to the binding's recorder.
+      // app.main() sets both FlutterError.onError (crash handler) and
+      // ErrorWidget.builder (CrashScreen builder). The binding captures
+      // ErrorWidget.builder BEFORE testBody() and verifies it is unchanged
+      // AFTER testBody() returns — addTearDown fires too late for that check.
+      // Restore ErrorWidget.builder here, immediately after app.main().
+      ErrorWidget.builder = bindingErrorWidgetBuilder;
+
+      // Override the crash handler with a filter that forwards non-spurious
+      // errors to the binding's recorder. addTearDown is fine for
+      // FlutterError.onError because the binding checks it via _recordError
+      // which is called on the next error, not in a post-body verify pass.
       FlutterError.onError = (details) {
         final msg = details.toString();
         // DEFUNCT/DISPOSED: keyboard-dismiss or teardown layout errors on
@@ -165,10 +174,7 @@ void main() {
         if (msg.contains('_zOrderIndex')) return;
         bindingError?.call(details);
       };
-      addTearDown(() {
-        FlutterError.onError = bindingError;
-        ErrorWidget.builder = bindingErrorWidgetBuilder;
-      });
+      addTearDown(() => FlutterError.onError = bindingError);
 
       await pumpUntil(tester, find.text('Welcome to SharedInbox'));
       _log('app settled');
