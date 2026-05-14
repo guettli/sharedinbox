@@ -86,9 +86,7 @@ Files: `lib/ui/screens/search_screen.dart`, `lib/data/db/database.dart`.
 
 ### U4 — Done: https://codeberg.org/guettli/sharedinbox/pulls/28
 
-### U5 🟡 Accessible swipe actions on email list items
-Delete and Move are hidden behind long-press or detail-screen menus. Add leading/trailing swipe actions on the `EmailListScreen` tile (archive / delete) matching Material 3 patterns.
-Files: `lib/ui/screens/email_list_screen.dart`.
+### U5 — Already implemented (Dismissible archive/delete swipes with undo, found in email_list_screen.dart)
 
 ### U6 — Done: https://codeberg.org/guettli/sharedinbox/pulls/29
 
