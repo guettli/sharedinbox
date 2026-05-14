@@ -59,6 +59,36 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: nix develop --no-warn-dirty --command task deploy-linux-to-server
 
+  build-windows:
+    name: Build & Deploy Windows Release
+    runs-on: windows-runner
+    needs: check
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Build Windows
+        run: task build-windows-release
+
+      - name: Set up SSH key
+        continue-on-error: true
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p $env:USERPROFILE\.ssh
+          $env:SSH_PRIVATE_KEY | Out-File -FilePath "$env:USERPROFILE\.ssh\id_rsa" -Encoding ascii
+          icacls "$env:USERPROFILE\.ssh\id_rsa" /inheritance:r /grant:r "$env:USERNAME:F"
+
+      - name: Deploy Windows to server
+        continue-on-error: true
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: task deploy-windows-to-server
+
   deploy-playstore:
     name: Build & Deploy to Play Store
     runs-on: self-hosted

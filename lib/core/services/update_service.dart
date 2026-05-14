@@ -14,11 +14,16 @@ class UpdateInfo {
   final String downloadUrl;
 }
 
-/// Returns an [UpdateInfo] when a newer Linux version is available, or null
-/// if the app is up to date, the version is unknown, or the platform is not
-/// Linux desktop.
+/// Returns an [UpdateInfo] when a newer Linux or Windows version is available,
+/// or null if the app is up to date, the version is unknown, or the platform
+/// is not a supported desktop.
 final updateInfoProvider = FutureProvider<UpdateInfo?>((ref) async {
-  if (!Platform.isLinux || _kAppVersion.isEmpty) return null;
+  final platformKey = Platform.isLinux
+      ? 'linux'
+      : Platform.isWindows
+          ? 'windows'
+          : null;
+  if (platformKey == null || _kAppVersion.isEmpty) return null;
 
   try {
     final resp = await http
@@ -27,7 +32,7 @@ final updateInfoProvider = FutureProvider<UpdateInfo?>((ref) async {
     if (resp.statusCode != 200) return null;
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final latest = json['version'] as String?;
-    final url = json['linux'] as String?;
+    final url = json[platformKey] as String?;
     if (latest == null || url == null) return null;
     if (latest == _kAppVersion) return null;
     return UpdateInfo(latestVersion: latest, downloadUrl: url);
