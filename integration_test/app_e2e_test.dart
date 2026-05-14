@@ -264,10 +264,12 @@ void main() {
         find.widgetWithText(TextFormField, 'To'),
         userEmail,
       );
-      // Pump so RawAutocomplete's OverlayPortal has a frame to close before
-      // focus moves to the next field — prevents the double hide() race that
-      // triggers the _zOrderIndex assertion in overlay.dart.
-      await tester.pump();
+      // Explicitly unfocus the To field so RawAutocomplete closes its overlay
+      // via a single FocusNode notification BEFORE Subject takes focus.
+      // A plain pump() is insufficient — the double hide() fires synchronously
+      // during the focus-dispatch triggered by the next enterText call.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Subject'),
         subject,
