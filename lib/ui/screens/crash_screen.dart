@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class CrashScreen extends StatelessWidget {
@@ -11,6 +14,20 @@ class CrashScreen extends StatelessWidget {
 
   final Object exception;
   final StackTrace? stackTrace;
+
+  Future<String> _buildReport() async {
+    String version = 'unknown';
+    try {
+      final info = await PackageInfo.fromPlatform();
+      version = '${info.version}+${info.buildNumber}';
+    } catch (_) {}
+    final platform =
+        '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
+    return 'App Version: $version\n'
+        'Platform: $platform\n\n'
+        'Error:\n```\n$exception\n```\n\n'
+        'Stack Trace:\n```\n$stackTrace\n```';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,7 +91,7 @@ class CrashScreen extends StatelessWidget {
               const SizedBox(height: 24),
               FilledButton.icon(
                 onPressed: () async {
-                  final data = 'Error: $exception\n\nStack Trace:\n$stackTrace';
+                  final data = await _buildReport();
                   await Clipboard.setData(ClipboardData(text: data));
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -91,12 +108,11 @@ class CrashScreen extends StatelessWidget {
               const SizedBox(height: 16),
               OutlinedButton.icon(
                 onPressed: () async {
+                  final report = await _buildReport();
                   final title = Uri.encodeComponent(
                     'Crash: ${exception.toString().split('\n').first}',
                   );
-                  final body = Uri.encodeComponent(
-                    'Error: $exception\n\nStack Trace:\n$stackTrace',
-                  );
+                  final body = Uri.encodeComponent(report);
                   final url = Uri.parse(
                     'https://codeberg.org/guettli/sharedinbox/issues/new?title=$title&body=$body',
                   );
@@ -115,9 +131,7 @@ class CrashScreen extends StatelessWidget {
                     }
                   } catch (e) {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(
+                      ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           duration: const Duration(seconds: 5),
                           content: Text('Error: $e'),

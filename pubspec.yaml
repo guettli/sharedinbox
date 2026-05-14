@@ -49,6 +49,9 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   workmanager: ^0.9.0
 
+  # App version metadata for crash reports
+  package_info_plus: ^8.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
@@ -23,6 +24,16 @@ class MockUrlLauncher extends Mock
 }
 
 void main() {
+  setUpAll(() {
+    PackageInfo.setMockInitialValues(
+      appName: 'SharedInbox',
+      packageName: 'org.sharedinbox',
+      version: '1.0.0',
+      buildNumber: '42',
+      buildSignature: '',
+    );
+  });
+
   testWidgets('CrashScreen shows error details and has a report button', (
     tester,
   ) async {
@@ -56,9 +67,7 @@ void main() {
       mock.launchedUrl,
       contains('title=Crash%3A%20TestException%3A%20something%20broke'),
     );
-    expect(
-      mock.launchedUrl,
-      contains('body=Error%3A%20TestException%3A%20something%20broke'),
-    );
+    expect(mock.launchedUrl, contains('App%20Version%3A%201.0.0%2B42'));
+    expect(mock.launchedUrl, contains('TestException%3A%20something%20broke'));
   });
 }
