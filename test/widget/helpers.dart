@@ -30,6 +30,7 @@ import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
+import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Fake repositories
@@ -380,6 +381,18 @@ Widget buildApp({
                     ),
                   ),
                 ],
+              ),
+              GoRoute(
+                path: ':mailboxPath/threads/:threadId',
+                builder: (ctx, state) => ThreadDetailScreen(
+                  accountId: state.pathParameters['accountId']!,
+                  mailboxPath: Uri.decodeComponent(
+                    state.pathParameters['mailboxPath']!,
+                  ),
+                  threadId: Uri.decodeComponent(
+                    state.pathParameters['threadId']!,
+                  ),
+                ),
               ),
             ],
           ),
