@@ -186,7 +186,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 ),
               ),
             ),
-          Html(
+          _SafeHtml(
             data: body.htmlBody!,
             extensions: [if (!_loadRemoteImages) _BlockRemoteImagesExtension()],
           ),
@@ -498,6 +498,57 @@ class _UnsubscribeChip extends StatelessWidget {
       label: const Text('Unsubscribe'),
       onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
     );
+  }
+}
+
+/// Renders [Html] and falls back to an error message if the widget throws
+/// during build, preventing a malformed body from crashing the whole screen.
+class _SafeHtml extends StatefulWidget {
+  const _SafeHtml({required this.data, required this.extensions});
+  final String data;
+  final List<HtmlExtension> extensions;
+
+  @override
+  State<_SafeHtml> createState() => _SafeHtmlState();
+}
+
+class _SafeHtmlState extends State<_SafeHtml> {
+  bool _failed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.warning_amber_outlined,
+              color: Theme.of(context).colorScheme.error,
+              size: 16,
+            ),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('Message body could not be rendered.')),
+          ],
+        ),
+      );
+    }
+
+    // Intercept any build-phase throw from flutter_html for this subtree.
+    // We save/restore via postFrameCallback so other widgets are unaffected.
+    final prev = ErrorWidget.builder;
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      ErrorWidget.builder = prev;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _failed = true);
+      });
+      return const SizedBox.shrink();
+    };
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => ErrorWidget.builder = prev,
+    );
+
+    return Html(data: widget.data, extensions: widget.extensions);
   }
 }
 
