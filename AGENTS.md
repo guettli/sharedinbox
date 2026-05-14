@@ -1,5 +1,25 @@
 # SharedInbox — Development Guide
 
+## Codeberg
+
+We use Codeberg: https://codeberg.org/guettli/sharedinbox/
+
+CLI tool `fgj` is available to query issues/PRs/actions.
+
+## Issue Label Workflow
+
+We use issues, follow this label state machine:
+
+- **State/Ready** — Issue is available to pick up
+- **State/InProgress** — Set this when you start working on an issue
+- **State/Question** — Set this when you hit a blocker or need clarification
+
+Rules:
+
+- Never start work on an issue without `State/Ready`
+- Switch `State/Ready` → `State/InProgress` as your first action when picking up an issue
+- If blocked, replace current state label with `State/Question` and leave a comment explaining the blocker
+
 ## Code conventions
 
 - Avoid `else`, use "early return".
