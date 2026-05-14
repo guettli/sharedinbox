@@ -2509,9 +2509,13 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
+      // Fetch the full message so enough_mail has MIME headers (including
+      // Content-Transfer-Encoding) and getPart() can decode the part correctly.
+      // A partial BODY.PEEK[n] fetch omits those headers, causing
+      // decodeContentBinary() to return raw base64 instead of decoded bytes.
       final fetch = await client.uidFetchMessage(
         emailRow.uid,
-        'BODY.PEEK[${attachment.fetchPartId}]',
+        'BODY.PEEK[]',
       );
       final msg = fetch.messages.first;
       final part = msg.getPart(attachment.fetchPartId) ?? msg;
