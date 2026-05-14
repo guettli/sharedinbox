@@ -69,14 +69,13 @@ run_tests() {
   local target="${1:-test/integration/}"
   if [ -f coverage/lcov.info ]; then
     cp coverage/lcov.info coverage/lcov.base.info
-    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter expanded "$target" >"$tmp" 2>&1
+    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter compact "$target" >"$tmp" 2>&1
     rm -f coverage/lcov.base.info
   else
-    fvm flutter test --concurrency=1 --reporter expanded "$target" >"$tmp" 2>&1
+    fvm flutter test --concurrency=1 --reporter compact "$target" >"$tmp" 2>&1
   fi
 }
 if run_tests "${@:-}"; then
-  cat "$tmp"
   grep -E "^All [0-9]+ tests passed" "$tmp" || tail -1 "$tmp"
 else
   cat "$tmp"

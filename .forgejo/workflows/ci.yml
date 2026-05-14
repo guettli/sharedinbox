@@ -20,7 +20,7 @@ jobs:
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Run Full Check Suite
-        run: nix develop --command task check
+        run: nix develop --no-warn-dirty --command task check
 
   build-linux:
     name: Build Linux Release
@@ -37,7 +37,7 @@ jobs:
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Build Linux
-        run: nix develop --command task build-linux-release
+        run: nix develop --no-warn-dirty --command task build-linux-release
 
   deploy-playstore:
     name: Build & Deploy to Play Store
@@ -83,4 +83,4 @@ jobs:
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
-        run: nix develop --command task deploy-android-bundle
+        run: nix develop --no-warn-dirty --command task deploy-android-bundle
