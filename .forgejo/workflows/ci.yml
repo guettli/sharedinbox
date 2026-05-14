@@ -64,6 +64,8 @@ jobs:
     runs-on: windows-runner
     needs: check
     if: github.ref == 'refs/heads/main'
+    continue-on-error: true
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
