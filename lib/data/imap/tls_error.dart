@@ -21,13 +21,50 @@ class TlsModeMismatchException implements Exception {
       'STARTTLS). Original error: $original';
 }
 
-/// If [error] is a TLS handshake failure caused by a wrong-version-number
-/// (i.e. the server is not speaking TLS), throw a [TlsModeMismatchException]
-/// with [host]/[port] context. Otherwise rethrow [error] unchanged.
+/// Wraps a TLS certificate verification failure into a user-actionable message.
+///
+/// Thrown when the server's certificate cannot be verified — either because it
+/// is self-signed, expired, or the CA chain has changed since the account was
+/// set up.
+class TlsCertificateException implements Exception {
+  TlsCertificateException(this.host, this.port, this.original);
+  final String host;
+  final int port;
+  final Object original;
+
+  @override
+  String toString() =>
+      'TLS certificate error on $host:$port — the server certificate could '
+      'not be verified. The certificate may have changed or expired. '
+      'Please re-check your account settings or contact your mail provider. '
+      'Original error: $original';
+}
+
+/// Returns true if [error] is a permanent TLS configuration error that will
+/// not resolve on its own and requires user action.
+bool isTlsConfigError(Object error) =>
+    error is TlsModeMismatchException || error is TlsCertificateException;
+
+/// If [error] is a recognisable TLS handshake failure, wraps it in a typed
+/// exception and throws it.  Otherwise rethrows [error] unchanged.
+///
+/// Recognised patterns:
+/// - `WRONG_VERSION_NUMBER` → [TlsModeMismatchException] (port/mode mismatch)
+/// - `CERTIFICATE_VERIFY_FAILED` / `HandshakeException` → [TlsCertificateException]
 Never rethrowAsTlsHint(Object error, StackTrace stack, String host, int port) {
-  if (error.toString().contains('WRONG_VERSION_NUMBER')) {
+  final s = error.toString();
+  if (s.contains('WRONG_VERSION_NUMBER')) {
     Error.throwWithStackTrace(
       TlsModeMismatchException(host, port, error),
+      stack,
+    );
+  }
+  if (s.contains('CERTIFICATE_VERIFY_FAILED') ||
+      s.contains('HandshakeException') ||
+      s.contains('CERTIFICATE_EXPIRED') ||
+      s.contains('CERTIFICATE_UNKNOWN')) {
+    Error.throwWithStackTrace(
+      TlsCertificateException(host, port, error),
       stack,
     );
   }

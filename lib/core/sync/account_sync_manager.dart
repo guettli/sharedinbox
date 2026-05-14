@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
+import 'package:sharedinbox/data/imap/tls_error.dart' show isTlsConfigError;
 
 typedef OnNewMailCallback = Future<void> Function(String accountEmail);
 
@@ -291,6 +292,7 @@ class _AccountSync implements _SyncLoop {
   }
 
   bool _isPermanentError(Object e) {
+    if (isTlsConfigError(e)) return true;
     final s = e.toString().toLowerCase();
     // enough_mail doesn't always have typed exceptions for auth, so we check strings.
     return s.contains('invalid credentials') ||
@@ -528,6 +530,7 @@ class _JmapAccountSync implements _SyncLoop {
   }
 
   bool _isPermanentError(Object e) {
+    if (isTlsConfigError(e)) return true;
     final s = e.toString().toLowerCase();
     return s.contains('invalid credentials') ||
         s.contains('authentication failed') ||
