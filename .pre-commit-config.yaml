@@ -12,6 +12,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: check-no-binary
+        name: check for binary files (build artifacts, databases)
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && scripts/check_no_binary.sh'
+        pass_filenames: false
+        always_run: true
       - id: forbidden-files-hook
         name: check for forbidden home-directory files
         language: system
