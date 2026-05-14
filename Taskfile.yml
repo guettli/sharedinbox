@@ -331,6 +331,12 @@ tasks:
     cmds:
       - fvm dart run scripts/check_coverage.dart
 
+  check-coverage:
+    desc: Run unit+widget tests with coverage, then fail if the gate is not met
+    deps: [test]
+    cmds:
+      - task: coverage
+
   website-dev:
     desc: Run Hugo development server
     cmds:
@@ -361,8 +367,8 @@ tasks:
           ${SSH_USER}@${SSH_HOST}:public_html/
 
   check-fast:
-    desc: Pre-commit checks — analyze + unit tests + widget tests (no build, no integration)
-    deps: [analyze, test, check-hygiene]
+    desc: Pre-commit checks — analyze + unit+widget tests + coverage gate (no build, no integration)
+    deps: [analyze, check-coverage, check-hygiene]
 
   check-hygiene:
     desc: Verify that no forbidden files (like home dir config) are tracked
