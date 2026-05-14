@@ -130,17 +130,12 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      // On Android, the keyboard-dismiss / window-resize cycle can trigger
-      // one final layout pass on already-disposed render objects (DEFUNCT).
-      // These spurious overflow errors have no effect on real functionality;
-      // filter them so they don't fail the test.
-      final prevError = FlutterError.onError;
-      FlutterError.onError = (details) {
-        final msg = details.toString();
-        if (msg.contains('DEFUNCT') || msg.contains('DISPOSED')) return;
-        prevError?.call(details);
-      };
-      addTearDown(() => FlutterError.onError = prevError);
+      // Capture the test binding's error recorder BEFORE app.main() so we can
+      // restore it in teardown. app.main() sets its own FlutterError.onError
+      // (crash-screen handler); we must override it AFTER the call so our
+      // filter takes precedence, yet teardown still restores to the binding's
+      // recorder (not to the crash handler).
+      final bindingError = FlutterError.onError;
 
       _log('app start');
       app.main(
@@ -155,6 +150,18 @@ void main() {
           accountConnectionStatusProvider.overrideWith((ref, _) async {}),
         ],
       );
+
+      // Override the crash handler that app.main() just installed with a
+      // filter that forwards non-spurious errors to the binding's recorder.
+      // On Android/Linux, keyboard-dismiss or teardown can produce
+      // DEFUNCT/DISPOSED layout errors; discard those silently.
+      FlutterError.onError = (details) {
+        final msg = details.toString();
+        if (msg.contains('DEFUNCT') || msg.contains('DISPOSED')) return;
+        bindingError?.call(details);
+      };
+      addTearDown(() => FlutterError.onError = bindingError);
+
       await pumpUntil(tester, find.text('Welcome to SharedInbox'));
       _log('app settled');
 
