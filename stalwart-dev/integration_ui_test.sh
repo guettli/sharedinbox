@@ -22,8 +22,8 @@ export STALWART_TMPDIR
 TEST_HOME="$(mktemp -d /tmp/sharedinbox-test-home-XXXXXX)"
 
 cleanup() {
-    kill "${STALWART_PID:-}" 2>/dev/null || true
-    wait "${STALWART_PID:-}" 2>/dev/null || true
+    kill "${STALWART_PID:-}" "${XVFB_PID:-}" 2>/dev/null || true
+    wait "${STALWART_PID:-}" "${XVFB_PID:-}" 2>/dev/null || true
     rm -rf "$TEST_HOME"
 }
 trap cleanup EXIT
@@ -113,27 +113,51 @@ pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
 pkill -u "$USER" -f "flutter.*integration" 2>/dev/null || true
 sleep 1
 
-# xvfb-run provides a virtual framebuffer so the Flutter Linux runner has a
-# display without requiring a real desktop session.  No D-Bus or keyring daemon
-# is needed because the integration tests inject an in-memory SecureStorage.
-# +iglx enables indirect GLX on Xvfb so Flutter/GTK3 can create an OpenGL context
-# using mesa's software renderer (LIBGL_ALWAYS_SOFTWARE=1 is set in flake.nix).
-#
-# Retry once: if the first attempt gets stuck in GTK/display init (the app
-# never connects back to the test runner), a fresh Xvfb on a new display number
-# usually succeeds on the second try.
+# Find an unused display number.
+_display=99
+while [ -e "/tmp/.X${_display}-lock" ]; do _display=$((_display + 1)); done
+
+# Manage Xvfb directly instead of via xvfb-run.  xvfb-run catches SIGTERM,
+# kills its children, and exits 0 — so `timeout 240 xvfb-run ...` exits 0 on
+# timeout, making a stuck/timed-out test indistinguishable from a pass.
+# Running Xvfb ourselves lets us capture fvm flutter test's real exit code.
+# +iglx: indirect GLX so Flutter/GTK3 gets an OpenGL context via mesa software
+# renderer (LIBGL_ALWAYS_SOFTWARE=1 is set in flake.nix).
+Xvfb ":${_display}" -screen 0 1280x720x24 +iglx &
+XVFB_PID=$!
+export DISPLAY=":${_display}"
+
+# Wait for the Xvfb Unix socket to appear (up to 5 s).
+for _xi in $(seq 1 10); do
+    [ -S "/tmp/.X11-unix/X${_display}" ] && break
+    sleep 0.5
+done
+[ -S "/tmp/.X11-unix/X${_display}" ] || { echo "Xvfb :${_display} did not start"; exit 1; }
+
+# Retry once: if the first attempt gets stuck in GTK/display init,
+# a fresh Xvfb on a new display number usually succeeds on the second try.
 _e2e_exit=0
 for _attempt in 1 2; do
-    ts "E2E attempt $_attempt"
-    if timeout 240 xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
-        fvm flutter test integration_test/ -d linux; then
-        _e2e_exit=0
-        break
-    fi
+    ts "E2E attempt $_attempt (DISPLAY=$DISPLAY)"
+    timeout 240 fvm flutter test integration_test/ -d linux
     _e2e_exit=$?
+    [ $_e2e_exit -eq 0 ] && break
     if [ $_attempt -lt 2 ]; then
-        ts "E2E attempt $_attempt failed (exit $_e2e_exit), cleaning up and retrying..."
+        ts "E2E attempt $_attempt failed (exit $_e2e_exit), restarting Xvfb and retrying..."
         pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
+        # Kill the old Xvfb and start a fresh one on a new display number.
+        kill "${XVFB_PID:-}" 2>/dev/null || true
+        wait "${XVFB_PID:-}" 2>/dev/null || true
+        rm -f "/tmp/.X${_display}-lock" "/tmp/.X11-unix/X${_display}" 2>/dev/null || true
+        _display=$((_display + 1))
+        while [ -e "/tmp/.X${_display}-lock" ]; do _display=$((_display + 1)); done
+        Xvfb ":${_display}" -screen 0 1280x720x24 +iglx &
+        XVFB_PID=$!
+        export DISPLAY=":${_display}"
+        for _xi in $(seq 1 10); do
+            [ -S "/tmp/.X11-unix/X${_display}" ] && break
+            sleep 0.5
+        done
         sleep 2
     fi
 done
