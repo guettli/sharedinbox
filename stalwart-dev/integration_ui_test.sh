@@ -105,12 +105,38 @@ export XDG_DATA_HOME="$TEST_HOME"
 
 ts "flutter test start"
 
+# Kill any orphan sharedinbox/flutter processes left by previous CI runs.
+# Stale processes can hold onto the Xvfb display, causing the new Flutter app
+# to hang indefinitely during GTK initialisation without ever connecting back
+# to the flutter test runner.
+pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
+pkill -u "$USER" -f "flutter.*integration" 2>/dev/null || true
+sleep 1
+
 # xvfb-run provides a virtual framebuffer so the Flutter Linux runner has a
 # display without requiring a real desktop session.  No D-Bus or keyring daemon
 # is needed because the integration tests inject an in-memory SecureStorage.
 # +iglx enables indirect GLX on Xvfb so Flutter/GTK3 can create an OpenGL context
 # using mesa's software renderer (LIBGL_ALWAYS_SOFTWARE=1 is set in flake.nix).
-timeout 600 xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
-    fvm flutter test integration_test/ -d linux
+#
+# Retry once: if the first attempt gets stuck in GTK/display init (the app
+# never connects back to the test runner), a fresh Xvfb on a new display number
+# usually succeeds on the second try.
+_e2e_exit=0
+for _attempt in 1 2; do
+    ts "E2E attempt $_attempt"
+    if timeout 240 xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24 +iglx" \
+        fvm flutter test integration_test/ -d linux; then
+        _e2e_exit=0
+        break
+    fi
+    _e2e_exit=$?
+    if [ $_attempt -lt 2 ]; then
+        ts "E2E attempt $_attempt failed (exit $_e2e_exit), cleaning up and retrying..."
+        pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
+        sleep 2
+    fi
+done
+[ $_e2e_exit -eq 0 ] || exit $_e2e_exit
 
 ts "flutter test done"
