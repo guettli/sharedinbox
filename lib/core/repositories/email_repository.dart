@@ -1,14 +1,19 @@
 import 'package:sharedinbox/core/models/email.dart';
 
 abstract class EmailRepository {
-  Stream<List<Email>> observeEmails(String accountId, String mailboxPath);
+  Stream<List<Email>> observeEmails(
+    String accountId,
+    String mailboxPath, {
+    int limit = 50,
+  });
 
   /// Groups emails by threadId and returns one [EmailThread] per thread,
   /// sorted by the latest message date descending.
   Stream<List<EmailThread>> observeThreads(
     String accountId,
-    String mailboxPath,
-  );
+    String mailboxPath, {
+    int limit = 50,
+  });
 
   /// Returns all emails belonging to [threadId] in [mailboxPath].
   Stream<List<Email>> observeEmailsInThread(

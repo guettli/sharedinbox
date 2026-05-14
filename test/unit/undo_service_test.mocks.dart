@@ -75,9 +75,10 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
 
   @override
   _i4.Stream<List<_i2.Email>> observeEmails(
-    String? accountId,
-    String? mailboxPath,
-  ) =>
+    String accountId,
+    String mailboxPath, {
+    int limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #observeEmails,
@@ -85,15 +86,17 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             mailboxPath,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Stream<List<_i2.Email>>.empty(),
       ) as _i4.Stream<List<_i2.Email>>);
 
   @override
   _i4.Stream<List<_i2.EmailThread>> observeThreads(
-    String? accountId,
-    String? mailboxPath,
-  ) =>
+    String accountId,
+    String mailboxPath, {
+    int limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #observeThreads,
@@ -101,6 +104,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             mailboxPath,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Stream<List<_i2.EmailThread>>.empty(),
       ) as _i4.Stream<List<_i2.EmailThread>>);

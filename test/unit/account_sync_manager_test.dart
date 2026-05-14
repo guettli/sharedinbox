@@ -34,9 +34,18 @@ void main() {
 
 class FakeEmailRepository implements EmailRepository {
   @override
-  Stream<List<Email>> observeEmails(String a, String m) => Stream.value([]);
+  Stream<List<Email>> observeEmails(
+    String a,
+    String m, {
+    int limit = 50,
+  }) =>
+      Stream.value([]);
   @override
-  Stream<List<EmailThread>> observeThreads(String a, String m) =>
+  Stream<List<EmailThread>> observeThreads(
+    String a,
+    String m, {
+    int limit = 50,
+  }) =>
       Stream.value([]);
   @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>

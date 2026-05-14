@@ -58,15 +58,17 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Stream<List<model.Email>> observeEmails(
     String accountId,
-    String mailboxPath,
-  ) {
+    String mailboxPath, {
+    int limit = 50,
+  }) {
     return (_db.select(_db.emails)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
+          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..limit(limit))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
   }
@@ -74,15 +76,17 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Stream<List<model.EmailThread>> observeThreads(
     String accountId,
-    String mailboxPath,
-  ) {
+    String mailboxPath, {
+    int limit = 50,
+  }) {
     return (_db.select(_db.threads)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.latestDate)]))
+          ..orderBy([(t) => OrderingTerm.desc(t.latestDate)])
+          ..limit(limit))
         .watch()
         .map((rows) => rows.map(_threadRowToModel).toList());
   }

@@ -158,14 +158,19 @@ class FakeEmailRepository implements EmailRepository {
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
 
   @override
-  Stream<List<Email>> observeEmails(String accountId, String mailboxPath) =>
+  Stream<List<Email>> observeEmails(
+    String accountId,
+    String mailboxPath, {
+    int limit = 50,
+  }) =>
       Stream.value(List.of(_emails));
 
   @override
   Stream<List<EmailThread>> observeThreads(
     String accountId,
-    String mailboxPath,
-  ) =>
+    String mailboxPath, {
+    int limit = 50,
+  }) =>
       observeEmails(accountId, mailboxPath).map((emails) {
         return emails.map((e) {
           return EmailThread(

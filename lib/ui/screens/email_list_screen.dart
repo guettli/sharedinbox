@@ -45,6 +45,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   List<EmailThread> _currentThreads = [];
   // Individual email selection used in search results.
   final Set<String> _selectedSearchIds = {};
+
+  // Pagination: number of threads currently requested from the DB.
+  static const _pageSize = 50;
+  int _limit = _pageSize;
   bool get _selecting =>
       _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
@@ -343,7 +347,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         await emailRepo.syncEmails(widget.accountId, widget.mailboxPath);
       },
       child: StreamBuilder<List<EmailThread>>(
-        stream: emailRepo.observeThreads(widget.accountId, widget.mailboxPath),
+        stream: emailRepo.observeThreads(
+          widget.accountId,
+          widget.mailboxPath,
+          limit: _limit,
+        ),
         builder: (ctx, snap) {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
@@ -539,9 +547,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Widget _buildThreadList(List<EmailThread> threads) {
+    final hasMore = threads.length == _limit;
     return ListView.builder(
-      itemCount: threads.length,
+      itemCount: threads.length + (hasMore ? 1 : 0),
       itemBuilder: (ctx, i) {
+        if (i == threads.length) {
+          return TextButton(
+            onPressed: () => setState(() => _limit += _pageSize),
+            child: const Text('Load more'),
+          );
+        }
         final t = threads[i];
         final isSelected = _selectedThreadIds.contains(t.threadId);
         final senderNames =
