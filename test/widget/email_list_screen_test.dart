@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 
@@ -12,9 +13,11 @@ import 'helpers.dart';
 class _MutableFakeEmailRepository extends FakeEmailRepository {
   List<Email> _results;
 
-  _MutableFakeEmailRepository(List<Email> initial)
-      : _results = List.of(initial),
-        super();
+  _MutableFakeEmailRepository(
+    List<Email> initial, {
+    super.emailDetail,
+    super.emailBody,
+  }) : _results = List.of(initial);
 
   void setSearchResults(List<Email> results) => _results = results;
 
@@ -430,7 +433,6 @@ void main() {
       'deleting all search results pops back to previous screen',
       (tester) async {
         final email = testEmail(subject: 'Needle');
-        final repo = _MutableFakeEmailRepository([email]);
 
         // Start at the mailbox list so the email list is pushed on top of it,
         // making context.canPop() == true inside EmailListScreen.
@@ -444,7 +446,9 @@ void main() {
               mailboxRepositoryProvider.overrideWithValue(
                 FakeMailboxRepository([kTestMailbox]),
               ),
-              emailRepositoryProvider.overrideWithValue(repo),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(searchResults: [email]),
+              ),
             ],
           ),
         );
@@ -474,13 +478,117 @@ void main() {
         await tester.tap(find.byIcon(Icons.select_all));
         await tester.pumpAndSettle();
 
-        // After deletion the search re-runs and finds nothing.
-        repo.setSearchResults([]);
-
         await tester.tap(find.byIcon(Icons.delete));
         await tester.pumpAndSettle();
 
         // Should have popped back to the mailbox list.
+        expect(find.byType(EmailListScreen), findsNothing);
+        expect(find.byType(MailboxListScreen), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'deleting some search results updates the list without popping',
+      (tester) async {
+        final email1 = testEmail(subject: 'Needle One');
+        final email2 = testEmail(subject: 'Needle Two', id: 'acc-1:2');
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(searchResults: [email1, email2]),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('INBOX'));
+        await tester.pumpAndSettle();
+
+        // Search returns both emails.
+        await tester.enterText(find.byType(TextField), 'Needle');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Needle One'), findsOneWidget);
+        expect(find.text('Needle Two'), findsOneWidget);
+
+        // Select only the first email and delete it.
+        await tester.longPress(find.text('Needle One'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.delete));
+        await tester.pumpAndSettle();
+
+        // EmailListScreen stays open but the deleted email is gone.
+        expect(find.byType(EmailListScreen), findsOneWidget);
+        expect(find.text('Needle One'), findsNothing);
+        expect(find.text('Needle Two'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'opening and deleting a single search result pops back to previous screen',
+      (tester) async {
+        final email = testEmail(subject: 'Needle');
+        final repo = _MutableFakeEmailRepository(
+          [email],
+          emailDetail: email,
+          emailBody: const EmailBody(emailId: 'acc-1:42', attachments: []),
+        );
+
+        // Start at the mailbox list so context.canPop() is true in EmailListScreen.
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Navigate into INBOX.
+        await tester.tap(find.text('INBOX'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(EmailListScreen), findsOneWidget);
+
+        // Search for the email.
+        await tester.enterText(find.byType(TextField), 'Needle');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        // Tap the email to open it in EmailDetailScreen (not long-press / selection).
+        await tester.tap(find.text('Bob'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+
+        // The search will return empty results after the email is deleted.
+        repo.setSearchResults([]);
+
+        // Delete the email from the detail screen.
+        await tester.tap(find.byIcon(Icons.delete));
+        await tester.pumpAndSettle();
+
+        // Should have popped all the way back to the mailbox list.
+        expect(find.byType(EmailDetailScreen), findsNothing);
         expect(find.byType(EmailListScreen), findsNothing);
         expect(find.byType(MailboxListScreen), findsOneWidget);
       },

@@ -466,10 +466,36 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   Future<void> _batchArchive() =>
       _batchMoveToRole('archive', 'No archive folder found');
 
+  Future<void> _refreshSearchAndPopIfEmpty() async {
+    if (!mounted || !_searching) return;
+    final query = _searchController.text.trim();
+    final remaining = await ref
+        .read(emailRepositoryProvider)
+        .searchEmails(widget.accountId, widget.mailboxPath, query);
+    if (!mounted) return;
+    if (remaining.isEmpty) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        _searchController.clear();
+      }
+    } else {
+      setState(() => _searchResults = remaining);
+    }
+  }
+
+  Future<void> _openSearchResultAndRefresh(String emailId) async {
+    await context.push(
+      '/accounts/${widget.accountId}/mailboxes'
+      '/${Uri.encodeComponent(widget.mailboxPath)}'
+      '/emails/${Uri.encodeComponent(emailId)}',
+    );
+    await _refreshSearchAndPopIfEmpty();
+  }
+
   Future<void> _batchDelete() async {
     final ids = _selectedEmailIds;
     final wasSearching = _searching;
-    final searchQuery = _searchController.text.trim();
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
 
@@ -498,10 +524,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
 
     if (wasSearching && mounted) {
-      final remaining = await ref
-          .read(emailRepositoryProvider)
-          .searchEmails(widget.accountId, widget.mailboxPath, searchQuery);
-      if (!mounted) return;
+      // Filter deleted emails out of the local results immediately.
+      // Calling searchEmails here would hit the IMAP server, which still has
+      // the emails because the delete is only enqueued — not yet applied.
+      final deletedIds = ids.toSet();
+      final remaining = (_searchResults ?? [])
+          .where((e) => !deletedIds.contains(e.id))
+          .toList();
       if (remaining.isEmpty) {
         if (context.canPop()) {
           context.pop();
@@ -814,9 +843,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ),
           onTap: _selecting
               ? () => _toggleSearchSelection(e.id)
-              : () => context.push(
-                    '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(e.id)}',
-                  ),
+              : () => unawaited(_openSearchResultAndRefresh(e.id)),
           onLongPress: () => _toggleSearchSelection(e.id),
         );
       },
