@@ -147,6 +147,7 @@ class FakeEmailRepository implements EmailRepository {
   final List<Email> _emails;
   final Email? _emailDetail;
   final EmailBody _emailBody;
+  final String _rawRfc822;
 
   final List<Email> _searchResults;
 
@@ -155,9 +156,11 @@ class FakeEmailRepository implements EmailRepository {
     Email? emailDetail,
     EmailBody? emailBody,
     List<Email>? searchResults,
+    String rawRfc822 = '',
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
+        _rawRfc822 = rawRfc822,
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
 
   @override
@@ -261,7 +264,7 @@ class FakeEmailRepository implements EmailRepository {
       '/tmp/${attachment.filename}';
 
   @override
-  Future<String> fetchRawRfc822(String emailId) async => '';
+  Future<String> fetchRawRfc822(String emailId) async => _rawRfc822;
 
   @override
   Future<List<Email>> searchEmails(

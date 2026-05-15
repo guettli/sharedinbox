@@ -457,11 +457,29 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           title: const Text('Raw Email'),
           content: SizedBox(
             width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: SelectableText(
-                raw,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fmtSize(raw.length),
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.outline,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      raw,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           actions: [
@@ -496,13 +514,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     String raw,
   ) async {
     try {
-      final dir = await getTemporaryDirectory();
+      Directory dir;
+      try {
+        dir =
+            (await getDownloadsDirectory()) ?? (await getTemporaryDirectory());
+      } catch (_) {
+        dir = await getTemporaryDirectory();
+      }
       final subject = (header?.subject ?? 'email')
           .replaceAll(RegExp(r'[^\w\s-]'), '_')
           .trim();
-      final file = File('${dir.path}/$subject.eml');
+      final filename = '$subject.eml';
+      final file = File('${dir.path}/$filename');
       await file.writeAsString(raw);
-      await OpenFilex.open(file.path);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved $filename to ${dir.path}')),
+      );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(

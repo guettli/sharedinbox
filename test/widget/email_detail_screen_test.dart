@@ -143,6 +143,41 @@ void main() {
       expect(find.text('report.pdf'), findsOneWidget);
     });
 
+    testWidgets('Show Raw Email dialog shows size of email', (tester) async {
+      // 'A' * 2048 → fmtSize(2048) == '2.0 KB'
+      final rawContent = 'A' * 2048;
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(
+                emailDetail: testEmail(),
+                emailBody:
+                    const EmailBody(emailId: 'acc-1:42', attachments: []),
+                rawRfc822: rawContent,
+              ),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Show Raw Email'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Raw Email'), findsOneWidget);
+      expect(find.text('2.0 KB'), findsOneWidget);
+    });
+
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
       tester,
     ) async {
