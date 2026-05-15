@@ -15,12 +15,19 @@ Flow
    d. No Ready issues       → print "nothing to do", exit 0
 
 State file: ~/.sharedinbox-agent-state.json
-  { "pid": 1234, "issue": 91, "started_at": "2026-05-15T12:00:00+00:00",
-    "type": "issue" }   # type is "issue" or "ci-fix"
+  { "tmux_session": "issue-91", "issue": 91,
+    "started_at": "2026-05-15T12:00:00+00:00", "type": "issue" }
+
+The agent runs inside a detached tmux session so you can watch it live or
+resume the Claude conversation afterward:
+
+  tmux attach -t issue-91          # watch while running
+  claude --resume issue-91         # continue the conversation later
 """
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -131,11 +138,11 @@ def _read_state() -> dict | None:
     return None
 
 
-def _write_state(pid: int, issue: int | None, kind: str) -> None:
+def _write_state(tmux_session: str, issue: int | None, kind: str) -> None:
     STATE_FILE.write_text(
         json.dumps(
             {
-                "pid": pid,
+                "tmux_session": tmux_session,
                 "issue": issue,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "type": kind,
@@ -152,56 +159,80 @@ def _clear_state() -> None:
 # ── agent launcher ────────────────────────────────────────────────────────────
 
 
-def _start_agent(prompt: str, session_name: str) -> int:
+def _start_agent(prompt: str, session_name: str) -> str:
     """
-    Start Claude Code in non-interactive mode and return its PID.
+    Start Claude Code inside a detached tmux session and return the session name.
 
-    The agent runs in the background; cron will check its status next cycle.
-    stdout/stderr are redirected to a log file for debugging.
+    The session inherits the tmux server's environment (including ANTHROPIC_API_KEY
+    and any keychain access), which is more reliable than cron's minimal env.
+    Output is written to both the tmux scrollback buffer and a log file via tee.
     """
     log_dir = Path.home() / ".sharedinbox-agent-logs"
     log_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     log_file = log_dir / f"{session_name}-{ts}.log"
 
-    proc = subprocess.Popen(
-        [
-            "claude",
-            "--dangerously-skip-permissions",
-            "--name", session_name,
-            "-p", prompt,
-        ],
-        stdout=open(log_file, "w"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,  # detach from this process group
+    # Kill any stale session with this name before creating a new one.
+    subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
+
+    shell_cmd = (
+        f"claude --dangerously-skip-permissions"
+        f" --name {shlex.quote(session_name)}"
+        f" -p {shlex.quote(prompt)}"
+        f" 2>&1 | tee {shlex.quote(str(log_file))}"
     )
-    print(f"[agent_loop] Started agent PID={proc.pid}, log={log_file}")
-    return proc.pid
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, "bash", "-c", shell_cmd],
+        check=True,
+    )
+    print(f"[agent_loop] Started tmux session={session_name!r}, log={log_file}")
+    print(f"[agent_loop]   Watch:  tmux attach -t {shlex.quote(session_name)}")
+    print(f"[agent_loop]   Resume: claude --resume {shlex.quote(session_name)}")
+    return session_name
 
 
-def _process_alive(pid: int) -> bool:
+def _agent_alive(state: dict) -> bool:
+    """Return True if the agent's tmux session is still running."""
+    session = state.get("tmux_session")
+    if session:
+        r = subprocess.run(
+            ["tmux", "has-session", "-t", session], capture_output=True
+        )
+        return r.returncode == 0
+    # Backward compat: old state files stored a pid instead of a tmux session.
+    pid = state.get("pid")
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    return False
+
+
+def _agent_age_seconds(state: dict) -> float:
+    """Seconds elapsed since the agent was launched, from the state file timestamp."""
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists but owned by another user
-
-
-def _process_age_seconds(pid: int) -> float:
-    """Return how long the process has been running, in seconds."""
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text().split()
-        # Field 22 (index 21) is start time in clock ticks since boot.
-        start_ticks = int(stat[21])
-        clk_tck = os.sysconf("SC_CLK_TCK")
-        uptime = float(Path("/proc/uptime").read_text().split()[0])
-        boot_time = datetime.now(timezone.utc).timestamp() - uptime
-        started_at = boot_time + start_ticks / clk_tck
-        return datetime.now(timezone.utc).timestamp() - started_at
+        started_at = datetime.fromisoformat(state["started_at"])
+        return (datetime.now(timezone.utc) - started_at).total_seconds()
     except Exception:
         return 0.0
+
+
+def _kill_agent(state: dict) -> None:
+    """Forcefully stop the running agent."""
+    session = state.get("tmux_session")
+    if session:
+        subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
+        return
+    pid = state.get("pid")
+    if pid:
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
 
 
 # ── main flow ─────────────────────────────────────────────────────────────────
@@ -211,17 +242,18 @@ def main() -> int:
     state = _read_state()
 
     # ── 1. Agent already running? ─────────────────────────────────────────────
-    if state and _process_alive(state["pid"]):
-        age = _process_age_seconds(state["pid"])
+    if state and _agent_alive(state):
+        age = _agent_age_seconds(state)
         issue = state.get("issue")
         kind = state.get("type", "issue")
+        session = state.get("tmux_session", state.get("pid", "?"))
 
         if age > MAX_AGENT_AGE_SECONDS:
             print(
-                f"[agent_loop] Agent PID={state['pid']} (issue #{issue}) "
+                f"[agent_loop] Agent session={session!r} (issue #{issue}) "
                 f"has been running for {age/60:.0f} min — aborting."
             )
-            os.kill(state["pid"], 9)
+            _kill_agent(state)
             _clear_state()
             if issue:
                 _set_labels(issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
@@ -229,7 +261,7 @@ def main() -> int:
             return 1
 
         print(
-            f"[agent_loop] Agent PID={state['pid']} ({kind}, issue #{issue}) "
+            f"[agent_loop] Agent session={session!r} ({kind}, issue #{issue}) "
             f"still running ({age/60:.0f} min). Waiting."
         )
         return 0
@@ -255,8 +287,8 @@ def main() -> int:
             "Verify locally with 'task check' before pushing. "
             "When done, stop."
         )
-        pid = _start_agent(prompt, "ci-fix")
-        _write_state(pid, None, "ci-fix")
+        session_name = _start_agent(prompt, "ci-fix")
+        _write_state(session_name, None, "ci-fix")
         return 0
 
     # CI is ok (or no run) — find a Ready issue.
@@ -299,8 +331,8 @@ Instructions:
 - When the work is done and pushed, close the issue and stop.
 """
 
-    pid = _start_agent(prompt, f"issue-{issue_number}")
-    _write_state(pid, issue_number, "issue")
+    session_name = _start_agent(prompt, f"issue-{issue_number}")
+    _write_state(session_name, issue_number, "issue")
     return 0
 
 
