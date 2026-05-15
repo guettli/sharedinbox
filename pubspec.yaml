@@ -43,6 +43,12 @@ dependencies:
   # QR code generation for account sharing
   qr_flutter: ^4.1.0
 
+  # Public-key encryption for secure account sharing (ECIES: X25519 + AES-256-GCM)
+  cryptography: ^2.7.0
+
+  # QR code scanning (camera) for secure account import
+  mobile_scanner: ^5.0.0
+
   # HTML rendering for email bodies
   webview_flutter: ^4.0.0
   url_launcher: ^6.3.2

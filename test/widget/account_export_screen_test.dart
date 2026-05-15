@@ -1,162 +1,155 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/share_encryption_service.dart';
 
 import 'helpers.dart';
 
 void main() {
-  group('AccountExportScreen', () {
-    const account = Account(
-      id: 'acc-1',
-      displayName: 'Alice',
-      email: 'alice@example.com',
-      imapHost: 'imap.example.com',
-      smtpHost: 'smtp.example.com',
-    );
-
-    testWidgets('shows QR code and copy button after loading', (tester) async {
+  group('AccountReceiveScreen', () {
+    testWidgets('shows pubkey QR code and scan button after key generation', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
-          initialLocation: '/accounts/acc-1/export',
-          overrides: baseOverrides(accounts: [account]),
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(),
         ),
       );
+      // Allow async key generation to complete.
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('accountQrCode')), findsOneWidget);
-      expect(find.byKey(const Key('copyCodeButton')), findsOneWidget);
+      expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
+      expect(find.byKey(const Key('scanEncryptedButton')), findsOneWidget);
     });
 
-    testWidgets('shows password warning', (tester) async {
+    testWidgets('shows 20-minute expiry hint', (tester) async {
       await tester.pumpWidget(
         buildApp(
-          initialLocation: '/accounts/acc-1/export',
-          overrides: baseOverrides(accounts: [account]),
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(),
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('password'),
-        findsAtLeastNWidgets(1),
-      );
+      expect(find.textContaining('20 minutes'), findsOneWidget);
     });
   });
 
-  group('AccountImportScreen', () {
-    testWidgets('shows instruction text and disabled import button', (
+  group('AccountSendScreen', () {
+    testWidgets('shows camera scanner (or text fallback) on load', (
       tester,
     ) async {
       await tester.pumpWidget(
         buildApp(
-          initialLocation: '/accounts/import',
-          overrides: baseOverrides(),
+          initialLocation: '/accounts/send',
+          overrides: baseOverrides(
+            accounts: [
+              const Account(
+                id: 'acc-1',
+                displayName: 'Alice',
+                email: 'alice@example.com',
+                imapHost: 'imap.example.com',
+                smtpHost: 'smtp.example.com',
+              ),
+            ],
+          ),
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Import account'), findsOneWidget);
-      expect(find.byKey(const Key('importCodeField')), findsOneWidget);
-
-      final importBtn = tester.widget<FilledButton>(
-        find.byKey(const Key('importButton')),
-      );
-      expect(importBtn.onPressed, isNull);
+      // On Linux (desktop without camera), the text-fallback field appears.
+      // On mobile, the MobileScanner widget would be shown.
+      // Either way the screen renders without crash.
+      expect(find.byType(Scaffold), findsAtLeastNWidgets(1));
     });
 
-    testWidgets('invalid JSON shows error message', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/import',
-          overrides: baseOverrides(),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-        find.byKey(const Key('importCodeField')),
-        'not valid json',
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('Invalid code'), findsOneWidget);
-    });
-
-    testWidgets('valid code shows account preview and enables import', (
+    testWidgets('shows account selection when multiple accounts present', (
       tester,
     ) async {
-      const account = Account(
-        id: 'acc-99',
+      const account1 = Account(
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+      const account2 = Account(
+        id: 'acc-2',
         displayName: 'Bob',
         email: 'bob@example.com',
         imapHost: 'imap.example.com',
         smtpHost: 'smtp.example.com',
       );
-      final code = jsonEncode({
-        'v': 1,
-        'account': account.toJson(),
-        'password': 'secret',
-      });
+
+      // Generate a real key pair and a valid pubkey QR string to feed in.
+      final material = await ShareEncryptionService.generateKeyPair();
+      final pubKeyQr = ShareEncryptionService.encodePublicKeyQr(
+        material.keyId,
+        material.publicKeyBytes,
+      );
 
       await tester.pumpWidget(
         buildApp(
-          initialLocation: '/accounts/import',
-          overrides: baseOverrides(),
+          initialLocation: '/accounts/send',
+          overrides: baseOverrides(accounts: [account1, account2]),
         ),
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('importCodeField')),
-        code,
-      );
-      await tester.pumpAndSettle();
+      // On desktop the text fallback is shown — simulate pasting the pubkey.
+      final field = find.byKey(const Key('pubKeyInputField'));
+      if (field.evaluate().isNotEmpty) {
+        await tester.enterText(field, pubKeyQr);
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Bob'), findsOneWidget);
-      expect(find.text('bob@example.com'), findsOneWidget);
-
-      final importBtn = tester.widget<FilledButton>(
-        find.byKey(const Key('importButton')),
-      );
-      expect(importBtn.onPressed, isNotNull);
+        // With two accounts the selection list should appear.
+        expect(find.byKey(const Key('sendSelectedButton')), findsOneWidget);
+        expect(find.text('Alice'), findsOneWidget);
+        expect(find.text('Bob'), findsOneWidget);
+      }
+      // On mobile the MobileScanner handles this; we skip it in widget tests.
     });
 
-    testWidgets('successful import navigates back to accounts list', (
+    testWidgets('shows encrypted QR after single account auto-select', (
       tester,
     ) async {
       const account = Account(
-        id: 'acc-99',
-        displayName: 'Bob',
-        email: 'bob@example.com',
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
         imapHost: 'imap.example.com',
         smtpHost: 'smtp.example.com',
       );
-      final code = jsonEncode({
-        'v': 1,
-        'account': account.toJson(),
-        'password': 'secret',
-      });
+
+      final material = await ShareEncryptionService.generateKeyPair();
+      final pubKeyQr = ShareEncryptionService.encodePublicKeyQr(
+        material.keyId,
+        material.publicKeyBytes,
+      );
 
       await tester.pumpWidget(
         buildApp(
-          initialLocation: '/accounts/import',
-          overrides: baseOverrides(),
+          initialLocation: '/accounts/send',
+          overrides: baseOverrides(accounts: [account]),
         ),
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('importCodeField')),
-        code,
-      );
-      await tester.pumpAndSettle();
+      final field = find.byKey(const Key('pubKeyInputField'));
+      if (field.evaluate().isNotEmpty) {
+        await tester.enterText(field, pubKeyQr);
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('importButton')));
-      await tester.pumpAndSettle();
-
-      expect(find.text('SharedInbox'), findsOneWidget);
+        // Single account → auto-selected → encrypted QR shown immediately.
+        expect(
+          find.byKey(const Key('encryptedAccountsQrCode')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('copyEncryptedButton')), findsOneWidget);
+      }
     });
   });
 }

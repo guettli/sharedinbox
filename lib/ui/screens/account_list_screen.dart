@@ -35,6 +35,14 @@ class AccountListScreen extends ConsumerWidget {
               ),
             ),
             ListTile(
+              leading: const Icon(Icons.qr_code_scanner),
+              title: const Text('Receive accounts'),
+              onTap: () {
+                Navigator.pop(context);
+                unawaited(context.push('/accounts/receive'));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.history),
               title: const Text('Undo Log'),
               onTap: () {
@@ -180,8 +188,8 @@ class _AccountTile extends ConsumerWidget {
                 child: Text('Local email filters'),
               ),
               const PopupMenuItem(
-                value: _AccountAction.export,
-                child: Text('Export account'),
+                value: _AccountAction.send,
+                child: Text('Send accounts'),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
@@ -253,8 +261,8 @@ class _AccountTile extends ConsumerWidget {
       case _AccountAction.emailFiltersLocal:
         await context.push('/accounts/${account.id}/sieve/local');
         break;
-      case _AccountAction.export:
-        await context.push('/accounts/${account.id}/export');
+      case _AccountAction.send:
+        await context.push('/accounts/send');
         break;
       case _AccountAction.delete:
         final confirmed = await showDialog<bool>(
@@ -398,7 +406,7 @@ enum _AccountAction {
   edit,
   emailFiltersRemote,
   emailFiltersLocal,
-  export,
+  send,
   delete,
 }
 

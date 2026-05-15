@@ -299,8 +299,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             OutlinedButton.icon(
               key: const Key('importAccountButton'),
               icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Import account'),
-              onPressed: () => context.push('/accounts/import'),
+              label: const Text('Receive account'),
+              onPressed: () => context.push('/accounts/receive'),
             ),
           ],
         ),

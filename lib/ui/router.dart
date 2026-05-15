@@ -3,9 +3,9 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 
 import 'package:sharedinbox/ui/screens/about_screen.dart';
-import 'package:sharedinbox/ui/screens/account_export_screen.dart';
-import 'package:sharedinbox/ui/screens/account_import_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
+import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
+import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
@@ -37,8 +37,12 @@ final router = GoRouter(
               builder: (ctx, state) => const AddAccountScreen(),
             ),
             GoRoute(
-              path: 'import',
-              builder: (ctx, state) => const AccountImportScreen(),
+              path: 'receive',
+              builder: (ctx, state) => const AccountReceiveScreen(),
+            ),
+            GoRoute(
+              path: 'send',
+              builder: (ctx, state) => const AccountSendScreen(),
             ),
             GoRoute(
               path: 'undo-log',
@@ -55,12 +59,6 @@ final router = GoRouter(
             GoRoute(
               path: ':accountId/edit',
               builder: (ctx, state) => EditAccountScreen(
-                accountId: state.pathParameters['accountId']!,
-              ),
-            ),
-            GoRoute(
-              path: ':accountId/export',
-              builder: (ctx, state) => AccountExportScreen(
                 accountId: state.pathParameters['accountId']!,
               ),
             ),
