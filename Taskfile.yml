@@ -122,6 +122,16 @@ tasks:
     cmds:
       - fvm dart format lib test
 
+  check-mocks:
+    desc: Fail if any *.mocks.dart file is out of date (re-runs build_runner)
+    deps: [_preflight, _pub-get]
+    sources:
+      - lib/**/*.dart
+      - test/**/*.dart
+      - pubspec.yaml
+    cmds:
+      - scripts/check_mocks_fresh.sh
+
   analyze-fix:
     desc: Auto-fix lint issues with dart fix --apply
     deps: [_preflight]
@@ -471,7 +481,7 @@ tasks:
 
   check-fast:
     desc: Pre-commit checks — analyze + unit+widget tests + coverage gate (no build, no integration)
-    deps: [analyze, check-coverage, check-hygiene, check-layers]
+    deps: [analyze, check-coverage, check-hygiene, check-layers, check-mocks]
 
   check-layers:
     desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed)
