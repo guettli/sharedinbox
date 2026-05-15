@@ -15,6 +15,11 @@ final _searchHistoryProvider =
   return ref.watch(searchHistoryRepositoryProvider).getRecentSearches();
 });
 
+/// Returns true if [text] contains a word that starts with [query].
+/// "foo" matches "foobar" or "My Foobar" but NOT "blafoo".
+bool _hasWordPrefix(String text, String query) =>
+    RegExp(r'\b' + RegExp.escape(query), caseSensitive: false).hasMatch(text);
+
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, this.accountId});
   final String? accountId;
@@ -79,7 +84,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ).wait;
 
       final matchedMailboxes = allMailboxes
-          .where((m) => m.name.toLowerCase().contains(ql))
+          .where((m) => _hasWordPrefix(m.name, ql))
           .toList()
         ..sort(compareMailboxes);
 
@@ -91,8 +96,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         for (final addr in [...email.from, ...email.to, ...email.cc]) {
           final key = '${email.accountId}:${addr.email}';
           if (seen.contains(key)) continue;
-          final matchesEmail = addr.email.toLowerCase().contains(ql);
-          final matchesName = addr.name?.toLowerCase().contains(ql) ?? false;
+          final matchesEmail = _hasWordPrefix(addr.email, ql);
+          final matchesName =
+              addr.name != null && _hasWordPrefix(addr.name!, ql);
           if (!matchesEmail && !matchesName) continue;
           seen.add(key);
           final addrEmail = addr.email;

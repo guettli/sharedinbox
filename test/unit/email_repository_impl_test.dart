@@ -421,6 +421,38 @@ void main() {
       expect(results3, isEmpty);
     });
 
+    test('searchEmailsGlobal matches word prefix but not suffix', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('foobar baz'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('blafoo baz'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // 'foo' is a prefix of 'foobar' — should match; 'blafoo' is not a
+      // prefix match so only one result expected.
+      final results = await r.emails.searchEmailsGlobal(null, 'foo');
+      expect(results, hasLength(1));
+      expect(results.first.subject, 'foobar baz');
+    });
+
     test('searchAddresses returns results sorted by most recently used',
         () async {
       final r = _makeRepos();

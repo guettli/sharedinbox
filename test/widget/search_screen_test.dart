@@ -160,6 +160,80 @@ void main() {
       expect(find.text('Archive'), findsOneWidget);
     });
 
+    testWidgets('folder with query as word prefix is matched', (tester) async {
+      const foobarMailbox = Mailbox(
+        id: 'acc-1:Foobar',
+        accountId: 'acc-1',
+        path: 'Foobar',
+        name: 'Foobar',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([foobarMailbox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Folders'), findsOneWidget);
+      expect(find.text('Foobar'), findsOneWidget);
+    });
+
+    testWidgets('folder whose name ends with query is not matched', (
+      tester,
+    ) async {
+      const blafooMailbox = Mailbox(
+        id: 'acc-1:Blafoo',
+        accountId: 'acc-1',
+        path: 'Blafoo',
+        name: 'Blafoo',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([blafooMailbox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Blafoo'), findsNothing);
+      expect(find.text('No results'), findsOneWidget);
+    });
+
     testWidgets('tapping clear button resets results to placeholder', (
       tester,
     ) async {
