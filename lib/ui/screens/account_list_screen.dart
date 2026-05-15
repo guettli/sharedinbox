@@ -15,7 +15,7 @@ class AccountListScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SharedInbox'),
+        title: const Text('sharedinbox.de'),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
@@ -30,7 +30,7 @@ class AccountListScreen extends ConsumerWidget {
             const DrawerHeader(
               decoration: BoxDecoration(color: Colors.blueGrey),
               child: Text(
-                'SharedInbox',
+                'sharedinbox.de',
                 style: TextStyle(color: Colors.white, fontSize: 24),
               ),
             ),
@@ -312,7 +312,7 @@ class _OnboardingView extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'Welcome to SharedInbox',
+              'Welcome to sharedinbox.de',
               style: theme.textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
@@ -332,7 +332,7 @@ class _OnboardingView extends StatelessWidget {
               number: '2',
               title: 'Wait for sync',
               description:
-                  'SharedInbox downloads your messages in the background.',
+                  'sharedinbox.de downloads your messages in the background.',
             ),
             const _Step(
               number: '3',

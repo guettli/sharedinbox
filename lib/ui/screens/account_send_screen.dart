@@ -74,7 +74,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Not a valid SharedInbox public-key QR code. '
+              'Not a valid sharedinbox.de public-key QR code. '
               'Ask the receiver to show step 1 of "Receive accounts".',
             ),
           ),

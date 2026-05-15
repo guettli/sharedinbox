@@ -1,7 +1,7 @@
 ---
-title: 'Welcome to SharedInbox'
+title: 'Welcome to sharedinbox.de'
 date: 2026-05-12T08:00:00Z
 draft: false
 ---
 
-Welcome to the official website of SharedInbox!
+Welcome to the official website of sharedinbox.de!

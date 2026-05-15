@@ -13,7 +13,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
+      expect(find.text('Welcome to sharedinbox.de'), findsOneWidget);
       expect(find.text('Add account'), findsOneWidget);
     });
 
@@ -86,7 +86,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('SharedInbox'), findsOneWidget);
+      expect(find.text('sharedinbox.de'), findsOneWidget);
     });
 
     testWidgets(
@@ -204,7 +204,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
-      expect(find.text('SharedInbox'), findsOneWidget);
+      expect(find.text('sharedinbox.de'), findsOneWidget);
     });
   });
 }

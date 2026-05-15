@@ -45,7 +45,7 @@ class CrashScreen extends StatelessWidget {
               const Icon(Icons.error_outline, color: Colors.red, size: 64),
               const SizedBox(height: 16),
               Text(
-                'SharedInbox encountered an unexpected error and needs to be restarted.',
+                'sharedinbox.de encountered an unexpected error and needs to be restarted.',
                 style: Theme.of(context).textTheme.titleMedium,
                 textAlign: TextAlign.center,
               ),

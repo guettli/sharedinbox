@@ -25,7 +25,7 @@ class _AboutScreenState extends State<AboutScreen> {
     final version =
         pkg != null ? '${pkg.version}+${pkg.buildNumber}' : 'unknown';
 
-    return '## SharedInbox\n\n'
+    return '## sharedinbox.de\n\n'
         '| Property | Value |\n'
         '|----------|-------|\n'
         '| Version | $version |\n'
