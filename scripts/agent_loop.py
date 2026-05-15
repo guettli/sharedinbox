@@ -179,7 +179,7 @@ def _start_agent(prompt: str, session_name: str) -> str:
         f"claude --dangerously-skip-permissions"
         f" --name {shlex.quote(session_name)}"
         f" -p {shlex.quote(prompt)}"
-        f" 2>&1 | tee {shlex.quote(str(log_file))}"
+        f" < /dev/null 2>&1 | tee {shlex.quote(str(log_file))}"
     )
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, "bash", "-c", shell_cmd],
