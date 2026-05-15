@@ -70,11 +70,19 @@ class FolderDrawer extends ConsumerWidget {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.filter_list),
-            title: const Text('Email filters'),
+            leading: const Icon(Icons.dns),
+            title: const Text('Remote Filters'),
             onTap: () {
               Navigator.pop(context);
               unawaited(context.push('/accounts/$accountId/sieve'));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.phone_android),
+            title: const Text('Local Filters'),
+            onTap: () {
+              Navigator.pop(context);
+              unawaited(context.push('/accounts/$accountId/sieve/local'));
             },
           ),
           const Divider(height: 1),
