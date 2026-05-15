@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -13,18 +12,11 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
-
-void _openLink(String? url, Map<String, String> attrs, dynamic _) {
-  if (url == null) return;
-  final uri = Uri.tryParse(url);
-  if (uri != null) {
-    unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
-  }
-}
 
 class EmailDetailScreen extends ConsumerStatefulWidget {
   const EmailDetailScreen({super.key, required this.emailId});
@@ -192,9 +184,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 ),
               ),
             ),
-          _SafeHtml(
-            data: body.htmlBody!,
-            extensions: [if (!_loadRemoteImages) _BlockRemoteImagesExtension()],
+          SecureEmailWebView(
+            htmlBody: body.htmlBody!,
+            loadRemoteImages: _loadRemoteImages,
           ),
         ] else
           SelectableText(
@@ -518,75 +510,4 @@ class _UnsubscribeChip extends StatelessWidget {
       onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
     );
   }
-}
-
-/// Renders [Html] and falls back to an error message if the widget throws
-/// during build, preventing a malformed body from crashing the whole screen.
-class _SafeHtml extends StatefulWidget {
-  const _SafeHtml({required this.data, required this.extensions});
-  final String data;
-  final List<HtmlExtension> extensions;
-
-  @override
-  State<_SafeHtml> createState() => _SafeHtmlState();
-}
-
-class _SafeHtmlState extends State<_SafeHtml> {
-  bool _failed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    if (_failed) {
-      return Padding(
-        padding: const EdgeInsets.all(8),
-        child: Row(
-          children: [
-            Icon(
-              Icons.warning_amber_outlined,
-              color: Theme.of(context).colorScheme.error,
-              size: 16,
-            ),
-            const SizedBox(width: 8),
-            const Expanded(child: Text('Message body could not be rendered.')),
-          ],
-        ),
-      );
-    }
-
-    // Intercept any build-phase throw from flutter_html for this subtree.
-    // We save/restore via postFrameCallback so other widgets are unaffected.
-    final prev = ErrorWidget.builder;
-    ErrorWidget.builder = (FlutterErrorDetails details) {
-      ErrorWidget.builder = prev;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _failed = true);
-      });
-      return const SizedBox.shrink();
-    };
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => ErrorWidget.builder = prev,
-    );
-
-    return Html(
-      data: widget.data,
-      extensions: widget.extensions,
-      onLinkTap: _openLink,
-    );
-  }
-}
-
-class _BlockRemoteImagesExtension extends HtmlExtension {
-  @override
-  Set<String> get supportedTags => {'img'};
-
-  @override
-  bool matches(ExtensionContext context) {
-    if (context.elementName != 'img') return false;
-    final src = context.attributes['src'] ?? '';
-    return src.startsWith('http://') || src.startsWith('https://');
-  }
-
-  @override
-  InlineSpan build(ExtensionContext context) =>
-      const WidgetSpan(child: SizedBox.shrink());
 }

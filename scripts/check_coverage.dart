@@ -49,6 +49,7 @@ const _excluded = {
   'lib/ui/screens/thread_detail_screen.dart',
   'lib/ui/screens/undo_log_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
+  'lib/ui/widgets/secure_email_webview.dart',
   'lib/ui/widgets/snooze_picker.dart',
   'lib/ui/widgets/try_connection_button.dart',
   'lib/ui/widgets/undo_shell.dart',

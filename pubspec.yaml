@@ -41,7 +41,7 @@ dependencies:
   mime: ^2.0.0
 
   # HTML rendering for email bodies
-  flutter_html: ^3.0.0
+  webview_flutter: ^4.0.0
   url_launcher: ^6.3.2
   flutter_markdown: ^0.7.7+1
 

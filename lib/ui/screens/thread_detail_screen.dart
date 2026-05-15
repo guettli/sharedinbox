@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -10,7 +9,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d, HH:mm');
 
@@ -164,23 +163,9 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                         onPressed: () =>
                             setState(() => _loadRemoteImages = true),
                       ),
-                    Html(
-                      data: body.htmlBody!,
-                      extensions: [
-                        if (!_loadRemoteImages) _BlockRemoteImagesExtension(),
-                      ],
-                      onLinkTap: (url, _, __) {
-                        if (url == null) return;
-                        final uri = Uri.tryParse(url);
-                        if (uri != null) {
-                          unawaited(
-                            launchUrl(
-                              uri,
-                              mode: LaunchMode.externalApplication,
-                            ),
-                          );
-                        }
-                      },
+                    SecureEmailWebView(
+                      htmlBody: body.htmlBody!,
+                      loadRemoteImages: _loadRemoteImages,
                     ),
                   ] else
                     SelectableText(
@@ -287,20 +272,4 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
       }
     }
   }
-}
-
-class _BlockRemoteImagesExtension extends HtmlExtension {
-  @override
-  Set<String> get supportedTags => {'img'};
-
-  @override
-  bool matches(ExtensionContext context) {
-    if (context.elementName != 'img') return false;
-    final src = context.attributes['src'] ?? '';
-    return src.startsWith('http://') || src.startsWith('https://');
-  }
-
-  @override
-  InlineSpan build(ExtensionContext context) =>
-      const WidgetSpan(child: SizedBox.shrink());
 }
