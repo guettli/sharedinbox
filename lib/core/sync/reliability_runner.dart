@@ -50,7 +50,7 @@ class ReliabilityRunner {
     }
   }
 
-  Future<void> _runForAccount(String accountId) async {
+  Future<void> _runForAccount(String accountId, {bool force = false}) async {
     try {
       final mailboxes = await _mailboxes.observeMailboxes(accountId).first;
       var totalMissingLocally = 0;
@@ -59,7 +59,7 @@ class ReliabilityRunner {
       final details = <String, dynamic>{};
 
       for (final mailbox in mailboxes) {
-        if (!_running) break;
+        if (!force && !_running) break;
         final result = await _emails.verifySyncReliability(
           accountId,
           mailbox.path,
@@ -103,7 +103,14 @@ class ReliabilityRunner {
   }
 
   /// Forces a reliability check for all accounts immediately.
+  ///
+  /// Works regardless of whether [start] has been called, so the UI can
+  /// trigger a manual check at any time without depending on the periodic
+  /// runner being active.
   Future<void> checkNow() async {
-    await _runAll();
+    final accounts = await _accounts.observeAccounts().first;
+    for (final account in accounts) {
+      await _runForAccount(account.id, force: true);
+    }
   }
 }

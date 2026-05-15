@@ -1,0 +1,204 @@
+// Tests for ReliabilityRunner.checkNow() — the manual "Verify sync health"
+// trigger.  Specifically guards against regression of issue #95 where
+// checkNow() silently did nothing because it delegated to _runAll(), which
+// checked the _running flag (only true after start() is called).
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/sync/reliability_runner.dart';
+import 'package:sharedinbox/data/db/database.dart'
+    hide Account, Email, EmailBody;
+
+import 'db_test_helper.dart';
+
+// ---------------------------------------------------------------------------
+// Minimal fakes
+// ---------------------------------------------------------------------------
+
+const _kAccount = Account(
+  id: 'test-account',
+  displayName: 'Test',
+  email: 'test@example.com',
+  imapHost: 'localhost',
+);
+
+const _kMailbox = Mailbox(
+  id: 'test-account:INBOX',
+  accountId: 'test-account',
+  path: 'INBOX',
+  name: 'INBOX',
+  unreadCount: 0,
+  totalCount: 0,
+);
+
+class _FakeAccounts implements AccountRepository {
+  @override
+  Stream<List<Account>> observeAccounts() => Stream.value([_kAccount]);
+  @override
+  Future<Account?> getAccount(String id) async => _kAccount;
+  @override
+  Future<void> addAccount(Account account, String password) async {}
+  @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+  @override
+  Future<void> removeAccount(String id) async {}
+  @override
+  Future<String> getPassword(String id) async => 'secret';
+}
+
+class _FakeMailboxes implements MailboxRepository {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
+      Stream.value([_kMailbox]);
+  @override
+  Future<int> syncMailboxes(String accountId) async => 0;
+  @override
+  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
+      null;
+  @override
+  Future<void> clearForResync(String accountId) async {}
+}
+
+class _FakeEmails implements EmailRepository {
+  int verifyCallCount = 0;
+
+  @override
+  Future<ReliabilityResult> verifySyncReliability(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    verifyCallCount++;
+    return ReliabilityResult.healthy;
+  }
+
+  // All remaining methods are unused by ReliabilityRunner.
+  @override
+  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
+      Stream.value([]);
+  @override
+  Stream<List<EmailThread>> observeThreads(
+    String a,
+    String m, {
+    int limit = 50,
+  }) =>
+      Stream.value([]);
+  @override
+  Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
+      Stream.value([]);
+  @override
+  Future<Email?> getEmail(String id) async => null;
+  @override
+  Future<EmailBody> getEmailBody(String id) async =>
+      const EmailBody(emailId: '', attachments: []);
+  @override
+  Future<SyncEmailsResult> syncEmails(String a, String m) async =>
+      SyncEmailsResult.zero;
+  @override
+  Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
+  @override
+  Future<void> markAllAsRead(String a, String m) async {}
+  @override
+  Future<void> moveEmail(String id, String dest) async {}
+  @override
+  Future<String?> deleteEmail(String id) async => null;
+  @override
+  Future<void> sendEmail(String a, EmailDraft d) async {}
+  @override
+  Future<String> downloadAttachment(String id, EmailAttachment att) async => '';
+  @override
+  Future<String> fetchRawRfc822(String id) async => '';
+  @override
+  Future<List<Email>> searchEmails(String a, String m, String q) async => [];
+  @override
+  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
+  @override
+  Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
+  @override
+  Future<List<EmailAddress>> searchAddresses(
+    String? a,
+    String q, {
+    int limit = 10,
+  }) async =>
+      [];
+  @override
+  Stream<List<FailedMutation>> observeFailedMutations(String a) =>
+      Stream.value([]);
+  @override
+  Future<void> discardMutation(int id) async {}
+  @override
+  Future<void> retryMutation(int id) async {}
+  @override
+  Future<bool> cancelPendingChange(String id, String type) async => false;
+  @override
+  Future<void> snoozeEmail(String id, DateTime until) async {}
+  @override
+  Future<void> restoreEmails(List<Email> emails) async {}
+  @override
+  Future<Email?> findEmailByMessageId(String a, String messageId) async => null;
+  @override
+  Stream<String> get onChangesQueued => const Stream.empty();
+  @override
+  Stream<void> watchJmapPush(String a, String password) => const Stream.empty();
+  @override
+  Future<int> flushPendingChanges(String a, String password) async => 0;
+  @override
+  Future<int> wakeUpEmails(String accountId) async => 0;
+  @override
+  Future<void> clearForResync(String accountId) async {}
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+void main() {
+  configureSqliteForTests();
+
+  group('ReliabilityRunner.checkNow()', () {
+    late AppDatabase db;
+    late _FakeEmails emails;
+    late ReliabilityRunner runner;
+
+    setUp(() {
+      db = openTestDatabase();
+      emails = _FakeEmails();
+      runner = ReliabilityRunner(db, _FakeAccounts(), _FakeMailboxes(), emails);
+    });
+
+    tearDown(() => db.close());
+
+    test('writes sync-health row even when start() was never called', () async {
+      // Do NOT call runner.start() — this was the bug: checkNow() only ran
+      // when _running was true, which required start() to have been called.
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows, hasLength(1), reason: 'checkNow() must write to the DB');
+      expect(rows.first.accountId, 'test-account');
+      expect(rows.first.isHealthy, isTrue);
+    });
+
+    test('calls verifySyncReliability for each mailbox', () async {
+      await runner.checkNow();
+
+      expect(
+        emails.verifyCallCount,
+        1,
+        reason: 'one mailbox → one verifySyncReliability call',
+      );
+    });
+
+    test('also works when start() was called beforehand', () async {
+      runner.start();
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows, hasLength(1));
+    });
+  });
+}
