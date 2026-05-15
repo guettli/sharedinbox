@@ -4,12 +4,14 @@ class MailboxSyncStats {
     required this.fetched,
     required this.skipped,
     required this.bytesTransferred,
+    this.duration,
   });
 
   final String mailboxPath;
   final int fetched;
   final int skipped;
   final int bytesTransferred;
+  final Duration? duration;
 }
 
 class SyncLogEntry {

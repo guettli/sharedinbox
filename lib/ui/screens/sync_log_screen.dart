@@ -9,6 +9,11 @@ import 'package:sharedinbox/di.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
+String _fmtDuration(Duration d) {
+  final ms = d.inMilliseconds;
+  return ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';
+}
+
 String _fmtBytes(int bytes) {
   if (bytes <= 0) return '0 B';
   if (bytes < 1024) return '$bytes B';
@@ -104,9 +109,7 @@ class _SyncLogTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ms = entry.duration.inMilliseconds;
-    final durationLabel =
-        ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';
+    final durationLabel = _fmtDuration(entry.duration);
     final proto =
         entry.protocol.isEmpty ? '' : ' · ${entry.protocol.toUpperCase()}';
     final theme = Theme.of(context);
@@ -154,7 +157,10 @@ class _SyncLogTile extends StatelessWidget {
                 for (final m in entry.mailboxStats)
                   _row(
                     '  ${m.mailboxPath}',
-                    '${m.fetched} new · ${m.skipped} up-to-date',
+                    [
+                      '${m.fetched} new · ${m.skipped} up-to-date',
+                      if (m.duration != null) _fmtDuration(m.duration!),
+                    ].join(' · '),
                   ),
               ],
               if (entry.errorMessage != null)

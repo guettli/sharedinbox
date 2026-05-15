@@ -347,6 +347,7 @@ class _AccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;
       mailboxStats.add(
@@ -355,6 +356,7 @@ class _AccountSync implements _SyncLoop {
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,
+          duration: DateTime.now().difference(mailboxStart),
         ),
       );
     }
@@ -598,6 +600,7 @@ class _JmapAccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;
       mailboxStats.add(
@@ -606,6 +609,7 @@ class _JmapAccountSync implements _SyncLoop {
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,
+          duration: DateTime.now().difference(mailboxStart),
         ),
       );
     }

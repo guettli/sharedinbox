@@ -49,6 +49,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
                 fetched: Value(s.fetched),
                 skipped: Value(s.skipped),
                 bytesTransferred: Value(s.bytesTransferred),
+                durationMs: Value(s.duration?.inMilliseconds),
               ),
             );
       }
@@ -90,6 +91,9 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
                     fetched: m.fetched,
                     skipped: m.skipped,
                     bytesTransferred: m.bytesTransferred,
+                    duration: m.durationMs != null
+                        ? Duration(milliseconds: m.durationMs!)
+                        : null,
                   ),
                 )
                 .toList(),

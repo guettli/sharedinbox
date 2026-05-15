@@ -204,6 +204,8 @@ class SyncLogMailboxes extends Table {
   IntColumn get fetched => integer().withDefault(const Constant(0))();
   IntColumn get skipped => integer().withDefault(const Constant(0))();
   IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
+  // Added in schema v30: how long this mailbox took to sync, in milliseconds.
+  IntColumn get durationMs => integer().nullable()();
 }
 
 /// Stores the result of the periodic "ground truth" verification.
@@ -290,7 +292,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 29;
+  int get schemaVersion => 30;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -521,6 +523,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 29) {
             await m.createTable(localSieveScripts);
+          }
+          if (from >= 12 && from < 30) {
+            await m.addColumn(syncLogMailboxes, syncLogMailboxes.durationMs);
           }
         },
       );

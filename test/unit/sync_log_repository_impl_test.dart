@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 
@@ -54,6 +55,48 @@ void main() {
     expect(rows.first.itemsSynced, 5);
     expect(rows.first.mailboxesSynced, 3);
     expect(rows.first.pendingFlushed, 0);
+  });
+
+  test('stores and retrieves per-mailbox duration', () async {
+    final repo = SyncLogRepositoryImpl(db);
+    final start = DateTime(2024, 2, 1, 10);
+    final end = DateTime(2024, 2, 1, 10, 0, 8);
+
+    await repo.log(
+      accountId: 'acc1',
+      success: true,
+      protocol: 'imap',
+      emailsFetched: 3,
+      emailsSkipped: 1,
+      mailboxesSynced: 2,
+      pendingFlushed: 0,
+      bytesTransferred: 1024,
+      startedAt: start,
+      finishedAt: end,
+      mailboxStats: const [
+        MailboxSyncStats(
+          mailboxPath: 'INBOX',
+          fetched: 2,
+          skipped: 1,
+          bytesTransferred: 512,
+          duration: Duration(milliseconds: 3200),
+        ),
+        MailboxSyncStats(
+          mailboxPath: 'Sent',
+          fetched: 1,
+          skipped: 0,
+          bytesTransferred: 512,
+        ),
+      ],
+    );
+
+    final entries = await repo.observeSyncLogs('acc1').first;
+    final latest = entries.first;
+    expect(latest.mailboxStats, hasLength(2));
+    expect(latest.mailboxStats[0].mailboxPath, 'INBOX');
+    expect(latest.mailboxStats[0].duration, const Duration(milliseconds: 3200));
+    expect(latest.mailboxStats[1].mailboxPath, 'Sent');
+    expect(latest.mailboxStats[1].duration, isNull);
   });
 
   test('logs error entry with message', () async {

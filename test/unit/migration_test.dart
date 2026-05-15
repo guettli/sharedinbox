@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 29);
+      expect(db.schemaVersion, 30);
       await db.close();
     });
 
@@ -186,6 +186,11 @@ void main() {
       // v29: local_sieve_scripts table.
       await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
 
+      // v30: duration_ms column on sync_log_mailboxes.
+      final syncLogMailboxColumns =
+          await _tableColumns(db, 'sync_log_mailboxes');
+      expect(syncLogMailboxColumns, contains('duration_ms'));
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -293,6 +298,33 @@ void main() {
           headers_json TEXT NULL
         );
       ''');
+      rawDb.execute('''
+        CREATE TABLE sync_logs (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NOT NULL,
+          result TEXT NOT NULL,
+          error_message TEXT NULL,
+          protocol TEXT NOT NULL DEFAULT '',
+          items_synced INTEGER NOT NULL DEFAULT 0,
+          mailboxes_synced INTEGER NOT NULL DEFAULT 0,
+          pending_flushed INTEGER NOT NULL DEFAULT 0,
+          emails_skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER NOT NULL,
+          finished_at INTEGER NOT NULL,
+          protocol_log TEXT NULL
+        );
+      ''');
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL REFERENCES sync_logs (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0
+        );
+      ''');
       rawDb.execute('PRAGMA user_version = 22;');
       rawDb.close();
 
@@ -341,11 +373,16 @@ void main() {
       // v29: local_sieve_scripts table.
       await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
 
+      // v30: duration_ms column on sync_log_mailboxes.
+      final syncLogMailboxColumns =
+          await _tableColumns(db, 'sync_log_mailboxes');
+      expect(syncLogMailboxColumns, contains('duration_ms'));
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 29', () async {
+    test('fresh install creates all tables at schemaVersion 30', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -378,6 +415,11 @@ void main() {
 
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));
+
+      // v30: duration_ms column on sync_log_mailboxes.
+      final syncLogMailboxColumns =
+          await _tableColumns(db, 'sync_log_mailboxes');
+      expect(syncLogMailboxColumns, contains('duration_ms'));
 
       await db.close();
     });
