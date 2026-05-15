@@ -58,6 +58,10 @@ linux/flutter/generated_plugins.cmake
 .flutter-plugins-dependencies
 .metadata
 
+# --- Python ---
+__pycache__/
+*.pyc
+
 # --- Tools & Cache ---
 .fvm/
 fvm/
@@ -98,6 +102,7 @@ sharedinbox-runner/runner-data/
 website/public/
 website/resources/
 website/.hugo_build.lock
+website/content/builds/_index.md
 website/content/builds/[0-9]*/
 
 .copilot/
@@ -106,4 +111,5 @@ website/content/builds/[0-9]*/
 .wget-hsts
 
 tmp/
+test/widget/failures/
 .claude*

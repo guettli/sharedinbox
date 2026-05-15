@@ -459,7 +459,7 @@ tasks:
         echo "Uploaded $APK_NAME to $REMOTE_DIR"
 
   generate-build-history:
-    desc: Generate Hugo build-history pages from APKs on the server
+    desc: Generate Hugo build-history pages from Linux and Android builds on the server
     preconditions:
       - sh: test -n "$SSH_USER"
         msg: "SSH_USER is not set"
@@ -468,6 +468,17 @@ tasks:
     cmds:
       - python3 scripts/generate_build_history.py
 
+  website-publish:
+    desc: Generate build history, build Hugo site, and rsync to server (requires SSH_USER + SSH_HOST)
+    preconditions:
+      - sh: test -n "$SSH_USER"
+        msg: "SSH_USER is not set"
+      - sh: test -n "$SSH_HOST"
+        msg: "SSH_HOST is not set"
+    cmds:
+      - task: generate-build-history
+      - task: website-deploy
+
   website-deploy:
     desc: Deploy the website via rsync to public_html
     deps: [website-build]
@@ -475,6 +486,7 @@ tasks:
       - |
         rsync -avz --delete \
           --exclude='*.apk' \
+          --exclude='*.tar.gz' \
           -e "ssh -o StrictHostKeyChecking=no" \
           website/public/ \
           ${SSH_USER}@${SSH_HOST}:public_html/

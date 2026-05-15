@@ -46,7 +46,7 @@ command -v xvfb-run >/dev/null || {
 # but the leftover Xvfb's stale /tmp/.X11-unix/X<N> socket and lock file confuse
 # its cleanup, producing "kill: No such process" on exit and a non-zero status
 # even when the test itself passed.
-for _xvfb_pid in $(pgrep -u "$USER" -x Xvfb 2>/dev/null); do
+for _xvfb_pid in $(pgrep -u "${USER:-$(id -un)}" -x Xvfb 2>/dev/null); do
     _xvfb_display=$(tr '\0' ' ' < "/proc/${_xvfb_pid}/cmdline" 2>/dev/null \
         | grep -oE ':[0-9]+' | head -1)
     kill "$_xvfb_pid" 2>/dev/null || true
@@ -109,8 +109,8 @@ ts "flutter test start"
 # Stale processes can hold onto the Xvfb display, causing the new Flutter app
 # to hang indefinitely during GTK initialisation without ever connecting back
 # to the flutter test runner.
-pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
-pkill -u "$USER" -f "flutter.*integration" 2>/dev/null || true
+pkill -u "${USER:-$(id -un)}" -f "sharedinbox" 2>/dev/null || true
+pkill -u "${USER:-$(id -un)}" -f "flutter.*integration" 2>/dev/null || true
 sleep 1
 
 # Find an unused display number.
@@ -145,7 +145,7 @@ for _attempt in 1 2; do
     [ "$_e2e_exit" -eq 0 ] && break || true
     if [ $_attempt -lt 2 ]; then
         ts "E2E attempt $_attempt failed (exit $_e2e_exit), restarting Xvfb and retrying..."
-        pkill -u "$USER" -f "sharedinbox" 2>/dev/null || true
+        pkill -u "${USER:-$(id -un)}" -f "sharedinbox" 2>/dev/null || true
         # Kill the old Xvfb and start a fresh one on a new display number.
         kill "${XVFB_PID:-}" 2>/dev/null || true
         wait "${XVFB_PID:-}" 2>/dev/null || true

@@ -127,16 +127,35 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: nix develop --no-warn-dirty --command task deploy-apk-to-server
 
-      - name: Generate build history
-        continue-on-error: true
-        env:
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: nix develop --no-warn-dirty --command task generate-build-history
+  publish-website:
+    name: Publish Website Build History
+    runs-on: self-hosted
+    needs: [build-linux, deploy-playstore]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      (needs.build-linux.result == 'success' || needs.deploy-playstore.result == 'success')
 
-      - name: Deploy website
-        continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enable Nix flakes
+        run: |
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+
+      - name: Set up SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Generate build history and deploy website
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: nix develop --no-warn-dirty --command task website-deploy
+        run: nix develop --no-warn-dirty --command task website-publish
