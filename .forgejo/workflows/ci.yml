@@ -21,9 +21,6 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
-      - name: Check mocks are up to date
-        run: nix develop --no-warn-dirty --command task check-mocks
-
       - name: Run Full Check Suite
         run: nix develop --no-warn-dirty --command task check
 
