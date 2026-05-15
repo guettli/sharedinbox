@@ -41,6 +41,10 @@ abstract class EmailRepository {
   /// return the cached path without a network round-trip.
   Future<String> downloadAttachment(String emailId, EmailAttachment attachment);
 
+  /// Fetches the original RFC 2822 message from the server as a raw string.
+  /// Always performs a live network request — the raw message is not cached.
+  Future<String> fetchRawRfc822(String emailId);
+
   /// Returns emails in [mailboxPath] whose subject or body contain [query].
   /// Results come from the server (IMAP SEARCH) and are not cached.
   Future<List<Email>> searchEmails(

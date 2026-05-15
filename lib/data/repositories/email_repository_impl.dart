@@ -2534,6 +2534,65 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<String> fetchRawRfc822(String emailId) async {
+    final emailRow = await (_db.select(
+      _db.emails,
+    )..where((t) => t.id.equals(emailId)))
+        .getSingle();
+    final account = (await _accounts.getAccount(emailRow.accountId))!;
+    final password = await _accounts.getPassword(account.id);
+
+    if (account.type == account_model.AccountType.jmap) {
+      final jmap = await JmapClient.connect(
+        httpClient: _httpClient,
+        jmapUrl: Uri.parse(account.jmapUrl!),
+        username: _effectiveUsername(account),
+        password: password,
+      );
+      final jmapEmailId = emailId.contains(':')
+          ? emailId.substring(emailId.indexOf(':') + 1)
+          : emailId;
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': [jmapEmailId],
+            'properties': ['id', 'blobId'],
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Email/get');
+      final emailData =
+          (result['list'] as List<dynamic>).first as Map<String, dynamic>;
+      final blobId = emailData['blobId'] as String;
+      final bytes = await jmap.downloadBlob(
+        blobId,
+        name: 'email.eml',
+        type: 'message/rfc822',
+      );
+      return utf8.decode(bytes, allowMalformed: true);
+    }
+
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
+    try {
+      await client.selectMailboxByPath(emailRow.mailboxPath);
+      final fetch = await client.uidFetchMessage(
+        emailRow.uid,
+        'BODY.PEEK[]',
+      );
+      return fetch.messages.first.renderMessage();
+    } finally {
+      await client.logout();
+    }
+  }
+
+  @override
   Future<List<model.Email>> searchEmailsGlobal(
     String? accountId,
     String query,

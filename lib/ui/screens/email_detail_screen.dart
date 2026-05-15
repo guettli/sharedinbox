@@ -159,8 +159,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             onSelected: (value) {
               if (value == 'headers' && body != null) {
                 _showHeaders(context, body);
-              } else if (value == 'rfc' && body != null) {
-                unawaited(_showRaw(context, header, body));
+              } else if (value == 'rfc') {
+                unawaited(_showRaw(context, header));
               }
             },
           ),
@@ -428,22 +428,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
-  Future<void> _showRaw(
-    BuildContext context,
-    Email? header,
-    EmailBody body,
-  ) async {
-    final buf = StringBuffer();
-    for (final h in body.headers) {
-      buf.write('${h.name}: ${h.value}\n');
+  Future<void> _showRaw(BuildContext context, Email? header) async {
+    final String raw;
+    try {
+      raw = await ref
+          .read(emailRepositoryProvider)
+          .fetchRawRfc822(widget.emailId);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to fetch raw email: $e')),
+      );
+      return;
     }
-    buf.write('\n');
-    if (body.textBody != null && body.textBody!.isNotEmpty) {
-      buf.write(body.textBody);
-    } else if (body.htmlBody != null && body.htmlBody!.isNotEmpty) {
-      buf.write(await compute(htmlToPlain, body.htmlBody!));
-    }
-    final raw = buf.toString();
 
     if (!context.mounted) return;
 

@@ -252,6 +252,9 @@ class FakeEmailRepository implements EmailRepository {
       '/tmp/${attachment.filename}';
 
   @override
+  Future<String> fetchRawRfc822(String emailId) async => '';
+
+  @override
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,

@@ -88,6 +88,8 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<String> downloadAttachment(String id, EmailAttachment a) async => '';
   @override
+  Future<String> fetchRawRfc822(String emailId) async => '';
+  @override
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
   @override
   Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
