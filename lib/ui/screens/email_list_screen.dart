@@ -503,7 +503,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           .searchEmails(widget.accountId, widget.mailboxPath, searchQuery);
       if (!mounted) return;
       if (remaining.isEmpty) {
-        _searchController.clear();
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          _searchController.clear();
+        }
       } else {
         setState(() => _searchResults = remaining);
       }

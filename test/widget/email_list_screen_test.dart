@@ -3,8 +3,29 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 
 import 'helpers.dart';
+
+// A fake email repository whose search results can be changed mid-test.
+class _MutableFakeEmailRepository extends FakeEmailRepository {
+  List<Email> _results;
+
+  _MutableFakeEmailRepository(List<Email> initial)
+      : _results = List.of(initial),
+        super();
+
+  void setSearchResults(List<Email> results) => _results = results;
+
+  @override
+  Future<List<Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query,
+  ) async =>
+      _results;
+}
 
 final _kDate = DateTime(2024, 6);
 
@@ -404,6 +425,66 @@ void main() {
       // Navigated to email detail (subject appears in the detail body)
       expect(find.text('Result email'), findsWidgets);
     });
+
+    testWidgets(
+      'deleting all search results pops back to previous screen',
+      (tester) async {
+        final email = testEmail(subject: 'Needle');
+        final repo = _MutableFakeEmailRepository([email]);
+
+        // Start at the mailbox list so the email list is pushed on top of it,
+        // making context.canPop() == true inside EmailListScreen.
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byType(MailboxListScreen), findsOneWidget);
+
+        // Navigate into INBOX (pushes EmailListScreen onto the stack).
+        await tester.tap(find.text('INBOX'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(EmailListScreen), findsOneWidget);
+
+        // Search for the email.
+        await tester.enterText(find.byType(TextField), 'Needle');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        // 'Needle' also appears in the SearchBar input, so match at least one.
+        expect(find.text('Needle'), findsAtLeastNWidgets(1));
+
+        // Long-press the sender name (unique to the email tile) to enter
+        // selection mode.
+        await tester.longPress(find.text('Bob'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.select_all));
+        await tester.pumpAndSettle();
+
+        // After deletion the search re-runs and finds nothing.
+        repo.setSearchResults([]);
+
+        await tester.tap(find.byIcon(Icons.delete));
+        await tester.pumpAndSettle();
+
+        // Should have popped back to the mailbox list.
+        expect(find.byType(EmailListScreen), findsNothing);
+        expect(find.byType(MailboxListScreen), findsOneWidget);
+      },
+    );
 
     testWidgets('shows preview snippet when email has preview', (tester) async {
       final email = Email(
