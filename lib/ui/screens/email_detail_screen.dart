@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -148,10 +151,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 value: 'headers',
                 child: Text('Show Mail Headers'),
               ),
+              const PopupMenuItem(
+                value: 'rfc',
+                child: Text('Show Raw Email'),
+              ),
             ],
             onSelected: (value) {
               if (value == 'headers' && body != null) {
                 _showHeaders(context, body);
+              } else if (value == 'rfc' && body != null) {
+                unawaited(_showRaw(context, header, body));
               }
             },
           ),
@@ -416,6 +425,86 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ),
       );
       context.pop();
+    }
+  }
+
+  Future<void> _showRaw(
+    BuildContext context,
+    Email? header,
+    EmailBody body,
+  ) async {
+    final buf = StringBuffer();
+    for (final h in body.headers) {
+      buf.write('${h.name}: ${h.value}\n');
+    }
+    buf.write('\n');
+    if (body.textBody != null && body.textBody!.isNotEmpty) {
+      buf.write(body.textBody);
+    } else if (body.htmlBody != null && body.htmlBody!.isNotEmpty) {
+      buf.write(await compute(htmlToPlain, body.htmlBody!));
+    }
+    final raw = buf.toString();
+
+    if (!context.mounted) return;
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Raw Email'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                raw,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: raw));
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Copied to clipboard')),
+                  );
+                }
+              },
+              child: const Text('Copy'),
+            ),
+            TextButton(
+              onPressed: () => unawaited(_downloadRaw(ctx, header, raw)),
+              child: const Text('Download'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadRaw(
+    BuildContext context,
+    Email? header,
+    String raw,
+  ) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final subject = (header?.subject ?? 'email')
+          .replaceAll(RegExp(r'[^\w\s-]'), '_')
+          .trim();
+      final file = File('${dir.path}/$subject.eml');
+      await file.writeAsString(raw);
+      await OpenFilex.open(file.path);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
     }
   }
 
