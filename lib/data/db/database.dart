@@ -107,6 +107,8 @@ class EmailBodies extends Table {
   DateTimeColumn get cachedAt => dateTime().nullable()();
   // Added in schema v20: raw or parsed headers
   TextColumn get headersJson => text().nullable()();
+  // Added in schema v28: serialised MimePart tree (JSON)
+  TextColumn get mimeTreeJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {emailId};
@@ -277,7 +279,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 27;
+  int get schemaVersion => 28;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -502,6 +504,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 27) {
             await m.createTable(searchHistoryEntries);
+          }
+          if (from < 28) {
+            await m.addColumn(emailBodies, emailBodies.mimeTreeJson);
           }
         },
       );

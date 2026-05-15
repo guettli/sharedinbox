@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 27);
+      expect(db.schemaVersion, 28);
       await db.close();
     });
 
@@ -176,6 +176,13 @@ void main() {
           .customSelect('SELECT count(*) FROM search_history_entries')
           .get();
 
+      // v28: mime_tree_json column on email_bodies.
+      await db
+          .customSelect(
+            'SELECT mime_tree_json FROM email_bodies LIMIT 0',
+          )
+          .get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -273,6 +280,16 @@ void main() {
           PRIMARY KEY (account_id, mailbox_path, id)
         );
       ''');
+      rawDb.execute('''
+        CREATE TABLE email_bodies (
+          email_id TEXT NOT NULL PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
+          text_body TEXT NULL,
+          html_body TEXT NULL,
+          attachments_json TEXT NOT NULL DEFAULT '[]',
+          cached_at INTEGER NULL,
+          headers_json TEXT NULL
+        );
+      ''');
       rawDb.execute('PRAGMA user_version = 22;');
       rawDb.close();
 
@@ -311,11 +328,18 @@ void main() {
           .customSelect('SELECT count(*) FROM search_history_entries')
           .get();
 
+      // v28: mime_tree_json column on email_bodies.
+      await db
+          .customSelect(
+            'SELECT mime_tree_json FROM email_bodies LIMIT 0',
+          )
+          .get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 27', () async {
+    test('fresh install creates all tables at schemaVersion 28', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 

@@ -152,6 +152,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Show Mail Headers'),
               ),
               const PopupMenuItem(
+                value: 'structure',
+                child: Text('Show Mail Structure'),
+              ),
+              const PopupMenuItem(
                 value: 'rfc',
                 child: Text('Show Raw Email'),
               ),
@@ -159,6 +163,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             onSelected: (value) {
               if (value == 'headers' && body != null) {
                 _showHeaders(context, body);
+              } else if (value == 'structure' && body != null) {
+                _showStructure(context, body);
               } else if (value == 'rfc') {
                 unawaited(_showRaw(context, header));
               }
@@ -562,6 +568,88 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ),
       ),
     );
+  }
+
+  void _showStructure(BuildContext context, EmailBody body) {
+    final tree = body.mimeTree;
+    if (tree == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Text(
+            'Structure not available. Try re-syncing the email.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final rows = <_MimeRow>[];
+    _flattenMimeTree(tree, 0, rows);
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Mail Structure'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: rows.length,
+              itemBuilder: (ctx, i) {
+                final row = rows[i];
+                return Container(
+                  color: i.isEven
+                      ? Theme.of(ctx).colorScheme.surfaceContainerHighest
+                      : Theme.of(ctx).colorScheme.surface,
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 4,
+                    horizontal: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(width: row.depth * 16.0),
+                      Expanded(
+                        child: Text(
+                          row.label,
+                          style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                                fontFamily: 'monospace',
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MimeRow {
+  const _MimeRow(this.depth, this.label);
+  final int depth;
+  final String label;
+}
+
+void _flattenMimeTree(MimePart part, int depth, List<_MimeRow> out) {
+  final parts = <String>[part.contentType];
+  if (part.filename != null) parts.add('"${part.filename}"');
+  if (part.size != null) parts.add(fmtSize(part.size!));
+  if (part.encoding != null) parts.add(part.encoding!);
+  out.add(_MimeRow(depth, parts.join('  ')));
+  for (final child in part.children) {
+    _flattenMimeTree(child, depth + 1, out);
   }
 }
 

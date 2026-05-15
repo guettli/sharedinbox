@@ -232,12 +232,29 @@ class EmailHeader {
 }
 
 /// Full message body — fetched on demand, cached in the local DB.
+class MimePart {
+  final String contentType;
+  final String? filename;
+  final int? size;
+  final String? encoding;
+  final List<MimePart> children;
+
+  const MimePart({
+    required this.contentType,
+    this.filename,
+    this.size,
+    this.encoding,
+    this.children = const [],
+  });
+}
+
 class EmailBody {
   final String emailId;
   final String? textBody;
   final String? htmlBody;
   final List<EmailAttachment> attachments;
   final List<EmailHeader> headers;
+  final MimePart? mimeTree;
 
   const EmailBody({
     required this.emailId,
@@ -245,6 +262,7 @@ class EmailBody {
     this.htmlBody,
     required this.attachments,
     this.headers = const [],
+    this.mimeTree,
   });
 }
 

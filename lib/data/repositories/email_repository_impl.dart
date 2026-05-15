@@ -262,6 +262,8 @@ class EmailRepositoryImpl implements EmailRepository {
             .toList(),
       );
 
+      final mimeTreeJson = _buildMimeTreeJson(msg);
+
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
@@ -269,6 +271,7 @@ class EmailRepositoryImpl implements EmailRepository {
               htmlBody: Value(htmlBody),
               attachmentsJson: Value(attachmentsJson),
               headersJson: Value(headersJson),
+              mimeTreeJson: Value(mimeTreeJson),
               cachedAt: Value(DateTime.now()),
             ),
           );
@@ -278,6 +281,7 @@ class EmailRepositoryImpl implements EmailRepository {
         htmlBody: htmlBody,
         attachments: _parseAttachments(attachmentsJson),
         headers: _parseHeaders(headersJson),
+        mimeTree: _parseMimeTree(mimeTreeJson),
       );
     } finally {
       await client.logout();
@@ -2882,6 +2886,27 @@ class EmailRepositoryImpl implements EmailRepository {
         htmlBody: row.htmlBody,
         attachments: _parseAttachments(row.attachmentsJson),
         headers: _parseHeaders(row.headersJson),
+        mimeTree: _parseMimeTree(row.mimeTreeJson),
+      );
+
+  model.MimePart? _parseMimeTree(String? jsonStr) {
+    if (jsonStr == null || jsonStr.isEmpty) return null;
+    try {
+      return _mimePartFromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  model.MimePart _mimePartFromJson(Map<String, dynamic> m) => model.MimePart(
+        contentType: m['contentType'] as String? ?? 'application/octet-stream',
+        filename: m['filename'] as String?,
+        size: m['size'] as int?,
+        encoding: m['encoding'] as String?,
+        children: ((m['children'] as List<dynamic>?) ?? [])
+            .cast<Map<String, dynamic>>()
+            .map(_mimePartFromJson)
+            .toList(),
       );
 
   List<model.EmailHeader> _parseHeaders(String? jsonStr) {
@@ -2973,3 +2998,23 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 }
+
+/// Recursively converts an [imap.MimePart] into a JSON-serialisable map.
+Map<String, dynamic> _mimePartToJson(imap.MimePart part) {
+  final ct = part.getHeaderContentType();
+  final disposition = part.getHeaderContentDisposition();
+  final rawEncoding =
+      part.getHeader('content-transfer-encoding')?.firstOrNull?.value;
+  final encoding = rawEncoding?.split(';').first.trim().toLowerCase();
+  return {
+    'contentType': ct?.mediaType.text ?? 'application/octet-stream',
+    'filename': disposition?.filename ?? ct?.parameters['name'],
+    'size': disposition?.size,
+    'encoding': encoding,
+    'children': (part.parts ?? []).map(_mimePartToJson).toList(),
+  };
+}
+
+/// Builds a JSON string representing the MIME tree of [msg].
+String _buildMimeTreeJson(imap.MimeMessage msg) =>
+    jsonEncode(_mimePartToJson(msg));
