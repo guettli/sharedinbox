@@ -16,7 +16,7 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart' show FakeImapClient;
+import 'fake_imap.dart' show FakeImapClient, SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -663,6 +663,48 @@ void main() {
 
       // 4+1 = 5 = _maxChangeAttempts → evicted
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('snooze flush selects src mailbox and moves email to Snoozed',
+        () async {
+      final spy = SnoozeSpyImapClient();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => spy,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:5',
+              changeType: 'snooze',
+              payload: jsonEncode({
+                'uid': 5,
+                'src': 'INBOX',
+                'dest': 'Snoozed',
+                'until': '2026-05-10T15:00:00.000',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // Change successfully applied — removed from queue.
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // Source mailbox extracted from 'src', not 'mailboxPath'.
+      expect(spy.selectedMailbox, 'INBOX');
+      expect(spy.createdMailbox, 'Snoozed');
+      expect(spy.movedToMailbox, 'Snoozed');
     });
   });
 
@@ -1563,6 +1605,120 @@ void main() {
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
       // 4+1 = 5 = _maxChangeAttempts → evicted
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('snooze creates Snoozed folder via Mailbox/set when dest is Snoozed',
+        () async {
+      final List<Map<String, dynamic>> capturedBodies = [];
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {
+                'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+              },
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        capturedBodies.add(body);
+        final calls = body['methodCalls'] as List;
+        final methodName = (calls.first as List)[0] as String;
+        if (methodName == 'Mailbox/set') {
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'Mailbox/set',
+                  {
+                    'accountId': 'acct1',
+                    'created': {
+                      'new-snoozed': {'id': 'mbx-snoozed'},
+                    },
+                  },
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                {'accountId': 'acct1', 'updated': {}},
+                '0',
+              ],
+            ],
+          }),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await seedChange(
+        r.db,
+        r.accounts,
+        changeType: 'snooze',
+        payload: jsonEncode({
+          'uid': 0,
+          'src': 'mbx-inbox',
+          'dest': 'Snoozed',
+          'until': '2026-05-10T15:00:00.000',
+        }),
+      );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // Change successfully applied — removed from queue.
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+      // First API call should be Mailbox/set to create the Snoozed folder.
+      expect(capturedBodies, hasLength(2));
+      final firstCall =
+          ((capturedBodies.first['methodCalls'] as List).first as List)[0];
+      expect(firstCall, 'Mailbox/set');
+
+      // Second call should be Email/set using the newly created mailbox ID.
+      final secondCallArgs = ((capturedBodies[1]['methodCalls'] as List).first
+          as List)[1] as Map<String, dynamic>;
+      final update = (secondCallArgs['update'] as Map<String, dynamic>)['e1']
+          as Map<String, dynamic>;
+      expect(update['mailboxIds/mbx-snoozed'], true);
+    });
+
+    test('snooze uses existing mailbox ID when dest is already a JMAP ID',
+        () async {
+      final r = _makeRepos(httpClient: mockFlush(200));
+      await seedChange(
+        r.db,
+        r.accounts,
+        changeType: 'snooze',
+        payload: jsonEncode({
+          'uid': 0,
+          'src': 'mbx-inbox',
+          'dest': 'mbx-snoozed',
+          'until': '2026-05-10T15:00:00.000',
+        }),
+      );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // Change applied without needing Mailbox/set (dest was already a valid ID).
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     });
   });

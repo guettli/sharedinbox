@@ -2047,7 +2047,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     final uid = payload['uid'] as int;
-    final mailboxPath = payload['mailboxPath'] as String;
+    // snooze/unsnooze payloads use 'src' for the source folder; all others use 'mailboxPath'.
+    final mailboxPath = (payload['mailboxPath'] ?? payload['src']) as String;
     final seq = imap.MessageSequence.fromId(uid, isUid: true);
     await client.selectMailboxByPath(mailboxPath);
 
@@ -2186,8 +2187,29 @@ class EmailRepositoryImpl implements EmailRepository {
         final until = payload['until'] as String;
         final timestamp = until.replaceAll(':', '').replaceAll('-', '');
         final keyword = 'snz:$timestamp';
-        final destMailboxId = payload['dest'] as String;
+        var destMailboxId = payload['dest'] as String;
         final srcMailboxId = payload['src'] as String;
+        // When the Snoozed folder didn't exist at enqueue time, 'dest' holds
+        // the literal name 'Snoozed' rather than a JMAP mailbox ID.  Create it.
+        if (destMailboxId == 'Snoozed') {
+          final createResps = await jmap.call([
+            [
+              'Mailbox/set',
+              {
+                'accountId': jmap.accountId,
+                'create': {
+                  'new-snoozed': {'name': 'Snoozed', 'role': 'snoozed'},
+                },
+              },
+              '0',
+            ],
+          ]);
+          final createResult = _responseArgs(createResps, 0, 'Mailbox/set');
+          final created = createResult['created'] as Map<String, dynamic>?;
+          final newId = (created?['new-snoozed']
+              as Map<String, dynamic>?)?['id'] as String?;
+          if (newId != null) destMailboxId = newId;
+        }
         responses = await jmap.call([
           [
             'Email/set',
