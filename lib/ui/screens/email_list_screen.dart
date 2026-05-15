@@ -468,6 +468,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   Future<void> _batchDelete() async {
     final ids = _selectedEmailIds;
+    final wasSearching = _searching;
+    final searchQuery = _searchController.text.trim();
     _clearSelection();
     final repo = ref.read(emailRepositoryProvider);
 
@@ -494,6 +496,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       originalEmails: originalEmails,
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+
+    if (wasSearching && mounted) {
+      final remaining = await ref
+          .read(emailRepositoryProvider)
+          .searchEmails(widget.accountId, widget.mailboxPath, searchQuery);
+      if (!mounted) return;
+      if (remaining.isEmpty) {
+        _searchController.clear();
+      } else {
+        setState(() => _searchResults = remaining);
+      }
+    }
   }
 
   Future<void> _batchMarkSpam() =>
