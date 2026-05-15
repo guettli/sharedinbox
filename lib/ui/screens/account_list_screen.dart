@@ -50,6 +50,14 @@ class AccountListScreen extends ConsumerWidget {
                 unawaited(context.push('/accounts/changelog'));
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('About'),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                unawaited(context.push('/accounts/about'));
+              },
+            ),
           ],
         ),
       ),

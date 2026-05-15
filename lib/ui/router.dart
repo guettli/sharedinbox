@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/sieve_script.dart';
 
+import 'package:sharedinbox/ui/screens/about_screen.dart';
 import 'package:sharedinbox/ui/screens/account_export_screen.dart';
 import 'package:sharedinbox/ui/screens/account_import_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
@@ -46,6 +47,10 @@ final router = GoRouter(
             GoRoute(
               path: 'changelog',
               builder: (ctx, state) => const ChangeLogScreen(),
+            ),
+            GoRoute(
+              path: 'about',
+              builder: (ctx, state) => const AboutScreen(),
             ),
             GoRoute(
               path: ':accountId/edit',
