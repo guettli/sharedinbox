@@ -141,6 +141,12 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<void> restoreEmails(List<Email> emails) async {}
   @override
+  Future<Email?> findEmailByMessageId(
+    String accountId,
+    String messageId,
+  ) async =>
+      null;
+  @override
   Stream<String> get onChangesQueued => const Stream.empty();
   @override
   Stream<void> watchJmapPush(String accountId, String password) =>

@@ -45,17 +45,17 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     final UndoAction action;
     if (actionId == null) {
       action = state.last;
-      state = state.sublist(0, state.length - 1);
     } else {
       try {
         action = state.firstWhere((a) => a.id == actionId);
-        state = state.where((a) => a.id != actionId).toList();
       } catch (e) {
         return; // Action not found
       }
     }
 
-    unawaited(_ref.read(undoRepositoryProvider).deleteAction(action.id));
+    // Keep the original entry in state and DB so the user can see what
+    // happened and retry if the undo failed (e.g. after an IMAP sync reverted
+    // the local change). The inverse action added below allows undoing the undo.
 
     final repo = _ref.read(emailRepositoryProvider);
 
@@ -70,10 +70,22 @@ class UndoService extends StateNotifier<List<UndoAction>> {
             ? null
             : action.originalEmails.where((e) => e.id == id).firstOrNull;
 
-        // 2. If row is missing (hard delete), restore it first.
-        // We restore it at its CURRENT state (where it is on the server,
-        // or where it was moving to).
-        if (original != null) {
+        // 2. Resolve the current DB row for the email.
+        // For IMAP, after a server-applied move the email gets a new UID, so
+        // the original id ('accountId:oldUid') no longer exists. Look it up by
+        // Message-ID so we use the correct UID in the pending change.
+        var currentEmail = await repo.getEmail(id);
+        if (currentEmail == null && original?.messageId != null) {
+          currentEmail = await repo.findEmailByMessageId(
+            action.accountId,
+            original!.messageId!,
+          );
+        }
+        final currentId = currentEmail?.id ?? id;
+
+        // 3. If the row is absent (hard delete or UID changed after sync),
+        // restore it from the saved snapshot so moveEmail can find it.
+        if (currentEmail == null && original != null) {
           final currentPath = cancelled
               ? action.sourceMailboxPath
               : (action.destinationMailboxPath ?? action.sourceMailboxPath);
@@ -82,15 +94,15 @@ class UndoService extends StateNotifier<List<UndoAction>> {
           ]);
         }
 
-        // 3. Move it back to source.
+        // 4. Move it back to source.
         // This updates local DB optimistically and (if not cancelled) enqueues
-        // a reverse move on the server.
-        await repo.moveEmail(id, action.sourceMailboxPath);
+        // a reverse move on the server using the correct UID.
+        await repo.moveEmail(currentId, action.sourceMailboxPath);
 
         if (cancelled) {
-          // 4. If we successfully cancelled the original, the reverse move
+          // 5. If we successfully cancelled the original, the reverse move
           // we just enqueued is redundant.
-          await repo.cancelPendingChange(id, 'move');
+          await repo.cancelPendingChange(currentId, 'move');
         }
       } catch (e) {
         // Best effort.

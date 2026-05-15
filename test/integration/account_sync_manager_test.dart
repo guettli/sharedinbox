@@ -209,6 +209,13 @@ class _FakeEmails implements EmailRepository {
   Future<void> restoreEmails(List<Email> emails) async {}
 
   @override
+  Future<Email?> findEmailByMessageId(
+    String accountId,
+    String messageId,
+  ) async =>
+      null;
+
+  @override
   Future<String?> deleteEmail(String id) async => null;
 
   @override

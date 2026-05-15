@@ -25,6 +25,10 @@ void main() {
     when(
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => []);
+    when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
+    when(
+      mockEmailRepo.findEmailByMessageId(any, any),
+    ).thenAnswer((_) async => null);
 
     container = ProviderContainer(
       overrides: [
@@ -97,21 +101,24 @@ void main() {
     await notifier.pushAction(action1);
     await notifier.pushAction(action2);
 
-    // Undo action2 (delete); a reverse move action is pushed in its place.
+    // Undo action2 (delete); the original entry is kept and a reverse action is added.
     await notifier.undo();
     final stateAfterUndo2 = container.read(undoServiceProvider);
-    expect(stateAfterUndo2.length, 2);
+    expect(stateAfterUndo2.length, 3);
     expect(stateAfterUndo2[0].id, '1');
-    expect(stateAfterUndo2[1].id, '2-inv');
-    expect(stateAfterUndo2[1].sourceMailboxPath, 'Trash');
-    expect(stateAfterUndo2[1].destinationMailboxPath, 'INBOX');
+    expect(stateAfterUndo2[1].id, '2');
+    expect(stateAfterUndo2[2].id, '2-inv');
+    expect(stateAfterUndo2[2].sourceMailboxPath, 'Trash');
+    expect(stateAfterUndo2[2].destinationMailboxPath, 'INBOX');
     verify(mockEmailRepo.moveEmail('e2', 'INBOX')).called(1);
 
-    // Undo action1 (no dest → no inverse); log shrinks to just the inverse.
+    // Undo action1 (no dest → no inverse); original stays, log is unchanged.
     await notifier.undo(actionId: '1');
     final stateAfterUndo1 = container.read(undoServiceProvider);
-    expect(stateAfterUndo1.length, 1);
-    expect(stateAfterUndo1[0].id, '2-inv');
+    expect(stateAfterUndo1.length, 3);
+    expect(stateAfterUndo1[0].id, '1');
+    expect(stateAfterUndo1[1].id, '2');
+    expect(stateAfterUndo1[2].id, '2-inv');
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 
@@ -136,9 +143,11 @@ void main() {
     await notifier.pushAction(action);
     await notifier.undo(actionId: 'del1');
 
+    // Original entry stays; inverse is added.
     final log = container.read(undoServiceProvider);
-    expect(log.length, 1);
-    final inv = log.first;
+    expect(log.length, 2);
+    expect(log[0].id, 'del1');
+    final inv = log[1];
     expect(inv.id, 'del1-inv');
     expect(inv.type, UndoType.move);
     expect(inv.emailIds, ['e1']);
@@ -172,8 +181,10 @@ void main() {
     await notifier.pushAction(action);
     await notifier.undo(actionId: 'mv1');
 
+    // Original entry stays; no inverse since no destinationMailboxPath.
     final log = container.read(undoServiceProvider);
-    expect(log, isEmpty);
+    expect(log.length, 1);
+    expect(log.first.id, 'mv1');
   });
 
   test('undo with actionId removes and undos specific action', () async {
@@ -203,9 +214,9 @@ void main() {
     await notifier.pushAction(action1);
     await notifier.pushAction(action2);
 
-    // action1 has no destinationMailboxPath → no inverse pushed, so action2 remains.
+    // action1 has no destinationMailboxPath → no inverse pushed, original stays.
     await notifier.undo(actionId: '1');
-    expect(container.read(undoServiceProvider), [action2]);
+    expect(container.read(undoServiceProvider), [action1, action2]);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
     verifyNever(mockEmailRepo.moveEmail('e2', 'INBOX'));
   });

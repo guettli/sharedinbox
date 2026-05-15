@@ -251,6 +251,78 @@ void main() {
     },
   );
 
+  test(
+    'Undo deletion for IMAP succeeds after sync assigned new UID (message-id lookup)',
+    () async {
+      const oldEmailId = 'acc1:101';
+      final original = await repo.getEmail(oldEmailId);
+      expect(original, isNotNull);
+      expect(original!.messageId, isNull); // set a messageId so lookup works
+
+      // Seed a messageId so undo can find the email after UID change.
+      await (db.update(db.emails)..where((t) => t.id.equals(oldEmailId)))
+          .write(const EmailsCompanion(messageId: Value('msg-101@test')));
+
+      final originalWithMsgId = await repo.getEmail(oldEmailId);
+
+      // 1. Delete → moves to Trash locally (uid=101, id='acc1:101')
+      final destPath = await repo.deleteEmail(oldEmailId);
+      expect(destPath, 'Trash');
+
+      // 2. Simulate IMAP sync: the server assigned a new UID (205) in Trash.
+      // The old row (acc1:101) is removed and a new row (acc1:205) is inserted.
+      await (db.delete(db.emails)..where((t) => t.id.equals(oldEmailId))).go();
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc1:205',
+              accountId: 'acc1',
+              mailboxPath: 'Trash',
+              uid: 205,
+              subject: const Value('Test Email'),
+              receivedAt: DateTime.now(),
+              messageId: const Value('msg-101@test'),
+            ),
+          );
+
+      // Mark the original pending change as already applied (cannot cancel).
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.resourceId.equals(oldEmailId)))
+          .write(const PendingChangesCompanion(attempts: Value(1)));
+
+      // 3. Undo using the old email id — undo must locate 'acc1:205' by message-id.
+      final action = UndoAction(
+        id: 'undo-uid-change',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: [oldEmailId],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: destPath,
+        originalEmails: [originalWithMsgId!],
+      );
+      await container.read(undoServiceProvider.notifier).pushAction(action);
+      await container.read(undoServiceProvider.notifier).undo();
+
+      // 4. Verify the current email row is now in INBOX.
+      final inInbox = await (db.select(db.emails)
+            ..where((t) => t.mailboxPath.equals('INBOX')))
+          .get();
+      expect(
+        inInbox,
+        isNotEmpty,
+        reason: 'Email should be in INBOX after undo',
+      );
+
+      // 5. Verify the pending change uses the new UID (205), not the old one (101).
+      final changes = await db.select(db.pendingChanges).get();
+      final reverseMove = changes.firstWhere(
+        (c) => c.changeType == 'move' && c.attempts == 0,
+      );
+      final payload = jsonDecode(reverseMove.payload) as Map<String, dynamic>;
+      expect(payload['uid'], 205, reason: 'Pending move must use the new UID');
+      expect(payload['dest'], 'INBOX');
+    },
+  );
+
   test('Undo snooze clears snooze metadata and moves back', () async {
     const emailId = 'acc1:101';
     final original = await repo.getEmail(emailId);

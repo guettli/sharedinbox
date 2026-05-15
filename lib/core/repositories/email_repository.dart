@@ -99,6 +99,11 @@ abstract class EmailRepository {
   /// Used for the "Undo" feature when the original rows were hard-deleted (IMAP).
   Future<void> restoreEmails(List<Email> emails);
 
+  /// Finds an email in [accountId]'s mailboxes by its RFC 2822 Message-ID header.
+  /// Returns null if not found. Used during undo to locate an email after its
+  /// IMAP UID changed (e.g. after a server-applied move assigned a new UID).
+  Future<Email?> findEmailByMessageId(String accountId, String messageId);
+
   /// Emits the accountId whenever a new change is enqueued locally.
   /// Used by AccountSyncManager to trigger an immediate flush.
   Stream<String> get onChangesQueued;

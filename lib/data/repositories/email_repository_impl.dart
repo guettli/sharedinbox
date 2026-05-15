@@ -1848,6 +1848,22 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  @override
+  Future<model.Email?> findEmailByMessageId(
+    String accountId,
+    String messageId,
+  ) async {
+    final row = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) & t.messageId.equals(messageId),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row == null ? null : _toModel(row);
+  }
+
+  @override
   Future<void> restoreEmails(List<model.Email> emails) async {
     for (final e in emails) {
       await _db.into(_db.emails).insertOnConflictUpdate(
