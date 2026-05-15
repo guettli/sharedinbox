@@ -8,9 +8,16 @@ import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/di.dart';
 
 class SieveScriptsScreen extends ConsumerStatefulWidget {
-  const SieveScriptsScreen({super.key, required this.accountId});
+  const SieveScriptsScreen({
+    super.key,
+    required this.accountId,
+    this.isLocal = false,
+  });
 
   final String accountId;
+
+  /// True for locally-executed scripts; false for server-side (ManageSieve/JMAP).
+  final bool isLocal;
 
   @override
   ConsumerState<SieveScriptsScreen> createState() => _SieveScriptsScreenState();
@@ -20,6 +27,10 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
   List<SieveScript>? _scripts;
   String? _error;
   bool _loading = true;
+
+  String get _editRoute => widget.isLocal
+      ? '/accounts/${widget.accountId}/sieve/local/edit'
+      : '/accounts/${widget.accountId}/sieve/edit';
 
   @override
   void initState() {
@@ -33,8 +44,13 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       _error = null;
     });
     try {
-      final scripts =
-          await ref.read(sieveRepositoryProvider).listScripts(widget.accountId);
+      final scripts = widget.isLocal
+          ? await ref
+              .read(localSieveRepositoryProvider)
+              .listScripts(widget.accountId)
+          : await ref
+              .read(sieveRepositoryProvider)
+              .listScripts(widget.accountId);
       if (mounted) {
         setState(() {
           _scripts = scripts;
@@ -53,15 +69,19 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
 
   Future<void> _activate(SieveScript script) async {
     try {
-      await ref
-          .read(sieveRepositoryProvider)
-          .activateScript(widget.accountId, script.id);
+      if (widget.isLocal) {
+        await ref
+            .read(localSieveRepositoryProvider)
+            .activateScript(widget.accountId, script.id);
+      } else {
+        await ref
+            .read(sieveRepositoryProvider)
+            .activateScript(widget.accountId, script.id);
+      }
       await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 5),
             content: Text('Failed to activate: $e'),
@@ -91,15 +111,19 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     );
     if (!(confirmed ?? false) || !mounted) return;
     try {
-      await ref
-          .read(sieveRepositoryProvider)
-          .deleteScript(widget.accountId, script.id);
+      if (widget.isLocal) {
+        await ref
+            .read(localSieveRepositoryProvider)
+            .deleteScript(widget.accountId, script.id);
+      } else {
+        await ref
+            .read(sieveRepositoryProvider)
+            .deleteScript(widget.accountId, script.id);
+      }
       await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 5),
             content: Text('Failed to delete: $e'),
@@ -112,11 +136,15 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Email filters')),
+      appBar: AppBar(
+        title: Text(
+          widget.isLocal ? 'Local email filters' : 'Server email filters',
+        ),
+      ),
       body: _buildBody(),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          await context.push('/accounts/${widget.accountId}/sieve/edit');
+          await context.push(_editRoute);
           await _load();
         },
         child: const Icon(Icons.add),
@@ -144,22 +172,68 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       );
     }
     final scripts = _scripts ?? [];
-    if (scripts.isEmpty) {
-      return const Center(
-        child: Text('No Sieve scripts. Tap + to create one.'),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.builder(
-        itemCount: scripts.length,
-        itemBuilder: (ctx, i) => _ScriptTile(
-          script: scripts[i],
-          accountId: widget.accountId,
-          onActivate: () => _activate(scripts[i]),
-          onDelete: () => _delete(scripts[i]),
-          onEdited: _load,
+    return Column(
+      children: [
+        _SieveSourceBanner(isLocal: widget.isLocal),
+        Expanded(
+          child: scripts.isEmpty
+              ? const Center(
+                  child: Text('No Sieve scripts. Tap + to create one.'),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    itemCount: scripts.length,
+                    itemBuilder: (ctx, i) => _ScriptTile(
+                      script: scripts[i],
+                      accountId: widget.accountId,
+                      editRoute: _editRoute,
+                      onActivate: () => _activate(scripts[i]),
+                      onDelete: () => _delete(scripts[i]),
+                      onEdited: _load,
+                    ),
+                  ),
+                ),
         ),
+      ],
+    );
+  }
+}
+
+class _SieveSourceBanner extends StatelessWidget {
+  const _SieveSourceBanner({required this.isLocal});
+
+  final bool isLocal;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = isLocal
+        ? 'These scripts run locally on this device. '
+            'Server email filters are separate and independent.'
+        : 'These scripts run on the mail server (ManageSieve / JMAP). '
+            'Local email filters are separate and independent.';
+    return Container(
+      width: double.infinity,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isLocal ? Icons.phone_android : Icons.dns,
+            size: 18,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -169,6 +243,7 @@ class _ScriptTile extends StatelessWidget {
   const _ScriptTile({
     required this.script,
     required this.accountId,
+    required this.editRoute,
     required this.onActivate,
     required this.onDelete,
     required this.onEdited,
@@ -176,6 +251,7 @@ class _ScriptTile extends StatelessWidget {
 
   final SieveScript script;
   final String accountId;
+  final String editRoute;
   final VoidCallback onActivate;
   final VoidCallback onDelete;
   final VoidCallback onEdited;
@@ -193,10 +269,7 @@ class _ScriptTile extends StatelessWidget {
         onSelected: (action) async {
           switch (action) {
             case _ScriptAction.edit:
-              await context.push(
-                '/accounts/$accountId/sieve/edit',
-                extra: script,
-              );
+              await context.push(editRoute, extra: script);
               onEdited();
             case _ScriptAction.activate:
               onActivate();
@@ -219,7 +292,7 @@ class _ScriptTile extends StatelessWidget {
         ],
       ),
       onTap: () async {
-        await context.push('/accounts/$accountId/sieve/edit', extra: script);
+        await context.push(editRoute, extra: script);
         onEdited();
       },
     );

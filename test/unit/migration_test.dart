@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 28);
+      expect(db.schemaVersion, 29);
       await db.close();
     });
 
@@ -183,6 +183,9 @@ void main() {
           )
           .get();
 
+      // v29: local_sieve_scripts table.
+      await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
@@ -335,11 +338,14 @@ void main() {
           )
           .get();
 
+      // v29: local_sieve_scripts table.
+      await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 28', () async {
+    test('fresh install creates all tables at schemaVersion 29', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -363,6 +369,7 @@ void main() {
           'sync_health',
           'undo_actions',
           'search_history_entries',
+          'local_sieve_scripts', // v29
         ]),
       );
 

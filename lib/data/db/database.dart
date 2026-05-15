@@ -243,6 +243,16 @@ class SearchHistoryEntries extends Table {
   DateTimeColumn get searchedAt => dateTime()();
 }
 
+@DataClassName('LocalSieveScriptRow')
+class LocalSieveScripts extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text()();
+  TextColumn get content => text().withDefault(const Constant(''))();
+  BoolColumn get isActive => boolean().withDefault(const Constant(false))();
+}
+
 @DataClassName('UndoActionRow')
 class UndoActions extends Table {
   TextColumn get id => text()();
@@ -273,13 +283,14 @@ class UndoActions extends Table {
     SyncHealth,
     UndoActions,
     SearchHistoryEntries,
+    LocalSieveScripts,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 28;
+  int get schemaVersion => 29;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -507,6 +518,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 28) {
             await m.addColumn(emailBodies, emailBodies.mimeTreeJson);
+          }
+          if (from < 29) {
+            await m.createTable(localSieveScripts);
           }
         },
       );

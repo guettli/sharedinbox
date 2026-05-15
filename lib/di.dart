@@ -20,6 +20,7 @@ import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Email, EmailBody;
+import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -153,6 +154,10 @@ final sieveRepositoryProvider = Provider<SieveRepository>((ref) {
     ref.watch(accountRepositoryProvider),
     ref.watch(httpClientProvider),
   );
+});
+
+final localSieveRepositoryProvider = Provider<LocalSieveRepository>((ref) {
+  return LocalSieveRepository(ref.watch(dbProvider));
 });
 
 final connectionTestServiceProvider = Provider<ConnectionTestService>((ref) {

@@ -11,12 +11,16 @@ class SieveScriptEditScreen extends ConsumerStatefulWidget {
     super.key,
     required this.accountId,
     this.script,
+    this.isLocal = false,
   });
 
   final String accountId;
 
   /// Null when creating a new script.
   final SieveScript? script;
+
+  /// True for locally-executed scripts; false for server-side (ManageSieve/JMAP).
+  final bool isLocal;
 
   @override
   ConsumerState<SieveScriptEditScreen> createState() =>
@@ -50,9 +54,13 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen> {
   Future<void> _loadContent() async {
     setState(() => _loadingContent = true);
     try {
-      final content = await ref
-          .read(sieveRepositoryProvider)
-          .getScriptContent(widget.accountId, widget.script!.blobId);
+      final content = widget.isLocal
+          ? await ref
+              .read(localSieveRepositoryProvider)
+              .getScriptContent(widget.accountId, widget.script!.blobId)
+          : await ref
+              .read(sieveRepositoryProvider)
+              .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
         setState(() => _loadingContent = false);
@@ -78,12 +86,21 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen> {
       _error = null;
     });
     try {
-      await ref.read(sieveRepositoryProvider).saveScript(
-            widget.accountId,
-            id: widget.script?.id,
-            name: name,
-            content: _contentController.text,
-          );
+      if (widget.isLocal) {
+        await ref.read(localSieveRepositoryProvider).saveScript(
+              widget.accountId,
+              id: widget.script?.id,
+              name: name,
+              content: _contentController.text,
+            );
+      } else {
+        await ref.read(sieveRepositoryProvider).saveScript(
+              widget.accountId,
+              id: widget.script?.id,
+              name: name,
+              content: _contentController.text,
+            );
+      }
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {

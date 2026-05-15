@@ -160,9 +160,13 @@ class _AccountTile extends ConsumerWidget {
               ),
               if (_sieveSupported(account))
                 const PopupMenuItem(
-                  value: _AccountAction.emailFilters,
-                  child: Text('Email filters'),
+                  value: _AccountAction.emailFiltersRemote,
+                  child: Text('Server email filters'),
                 ),
+              const PopupMenuItem(
+                value: _AccountAction.emailFiltersLocal,
+                child: Text('Local email filters'),
+              ),
               const PopupMenuItem(
                 value: _AccountAction.export,
                 child: Text('Export account'),
@@ -203,8 +207,11 @@ class _AccountTile extends ConsumerWidget {
       case _AccountAction.edit:
         await context.push('/accounts/${account.id}/edit');
         break;
-      case _AccountAction.emailFilters:
+      case _AccountAction.emailFiltersRemote:
         await context.push('/accounts/${account.id}/sieve');
+        break;
+      case _AccountAction.emailFiltersLocal:
+        await context.push('/accounts/${account.id}/sieve/local');
         break;
       case _AccountAction.export:
         await context.push('/accounts/${account.id}/export');
@@ -344,7 +351,15 @@ class _Step extends StatelessWidget {
   }
 }
 
-enum _AccountAction { syncLog, verifySync, edit, emailFilters, export, delete }
+enum _AccountAction {
+  syncLog,
+  verifySync,
+  edit,
+  emailFiltersRemote,
+  emailFiltersLocal,
+  export,
+  delete,
+}
 
 /// Whether to surface the "Email filters" (Sieve) entry for [account].
 ///

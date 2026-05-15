@@ -78,6 +78,21 @@ final router = GoRouter(
               ),
             ),
             GoRoute(
+              path: ':accountId/sieve/local',
+              builder: (ctx, state) => SieveScriptsScreen(
+                accountId: state.pathParameters['accountId']!,
+                isLocal: true,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/sieve/local/edit',
+              builder: (ctx, state) => SieveScriptEditScreen(
+                accountId: state.pathParameters['accountId']!,
+                script: state.extra as SieveScript?,
+                isLocal: true,
+              ),
+            ),
+            GoRoute(
               path: ':accountId/search',
               builder: (ctx, state) =>
                   SearchScreen(accountId: state.pathParameters['accountId']!),
