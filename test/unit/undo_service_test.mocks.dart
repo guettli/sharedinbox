@@ -283,6 +283,21 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<String>);
 
   @override
+  _i4.Future<String> fetchRawRfc822(String? emailId) => (super.noSuchMethod(
+        Invocation.method(
+          #fetchRawRfc822,
+          [emailId],
+        ),
+        returnValue: _i4.Future<String>.value(_i5.dummyValue<String>(
+          this,
+          Invocation.method(
+            #fetchRawRfc822,
+            [emailId],
+          ),
+        )),
+      ) as _i4.Future<String>);
+
+  @override
   _i4.Future<List<_i2.Email>> searchEmails(
     String? accountId,
     String? mailboxPath,
