@@ -7,6 +7,15 @@ import 'helpers.dart';
 
 void main() {
   group('AddAccountScreen', () {
+    testWidgets('step 1: shows Import account button', (tester) async {
+      await tester.pumpWidget(
+        buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('importAccountButton')), findsOneWidget);
+    });
+
     testWidgets('step 1: shows email field and Continue button', (
       tester,
     ) async {

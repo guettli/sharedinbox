@@ -22,6 +22,8 @@ import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/account_export_screen.dart';
+import 'package:sharedinbox/ui/screens/account_import_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
@@ -370,8 +372,18 @@ Widget buildApp({
             builder: (ctx, state) => const AddAccountScreen(),
           ),
           GoRoute(
+            path: 'import',
+            builder: (ctx, state) => const AccountImportScreen(),
+          ),
+          GoRoute(
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/export',
+            builder: (ctx, state) => AccountExportScreen(
               accountId: state.pathParameters['accountId']!,
             ),
           ),

@@ -163,6 +163,10 @@ class _AccountTile extends ConsumerWidget {
                   value: _AccountAction.emailFilters,
                   child: Text('Email filters'),
                 ),
+              const PopupMenuItem(
+                value: _AccountAction.export,
+                child: Text('Export account'),
+              ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: _AccountAction.delete,
@@ -201,6 +205,9 @@ class _AccountTile extends ConsumerWidget {
         break;
       case _AccountAction.emailFilters:
         await context.push('/accounts/${account.id}/sieve');
+        break;
+      case _AccountAction.export:
+        await context.push('/accounts/${account.id}/export');
         break;
       case _AccountAction.delete:
         final confirmed = await showDialog<bool>(
@@ -337,7 +344,7 @@ class _Step extends StatelessWidget {
   }
 }
 
-enum _AccountAction { syncLog, verifySync, edit, emailFilters, delete }
+enum _AccountAction { syncLog, verifySync, edit, emailFilters, export, delete }
 
 /// Whether to surface the "Email filters" (Sieve) entry for [account].
 ///

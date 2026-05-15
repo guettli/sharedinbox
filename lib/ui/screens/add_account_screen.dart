@@ -295,6 +295,13 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               onPressed: _detectAccount,
               child: const Text('Continue'),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('importAccountButton'),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Import account'),
+              onPressed: () => context.push('/accounts/import'),
+            ),
           ],
         ),
       ),

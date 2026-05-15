@@ -136,6 +136,23 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
     });
 
+    testWidgets('account popup menu contains Export account item', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Export account'), findsOneWidget);
+    });
+
     testWidgets('AppBar does not overflow at minimum supported window size', (
       tester,
     ) async {

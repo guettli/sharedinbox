@@ -32,6 +32,8 @@ const _excluded = {
   'lib/di.dart',
   'lib/main.dart',
   'lib/ui/router.dart',
+  'lib/ui/screens/account_export_screen.dart',
+  'lib/ui/screens/account_import_screen.dart',
   'lib/ui/screens/account_list_screen.dart',
   'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/address_emails_screen.dart',
