@@ -878,6 +878,115 @@ void main() {
       expect(body.textBody, isNull);
       expect(body.htmlBody, isNull);
     });
+
+    test('populates mimeTree from JMAP bodyStructure', () async {
+      final r = _makeRepos(
+        httpClient: MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/get',
+                  {
+                    'accountId': 'acct1',
+                    'state': 'es1',
+                    'list': [
+                      {
+                        'id': 'e1',
+                        'textBody': [
+                          {'partId': '1', 'type': 'text/plain'},
+                        ],
+                        'htmlBody': [],
+                        'bodyValues': {
+                          '1': {'value': 'Hello', 'isTruncated': false},
+                        },
+                        'attachments': [],
+                        'bodyStructure': {
+                          'type': 'multipart/mixed',
+                          'subParts': [
+                            {'type': 'text/plain', 'size': 5},
+                            {
+                              'type': 'application/pdf',
+                              'name': 'doc.pdf',
+                              'size': 2048,
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final body = await r.emails.getEmailBody('jmap-1:e1');
+
+      expect(body.mimeTree, isNotNull);
+      expect(body.mimeTree!.contentType, 'multipart/mixed');
+      expect(body.mimeTree!.children, hasLength(2));
+      expect(body.mimeTree!.children[0].contentType, 'text/plain');
+      expect(body.mimeTree!.children[1].contentType, 'application/pdf');
+      expect(body.mimeTree!.children[1].filename, 'doc.pdf');
+      expect(body.mimeTree!.children[1].size, 2048);
+
+      // mimeTree must survive the cache round-trip.
+      final cached = await r.emails.getEmailBody('jmap-1:e1');
+      expect(cached.mimeTree, isNotNull);
+      expect(cached.mimeTree!.contentType, 'multipart/mixed');
+      expect(cached.mimeTree!.children, hasLength(2));
+    });
+
+    test('mimeTree is null when bodyStructure is absent', () async {
+      final r = _makeRepos(httpClient: mockBodyClient());
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // mockBodyClient returns no bodyStructure field.
+      final body = await r.emails.getEmailBody('jmap-1:e1');
+      expect(body.mimeTree, isNull);
+    });
   });
 
   group('JMAP syncEmails', () {

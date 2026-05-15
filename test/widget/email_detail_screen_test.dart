@@ -1,12 +1,27 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
+
+// Shared overrides for email detail tests.
+List<Override> _overrides({required EmailBody body, Email? email}) => [
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository([kTestAccount]),
+      ),
+      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+      emailRepositoryProvider.overrideWithValue(
+        FakeEmailRepository(
+          emailDetail: email ?? testEmail(),
+          emailBody: body,
+        ),
+      ),
+    ];
 
 void main() {
   group('EmailDetailScreen', () {
@@ -127,6 +142,79 @@ void main() {
       expect(find.text('Attachments'), findsOneWidget);
       expect(find.text('report.pdf'), findsOneWidget);
     });
+
+    testWidgets('Show Mail Structure opens dialog with MIME parts', (
+      tester,
+    ) async {
+      const body = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'Hello',
+        attachments: [],
+        mimeTree: MimePart(
+          contentType: 'multipart/mixed',
+          children: [
+            MimePart(contentType: 'text/plain', size: 100),
+            MimePart(
+              contentType: 'application/pdf',
+              filename: 'report.pdf',
+              size: 204800,
+            ),
+          ],
+        ),
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(body: body),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Open the popup menu.
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      // Tap the structure item.
+      await tester.tap(find.text('Show Mail Structure'));
+      await tester.pumpAndSettle();
+
+      // The dialog title and all three MIME parts must be visible.
+      expect(find.text('Mail Structure'), findsOneWidget);
+      expect(find.textContaining('multipart/mixed'), findsOneWidget);
+      expect(find.textContaining('text/plain'), findsOneWidget);
+      expect(find.textContaining('application/pdf'), findsOneWidget);
+    });
+
+    testWidgets(
+      'Show Mail Structure shows snackbar when mimeTree is absent',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Hello',
+          attachments: [],
+          // mimeTree is null — not yet cached or not available.
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Show Mail Structure'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Structure not available'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
 

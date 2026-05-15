@@ -318,9 +318,17 @@ class EmailRepositoryImpl implements EmailRepository {
             'htmlBody',
             'bodyValues',
             'attachments',
+            'bodyStructure',
           ],
           'fetchHTMLBodyValues': true,
           'fetchTextBodyValues': true,
+          'bodyProperties': [
+            'partId',
+            'type',
+            'name',
+            'size',
+            'subParts',
+          ],
         },
         '0',
       ],
@@ -340,6 +348,12 @@ class EmailRepositoryImpl implements EmailRepository {
       }).toList(),
     );
 
+    final rawBodyStructure =
+        emailData['bodyStructure'] as Map<String, dynamic>?;
+    final mimeTreeJson = rawBodyStructure != null
+        ? jsonEncode(_jmapBodyStructureToJson(rawBodyStructure))
+        : null;
+
     await _db.into(_db.emailBodies).insertOnConflictUpdate(
           EmailBodiesCompanion.insert(
             emailId: emailId,
@@ -347,6 +361,7 @@ class EmailRepositoryImpl implements EmailRepository {
             htmlBody: Value(htmlBody),
             attachmentsJson: Value(attachmentsJson),
             headersJson: Value(headersJson),
+            mimeTreeJson: Value(mimeTreeJson),
             cachedAt: Value(DateTime.now()),
           ),
         );
@@ -357,6 +372,7 @@ class EmailRepositoryImpl implements EmailRepository {
       htmlBody: htmlBody,
       attachments: _parseAttachments(attachmentsJson),
       headers: _parseHeaders(headersJson),
+      mimeTree: _parseMimeTree(mimeTreeJson),
     );
   }
 
@@ -3018,3 +3034,16 @@ Map<String, dynamic> _mimePartToJson(imap.MimePart part) {
 /// Builds a JSON string representing the MIME tree of [msg].
 String _buildMimeTreeJson(imap.MimeMessage msg) =>
     jsonEncode(_mimePartToJson(msg));
+
+/// Converts a JMAP `bodyStructure` object into the same JSON format used by
+/// [_mimePartToJson], so [_parseMimeTree] can deserialise it uniformly.
+Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
+      'contentType': m['type'] as String? ?? 'application/octet-stream',
+      'filename': m['name'],
+      'size': m['size'],
+      'encoding': null,
+      'children': ((m['subParts'] as List<dynamic>?) ?? [])
+          .cast<Map<String, dynamic>>()
+          .map(_jmapBodyStructureToJson)
+          .toList(),
+    };
