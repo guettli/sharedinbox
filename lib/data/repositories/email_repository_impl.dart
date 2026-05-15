@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -235,7 +236,9 @@ class EmailRepositoryImpl implements EmailRepository {
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
       final msg = fetch.messages.first;
       final textBody = msg.decodeTextPlainPart();
-      final htmlBody = msg.decodeTextHtmlPart();
+      final rawHtml = msg.decodeTextHtmlPart();
+      final htmlBody =
+          rawHtml == null ? null : injectInlineImages(rawHtml, msg);
       final contentInfos = msg.findContentInfo();
 
       final attachmentsJson = jsonEncode(
