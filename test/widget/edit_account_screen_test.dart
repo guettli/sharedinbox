@@ -45,6 +45,18 @@ void main() {
       expect(find.text('Save'), findsOneWidget);
     });
 
+    testWidgets('does not show Force full sync button', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Force full sync'), findsNothing);
+    });
+
     testWidgets('saving without password change pops back', (tester) async {
       tester.view.physicalSize = const Size(800, 1400);
       tester.view.devicePixelRatio = 1.0;

@@ -155,6 +155,10 @@ class _AccountTile extends ConsumerWidget {
                 child: Text('Verify sync health'),
               ),
               const PopupMenuItem(
+                value: _AccountAction.forceSync,
+                child: Text('Force full sync'),
+              ),
+              const PopupMenuItem(
                 value: _AccountAction.edit,
                 child: Text('Edit'),
               ),
@@ -202,6 +206,34 @@ class _AccountTile extends ConsumerWidget {
               content: Text('Starting sync verification...'),
             ),
           );
+        }
+        break;
+      case _AccountAction.forceSync:
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Force full sync?'),
+            content: const Text(
+              'This clears all locally-cached emails and mailboxes for this '
+              'account and immediately re-downloads everything from the server. '
+              'Previously viewed email content will not need to be re-downloaded.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Force sync'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed == true && context.mounted) {
+          await ProviderScope.containerOf(
+            context,
+          ).read(syncManagerProvider).forceResync(account.id);
         }
         break;
       case _AccountAction.edit:
@@ -354,6 +386,7 @@ class _Step extends StatelessWidget {
 enum _AccountAction {
   syncLog,
   verifySync,
+  forceSync,
   edit,
   emailFiltersRemote,
   emailFiltersLocal,

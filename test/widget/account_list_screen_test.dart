@@ -153,6 +153,43 @@ void main() {
       expect(find.text('Export account'), findsOneWidget);
     });
 
+    testWidgets('account popup menu contains Force full sync item', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Force full sync'), findsOneWidget);
+    });
+
+    testWidgets(
+      'Force full sync appears below Verify sync health in popup menu',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts',
+            overrides: baseOverrides(accounts: [kTestAccount]),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pumpAndSettle();
+
+        final verifyPos = tester.getTopLeft(find.text('Verify sync health')).dy;
+        final forcePos = tester.getTopLeft(find.text('Force full sync')).dy;
+        expect(forcePos, greaterThan(verifyPos));
+      },
+    );
+
     testWidgets('AppBar does not overflow at minimum supported window size', (
       tester,
     ) async {

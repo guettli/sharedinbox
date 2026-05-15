@@ -43,7 +43,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   bool _tryTesting = false;
   String? _tryOk;
   String? _tryErr;
-  bool _resyncing = false;
 
   @override
   void initState() {
@@ -171,43 +170,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     }
   }
 
-  Future<void> _forceResync() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Force full sync?'),
-        content: const Text(
-          'This clears all locally-cached emails and mailboxes for this '
-          'account and immediately re-downloads everything from the server. '
-          'Previously viewed email content will not need to be re-downloaded.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Force sync'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _resyncing = true);
-    try {
-      await ref.read(syncManagerProvider).forceResync(widget.accountId);
-      if (mounted) context.pop();
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _resyncing = false;
-          _errorMessage = 'Force sync failed: $e';
-        });
-      }
-    }
-  }
-
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final password = _passwordCtrl.text.isNotEmpty ? _passwordCtrl.text : null;
@@ -268,7 +230,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Edit account')),
-      body: _loading || _saving || _resyncing
+      body: _loading || _saving
           ? const Center(child: CircularProgressIndicator())
           : _buildForm(),
     );
@@ -387,15 +349,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ),
             const SizedBox(height: 8),
             FilledButton(onPressed: _save, child: const Text('Save')),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.sync_problem),
-              label: const Text('Force full sync'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.error,
-              ),
-              onPressed: _forceResync,
-            ),
           ],
         ),
       ),
