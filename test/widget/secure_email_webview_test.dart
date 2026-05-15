@@ -3,6 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
+void _expectLightMode(String html) {
+  expect(html, contains('color-scheme" content="light"'));
+  expect(html, contains('color-scheme: light'));
+  expect(html, contains('background-color: #ffffff'));
+  expect(html, contains('color: #000000'));
+}
+
 Widget _wrap(Widget child) => MaterialApp(
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
@@ -12,6 +19,30 @@ Widget _wrap(Widget child) => MaterialApp(
     );
 
 void main() {
+  group('buildEmailHtml', () {
+    test('forces light color-scheme to prevent black-on-black in dark mode',
+        () {
+      _expectLightMode(buildEmailHtml('<p>Hello</p>'));
+    });
+
+    test('includes email body content', () {
+      final html = buildEmailHtml('<p>Test body</p>');
+      expect(html, contains('<p>Test body</p>'));
+    });
+
+    test('blocks remote images by default', () {
+      final html = buildEmailHtml('<p>x</p>');
+      expect(html, contains('img-src data: blob:'));
+      expect(html, isNot(contains('img-src https:')));
+    });
+
+    test('allows remote images when loadRemoteImages is true', () {
+      final html = buildEmailHtml('<p>x</p>', loadRemoteImages: true);
+      expect(html, contains('https: http: data: blob:'));
+      _expectLightMode(html);
+    });
+  });
+
   // On Linux (the test host) the widget falls back to plain text extracted via
   // htmlToPlain().  These tests exercise that path.
   group('SecureEmailWebView (Linux plain-text fallback)', () {

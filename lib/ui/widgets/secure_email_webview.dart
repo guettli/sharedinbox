@@ -6,6 +6,43 @@ import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+/// Builds the full HTML document string for rendering an email body.
+///
+/// Forces `color-scheme: light` so that emails with black text remain readable
+/// when the device is in dark mode — the WebView would otherwise apply a dark
+/// background while leaving the email's own text colours unchanged.
+@visibleForTesting
+String buildEmailHtml(String htmlBody, {bool loadRemoteImages = false}) {
+  final imgSrc = loadRemoteImages ? 'https: http: data: blob:' : 'data: blob:';
+  // script-src 'none' blocks page scripts; JS mode stays unrestricted so the
+  // controller can call runJavaScriptReturningResult for height measurement.
+  const cspBase = "default-src 'none'; "
+      "style-src 'unsafe-inline'; "
+      "script-src 'none'; "
+      "object-src 'none'; "
+      "font-src 'none'";
+  final csp = '$cspBase; img-src $imgSrc';
+
+  return '''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta http-equiv="Content-Security-Policy" content="$csp">
+<style>
+body { margin: 0; padding: 0; font-family: sans-serif; word-break: break-word; color-scheme: light; background-color: #ffffff; color: #000000; }
+img { max-width: 100%; height: auto; }
+a { color: #1976D2; }
+* { box-sizing: border-box; }
+</style>
+</head>
+<body>
+$htmlBody
+</body>
+</html>''';
+}
+
 /// Renders an HTML email body securely.
 ///
 /// On Android the content is displayed in a WebView with JavaScript blocked
@@ -65,36 +102,10 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
     }
   }
 
-  String _buildHtml() {
-    final imgSrc =
-        widget.loadRemoteImages ? 'https: http: data: blob:' : 'data: blob:';
-    // script-src 'none' blocks page scripts; JS mode stays unrestricted so
-    // the controller can call runJavaScriptReturningResult for height measurement.
-    const cspBase = "default-src 'none'; "
-        "style-src 'unsafe-inline'; "
-        "script-src 'none'; "
-        "object-src 'none'; "
-        "font-src 'none'";
-    final csp = '$cspBase; img-src $imgSrc';
-
-    return '''<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="$csp">
-<style>
-body { margin: 0; padding: 0; font-family: sans-serif; word-break: break-word; }
-img { max-width: 100%; height: auto; }
-a { color: #1976D2; }
-* { box-sizing: border-box; }
-</style>
-</head>
-<body>
-${widget.htmlBody}
-</body>
-</html>''';
-  }
+  String _buildHtml() => buildEmailHtml(
+        widget.htmlBody,
+        loadRemoteImages: widget.loadRemoteImages,
+      );
 
   Future<void> _measureHeight(String _) async {
     final result = await _controller!.runJavaScriptReturningResult(
