@@ -13,7 +13,12 @@ class UndoShell extends ConsumerWidget {
     ref.listen<List<UndoAction>>(undoServiceProvider, (previous, next) {
       if (next.isNotEmpty &&
           (previous == null || previous.length < next.length)) {
-        _showUndoSnackbar(context, ref, next.last);
+        final action = next.last;
+        // Don't show a snackbar for actions loaded from persistence on app
+        // startup — only for actions pushed in this session.
+        if (DateTime.now().difference(action.timestamp).inSeconds < 30) {
+          _showUndoSnackbar(context, ref, action);
+        }
       }
     });
 
