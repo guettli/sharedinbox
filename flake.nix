@@ -9,7 +9,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = nixpkgs.legacyPackages.${system};
 
         # All Linux desktop runtime libraries needed by flutter build linux and
         # the UI integration tests (xvfb-run).  Kept as a list so we can reuse
