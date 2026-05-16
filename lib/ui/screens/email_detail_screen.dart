@@ -495,7 +495,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               child: const Text('Copy'),
             ),
             TextButton(
-              onPressed: () => unawaited(_downloadRaw(ctx, header, raw)),
+              onPressed: () async {
+                await _downloadRaw(ctx, header, raw);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
               child: const Text('Download'),
             ),
             TextButton(

@@ -1,13 +1,52 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
+
+// Fake PathProviderPlatform so _downloadRaw resolves getDownloadsDirectory /
+// getTemporaryDirectory via pure microtasks instead of calling xdg-user-dir.
+class _FakePathProviderPlatform extends PathProviderPlatform {
+  @override
+  Future<String?> getTemporaryPath() async => '/tmp';
+
+  @override
+  Future<String?> getDownloadsPath() async => '/tmp';
+}
+
+// IOOverrides subclass that stubs File creation so _downloadRaw completes
+// without real dart:io — writeAsString becomes a no-op microtask.
+base class _FakeIOOverrides extends IOOverrides {
+  @override
+  File createFile(String path) => _FakeFile(path);
+}
+
+// Fake File whose writeAsString is a no-op so _downloadRaw completes without
+// real I/O.  Other methods are unused and left to Fake's noSuchMethod handler.
+class _FakeFile extends Fake implements File {
+  _FakeFile(this._path);
+  final String _path;
+
+  @override
+  String get path => _path;
+
+  @override
+  Future<File> writeAsString(
+    String contents, {
+    FileMode mode = FileMode.write,
+    Encoding encoding = utf8,
+    bool flush = false,
+  }) async =>
+      this;
+}
 
 // Shared overrides for email detail tests.
 List<Override> _overrides({required EmailBody body, Email? email}) => [
@@ -176,6 +215,61 @@ void main() {
 
       expect(find.text('Raw Email'), findsOneWidget);
       expect(find.text('2.0 KB'), findsOneWidget);
+    });
+
+    testWidgets('Download Raw Email closes dialog after download', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(
+                emailDetail: testEmail(),
+                emailBody:
+                    const EmailBody(emailId: 'acc-1:42', attachments: []),
+                rawRfc822: 'Subject: test\r\n\r\nBody',
+              ),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Show Raw Email'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Raw Email'), findsOneWidget);
+
+      // Replace path_provider and File I/O with pure-microtask fakes so the
+      // entire _downloadRaw → Navigator.pop chain completes within pump loops.
+      final prevPathProvider = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _FakePathProviderPlatform();
+      IOOverrides.global = _FakeIOOverrides();
+      addTearDown(() {
+        PathProviderPlatform.instance = prevPathProvider;
+        IOOverrides.global = null;
+      });
+
+      await tester.tap(find.text('Download'));
+      // Each pump drains one microtask level: getDownloadsDirectory, then
+      // writeAsString, then _downloadRaw return, then Navigator.pop.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(Duration.zero);
+      }
+      await tester.pumpAndSettle();
+
+      // Dialog must be dismissed after download completes.
+      expect(find.text('Raw Email'), findsNothing);
     });
 
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
