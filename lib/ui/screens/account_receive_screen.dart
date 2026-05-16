@@ -222,10 +222,14 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
           ),
           const SizedBox(height: 24),
           Center(
-            child: QrImageView(
-              key: const Key('pubKeyQrCode'),
-              data: _pubKeyQr!,
-              size: 260,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(8),
+              child: QrImageView(
+                key: const Key('pubKeyQrCode'),
+                data: _pubKeyQr!,
+                size: 260,
+              ),
             ),
           ),
           const SizedBox(height: 16),

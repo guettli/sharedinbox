@@ -309,10 +309,14 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
           ),
           const SizedBox(height: 24),
           Center(
-            child: QrImageView(
-              key: const Key('encryptedAccountsQrCode'),
-              data: _encryptedQr!,
-              size: 280,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(8),
+              child: QrImageView(
+                key: const Key('encryptedAccountsQrCode'),
+                data: _encryptedQr!,
+                size: 280,
+              ),
             ),
           ),
           const SizedBox(height: 16),
