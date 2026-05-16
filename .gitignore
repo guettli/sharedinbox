@@ -113,3 +113,5 @@ website/content/builds/[0-9]*/
 tmp/
 test/widget/failures/
 .claude*
+
+dagger-certs
