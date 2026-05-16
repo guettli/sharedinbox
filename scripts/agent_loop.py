@@ -163,9 +163,13 @@ def _start_agent(prompt: str, session_name: str) -> str:
     """
     Start Claude Code inside a detached tmux session and return the session name.
 
+    Claude runs in interactive TUI mode (no -p flag) so the session is fully
+    watchable: `tmux attach -t <session>` shows live progress.  The session
+    stays open after the agent finishes; the 1-hour timeout in main() cleans it up.
+
     The session inherits the tmux server's environment (including ANTHROPIC_API_KEY
     and any keychain access), which is more reliable than cron's minimal env.
-    Output is written to both the tmux scrollback buffer and a log file via tee.
+    Output is also captured to a log file via pipe-pane.
     """
     log_dir = Path.home() / ".sharedinbox-agent-logs"
     log_dir.mkdir(exist_ok=True)
@@ -175,14 +179,22 @@ def _start_agent(prompt: str, session_name: str) -> str:
     # Kill any stale session with this name before creating a new one.
     subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
 
+    # Run without -p so Claude shows its TUI in the tmux pane.  The prompt is
+    # passed as a positional argument so Claude starts processing immediately.
     shell_cmd = (
         f"claude --dangerously-skip-permissions"
         f" --name {shlex.quote(session_name)}"
-        f" -p {shlex.quote(prompt)}"
-        f" < /dev/null 2>&1 | tee {shlex.quote(str(log_file))}"
+        f" {shlex.quote(prompt)}"
     )
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, "bash", "-c", shell_cmd],
+        check=True,
+    )
+    # Capture pane output to log without replacing the PTY — keeps the session
+    # fully interactive when you `tmux attach -t <session>`.
+    subprocess.run(
+        ["tmux", "pipe-pane", "-t", session_name,
+         f"cat >> {shlex.quote(str(log_file))}"],
         check=True,
     )
     print(f"[agent_loop] Started tmux session={session_name!r}, log={log_file}")
