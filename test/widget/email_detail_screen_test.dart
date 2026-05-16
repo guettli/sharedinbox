@@ -12,14 +12,11 @@ import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
 
-// Fake PathProviderPlatform so _downloadRaw resolves getDownloadsDirectory /
-// getTemporaryDirectory via pure microtasks instead of calling xdg-user-dir.
+// Fake PathProviderPlatform so _downloadRaw resolves getTemporaryDirectory
+// via pure microtasks instead of calling xdg-user-dir.
 class _FakePathProviderPlatform extends PathProviderPlatform {
   @override
   Future<String?> getTemporaryPath() async => '/tmp';
-
-  @override
-  Future<String?> getDownloadsPath() async => '/tmp';
 }
 
 // IOOverrides subclass that stubs File creation so _downloadRaw completes
@@ -261,7 +258,7 @@ void main() {
       });
 
       await tester.tap(find.text('Download'));
-      // Each pump drains one microtask level: getDownloadsDirectory, then
+      // Each pump drains one microtask level: getTemporaryDirectory, then
       // writeAsString, then _downloadRaw return, then Navigator.pop.
       for (var i = 0; i < 10; i++) {
         await tester.pump(Duration.zero);
@@ -270,6 +267,8 @@ void main() {
 
       // Dialog must be dismissed after download completes.
       expect(find.text('Raw Email'), findsNothing);
+      // SnackBar with Share action must be visible.
+      expect(find.text('Share'), findsOneWidget);
     });
 
     testWidgets('Show Mail Structure opens dialog with MIME parts', (

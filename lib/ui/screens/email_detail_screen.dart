@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -517,13 +518,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     String raw,
   ) async {
     try {
-      Directory dir;
-      try {
-        dir =
-            (await getDownloadsDirectory()) ?? (await getTemporaryDirectory());
-      } catch (_) {
-        dir = await getTemporaryDirectory();
-      }
+      final dir = await getTemporaryDirectory();
       final subject = (header?.subject ?? 'email')
           .replaceAll(RegExp(r'[^\w\s-]'), '_')
           .trim();
@@ -532,7 +527,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       await file.writeAsString(raw);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved $filename to ${dir.path}')),
+        SnackBar(
+          content: Text('Saved $filename'),
+          action: SnackBarAction(
+            label: 'Share',
+            onPressed: () => SharePlus.instance.share(
+              ShareParams(files: [XFile(file.path)]),
+            ),
+          ),
+        ),
       );
     } catch (e) {
       if (!context.mounted) return;
