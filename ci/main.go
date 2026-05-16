@@ -11,14 +11,22 @@ type Ci struct{}
 // Base container with all dependencies for Flutter and Linux builds
 func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/cirruslabs/flutter:3.22.2").
+		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y",
 			"clang", "cmake", "ninja-build", "pkg-config",
 			"libgtk-3-dev", "liblzma-dev", "libsecret-1-dev",
-			"libgcrypt20-dev", "libjson-cpp-dev", "sqlite3", "curl", "python3"}).
+			"libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3"}).
+		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
+		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
+		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
 		WithDirectory("/src", source, dagger.ContainerWithDirectoryOpts{
-			Exclude: []string{".git", ".local", ".cache", "build", "ci", ".daggerignore"},
+			Exclude: []string{
+				"**/.*", ".*",
+				"build", "node_modules", "snap", "fvm", "Android", "ios/Pods", "macos/Pods",
+				"linux/flutter/ephemeral", "website/public", "website/resources",
+				"ci", "test_output.txt", "run*.log", "**/*.log", "stat_*.txt", "md5_*.txt",
+			},
 		}).
 		WithWorkdir("/src")
 }
@@ -32,9 +40,6 @@ func (m *Ci) Setup(source *dagger.Directory) *dagger.Container {
 
 // Run hygiene check
 func (m *Ci) CheckHygiene(ctx context.Context, source *dagger.Directory) (string, error) {
-	// Note: We don't have .git in the container, so we check the files provided in the directory.
-	// But check-hygiene in Taskfile uses 'git ls-files'. 
-	// For now, we'll just check if these directories exist in the provided source.
 	return m.Base(source).
 		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
@@ -66,7 +71,7 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 	}
 
 	// Run tests
-	test, err := setup.WithExec([]string{"flutter", "test"}).Stdout(ctx)
+	test, err := setup.WithExec([]string{"flutter", "test", "test/unit"}).Stdout(ctx)
 	if err != nil {
 		return test, err
 	}

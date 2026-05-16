@@ -58,10 +58,10 @@ _DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080
 ```
 
 ### Usage
-Once the environment is set up, you can run the Dagger pipeline:
+Once the environment is set up, you can run the Dagger pipeline. For non-interactive environments (CI, LLMs), use `--progress=plain` for readable logs:
 
 ```bash
-nix develop --command dagger call -m ci check --source .
+nix develop --command dagger call --progress=plain -m ci check --source .
 ```
 
 ## CI Integration (Codeberg/Forgejo)
