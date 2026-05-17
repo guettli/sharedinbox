@@ -115,3 +115,5 @@ test/widget/failures/
 .claude*
 
 dagger-certs
+.Xauthority
+.sharedinbox-agent-state.json

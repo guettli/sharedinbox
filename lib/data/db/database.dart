@@ -238,6 +238,25 @@ class Drafts extends Table {
   TextColumn get imapServerId => text().nullable()();
 }
 
+/// Ephemeral public/private key pair generated for secure account sharing.
+/// Expires after 20 minutes; used to decrypt an incoming encrypted-accounts QR.
+@DataClassName('ShareKeyRow')
+class ShareKeys extends Table {
+  /// Random 16-byte key ID, hex-encoded.  Identifies which key pair the sender
+  /// used so the receiver can look it up even if multiple pairs exist.
+  TextColumn get id => text()();
+
+  /// Base64-encoded X25519 public key (32 bytes).
+  TextColumn get publicKey => text()();
+
+  /// Base64-encoded X25519 private key (32 bytes).
+  TextColumn get privateKey => text()();
+  DateTimeColumn get expiresAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DataClassName('SearchHistoryRow')
 class SearchHistoryEntries extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -286,13 +305,14 @@ class UndoActions extends Table {
     UndoActions,
     SearchHistoryEntries,
     LocalSieveScripts,
+    ShareKeys,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 30;
+  int get schemaVersion => 31;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -526,6 +546,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from >= 12 && from < 30) {
             await m.addColumn(syncLogMailboxes, syncLogMailboxes.durationMs);
+          }
+          if (from < 31) {
+            await m.createTable(shareKeys);
           }
         },
       );

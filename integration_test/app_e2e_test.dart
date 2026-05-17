@@ -179,7 +179,7 @@ void main() {
       };
       addTearDown(() => FlutterError.onError = bindingError);
 
-      await pumpUntil(tester, find.text('Welcome to SharedInbox'));
+      await pumpUntil(tester, find.text('Welcome to sharedinbox.de'));
       _log('app settled');
 
       // ── Add account ────────────────────────────────────────────────────────

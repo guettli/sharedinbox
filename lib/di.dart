@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
+import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
@@ -28,6 +29,7 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -59,6 +61,10 @@ final accountRepositoryProvider = Provider<AccountRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(secureStorageProvider),
   );
+});
+
+final shareKeyRepositoryProvider = Provider<ShareKeyRepository>((ref) {
+  return ShareKeyRepositoryImpl(ref.watch(dbProvider));
 });
 
 final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {

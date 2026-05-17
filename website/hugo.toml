@@ -1,16 +1,16 @@
 baseURL = 'https://sharedinbox.de/'
 languageCode = 'en-us'
-title = 'SharedInbox'
+title = 'sharedinbox.de'
 theme = 'PaperMod'
 
 [params]
     env = 'production'
-    title = 'SharedInbox'
+    title = 'sharedinbox.de'
     description = 'IMAP/SMTP Email Client'
-    author = 'SharedInbox Team'
+    author = 'sharedinbox.de Team'
 
     [params.homeInfoParams]
-        Title = "SharedInbox"
+        Title = "sharedinbox.de"
         Content = "The modern IMAP/SMTP email client for your desktop and mobile."
 
     [[params.socialIcons]]

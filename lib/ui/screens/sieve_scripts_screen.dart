@@ -138,7 +138,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.isLocal ? 'Local email filters' : 'Server email filters',
+          widget.isLocal ? 'Local Filters' : 'Remote Filters',
         ),
       ),
       body: _buildBody(),
@@ -178,7 +178,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         Expanded(
           child: scripts.isEmpty
               ? const Center(
-                  child: Text('No Sieve scripts. Tap + to create one.'),
+                  child: Text('No filters yet. Tap + to create one.'),
                 )
               : RefreshIndicator(
                   onRefresh: _load,
@@ -208,10 +208,11 @@ class _SieveSourceBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = isLocal
-        ? 'These scripts run locally on this device. '
-            'Server email filters are separate and independent.'
-        : 'These scripts run on the mail server (ManageSieve / JMAP). '
-            'Local email filters are separate and independent.';
+        ? 'Local Filters run Sieve scripts directly on this device. '
+            'Remote Filters, which run on the mail server, are configured separately.'
+        : 'Remote Filters run Sieve scripts on the mail server '
+            '(ManageSieve or JMAP). '
+            'Local Filters, which run on this device, are configured separately.';
     return Container(
       width: double.infinity,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,

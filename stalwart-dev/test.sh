@@ -17,6 +17,10 @@ command -v stalwart >/dev/null || {
     exit 1
 }
 
+# Kill any stalwart left over from a previous run (the CI self-hosted runner
+# keeps processes alive across jobs when a run is killed externally).
+pkill -x stalwart 2>/dev/null && sleep 0.5 || true
+
 # Pre-seed spam-filter version so Stalwart does not fetch it on first boot.
 mkdir -p "$STALWART_TMPDIR"
 sqlite3 "${STALWART_TMPDIR}/data.sqlite" \

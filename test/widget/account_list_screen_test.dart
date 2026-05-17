@@ -13,7 +13,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
+      expect(find.text('Welcome to sharedinbox.de'), findsOneWidget);
       expect(find.text('Add account'), findsOneWidget);
     });
 
@@ -86,7 +86,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('SharedInbox'), findsOneWidget);
+      expect(find.text('sharedinbox.de'), findsOneWidget);
     });
 
     testWidgets(
@@ -136,7 +136,7 @@ void main() {
       expect(find.text('Add account'), findsOneWidget);
     });
 
-    testWidgets('account popup menu contains Export account item', (
+    testWidgets('account popup menu contains Send accounts item', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -150,7 +150,7 @@ void main() {
       await tester.tap(find.byIcon(Icons.more_vert));
       await tester.pumpAndSettle();
 
-      expect(find.text('Export account'), findsOneWidget);
+      expect(find.text('Send accounts'), findsOneWidget);
     });
 
     testWidgets('account popup menu contains Force full sync item', (
@@ -204,7 +204,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
-      expect(find.text('SharedInbox'), findsOneWidget);
+      expect(find.text('sharedinbox.de'), findsOneWidget);
     });
   });
 }

@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 30);
+      expect(db.schemaVersion, 31);
       await db.close();
     });
 
@@ -382,7 +382,7 @@ void main() {
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 30', () async {
+    test('fresh install creates all tables at schemaVersion 31', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -407,6 +407,7 @@ void main() {
           'undo_actions',
           'search_history_entries',
           'local_sieve_scripts', // v29
+          'share_keys', // v31
         ]),
       );
 

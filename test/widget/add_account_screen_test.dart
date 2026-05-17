@@ -7,13 +7,14 @@ import 'helpers.dart';
 
 void main() {
   group('AddAccountScreen', () {
-    testWidgets('step 1: shows Import account button', (tester) async {
+    testWidgets('step 1: shows Receive account button', (tester) async {
       await tester.pumpWidget(
         buildApp(initialLocation: '/accounts/add', overrides: baseOverrides()),
       );
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('importAccountButton')), findsOneWidget);
+      expect(find.text('Receive account'), findsOneWidget);
     });
 
     testWidgets('step 1: shows email field and Continue button', (
@@ -212,7 +213,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
+      expect(find.text('Welcome to sharedinbox.de'), findsOneWidget);
     });
 
     testWidgets('JMAP connection failure shows error message', (tester) async {
@@ -293,7 +294,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to SharedInbox'), findsOneWidget);
+      expect(find.text('Welcome to sharedinbox.de'), findsOneWidget);
     });
 
     testWidgets(

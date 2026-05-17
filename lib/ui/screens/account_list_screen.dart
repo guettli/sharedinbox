@@ -15,7 +15,7 @@ class AccountListScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SharedInbox'),
+        title: const Text('sharedinbox.de'),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
@@ -30,9 +30,17 @@ class AccountListScreen extends ConsumerWidget {
             const DrawerHeader(
               decoration: BoxDecoration(color: Colors.blueGrey),
               child: Text(
-                'SharedInbox',
+                'sharedinbox.de',
                 style: TextStyle(color: Colors.white, fontSize: 24),
               ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.qr_code_scanner),
+              title: const Text('Receive accounts'),
+              onTap: () {
+                Navigator.pop(context);
+                unawaited(context.push('/accounts/receive'));
+              },
             ),
             ListTile(
               leading: const Icon(Icons.history),
@@ -48,6 +56,14 @@ class AccountListScreen extends ConsumerWidget {
               onTap: () {
                 Navigator.pop(context); // Close drawer
                 unawaited(context.push('/accounts/changelog'));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('About'),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                unawaited(context.push('/accounts/about'));
               },
             ),
           ],
@@ -172,8 +188,8 @@ class _AccountTile extends ConsumerWidget {
                 child: Text('Local email filters'),
               ),
               const PopupMenuItem(
-                value: _AccountAction.export,
-                child: Text('Export account'),
+                value: _AccountAction.send,
+                child: Text('Send accounts'),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
@@ -245,8 +261,8 @@ class _AccountTile extends ConsumerWidget {
       case _AccountAction.emailFiltersLocal:
         await context.push('/accounts/${account.id}/sieve/local');
         break;
-      case _AccountAction.export:
-        await context.push('/accounts/${account.id}/export');
+      case _AccountAction.send:
+        await context.push('/accounts/send');
         break;
       case _AccountAction.delete:
         final confirmed = await showDialog<bool>(
@@ -296,7 +312,7 @@ class _OnboardingView extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'Welcome to SharedInbox',
+              'Welcome to sharedinbox.de',
               style: theme.textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
@@ -316,7 +332,7 @@ class _OnboardingView extends StatelessWidget {
               number: '2',
               title: 'Wait for sync',
               description:
-                  'SharedInbox downloads your messages in the background.',
+                  'sharedinbox.de downloads your messages in the background.',
             ),
             const _Step(
               number: '3',
@@ -390,7 +406,7 @@ enum _AccountAction {
   edit,
   emailFiltersRemote,
   emailFiltersLocal,
-  export,
+  send,
   delete,
 }
 

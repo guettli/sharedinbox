@@ -70,7 +70,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'SharedInbox',
+      title: 'sharedinbox.de',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,

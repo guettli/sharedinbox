@@ -12,10 +12,10 @@ Thomas Güttler Email: info@thomas-guettler.de
 
 ## 2. Overview
 
-SharedInbox is an email client for desktop and mobile. This policy explains what data we process and
+sharedinbox.de is an email client for desktop and mobile. This policy explains what data we process and
 how.
 
-## 3. The SharedInbox Mail App
+## 3. The sharedinbox.de Mail App
 
 ### What data the app processes
 
@@ -30,7 +30,7 @@ The app processes the following data **exclusively on your device**:
 ### Network connections
 
 The app connects only to the email servers you configure (IMAP/SMTP). It does not connect to any
-SharedInbox servers, analytics services, or third-party tracking services.
+sharedinbox.de servers, analytics services, or third-party tracking services.
 
 ### No telemetry
 

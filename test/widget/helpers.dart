@@ -18,13 +18,15 @@ import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
+import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
+import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/account_export_screen.dart';
-import 'package:sharedinbox/ui/screens/account_import_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
+import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
+import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -72,6 +74,19 @@ class FakeAccountRepository implements AccountRepository {
 
   @override
   Future<String> getPassword(String accountId) async => 'test-password';
+}
+
+class FakeShareKeyRepository implements ShareKeyRepository {
+  ShareKeyMaterial? _material;
+
+  @override
+  Future<ShareKeyMaterial> createKeyPair() async {
+    _material = await ShareEncryptionService.generateKeyPair();
+    return _material!;
+  }
+
+  @override
+  Future<ShareKeyMaterial?> findByKeyId(dynamic keyId) async => _material;
 }
 
 class FakeDraftRepository implements DraftRepository {
@@ -375,18 +390,16 @@ Widget buildApp({
             builder: (ctx, state) => const AddAccountScreen(),
           ),
           GoRoute(
-            path: 'import',
-            builder: (ctx, state) => const AccountImportScreen(),
+            path: 'receive',
+            builder: (ctx, state) => const AccountReceiveScreen(),
+          ),
+          GoRoute(
+            path: 'send',
+            builder: (ctx, state) => const AccountSendScreen(),
           ),
           GoRoute(
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
-              accountId: state.pathParameters['accountId']!,
-            ),
-          ),
-          GoRoute(
-            path: ':accountId/export',
-            builder: (ctx, state) => AccountExportScreen(
               accountId: state.pathParameters['accountId']!,
             ),
           ),
@@ -499,6 +512,7 @@ List<Override> baseOverrides({
       connectionTestServiceProvider.overrideWithValue(
         FakeConnectionTestService(error: connectionError),
       ),
+      shareKeyRepositoryProvider.overrideWithValue(FakeShareKeyRepository()),
     ];
 
 // ---------------------------------------------------------------------------
