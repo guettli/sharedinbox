@@ -8,7 +8,7 @@ on:
 jobs:
   check:
     name: Full Project Check
-    runs-on: ubuntu-latest
+    runs-on: codeberg-medium
     timeout-minutes: 60
 
     steps:
@@ -36,7 +36,7 @@ jobs:
 
   build-linux:
     name: Build Linux Release
-    runs-on: ubuntu-latest
+    runs-on: codeberg-medium
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -71,7 +71,7 @@ jobs:
 
   deploy-playstore:
     name: Build & Deploy to Play Store
-    runs-on: ubuntu-latest
+    runs-on: codeberg-medium
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -113,7 +113,7 @@ jobs:
 
   publish-website:
     name: Publish Website Build History
-    runs-on: ubuntu-latest
+    runs-on: codeberg-medium
     needs: [build-linux, deploy-playstore]
     if: |
       always() &&
@@ -124,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 50
 
       - name: Install Dagger & Task
         run: |
