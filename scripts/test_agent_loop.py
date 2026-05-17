@@ -128,5 +128,80 @@ class TestStartAgent(unittest.TestCase):
             self.assertTrue(kwargs.get("start_new_session"))
 
 
+class TestMain(unittest.TestCase):
+    """Tests for the main() flow."""
+
+    def _make_mock_proc(self, pid=42):
+        proc = MagicMock()
+        proc.pid = pid
+        proc.stdin = io.BytesIO()
+        return proc
+
+    def _make_issue(self, number=10, title="Do something"):
+        return {"number": number, "title": title, "body": "", "labels": []}
+
+    def test_sets_in_progress_before_starting_agent(self):
+        """_set_labels(InProgress) must be called before _start_agent."""
+        call_order = []
+        mock_proc = self._make_mock_proc(pid=55)
+
+        def fake_set_labels(issue, add, remove):
+            call_order.append(("set_labels", add, remove))
+
+        def fake_start_agent(prompt, session_name):
+            call_order.append(("start_agent", session_name))
+            return 55
+
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[self._make_issue(10)]), \
+             patch("agent_loop._set_labels", side_effect=fake_set_labels), \
+             patch("agent_loop._start_agent", side_effect=fake_start_agent), \
+             patch("agent_loop._write_state"):
+            result = agent_loop.main()
+
+        self.assertEqual(result, 0)
+        labels_idx = next(
+            i for i, c in enumerate(call_order) if c[0] == "set_labels"
+        )
+        agent_idx = next(
+            i for i, c in enumerate(call_order) if c[0] == "start_agent"
+        )
+        self.assertLess(labels_idx, agent_idx,
+                        "_set_labels must be called before _start_agent")
+
+    def test_sets_in_progress_label_and_removes_ready(self):
+        """The InProgress label is added and the Ready label is removed."""
+        captured = {}
+
+        def fake_set_labels(issue, add, remove):
+            captured["add"] = add
+            captured["remove"] = remove
+
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[self._make_issue(7)]), \
+             patch("agent_loop._set_labels", side_effect=fake_set_labels), \
+             patch("agent_loop._start_agent", return_value=99), \
+             patch("agent_loop._write_state"):
+            agent_loop.main()
+
+        self.assertIn(agent_loop.LABEL_IN_PROGRESS, captured.get("add", []))
+        self.assertIn(agent_loop.LABEL_READY, captured.get("remove", []))
+
+    def test_no_ready_issues_does_nothing(self):
+        """main() exits cleanly with 0 when there are no ready issues."""
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]), \
+             patch("agent_loop._set_labels") as mock_labels, \
+             patch("agent_loop._start_agent") as mock_start:
+            result = agent_loop.main()
+
+        self.assertEqual(result, 0)
+        mock_labels.assert_not_called()
+        mock_start.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
