@@ -8,7 +8,7 @@ on:
 jobs:
   check:
     name: Full Project Check
-    runs-on: dagger-dagger
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
@@ -21,7 +21,7 @@ jobs:
 
   build-linux:
     name: Build Linux Release
-    runs-on: dagger-dagger
+    runs-on: ubuntu-latest
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -41,7 +41,7 @@ jobs:
 
   deploy-playstore:
     name: Build & Deploy to Play Store
-    runs-on: dagger-dagger
+    runs-on: ubuntu-latest
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -68,7 +68,7 @@ jobs:
 
   publish-website:
     name: Publish Website Build History
-    runs-on: dagger-dagger
+    runs-on: ubuntu-latest
     needs: [build-linux, deploy-playstore]
     if: |
       always() &&

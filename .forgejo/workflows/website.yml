@@ -12,7 +12,7 @@ on:
 jobs:
   deploy:
     name: Build & Deploy Website
-    runs-on: dagger-dagger
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
