@@ -175,11 +175,14 @@ def _start_agent(prompt: str, session_name: str) -> str:
     # Kill any stale session with this name before creating a new one.
     subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
 
+    # printf '\n' answers the workspace-trust dialog (press Enter to confirm the
+    # default "Yes, I trust this folder") when claude shows it despite -p mode.
+    # After that newline, stdin hits EOF, which -p mode ignores.
     shell_cmd = (
-        f"claude --dangerously-skip-permissions"
+        f"printf '\\n' | claude --dangerously-skip-permissions"
         f" --name {shlex.quote(session_name)}"
         f" -p {shlex.quote(prompt)}"
-        f" < /dev/null 2>&1 | tee {shlex.quote(str(log_file))}"
+        f" 2>&1 | tee {shlex.quote(str(log_file))}"
     )
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, "bash", "-c", shell_cmd],
