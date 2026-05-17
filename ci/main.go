@@ -41,7 +41,7 @@ func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
+		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld", "git"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -208,6 +208,12 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return analyze, err
 	}
 
+	// Verify mocks
+	mocks, err := m.CheckMocks(ctx)
+	if err != nil {
+		return mocks, err
+	}
+
 	// Run coverage gate (includes unit tests)
 	coverage, err := m.Coverage(ctx)
 	if err != nil {
@@ -226,7 +232,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return testIntegration, err
 	}
 
-	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, coverage, testBackend, testIntegration), nil
+	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, mocks, coverage, testBackend, testIntegration), nil
 }
 
 // Generate build history Hugo content by scanning the remote server

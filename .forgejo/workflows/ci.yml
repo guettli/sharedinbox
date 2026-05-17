@@ -9,7 +9,7 @@ jobs:
   check:
     name: Full Project Check
     runs-on: codeberg-small
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +39,7 @@ jobs:
     runs-on: codeberg-small
     needs: check
     if: github.ref == 'refs/heads/main'
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +74,7 @@ jobs:
     runs-on: codeberg-small
     needs: check
     if: github.ref == 'refs/heads/main'
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +119,7 @@ jobs:
       always() &&
       github.ref == 'refs/heads/main' &&
       (needs.build-linux.result == 'success' || needs.deploy-playstore.result == 'success')
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
