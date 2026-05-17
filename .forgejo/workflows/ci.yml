@@ -19,7 +19,7 @@ jobs:
       - name: Install Dagger & Task
         run: |
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          go install github.com/go-task/task/v3/cmd/task@latest
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -32,7 +32,7 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Run Full Check Suite
-        run: dagger call --progress=plain -m ci check
+        run: task check-dagger
 
   build-linux:
     name: Build Linux Release
@@ -66,9 +66,7 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: |
-          HASH=$(git rev-parse --short HEAD)
-          dagger call --progress=plain -m ci deploy-linux --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+        run: task deploy-linux
 
   deploy-playstore:
     name: Build & Deploy to Play Store
@@ -100,8 +98,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
-        run: |
-          dagger call --progress=plain -m ci publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON
+        run: task publish-android
 
       - name: Build & Deploy APK to server
         continue-on-error: true
@@ -110,9 +107,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          HASH=$(git rev-parse --short HEAD)
-          dagger call --progress=plain -m ci deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+        run: task deploy-apk
 
   publish-website:
     name: Publish Website Build History
@@ -149,5 +144,4 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: |
-          dagger call --progress=plain -m ci publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+        run: task publish-website
