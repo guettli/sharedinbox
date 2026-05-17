@@ -8,7 +8,7 @@ on:
 jobs:
   analyze-and-test:
     name: Analyze & unit test
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-runner
 
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
 
   integration:
     name: Integration tests (Stalwart)
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-runner
     # Run integration tests only on push to main, not on every PR.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -74,7 +74,7 @@ jobs:
 
   integration-ui:
     name: UI Integration tests (Stalwart + Xvfb)
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-runner
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -124,7 +124,7 @@ jobs:
 
   build-linux:
     name: Build Linux desktop
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-runner
     needs: analyze-and-test
 
     steps:
@@ -154,7 +154,7 @@ jobs:
 
   deploy:
     name: Deploy Linux build & publish website
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-runner
     needs: build-linux
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
