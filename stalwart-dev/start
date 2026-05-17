@@ -67,11 +67,11 @@ echo "Connection info written to ${TMPDIR}/ports.env" >&2
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-sed -e "s|127.0.0.1:8080|127.0.0.1:${STALWART_PORT}|" \
-    -e "s|127.0.0.1:1430|127.0.0.1:${STALWART_IMAP_PORT}|" \
-    -e "s|127.0.0.1:1025|127.0.0.1:${STALWART_SMTP_PORT}|" \
-    -e "s|127.0.0.1:4190|127.0.0.1:${STALWART_SIEVE_PORT}|" \
-    -e "s|/tmp/stalwart-dev|${TMPDIR}|" \
+sed -e "s|0.0.0.0:8080|0.0.0.0:${STALWART_PORT}|" \
+    -e "s|0.0.0.0:1430|0.0.0.0:${STALWART_IMAP_PORT}|" \
+    -e "s|0.0.0.0:1025|0.0.0.0:${STALWART_SMTP_PORT}|" \
+    -e "s|0.0.0.0:4190|0.0.0.0:${STALWART_SIEVE_PORT}|" \
+    -e "s|/tmp/stalwart|${TMPDIR}|" \
     "${REPO_ROOT}/stalwart-dev/config.toml" >"${TMPDIR}/config.toml"
 
 exec stalwart --config "${TMPDIR}/config.toml"

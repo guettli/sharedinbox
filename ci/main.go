@@ -76,7 +76,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 	config := m.Source.Directory("stalwart-dev").File("config.toml")
 
 	return dag.Container().
-		From("stalwartlabs/stalwart:latest").
+		From("stalwartlabs/stalwart:v0.14.1").
 		WithFile("/etc/stalwart/config.toml", config).
 		// Create data dir in /tmp where permissions are usually more relaxed.
 		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
