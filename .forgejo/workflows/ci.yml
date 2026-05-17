@@ -40,24 +40,15 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
-      - name: Build Linux
-        run: nix develop --no-warn-dirty --command dagger call --progress=plain -m ci build-linux-release --source . -o build/linux/x64/release/bundle
-
-      - name: Set up SSH key
+      - name: Build & Deploy Linux to server
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Deploy Linux to server
-        continue-on-error: true
-        env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: nix develop --no-warn-dirty --command task deploy-linux-to-server
+        run: |
+          HASH=$(git rev-parse --short HEAD)
+          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci deploy-linux --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   deploy-playstore:
     name: Build & Deploy to Play Store
@@ -106,25 +97,18 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
         run: |
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci build-android-release --source . -o build/app/outputs/bundle/release/app-release.aab
-          nix develop --no-warn-dirty --command task deploy-android-bundle # Still use task for deployment script if it's easier for now
+          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-android --source . --play-store-config env:PLAY_STORE_CONFIG_JSON
 
-      - name: Set up SSH key
+      - name: Build & Deploy APK to server
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Deploy APK to server
-        continue-on-error: true
-        env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: nix develop --no-warn-dirty --command task deploy-apk-to-server
+        run: |
+          HASH=$(git rev-parse --short HEAD)
+          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci deploy-apk --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   publish-website:
     name: Publish Website Build History
@@ -145,18 +129,11 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
-      - name: Set up SSH key
-        continue-on-error: true
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
       - name: Generate build history and deploy website
         continue-on-error: true
         env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: nix develop --no-warn-dirty --command task website-publish
+        run: |
+          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
