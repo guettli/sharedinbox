@@ -42,10 +42,14 @@ func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld", "git"}).
+		// Only install missing dependencies. git, curl, python3 are already in the image.
+		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
+		WithMountedCache("/opt/android-sdk-linux/ndk", dag.CacheVolume("android-ndk-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
+		// Pre-install NDK to avoid slow downloads during the actual build
+		WithExec([]string{"/bin/sh", "-c", "if [ ! -d /opt/android-sdk-linux/ndk/28.2.13676358 ]; then yes | sdkmanager \"ndk;28.2.13676358\"; fi"}).
 		WithDirectory("/src", m.Source).
 		WithWorkdir("/src")
 }
