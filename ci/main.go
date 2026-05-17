@@ -36,10 +36,6 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 			"clang", "cmake", "ninja-build", "pkg-config",
 			"libgtk-3-dev", "liblzma-dev", "libsecret-1-dev",
 			"libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2"}).
-		WithExec([]string{"curl", "-sL", "https://github.com/stalwartlabs/mail-server/releases/download/v0.14.1/stalwart-x86_64-unknown-linux-gnu.tar.gz", "-o", "/tmp/stalwart.tar.gz"}).
-		WithExec([]string{"tar", "-xzf", "/tmp/stalwart.tar.gz", "-C", "/usr/local/bin", "stalwart"}).
-		WithExec([]string{"chmod", "+x", "/usr/local/bin/stalwart"}).
-		WithExec([]string{"rm", "/tmp/stalwart.tar.gz"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -64,6 +60,23 @@ func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
 		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
 		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519")
+}
+
+// Latest Stalwart Mail Server as a Dagger Service
+func (m *Ci) Stalwart(source *dagger.Directory) *dagger.Service {
+	config := source.Directory("stalwart-dev").File("config.toml")
+
+	return dag.Container().
+		From("stalwartlabs/stalwart:latest").
+		WithFile("/etc/stalwart/config.toml", config).
+		// Create data dir in /tmp where permissions are usually more relaxed.
+		// Note: The Stalwart image might run as a non-root user.
+		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
+		WithExposedPort(8080). // JMAP
+		WithExposedPort(1430). // IMAP
+		WithExposedPort(1025). // SMTP
+		WithExposedPort(4190). // ManageSieve
+		AsService()
 }
 
 // Setup environment: pub get and build_runner
@@ -145,8 +158,25 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return coverage, err
 	}
 
-	// Run backend tests (requires Stalwart)
-	testBackend, err := setup.WithExec([]string{"stalwart-dev/test.sh"}).Stdout(ctx)
+	// Run backend tests (requires Stalwart Service)
+	stalwart := m.Stalwart(source)
+	testBackend, err := setup.
+		WithServiceBinding("stalwart", stalwart).
+		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
+		WithEnvVariable("STALWART_SMTP_HOST", "stalwart").
+		WithEnvVariable("STALWART_URL", "http://stalwart:8080").
+		WithEnvVariable("STALWART_IMAP_PORT", "1430").
+		WithEnvVariable("STALWART_SMTP_PORT", "1025").
+		WithEnvVariable("STALWART_SIEVE_PORT", "4190").
+		WithEnvVariable("STALWART_USER_B", "alice@example.com").
+		WithEnvVariable("STALWART_PASS_B", "secret").
+		// USER_C/PASS_C needed for multi-account tests
+		WithEnvVariable("STALWART_USER_C", "bob@example.com").
+		WithEnvVariable("STALWART_PASS_C", "secret").
+		// We can't use stalwart-dev/test.sh directly because it tries to START stalwart.
+		// We just run the tests against the bound service.
+		WithExec([]string{"flutter", "test", "test/backend"}).
+		Stdout(ctx)
 	if err != nil {
 		return testBackend, err
 	}
@@ -225,8 +255,8 @@ func (m *Ci) PublishWebsite(
 // Build and return the Linux bundle
 func (m *Ci) BuildLinux(source *dagger.Directory) *dagger.Directory {
 	return m.Setup(source).
-		WithExec([]string{"flutter", "build", "linux", "--debug"}).
-		Directory("build/linux/x64/debug/bundle")
+		WithExec([]string{"flutter", "build", "linux", "--release"}).
+		Directory("build/linux/x64/release/bundle")
 }
 
 // Build and return the Linux bundle (release)

@@ -16,14 +16,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
+      - name: Install Dagger & Task
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -32,19 +29,10 @@ jobs:
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
-
-      - name: Setup Dagger Remote Engine (via stunnel)
-        env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
-          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
-          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
-          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+        run: scripts/setup_dagger_remote.sh
 
       - name: Run Full Check Suite
-        run: nix develop --no-warn-dirty --command dagger call --progress=plain -m ci check --source .
+        run: dagger call --progress=plain -m ci check --source .
 
   build-linux:
     name: Build Linux Release
@@ -57,14 +45,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
+      - name: Install Dagger & Task
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -73,7 +58,7 @@ jobs:
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+        run: scripts/setup_dagger_remote.sh
 
       - name: Build & Deploy Linux to server
         continue-on-error: true
@@ -83,7 +68,7 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
           HASH=$(git rev-parse --short HEAD)
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci deploy-linux --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+          dagger call --progress=plain -m ci deploy-linux --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   deploy-playstore:
     name: Build & Deploy to Play Store
@@ -96,14 +81,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
+      - name: Install Dagger & Task
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -112,40 +94,14 @@ jobs:
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
-
-      - name: Install Android SDK (cached on runner between runs)
-        run: |
-          SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
-          if [ ! -d "$SDK/platforms/android-34" ]; then
-            echo "Android SDK not found, installing..."
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
-            mkdir -p "$SDK/cmdline-tools"
-            unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
-            [ -d "$SDK/cmdline-tools/cmdline-tools" ] && mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;34.0.0" "platforms;android-34"
-          else
-            echo "Android SDK cached, skipping install."
-          fi
-
-      - name: Prepare Keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
-          else
-            echo "Error: ANDROID_KEYSTORE_BASE64 secret is not set."
-            exit 1
-          fi
+        run: scripts/setup_dagger_remote.sh
 
       - name: Build & Deploy to Play Store
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
         run: |
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-android --source . --play-store-config env:PLAY_STORE_CONFIG_JSON
+          dagger call --progress=plain -m ci publish-android --source . --play-store-config env:PLAY_STORE_CONFIG_JSON
 
       - name: Build & Deploy APK to server
         continue-on-error: true
@@ -156,7 +112,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           HASH=$(git rev-parse --short HEAD)
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci deploy-apk --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+          dagger call --progress=plain -m ci deploy-apk --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   publish-website:
     name: Publish Website Build History
@@ -172,14 +128,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
+      - name: Install Dagger & Task
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -188,7 +141,7 @@ jobs:
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+        run: scripts/setup_dagger_remote.sh
 
       - name: Generate build history and deploy website
         continue-on-error: true
@@ -197,4 +150,4 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+          dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"

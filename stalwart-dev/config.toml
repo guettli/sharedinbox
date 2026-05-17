@@ -1,10 +1,5 @@
 # Minimal Stalwart Mail configuration for local development and integration tests.
 #
-# Do not start directly — use stalwart-dev/start, which substitutes $STALWART_PORT
-# and writes a per-clone config into /tmp/stalwart-dev-PORT/ before starting.
-#
-# Check:  curl http://localhost:$STALWART_PORT/.well-known/jmap
-#
 # HTTP only — localhost testing, no TLS.
 # Two test accounts (alice, bob) for multi-account sync tests.
 
@@ -13,27 +8,27 @@ hostname = "localhost"
 
 [[server.listener]]
 id       = "jmap"
-bind     = ["127.0.0.1:8080"]
+bind     = ["0.0.0.0:8080"]
 protocol = "http"
 
 [[server.listener]]
 id       = "imap"
-bind     = ["127.0.0.1:1430"]
+bind     = ["0.0.0.0:1430"]
 protocol = "imap"
 
 [[server.listener]]
 id       = "smtp"
-bind     = ["127.0.0.1:1025"]
+bind     = ["0.0.0.0:1025"]
 protocol = "smtp"
 
 [[server.listener]]
 id       = "managesieve"
-bind     = ["127.0.0.1:4190"]
+bind     = ["0.0.0.0:4190"]
 protocol = "managesieve"
 
 [store."db"]
 type = "sqlite"
-path = "/tmp/stalwart-dev/data.sqlite"
+path = "/tmp/stalwart/data.sqlite"
 
 [storage]
 data      = "db"

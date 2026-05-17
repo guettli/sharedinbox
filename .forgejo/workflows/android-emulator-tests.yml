@@ -17,15 +17,6 @@ jobs:
         with:
           fetch-depth: 50
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
-        run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
-
       - name: Install Android SDK
         run: |
           SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
@@ -40,4 +31,4 @@ jobs:
           fi
 
       - name: Run Android Integration Tests
-        run: nix develop --no-warn-dirty --command task integration-android
+        run: task integration-android

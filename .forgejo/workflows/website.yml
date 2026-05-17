@@ -19,14 +19,11 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.11
-
-      - name: Enable Nix flakes
+      - name: Install Dagger & Task
         run: |
-          mkdir -p ~/.config/nix
-          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -35,7 +32,7 @@ jobs:
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+        run: scripts/setup_dagger_remote.sh
 
       - name: Build & Deploy Website
         env:
@@ -43,9 +40,9 @@ jobs:
           SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
         run: |
-          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+          dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
       - name: Verify Website
         env:
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
-        run: nix develop --no-warn-dirty --command scripts/website-verify.sh
+        run: scripts/website-verify.sh
