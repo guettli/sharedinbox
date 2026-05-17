@@ -32,7 +32,7 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Run Full Check Suite
-        run: dagger call --progress=plain -m ci check --source .
+        run: dagger call --progress=plain -m ci check
 
   build-linux:
     name: Build Linux Release
@@ -68,7 +68,7 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
           HASH=$(git rev-parse --short HEAD)
-          dagger call --progress=plain -m ci deploy-linux --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+          dagger call --progress=plain -m ci deploy-linux --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   deploy-playstore:
     name: Build & Deploy to Play Store
@@ -101,7 +101,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
         run: |
-          dagger call --progress=plain -m ci publish-android --source . --play-store-config env:PLAY_STORE_CONFIG_JSON
+          dagger call --progress=plain -m ci publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON
 
       - name: Build & Deploy APK to server
         continue-on-error: true
@@ -112,7 +112,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           HASH=$(git rev-parse --short HEAD)
-          dagger call --progress=plain -m ci deploy-apk --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+          dagger call --progress=plain -m ci deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   publish-website:
     name: Publish Website Build History
@@ -150,4 +150,4 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
-          dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+          dagger call --progress=plain -m ci publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"

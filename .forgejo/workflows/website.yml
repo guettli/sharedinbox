@@ -40,7 +40,7 @@ jobs:
           SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
         run: |
-          dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+          dagger call --progress=plain -m ci publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
       - name: Verify Website
         env:

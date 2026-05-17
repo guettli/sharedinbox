@@ -7,28 +7,37 @@ import (
 	"dagger/ci/internal/dagger"
 )
 
-type Ci struct{}
+type Ci struct {
+	// The source directory of the project, filtered surgically.
+	Source *dagger.Directory
+}
+
+func New(
+	// The source directory of the project.
+	// +defaultPath=".."
+	source *dagger.Directory,
+) *Ci {
+	return &Ci{
+		Source: source.Filter(dagger.DirectoryFilterOpts{
+			Include: []string{
+				"lib/",
+				"test/",
+				"assets/",
+				"scripts/",
+				"pubspec.yaml",
+				"analysis_options.yaml",
+				"linux/",
+				"android/",
+				"integration_test/",
+				"drift_schemas/",
+				"stalwart-dev/",
+			},
+		}),
+	}
+}
 
 // Base container with all dependencies for Flutter and Linux builds
-func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
-	// Surgical inclusion: only take what is strictly needed for the build/test.
-	// This improves caching by ignoring transient or irrelevant files.
-	source = source.Filter(dagger.DirectoryFilterOpts{
-		Include: []string{
-			"lib/",
-			"test/",
-			"assets/",
-			"scripts/",
-			"pubspec.yaml",
-			"analysis_options.yaml",
-			"linux/",
-			"android/",
-			"integration_test/",
-			"drift_schemas/",
-			"stalwart-dev/",
-		},
-	})
-
+func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
@@ -39,7 +48,7 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
-		WithDirectory("/src", source).
+		WithDirectory("/src", m.Source).
 		WithWorkdir("/src")
 }
 
@@ -63,14 +72,13 @@ func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 }
 
 // Latest Stalwart Mail Server as a Dagger Service
-func (m *Ci) Stalwart(source *dagger.Directory) *dagger.Service {
-	config := source.Directory("stalwart-dev").File("config.toml")
+func (m *Ci) Stalwart() *dagger.Service {
+	config := m.Source.Directory("stalwart-dev").File("config.toml")
 
 	return dag.Container().
 		From("stalwartlabs/stalwart:latest").
 		WithFile("/etc/stalwart/config.toml", config).
 		// Create data dir in /tmp where permissions are usually more relaxed.
-		// Note: The Stalwart image might run as a non-root user.
 		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
@@ -80,37 +88,37 @@ func (m *Ci) Stalwart(source *dagger.Directory) *dagger.Service {
 }
 
 // Setup environment: pub get and build_runner
-func (m *Ci) Setup(source *dagger.Directory) *dagger.Container {
-	return m.Base(source).
+func (m *Ci) Setup() *dagger.Container {
+	return m.Base().
 		WithExec([]string{"flutter", "pub", "get"}).
 		// Use --delete-conflicting-outputs to ensure generated files match the current source
 		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
 }
 
 // Run hygiene check
-func (m *Ci) CheckHygiene(ctx context.Context, source *dagger.Directory) (string, error) {
-	return m.Base(source).
+func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
+	return m.Base().
 		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
 }
 
 // Enforce architecture — ui/ must not import data/
-func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string, error) {
-	return m.Base(source).
+func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
+	return m.Base().
 		WithExec([]string{"/bin/bash", "-c", "VIOLATIONS=$(grep -rn \"package:sharedinbox/data/\" lib/ui/ 2>/dev/null || true); if [ -n \"$VIOLATIONS\" ]; then echo \"ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):\"; echo \"$VIOLATIONS\"; exit 1; fi; echo \"Layer check passed.\""}).
 		Stdout(ctx)
 }
 
 // Run dart format check
-func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
-	return m.Base(source).
+func (m *Ci) Format(ctx context.Context) (string, error) {
+	return m.Base().
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
 
 // Verify that mocks are up to date
-func (m *Ci) CheckMocks(ctx context.Context, source *dagger.Directory) (string, error) {
-	return m.Setup(source).
+func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
+	return m.Setup().
 		WithExec([]string{"git", "init"}).
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
 		WithExec([]string{"git", "config", "user.name", "CI"}).
@@ -122,22 +130,22 @@ func (m *Ci) CheckMocks(ctx context.Context, source *dagger.Directory) (string, 
 }
 
 // Run coverage check
-func (m *Ci) Coverage(ctx context.Context, source *dagger.Directory) (string, error) {
-	return m.Setup(source).
+func (m *Ci) Coverage(ctx context.Context) (string, error) {
+	return m.Setup().
 		WithExec([]string{"flutter", "test", "test/unit", "--coverage"}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
 }
 
 // Full check suite (equivalent to task check)
-func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error) {
-	setup := m.Setup(source)
+func (m *Ci) Check(ctx context.Context) (string, error) {
+	setup := m.Setup()
 
 	// Hygiene & Layers
-	if _, err := m.CheckHygiene(ctx, source); err != nil {
+	if _, err := m.CheckHygiene(ctx); err != nil {
 		return "Hygiene check failed", err
 	}
-	if _, err := m.CheckLayers(ctx, source); err != nil {
+	if _, err := m.CheckLayers(ctx); err != nil {
 		return "Layer check failed", err
 	}
 
@@ -153,13 +161,13 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 	}
 
 	// Run coverage gate (includes unit tests)
-	coverage, err := m.Coverage(ctx, source)
+	coverage, err := m.Coverage(ctx)
 	if err != nil {
 		return coverage, err
 	}
 
 	// Run backend tests (requires Stalwart Service)
-	stalwart := m.Stalwart(source)
+	stalwart := m.Stalwart()
 	testBackend, err := setup.
 		WithServiceBinding("stalwart", stalwart).
 		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
@@ -170,11 +178,8 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		WithEnvVariable("STALWART_SIEVE_PORT", "4190").
 		WithEnvVariable("STALWART_USER_B", "alice@example.com").
 		WithEnvVariable("STALWART_PASS_B", "secret").
-		// USER_C/PASS_C needed for multi-account tests
 		WithEnvVariable("STALWART_USER_C", "bob@example.com").
 		WithEnvVariable("STALWART_PASS_C", "secret").
-		// We can't use stalwart-dev/test.sh directly because it tries to START stalwart.
-		// We just run the tests against the bound service.
 		WithExec([]string{"flutter", "test", "test/backend"}).
 		Stdout(ctx)
 	if err != nil {
@@ -187,12 +192,11 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 // Generate build history Hugo content by scanning the remote server
 func (m *Ci) GenerateBuildHistory(
 	ctx context.Context,
-	source *dagger.Directory,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) *dagger.Directory {
-	scriptSource := source.Filter(dagger.DirectoryFilterOpts{
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/generate_build_history.py", "website/"},
 	})
 
@@ -211,16 +215,15 @@ func (m *Ci) GenerateBuildHistory(
 // Build and return the Hugo-based website bundle
 func (m *Ci) BuildWebsite(
 	ctx context.Context,
-	source *dagger.Directory,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) *dagger.Directory {
 	// 1. Generate build history content
-	buildHistory := m.GenerateBuildHistory(ctx, source, sshKey, sshUser, sshHost)
+	buildHistory := m.GenerateBuildHistory(ctx, sshKey, sshUser, sshHost)
 
 	// 2. Prepare website source (base files + generated history)
-	websiteSource := source.Filter(dagger.DirectoryFilterOpts{
+	websiteSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"website/"},
 	}).WithDirectory("website/content/builds", buildHistory)
 
@@ -235,13 +238,12 @@ func (m *Ci) BuildWebsite(
 // Build and deploy the website to the remote server
 func (m *Ci) PublishWebsite(
 	ctx context.Context,
-	source *dagger.Directory,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) (string, error) {
 	// 1. Build the website
-	public := m.BuildWebsite(ctx, source, sshKey, sshUser, sshHost)
+	public := m.BuildWebsite(ctx, sshKey, sshUser, sshHost)
 
 	// 2. Deploy using rsync
 	return m.Deployer(sshKey).
@@ -253,15 +255,15 @@ func (m *Ci) PublishWebsite(
 }
 
 // Build and return the Linux bundle
-func (m *Ci) BuildLinux(source *dagger.Directory) *dagger.Directory {
-	return m.Setup(source).
+func (m *Ci) BuildLinux() *dagger.Directory {
+	return m.Setup().
 		WithExec([]string{"flutter", "build", "linux", "--release"}).
 		Directory("build/linux/x64/release/bundle")
 }
 
 // Build and return the Linux bundle (release)
-func (m *Ci) BuildLinuxRelease(source *dagger.Directory) *dagger.Directory {
-	return m.Setup(source).
+func (m *Ci) BuildLinuxRelease() *dagger.Directory {
+	return m.Setup().
 		WithExec([]string{"flutter", "build", "linux", "--release"}).
 		Directory("build/linux/x64/release/bundle")
 }
@@ -269,14 +271,13 @@ func (m *Ci) BuildLinuxRelease(source *dagger.Directory) *dagger.Directory {
 // Package and deploy the Linux release to the server
 func (m *Ci) DeployLinux(
 	ctx context.Context,
-	source *dagger.Directory,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 	commitHash string,
 ) (string, error) {
 	// 1. Build the release bundle
-	bundle := m.BuildLinuxRelease(source)
+	bundle := m.BuildLinuxRelease()
 
 	// 2. Package and deploy
 	datePath := time.Now().Format("2006/01/02")
@@ -292,8 +293,8 @@ func (m *Ci) DeployLinux(
 }
 
 // Build and return the Android APK
-func (m *Ci) BuildAndroidApk(source *dagger.Directory) *dagger.File {
-	return m.Setup(source).
+func (m *Ci) BuildAndroidApk() *dagger.File {
+	return m.Setup().
 		WithExec([]string{"flutter", "build", "apk", "--release"}).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
@@ -301,14 +302,13 @@ func (m *Ci) BuildAndroidApk(source *dagger.Directory) *dagger.File {
 // Deploy the Android APK to the server
 func (m *Ci) DeployApk(
 	ctx context.Context,
-	source *dagger.Directory,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 	commitHash string,
 ) (string, error) {
 	// 1. Build the APK
-	apk := m.BuildAndroidApk(source)
+	apk := m.BuildAndroidApk()
 
 	// 2. Deploy
 	datePath := time.Now().Format("2006/01/02")
@@ -323,8 +323,8 @@ func (m *Ci) DeployApk(
 }
 
 // Build and return the Android App Bundle (AAB)
-func (m *Ci) BuildAndroidRelease(source *dagger.Directory) *dagger.File {
-	return m.Setup(source).
+func (m *Ci) BuildAndroidRelease() *dagger.File {
+	return m.Setup().
 		WithExec([]string{"flutter", "build", "appbundle", "--release"}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
@@ -332,14 +332,13 @@ func (m *Ci) BuildAndroidRelease(source *dagger.Directory) *dagger.File {
 // Publish the Android App Bundle to Google Play Store
 func (m *Ci) PublishAndroid(
 	ctx context.Context,
-	source *dagger.Directory,
 	playStoreConfig *dagger.Secret,
 ) (string, error) {
 	// 1. Build the AAB
-	aab := m.BuildAndroidRelease(source)
+	aab := m.BuildAndroidRelease()
 
 	// 2. Prepare script source
-	scriptSource := source.Filter(dagger.DirectoryFilterOpts{
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/deploy_playstore.py"},
 	})
 
