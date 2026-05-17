@@ -12,39 +12,19 @@ on:
 jobs:
   deploy:
     name: Build & Deploy Website
-    runs-on: ubuntu-latest
+    runs-on: dagger-dagger
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Debug User
-        run: id
-
-      - name: Install Dagger & Task (Local)
-        run: |
-          mkdir -p $HOME/.local/bin
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
-
-      - name: Setup Dagger Remote Engine (via stunnel)
-        env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
-          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
-          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
-          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: scripts/setup_dagger_remote.sh
-
       - name: Build & Deploy Website
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.WEBSITE_SSH_PRIVATE_KEY }}
-          SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
-          SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
-        run: task publish-website
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: task website-deploy
 
       - name: Verify Website
         env:
