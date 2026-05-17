@@ -16,7 +16,26 @@ jobs:
         with:
           fetch-depth: 50
 
+      - name: Install Dagger & Task
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
+          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
       - name: Run Full Check Suite
+        env:
+          DAGGER_NO_NAG: "1"
         run: task check-dagger
 
   build-linux:
@@ -31,12 +50,30 @@ jobs:
         with:
           fetch-depth: 50
 
+      - name: Install Dagger & Task
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
+          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
       - name: Build & Deploy Linux to server
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_NO_NAG: "1"
         run: task deploy-linux
 
   deploy-playstore:
@@ -51,10 +88,28 @@ jobs:
         with:
           fetch-depth: 50
 
+      - name: Install Dagger & Task
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
+          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
       - name: Build & Deploy to Play Store
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
+          DAGGER_NO_NAG: "1"
         run: task publish-android
 
       - name: Build & Deploy APK to server
@@ -64,6 +119,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DAGGER_NO_NAG: "1"
         run: task deploy-apk
 
   publish-website:
@@ -81,10 +137,28 @@ jobs:
         with:
           fetch-depth: 50
 
+      - name: Install Dagger & Task
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
+          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
       - name: Generate build history and deploy website
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_NO_NAG: "1"
         run: task publish-website
