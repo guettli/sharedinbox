@@ -29,7 +29,11 @@
           cairo
           gdk-pixbuf
           harfbuzz
+        # Dagger remote setup dependencies
+        stunnel
+        netcat
         ];
+
         fgj = pkgs.stdenv.mkDerivation {
           pname = "fgj";
           version = "0.4.0";

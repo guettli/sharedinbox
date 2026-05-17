@@ -25,6 +25,22 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+
       - name: Run Full Check Suite
         run: nix develop --no-warn-dirty --command dagger call --progress=plain -m ci check --source .
 
@@ -47,6 +63,14 @@ jobs:
         run: |
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
 
       - name: Build & Deploy Linux to server
         continue-on-error: true
@@ -77,6 +101,14 @@ jobs:
         run: |
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
 
       - name: Install Android SDK (cached on runner between runs)
         run: |
@@ -144,6 +176,14 @@ jobs:
         run: |
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
 
       - name: Generate build history and deploy website
         continue-on-error: true
