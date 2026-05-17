@@ -26,10 +26,10 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     final newList = [...state, action];
     if (newList.length > _maxHistory) {
       final removed = newList.removeAt(0);
-      unawaited(_ref.read(undoRepositoryProvider).deleteAction(removed.id));
+      await _ref.read(undoRepositoryProvider).deleteAction(removed.id);
     }
     state = newList;
-    unawaited(_ref.read(undoRepositoryProvider).saveAction(action));
+    await _ref.read(undoRepositoryProvider).saveAction(action);
   }
 
   Future<void> clear() async {
