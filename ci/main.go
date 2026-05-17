@@ -71,7 +71,10 @@ func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string,
 
 // Run dart format check
 func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
+	// pub get is required so .dart_tool/package_config.json exists; without it dart format
+	// ignores the package's language version (3.3) and applies tall-style formatting.
 	return m.Base(source).
+		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
