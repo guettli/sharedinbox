@@ -12,12 +12,16 @@ on:
 jobs:
   deploy:
     name: Build & Deploy Website
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-25.11
 
       - name: Enable Nix flakes
         run: |

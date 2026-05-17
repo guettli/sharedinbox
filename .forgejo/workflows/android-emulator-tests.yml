@@ -9,13 +9,17 @@ on:
 jobs:
   integration-android:
     name: Android Emulator Integration Tests
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 50
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-25.11
 
       - name: Enable Nix flakes
         run: |
