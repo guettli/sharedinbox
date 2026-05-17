@@ -109,8 +109,8 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return "Layer check failed", err
 	}
 
-	// Format
-	if _, err := m.Format(ctx, source); err != nil {
+	// Format (Running after Setup/pub get ensures package resolution context)
+	if _, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx); err != nil {
 		return "Format check failed", err
 	}
 
