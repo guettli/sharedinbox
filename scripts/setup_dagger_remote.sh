@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
 # Establishes a secure tunnel to a remote Dagger Engine via stunnel.
-# Probes ports 8774 and 8775 to find the active server.
+# Probes DAGGER_STUNNEL_URL1 and DAGGER_STUNNEL_URL2 to find the active server.
 set -euo pipefail
 
-SERVER_IP="${DAGGER_SERVER_IP:-${SSH_HOST:-}}"
-if [ -z "$SERVER_IP" ]; then
-    echo "Error: DAGGER_SERVER_IP or SSH_HOST must be set."
+if [ -z "${DAGGER_STUNNEL_URL1:-}" ] || [ -z "${DAGGER_STUNNEL_URL2:-}" ]; then
+    echo "Error: DAGGER_STUNNEL_URL1 and DAGGER_STUNNEL_URL2 must be set."
     exit 1
 fi
 
-# 1. Probe for active port
-REMOTE_PORT=""
-for port in 8774 8775; do
-    echo "Probing $SERVER_IP:$port..."
-    if nc -zw 3 "$SERVER_IP" "$port" 2>/dev/null; then
-        echo "Found active Dagger server on $SERVER_IP:$port"
-        REMOTE_PORT="$port"
+ACTIVE_HOST=""
+ACTIVE_PORT=""
+
+for url in "$DAGGER_STUNNEL_URL1" "$DAGGER_STUNNEL_URL2"; do
+    # Parse host and port (e.g., example.com:8774 or just example.com)
+    host=$(echo "$url" | cut -d: -f1)
+    port=$(echo "$url" | cut -d: -f2)
+    # Default port if not provided
+    if [ "$host" == "$port" ]; then
+        port="8774"
+    fi
+
+    echo "Probing $host:$port..."
+    if nc -zw 3 "$host" "$port" 2>/dev/null; then
+        echo "Found active Dagger server on $host:$port"
+        ACTIVE_HOST="$host"
+        ACTIVE_PORT="$port"
         break
     fi
 done
 
-if [ -z "$REMOTE_PORT" ]; then
-    echo "Error: No Dagger server responded on $SERVER_IP:8774 or 8775"
-    # Fallback: If no remote server is found, we could just let Dagger start a local engine,
-    # but the user specifically wants the shared server. For now, we fail to be explicit.
+if [ -z "$ACTIVE_HOST" ]; then
+    echo "Error: No Dagger server responded on $DAGGER_STUNNEL_URL1 or $DAGGER_STUNNEL_URL2"
     exit 1
 fi
 
@@ -35,7 +42,6 @@ echo "$DAGGER_CLIENT_KEY" > /tmp/dagger-tls/client.key
 chmod 600 /tmp/dagger-tls/client.key
 
 # 3. Configure and start stunnel
-# We use a temp config file
 STUNNEL_CONF="/tmp/stunnel-dagger.conf"
 cat << EOF > "$STUNNEL_CONF"
 client = yes
@@ -44,7 +50,7 @@ pid = /tmp/stunnel.pid
 
 [dagger]
 accept = 127.0.0.1:1774
-connect = $SERVER_IP:$REMOTE_PORT
+connect = $ACTIVE_HOST:$ACTIVE_PORT
 CAfile = /tmp/dagger-tls/ca.crt
 cert = /tmp/dagger-tls/client.crt
 key = /tmp/dagger-tls/client.key
@@ -52,7 +58,6 @@ verifyChain = yes
 EOF
 
 # Start stunnel in the background
-# We assume 'stunnel' is in the PATH (provided by Nix)
 stunnel "$STUNNEL_CONF" &
 TUNNEL_PID=$!
 

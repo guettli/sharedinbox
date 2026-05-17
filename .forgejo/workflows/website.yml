@@ -28,24 +28,24 @@ jobs:
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
-      - name: Setup SSH
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
+          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: nix develop --no-warn-dirty --command scripts/setup_dagger_remote.sh
+
+      - name: Build & Deploy Website
         env:
           SSH_PRIVATE_KEY: ${{ secrets.WEBSITE_SSH_PRIVATE_KEY }}
-        run: |
-          if [ -n "$SSH_PRIVATE_KEY" ]; then
-            mkdir -p ~/.ssh
-            echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-          else
-            echo "Error: WEBSITE_SSH_PRIVATE_KEY secret is not set."
-            exit 1
-          fi
-
-      - name: Deploy
-        env:
           SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
-        run: nix develop --command task website-deploy
+        run: |
+          nix develop --no-warn-dirty --command dagger call --progress=plain -m ci publish-website --source . --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
-      - name: Verify
-        run: nix develop --command task website-verify
+      - name: Verify Website
+        env:
+          SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
+        run: nix develop --no-warn-dirty --command scripts/website-verify.sh
