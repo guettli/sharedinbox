@@ -68,6 +68,23 @@ func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string,
 		Stdout(ctx)
 }
 
+// Run dart format check
+func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
+	return m.Base(source).
+		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
+		Stdout(ctx)
+}
+
+// Verify that mocks are up to date
+func (m *Ci) CheckMocks(ctx context.Context, source *dagger.Directory) (string, error) {
+	// Setup runs build_runner, which is exactly what we need.
+	// If any file changed, it means the committed version was out of date.
+	// Note: We check specifically for .mocks.dart files.
+	return m.Setup(source).
+		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
+		Stdout(ctx)
+}
+
 // Full check suite (equivalent to task check)
 func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error) {
 	setup := m.Setup(source)
@@ -78,6 +95,11 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 	}
 	if _, err := m.CheckLayers(ctx, source); err != nil {
 		return "Layer check failed", err
+	}
+
+	// Format
+	if _, err := m.Format(ctx, source); err != nil {
+		return "Format check failed", err
 	}
 
 	// Run analyze
