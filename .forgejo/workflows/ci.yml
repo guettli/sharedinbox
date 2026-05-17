@@ -18,8 +18,8 @@ jobs:
 
       - name: Install Dagger & Task
         run: |
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | sudo BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sudo sh -s -- -b /usr/local/bin
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -48,8 +48,8 @@ jobs:
 
       - name: Install Dagger & Task
         run: |
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | sudo BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sudo sh -s -- -b /usr/local/bin
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -83,8 +83,8 @@ jobs:
 
       - name: Install Dagger & Task
         run: |
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | sudo BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sudo sh -s -- -b /usr/local/bin
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -128,8 +128,8 @@ jobs:
 
       - name: Install Dagger & Task
         run: |
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | sudo BIN_DIR=/usr/local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sudo sh -s -- -b /usr/local/bin
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
