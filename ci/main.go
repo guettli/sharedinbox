@@ -71,6 +71,7 @@ func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string,
 // Run dart format check
 func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
 	return m.Base(source).
+		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
