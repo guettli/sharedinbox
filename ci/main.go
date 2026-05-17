@@ -31,6 +31,7 @@ func New(
 				"integration_test/",
 				"drift_schemas/",
 				"stalwart-dev/",
+				"website/",
 			},
 		}),
 	}
