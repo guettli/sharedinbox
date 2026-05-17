@@ -80,10 +80,7 @@ func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string,
 
 // Run dart format check
 func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
-	// pub get is required so .dart_tool/package_config.json exists; without it dart format
-	// ignores the package's language version (3.3) and applies tall-style formatting.
 	return m.Base(source).
-		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
@@ -147,13 +144,47 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n", analyze, coverage, testBackend), nil
 }
 
-// Build and return the Hugo-based website bundle
-func (m *Ci) BuildWebsite(source *dagger.Directory) *dagger.Directory {
-	// Surgical inclusion for website
-	websiteSource := source.Filter(dagger.DirectoryFilterOpts{
-		Include: []string{"website/"},
+// Generate build history Hugo content by scanning the remote server
+func (m *Ci) GenerateBuildHistory(
+	ctx context.Context,
+	source *dagger.Directory,
+	sshKey *dagger.Secret,
+	sshUser string,
+	sshHost string,
+) *dagger.Directory {
+	scriptSource := source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/generate_build_history.py", "website/"},
 	})
 
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
+		WithFile("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithFileOpts{Permissions: 0600}).
+		WithEnvVariable("SSH_USER", sshUser).
+		WithEnvVariable("SSH_HOST", sshHost).
+		WithDirectory("/src", scriptSource).
+		WithWorkdir("/src").
+		WithExec([]string{"/bin/sh", "-c", "python3 scripts/generate_build_history.py"}).
+		Directory("website/content/builds")
+}
+
+// Build and return the Hugo-based website bundle
+func (m *Ci) BuildWebsite(
+	ctx context.Context,
+	source *dagger.Directory,
+	sshKey *dagger.Secret,
+	sshUser string,
+	sshHost string,
+) *dagger.Directory {
+	// 1. Generate build history content
+	buildHistory := m.GenerateBuildHistory(ctx, source, sshKey, sshUser, sshHost)
+
+	// 2. Prepare website source (base files + generated history)
+	websiteSource := source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"website/"},
+	}).WithDirectory("website/content/builds", buildHistory)
+
+	// 3. Build with Hugo
 	return m.Hugo().
 		WithDirectory("/src", websiteSource).
 		WithWorkdir("/src/website").
