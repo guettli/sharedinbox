@@ -20,14 +20,7 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
-		WithDirectory("/src", source, dagger.ContainerWithDirectoryOpts{
-			Exclude: []string{
-				"**/.*", ".*",
-				"build", "node_modules", "snap", "fvm", "Android", "ios/Pods", "macos/Pods",
-				"linux/flutter/ephemeral", "website/public", "website/resources",
-				"ci", "test_output.txt", "run*.log", "**/*.log", "stat_*.txt", "md5_*.txt",
-			},
-		}).
+		WithDirectory("/src", source).
 		WithWorkdir("/src")
 }
 
@@ -35,6 +28,7 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 func (m *Ci) Setup(source *dagger.Directory) *dagger.Container {
 	return m.Base(source).
 		WithExec([]string{"flutter", "pub", "get"}).
+		// Use --delete-conflicting-outputs to ensure generated files match the current source
 		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
 }
 
@@ -70,7 +64,7 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return analyze, err
 	}
 
-	// Run tests
+	// Run unit tests only (integration tests require Stalwart)
 	test, err := setup.WithExec([]string{"flutter", "test", "test/unit"}).Stdout(ctx)
 	if err != nil {
 		return test, err
@@ -78,7 +72,6 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 
 	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\nTests:\n%s\n", analyze, test), nil
 }
-
 
 // Build and return the Linux bundle
 func (m *Ci) BuildLinux(source *dagger.Directory) *dagger.Directory {
