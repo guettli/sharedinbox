@@ -9,7 +9,7 @@ on:
 jobs:
   integration-android:
     name: Android Emulator Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: codeberg-small
     timeout-minutes: 60
 
     steps:
