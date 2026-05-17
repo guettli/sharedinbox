@@ -12,11 +12,6 @@ export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-XXXXXX)"
 export STALWART_TMPDIR
 
-command -v stalwart >/dev/null || {
-    echo "stalwart not in PATH — run inside nix develop"
-    exit 1
-}
-
 # Kill any stalwart left over from a previous run.
 pkill -x stalwart 2>/dev/null && sleep 0.5 || true
 
@@ -34,8 +29,8 @@ tmp=$(mktemp)
 STALWART_PID=$!
 trap 'kill "$STALWART_PID" 2>/dev/null || true; wait "$STALWART_PID" 2>/dev/null || true; rm -f "$tmp"' EXIT
 
-# Wait until Stalwart is accepting connections (up to 10 s).
-for _i in $(seq 1 20); do
+# Wait until Stalwart is accepting connections (up to 60 s).
+for _i in $(seq 1 120); do
     # shellcheck source=/dev/null
     [ -f "${STALWART_TMPDIR}/ports.env" ] && . "${STALWART_TMPDIR}/ports.env"
     grep -E "already in use" "$LOGFILE" >/dev/null 2>&1 && {

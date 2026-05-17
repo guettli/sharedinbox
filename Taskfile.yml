@@ -172,22 +172,25 @@ tasks:
       - fvm flutter test
 
   test-backend:
-    desc: Backend tests against a local Stalwart mail server
-    deps: [_flutter-check]
-    sources:
-      - lib/**/*.dart
-      - test/backend/**/*.dart
+    desc: Backend tests against a local Stalwart mail server (via Dagger)
     cmds:
-      - stalwart-dev/test.sh
+      - dagger call -m ci test-backend --source .
 
   integration-ui:
-    desc: UI E2E tests on Linux via Xvfb — headless, no emulator needed
-    deps: [_preflight, _linux-deps-check, _pub-get]
-    sources:
-      - lib/**/*.dart
-      - integration_test/app_e2e_test.dart
+    desc: UI E2E tests on Linux via Xvfb — headless, no emulator needed (via Dagger)
     cmds:
-      - stalwart-dev/integration_ui_test.sh
+      - dagger call -m ci test-integration --source .
+
+  sync-reliability:
+    desc: Run sync reliability runner (via Dagger)
+    cmds:
+      - dagger call -m ci test-sync-reliability --source .
+
+  stalwart:
+    desc: Start a Stalwart instance for local development (via Dagger)
+    cmds:
+      - echo "Starting Stalwart on default ports (JMAP=8080, IMAP=1430, SMTP=1025, SIEVE=4190)"
+      - dagger call -m ci stalwart up --ports 8080:8080 --ports 1430:1430 --ports 1025:1025 --ports 4190:4190
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)

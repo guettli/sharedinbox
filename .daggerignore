@@ -1,13 +1,23 @@
 # Dagger context ignore file.
-# Since we use explicit inclusion in ci/main.go (Base function),
-# we only need to ignore large or sensitive directories here to
-# avoid unnecessary upload overhead to the Dagger engine.
 
+# Version control
 .git/
+.gitmodules
+
+# Build artifacts and tools
 build/
 .dart_tool/
 .fvm/
 .pub-cache/
+.dart-cli-completion/
+.dartServer/
+.direnv/
+.dotnet/
+.rustup/
+.task/
+.vscode/
+.vscode-server/
+coverage/
 node_modules/
 ios/Pods/
 macos/Pods/
@@ -15,6 +25,26 @@ linux/flutter/ephemeral/
 website/public/
 website/resources/
 
-# Sensitive files
+# Sensitive or system files
 .env*
 .ssh/
+.local/
+.cache/
+.config/
+.atuin/
+.gemini/
+.bash*
+.profile
+.zsh*
+.zcompdump
+.tmux.conf
+.lesshst
+.metadata
+.emulator_console_auth_token
+snap/
+.gitconfig
+.flutter-plugins-dependencies
+.flutter
+.forgejo
+.fvmrc
+.envrc

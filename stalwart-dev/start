@@ -6,16 +6,6 @@
 # STALWART_TMPDIR/ports.env for other scripts to source.
 set -euo pipefail
 
-command -v stalwart >/dev/null || {
-    echo "stalwart not in PATH — run inside nix develop"
-    exit 1
-}
-
-command -v ss >/dev/null || {
-    echo "ss not in PATH — cannot verify Stalwart ports"
-    exit 1
-}
-
 if [ "${STALWART_RANDOM_PORTS:-0}" = "1" ] || [ "${STALWART_PORT:-0}" = "0" ]; then
     command -v python3 >/dev/null || {
         echo "python3 not in PATH — cannot choose random Stalwart ports"
@@ -61,17 +51,30 @@ export STALWART_SIEVE_PORT=${STALWART_SIEVE_PORT}
 export STALWART_URL=${STALWART_URL}
 EOF
 
+# Find a container runtime
+if command -v podman >/dev/null 2>&1; then
+    RUNTIME="podman"
+elif command -v docker >/dev/null 2>&1; then
+    RUNTIME="docker"
+else
+    echo "No container runtime (podman or docker) found" >&2
+    exit 1
+fi
+
 echo "Stalwart ports: JMAP=${STALWART_PORT} IMAP=${STALWART_IMAP_PORT} SMTP=${STALWART_SMTP_PORT} SIEVE=${STALWART_SIEVE_PORT}" >&2
-echo "Stalwart is running in the foreground. Press Ctrl+C to stop." >&2
+echo "Stalwart is running in a container (${RUNTIME}). Press Ctrl+C to stop." >&2
 echo "Connection info written to ${TMPDIR}/ports.env" >&2
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-sed -e "s|0.0.0.0:8080|0.0.0.0:${STALWART_PORT}|" \
-    -e "s|0.0.0.0:1430|0.0.0.0:${STALWART_IMAP_PORT}|" \
-    -e "s|0.0.0.0:1025|0.0.0.0:${STALWART_SMTP_PORT}|" \
-    -e "s|0.0.0.0:4190|0.0.0.0:${STALWART_SIEVE_PORT}|" \
-    -e "s|/tmp/stalwart|${TMPDIR}|" \
-    "${REPO_ROOT}/stalwart-dev/config.toml" >"${TMPDIR}/config.toml"
-
-exec stalwart --config "${TMPDIR}/config.toml"
+# Run Stalwart in container, mapping the random host ports to the fixed container ports.
+# We mount the config.toml and use /tmp/stalwart for data (mapped to our local TMPDIR).
+exec "${RUNTIME}" run --rm -i \
+    -p "${STALWART_PORT}:8080" \
+    -p "${STALWART_IMAP_PORT}:1430" \
+    -p "${STALWART_SMTP_PORT}:1025" \
+    -p "${STALWART_SIEVE_PORT}:4190" \
+    -v "${REPO_ROOT}/stalwart-dev/config.toml:/etc/stalwart/config.toml:ro" \
+    -v "${TMPDIR}:/tmp/stalwart:rw" \
+    docker.io/stalwartlabs/stalwart:v0.14.1 \
+    stalwart --config /etc/stalwart/config.toml

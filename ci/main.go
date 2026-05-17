@@ -41,7 +41,7 @@ func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd"}).
+		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libgles2-mesa", "libegl1"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -75,13 +75,33 @@ func (m *Ci) Stalwart() *dagger.Service {
 	return dag.Container().
 		From("stalwartlabs/stalwart:v0.14.1").
 		WithFile("/etc/stalwart/config.toml", config).
-		// Create data dir in /tmp where permissions are usually more relaxed.
+		// Pre-seed data directory and spam-filter version to avoid network hits on startup.
 		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
+		WithExec([]string{"sqlite3", "/tmp/stalwart/data.sqlite", "CREATE TABLE IF NOT EXISTS s (k BLOB PRIMARY KEY, v BLOB NOT NULL); INSERT OR REPLACE INTO s VALUES ('version.spam-filter', 'dev');"}).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
 		WithExposedPort(1025). // SMTP
 		WithExposedPort(4190). // ManageSieve
+		// Explicitly run the binary with the config path to avoid bootstrap mode.
+		WithEntrypoint([]string{"stalwart", "--config", "/etc/stalwart/config.toml"}).
 		AsService()
+}
+
+// Helper to bind Stalwart service and set up environment variables for tests
+func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
+	stalwart := m.Stalwart()
+	return container.
+		WithServiceBinding("stalwart", stalwart).
+		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
+		WithEnvVariable("STALWART_SMTP_HOST", "stalwart").
+		WithEnvVariable("STALWART_URL", "http://stalwart:8080").
+		WithEnvVariable("STALWART_IMAP_PORT", "1430").
+		WithEnvVariable("STALWART_SMTP_PORT", "1025").
+		WithEnvVariable("STALWART_SIEVE_PORT", "4190").
+		WithEnvVariable("STALWART_USER_B", "alice@example.com").
+		WithEnvVariable("STALWART_PASS_B", "secret").
+		WithEnvVariable("STALWART_USER_C", "bob@example.com").
+		WithEnvVariable("STALWART_PASS_C", "secret")
 }
 
 // Setup environment: pub get and build_runner
@@ -129,15 +149,37 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 // Run coverage check
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
 	return m.Setup().
-		WithExec([]string{"flutter", "test", "test/unit", "--coverage"}).
+		WithExec([]string{"flutter", "test", "test/unit", "--coverage", "--reporter", "expanded"}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
+		Stdout(ctx)
+}
+
+// Run backend tests (IMAP/JMAP sync logic)
+func (m *Ci) TestBackend(ctx context.Context) (string, error) {
+	return m.WithStalwart(m.Setup()).
+		WithExec([]string{"flutter", "test", "--concurrency=1", "--reporter", "expanded", "test/backend"}).
+		Stdout(ctx)
+}
+
+// Run UI integration tests via Xvfb
+func (m *Ci) TestIntegration(ctx context.Context) (string, error) {
+	return m.WithStalwart(m.Setup()).
+		// Use xvfb-run for simpler X11 management.
+		// LIBGL_ALWAYS_SOFTWARE=1 ensures software rendering for Flutter in headless environments.
+		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
+		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "integration_test/", "-d", "linux"}).
+		Stdout(ctx)
+}
+
+// Run sync reliability runner
+func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
+	return m.WithStalwart(m.Setup()).
+		WithExec([]string{"flutter", "test", "test/backend/sync_reliability_test.dart", "--reporter", "expanded", "--concurrency=1"}).
 		Stdout(ctx)
 }
 
 // Full check suite (equivalent to task check)
 func (m *Ci) Check(ctx context.Context) (string, error) {
-	setup := m.Setup()
-
 	// Hygiene & Layers
 	if _, err := m.CheckHygiene(ctx); err != nil {
 		return "Hygiene check failed", err
@@ -145,6 +187,8 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	if _, err := m.CheckLayers(ctx); err != nil {
 		return "Layer check failed", err
 	}
+
+	setup := m.Setup()
 
 	// Format (Running after Setup/pub get ensures package resolution context)
 	if _, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx); err != nil {
@@ -163,29 +207,19 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return coverage, err
 	}
 
-	// Run backend tests (requires Stalwart Service)
-	stalwart := m.Stalwart()
-	testBackend, err := setup.
-		WithServiceBinding("stalwart", stalwart).
-		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
-		WithEnvVariable("STALWART_SMTP_HOST", "stalwart").
-		WithEnvVariable("STALWART_URL", "http://stalwart:8080").
-		WithEnvVariable("STALWART_IMAP_PORT", "1430").
-		WithEnvVariable("STALWART_SMTP_PORT", "1025").
-		WithEnvVariable("STALWART_SIEVE_PORT", "4190").
-		WithEnvVariable("STALWART_USER_B", "alice@example.com").
-		WithEnvVariable("STALWART_PASS_B", "secret").
-		WithEnvVariable("STALWART_USER_C", "bob@example.com").
-		WithEnvVariable("STALWART_PASS_C", "secret").
-		// Wait for Stalwart to be ready before running tests.
-		WithExec([]string{"/bin/bash", "-c", "for i in {1..30}; do nc -z stalwart 1430 && echo 'Stalwart is ready' && break; echo 'Waiting for Stalwart...'; sleep 1; done"}).
-		WithExec([]string{"flutter", "test", "--concurrency=1", "test/backend"}).
-		Stdout(ctx)
+	// Run backend tests
+	testBackend, err := m.TestBackend(ctx)
 	if err != nil {
 		return testBackend, err
 	}
 
-	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n", analyze, coverage, testBackend), nil
+	// Run UI integration tests
+	testIntegration, err := m.TestIntegration(ctx)
+	if err != nil {
+		return testIntegration, err
+	}
+
+	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, coverage, testBackend, testIntegration), nil
 }
 
 // Generate build history Hugo content by scanning the remote server
