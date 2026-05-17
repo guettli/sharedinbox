@@ -258,7 +258,6 @@ func (m *Ci) DeployLinux(
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
 		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
-		// Update latest.json logic could be added here too, similar to Taskfile
 		Stdout(ctx)
 }
 
@@ -298,4 +297,31 @@ func (m *Ci) BuildAndroidRelease(source *dagger.Directory) *dagger.File {
 	return m.Setup(source).
 		WithExec([]string{"flutter", "build", "appbundle", "--release"}).
 		File("build/app/outputs/bundle/release/app-release.aab")
+}
+
+// Publish the Android App Bundle to Google Play Store
+func (m *Ci) PublishAndroid(
+	ctx context.Context,
+	source *dagger.Directory,
+	playStoreConfig *dagger.Secret,
+) (string, error) {
+	// 1. Build the AAB
+	aab := m.BuildAndroidRelease(source)
+
+	// 2. Prepare script source
+	scriptSource := source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/deploy_playstore.py"},
+	})
+
+	// 3. Deploy
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
+		WithExec([]string{"pip", "install", "requests", "google-auth"}).
+		WithFile("/src/build/app/outputs/bundle/release/app-release.aab", aab).
+		WithFile("/src/scripts/deploy_playstore.py", scriptSource.File("scripts/deploy_playstore.py")).
+		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
+		WithWorkdir("/src").
+		WithExec([]string{"python3", "scripts/deploy_playstore.py"}).
+		Stdout(ctx)
 }
