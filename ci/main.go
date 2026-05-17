@@ -41,7 +41,7 @@ func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libgles2-mesa", "libegl1"}).
+		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -72,12 +72,20 @@ func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 func (m *Ci) Stalwart() *dagger.Service {
 	config := m.Source.Directory("stalwart-dev").File("config.toml")
 
-	return dag.Container().
-		From("stalwartlabs/stalwart:v0.14.1").
-		WithFile("/etc/stalwart/config.toml", config).
-		// Pre-seed data directory and spam-filter version to avoid network hits on startup.
+	// Pre-seed data directory and spam-filter version to avoid network hits on startup.
+	// We use an alpine container to create the sqlite database file.
+	dataDir := dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "sqlite"}).
 		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
 		WithExec([]string{"sqlite3", "/tmp/stalwart/data.sqlite", "CREATE TABLE IF NOT EXISTS s (k BLOB PRIMARY KEY, v BLOB NOT NULL); INSERT OR REPLACE INTO s VALUES ('version.spam-filter', 'dev');"}).
+		Directory("/tmp/stalwart")
+
+	return dag.Container().
+		From("stalwartlabs/stalwart:v0.14.1").
+		WithFile("/etc/stalwart/config.toml.orig", config).
+		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' -e 's/bind     = \\[\"0.0.0.0:\\([0-9]*\\)\"\\]/bind     = [\"0.0.0.0:\\1\", \"[::]:\\1\"]/g' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
+		WithDirectory("/tmp/stalwart", dataDir).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
 		WithExposedPort(1025). // SMTP
@@ -108,8 +116,7 @@ func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
 func (m *Ci) Setup() *dagger.Container {
 	return m.Base().
 		WithExec([]string{"flutter", "pub", "get"}).
-		// Use --delete-conflicting-outputs to ensure generated files match the current source
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
+		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"})
 }
 
 // Run hygiene check
@@ -141,7 +148,7 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 		WithExec([]string{"git", "config", "user.name", "CI"}).
 		WithExec([]string{"git", "add", "."}).
 		WithExec([]string{"git", "commit", "-m", "baseline"}).
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"}).
+		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"}).
 		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
 		Stdout(ctx)
 }
