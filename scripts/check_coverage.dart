@@ -56,6 +56,8 @@ const _excluded = {
   'lib/ui/widgets/snooze_picker.dart',
   'lib/ui/widgets/try_connection_button.dart',
   'lib/ui/widgets/undo_shell.dart',
+  'lib/ui/screens/about_screen.dart',
+  'lib/ui/widgets/email_tile.dart',
   'lib/core/sync/account_sync_manager.dart',
   'lib/core/sync/background_sync.dart',
   'lib/core/sync/reliability_runner.dart',

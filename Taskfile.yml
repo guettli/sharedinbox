@@ -171,8 +171,8 @@ tasks:
     cmds:
       - fvm flutter test
 
-  integration:
-    desc: Integration tests against a local Stalwart mail server
+  test-backend:
+    desc: Backend tests against a local Stalwart mail server
     deps: [_flutter-check]
     sources:
       - lib/**/*.dart

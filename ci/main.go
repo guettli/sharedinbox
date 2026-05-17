@@ -70,28 +70,29 @@ func (m *Ci) CheckLayers(ctx context.Context, source *dagger.Directory) (string,
 
 // Run dart format check
 func (m *Ci) Format(ctx context.Context, source *dagger.Directory) (string, error) {
-	// Initialize git and add files to index so 'git diff' works correctly for mock checking
-	// and use --set-exit-if-changed for format enforcement.
 	return m.Base(source).
-		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
 
 // Verify that mocks are up to date
 func (m *Ci) CheckMocks(ctx context.Context, source *dagger.Directory) (string, error) {
-	// We need to initialize a git repo inside the container so that build_runner's
-	// changes (if any) can be detected via 'git diff'.
 	return m.Setup(source).
 		WithExec([]string{"git", "init"}).
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
 		WithExec([]string{"git", "config", "user.name", "CI"}).
 		WithExec([]string{"git", "add", "."}).
 		WithExec([]string{"git", "commit", "-m", "baseline"}).
-		// Re-run build_runner to see if anything changes (though Setup already ran it,
-		// we need the git baseline established FIRST).
 		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"}).
 		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
+		Stdout(ctx)
+}
+
+// Run coverage check
+func (m *Ci) Coverage(ctx context.Context, source *dagger.Directory) (string, error) {
+	return m.Setup(source).
+		WithExec([]string{"flutter", "test", "test/unit", "--coverage"}).
+		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
 }
 
@@ -118,10 +119,10 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return analyze, err
 	}
 
-	// Run unit tests
-	test, err := setup.WithExec([]string{"flutter", "test", "test/unit"}).Stdout(ctx)
+	// Run coverage gate (includes unit tests)
+	coverage, err := m.Coverage(ctx, source)
 	if err != nil {
-		return test, err
+		return coverage, err
 	}
 
 	// Run backend tests (requires Stalwart)
@@ -130,7 +131,7 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return testBackend, err
 	}
 
-	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\nUnit Tests:\n%s\n\nBackend Tests:\n%s\n", analyze, test, testBackend), nil
+	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n", analyze, coverage, testBackend), nil
 }
 
 // Build and return the Linux bundle
