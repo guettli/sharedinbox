@@ -287,6 +287,21 @@ class UndoActions extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Records which emails have already had local Sieve rules applied.
+/// Keyed by (accountId, messageId) so the same email is never processed twice,
+/// even across restarts or re-syncs.
+@DataClassName('LocalSieveAppliedRow')
+class LocalSieveApplied extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // RFC 2822 Message-ID header value — stable across folder moves.
+  TextColumn get messageId => text()();
+  DateTimeColumn get appliedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, messageId};
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 
 @DriftDatabase(
@@ -305,6 +320,7 @@ class UndoActions extends Table {
     UndoActions,
     SearchHistoryEntries,
     LocalSieveScripts,
+    LocalSieveApplied,
     ShareKeys,
   ],
 )
@@ -312,7 +328,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 31;
+  int get schemaVersion => 32;
 
   Future<void> _createEmailFts() async {
     await customStatement('''
@@ -549,6 +565,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 31) {
             await m.createTable(shareKeys);
+          }
+          if (from < 32) {
+            await m.createTable(localSieveApplied);
           }
         },
       );

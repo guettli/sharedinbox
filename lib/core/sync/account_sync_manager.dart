@@ -360,6 +360,7 @@ class _AccountSync implements _SyncLoop {
         ),
       );
     }
+    await _emails.applySieveRules(account.id);
     return _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,
@@ -613,6 +614,7 @@ class _JmapAccountSync implements _SyncLoop {
         ),
       );
     }
+    await _emails.applySieveRules(account.id);
     return _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,

@@ -159,6 +159,8 @@ class _CountingEmails implements EmailRepository {
       ReliabilityResult.healthy;
   @override
   Future<void> clearForResync(String accountId) async {}
+  @override
+  Future<int> applySieveRules(String accountId) async => 0;
 }
 
 class _FakeSyncLog implements SyncLogRepository {

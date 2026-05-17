@@ -623,6 +623,15 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
       ) as _i4.Future<_i2.Email?>);
 
   @override
+  _i4.Future<int> applySieveRules(String? accountId) => (super.noSuchMethod(
+        Invocation.method(
+          #applySieveRules,
+          [accountId],
+        ),
+        returnValue: _i4.Future<int>.value(0),
+      ) as _i4.Future<int>);
+
+  @override
   _i4.Stream<void> watchJmapPush(
     String? accountId,
     String? password,

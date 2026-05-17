@@ -104,6 +104,12 @@ abstract class EmailRepository {
   /// IMAP UID changed (e.g. after a server-applied move assigned a new UID).
   Future<Email?> findEmailByMessageId(String accountId, String messageId);
 
+  /// Applies locally stored active Sieve rules to INBOX emails that have not
+  /// been processed yet. Records each processed email in LocalSieveApplied so
+  /// the same email is never filtered twice (across restarts or re-syncs).
+  /// Returns the number of emails where a rule matched and an action was taken.
+  Future<int> applySieveRules(String accountId);
+
   /// Emits the accountId whenever a new change is enqueued locally.
   /// Used by AccountSyncManager to trigger an immediate flush.
   Stream<String> get onChangesQueued;

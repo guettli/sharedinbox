@@ -334,6 +334,9 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<void> clearForResync(String accountId) async {}
+
+  @override
+  Future<int> applySieveRules(String accountId) async => 0;
 }
 
 // ---------------------------------------------------------------------------
