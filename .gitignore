@@ -117,3 +117,6 @@ test/widget/failures/
 dagger-certs
 .Xauthority
 .sharedinbox-agent-state.json
+
+.viminfo
+/go
