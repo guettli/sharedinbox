@@ -1,3 +1,6 @@
+# We switched to Dagger. Running the emulator tests in Dagger does not really work
+# We will use an external service for device testing.
+# TODO: Switch to device testing. First choose a service. Maybe codemagic.io
 name: Android Emulator Tests (Disabled)
 
 on:

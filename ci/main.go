@@ -10,6 +10,23 @@ type Ci struct{}
 
 // Base container with all dependencies for Flutter and Linux builds
 func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
+	// Surgical inclusion: only take what is strictly needed for the build/test.
+	// This improves caching by ignoring transient or irrelevant files.
+	source = source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{
+			"lib/",
+			"test/",
+			"assets/",
+			"scripts/",
+			"pubspec.yaml",
+			"analysis_options.yaml",
+			"linux/",
+			"android/",
+			"integration_test/",
+			"drift_schemas/",
+		},
+	})
+
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
