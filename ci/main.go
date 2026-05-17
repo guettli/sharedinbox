@@ -50,10 +50,21 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 func (m *Ci) Hugo() *dagger.Container {
 	return dag.Container().
 		From("alpine:3.21").
-		WithExec([]string{"apk", "add", "--no-cache", "curl", "tar", "libc6-compat", "libstdc++", "gcompat"}).
+		WithExec([]string{"apk", "--no-cache", "add", "curl", "tar", "libc6-compat", "libstdc++", "gcompat"}).
 		WithExec([]string{"curl", "-sL", "https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_0.152.2_linux-amd64.tar.gz", "-o", "/tmp/hugo.tar.gz"}).
 		WithExec([]string{"tar", "-xzf", "/tmp/hugo.tar.gz", "-C", "/usr/local/bin", "hugo"}).
 		WithExec([]string{"rm", "/tmp/hugo.tar.gz"})
+}
+
+// Deploy container for rsync/ssh
+func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client"}).
+		WithFile("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithFileOpts{Permissions: 0600}).
+		// Pre-populate known_hosts to avoid interactive prompt?
+		// Actually, we can just use -o StrictHostKeyChecking=no in rsync command.
+		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no")
 }
 
 // Setup environment: pub get and build_runner
@@ -190,6 +201,26 @@ func (m *Ci) BuildWebsite(
 		WithWorkdir("/src/website").
 		WithExec([]string{"hugo", "--minify"}).
 		Directory("public")
+}
+
+// Build and deploy the website to the remote server
+func (m *Ci) PublishWebsite(
+	ctx context.Context,
+	source *dagger.Directory,
+	sshKey *dagger.Secret,
+	sshUser string,
+	sshHost string,
+) (string, error) {
+	// 1. Build the website
+	public := m.BuildWebsite(ctx, source, sshKey, sshUser, sshHost)
+
+	// 2. Deploy using rsync
+	return m.Deployer(sshKey).
+		WithDirectory("/public", public).
+		WithExec([]string{"rsync", "-avz", "--delete",
+			"--exclude=*.apk", "--exclude=*.tar.gz",
+			"/public/", fmt.Sprintf("%s@%s:public_html/", sshUser, sshHost)}).
+		Stdout(ctx)
 }
 
 // Build and return the Linux bundle
