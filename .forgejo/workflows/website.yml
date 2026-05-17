@@ -22,7 +22,7 @@ jobs:
       - name: Install Dagger & Task
         run: |
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-          go install github.com/go-task/task/v3/cmd/task@latest
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
           sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
       - name: Setup Dagger Remote Engine (via stunnel)
