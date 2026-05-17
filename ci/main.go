@@ -62,8 +62,8 @@ func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
-		WithFile("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithFileOpts{Permissions: 0600}).
-		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no")
+		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519")
 }
 
 // Setup environment: pub get and build_runner
@@ -169,7 +169,7 @@ func (m *Ci) GenerateBuildHistory(
 	return dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
-		WithFile("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithFileOpts{Permissions: 0600}).
+		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
 		WithEnvVariable("SSH_USER", sshUser).
 		WithEnvVariable("SSH_HOST", sshHost).
 		WithDirectory("/src", scriptSource).
@@ -256,8 +256,8 @@ func (m *Ci) DeployLinux(
 	return m.Deployer(sshKey).
 		WithDirectory("/bundle", bundle).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
-		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
 		Stdout(ctx)
 }
 
@@ -287,8 +287,8 @@ func (m *Ci) DeployApk(
 
 	return m.Deployer(sshKey).
 		WithFile("/tmp/app.apk", apk).
-		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
+		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
 		Stdout(ctx)
 }
 
