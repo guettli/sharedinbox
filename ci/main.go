@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 	"dagger/ci/internal/dagger"
 )
 
@@ -60,10 +61,8 @@ func (m *Ci) Hugo() *dagger.Container {
 func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 	return dag.Container().
 		From("alpine:3.21").
-		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client"}).
+		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
 		WithFile("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithFileOpts{Permissions: 0600}).
-		// Pre-populate known_hosts to avoid interactive prompt?
-		// Actually, we can just use -o StrictHostKeyChecking=no in rsync command.
 		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no")
 }
 
@@ -235,6 +234,63 @@ func (m *Ci) BuildLinuxRelease(source *dagger.Directory) *dagger.Directory {
 	return m.Setup(source).
 		WithExec([]string{"flutter", "build", "linux", "--release"}).
 		Directory("build/linux/x64/release/bundle")
+}
+
+// Package and deploy the Linux release to the server
+func (m *Ci) DeployLinux(
+	ctx context.Context,
+	source *dagger.Directory,
+	sshKey *dagger.Secret,
+	sshUser string,
+	sshHost string,
+	commitHash string,
+) (string, error) {
+	// 1. Build the release bundle
+	bundle := m.BuildLinuxRelease(source)
+
+	// 2. Package and deploy
+	datePath := time.Now().Format("2006/01/02")
+	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
+	tarball := fmt.Sprintf("sharedinbox-linux-amd64-%s.tar.gz", commitHash)
+
+	return m.Deployer(sshKey).
+		WithDirectory("/bundle", bundle).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
+		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		// Update latest.json logic could be added here too, similar to Taskfile
+		Stdout(ctx)
+}
+
+// Build and return the Android APK
+func (m *Ci) BuildAndroidApk(source *dagger.Directory) *dagger.File {
+	return m.Setup(source).
+		WithExec([]string{"flutter", "build", "apk", "--release"}).
+		File("build/app/outputs/flutter-apk/app-release.apk")
+}
+
+// Deploy the Android APK to the server
+func (m *Ci) DeployApk(
+	ctx context.Context,
+	source *dagger.Directory,
+	sshKey *dagger.Secret,
+	sshUser string,
+	sshHost string,
+	commitHash string,
+) (string, error) {
+	// 1. Build the APK
+	apk := m.BuildAndroidApk(source)
+
+	// 2. Deploy
+	datePath := time.Now().Format("2006/01/02")
+	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
+	apkName := fmt.Sprintf("sharedinbox-mua-%s.apk", commitHash)
+
+	return m.Deployer(sshKey).
+		WithFile("/tmp/app.apk", apk).
+		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
+		Stdout(ctx)
 }
 
 // Build and return the Android App Bundle (AAB)
