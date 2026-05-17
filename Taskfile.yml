@@ -176,7 +176,7 @@ tasks:
     deps: [_flutter-check]
     sources:
       - lib/**/*.dart
-      - test/integration/**/*.dart
+      - test/backend/**/*.dart
     cmds:
       - stalwart-dev/test.sh
 
@@ -524,7 +524,7 @@ tasks:
     internal: true
     run: once
     cmds:
-      - task: integration
+      - task: test-backend
       - task: integration-ui
 
   ci-logs:

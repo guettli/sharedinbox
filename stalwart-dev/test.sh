@@ -70,13 +70,13 @@ START=$(date +%s)
 run_tests() {
   # If unit tests already produced a coverage baseline, merge integration coverage
   # into it so the final gate reflects both suites.
-  local target="${1:-test/integration/}"
+  local target="${1:-test/backend/}"
   if [ -f coverage/lcov.info ]; then
     cp coverage/lcov.info coverage/lcov.base.info
-    fvm flutter test --concurrency=1 --coverage --merge-coverage --reporter compact "$target" >"$tmp" 2>&1
+    flutter test --concurrency=1 --coverage --merge-coverage --reporter compact "$target" >"$tmp" 2>&1
     rm -f coverage/lcov.base.info
   else
-    fvm flutter test --concurrency=1 --reporter compact "$target" >"$tmp" 2>&1
+    flutter test --concurrency=1 --reporter compact "$target" >"$tmp" 2>&1
   fi
 }
 if run_tests "${@:-}"; then
@@ -86,4 +86,4 @@ else
   exit 1
 fi
 END=$(date +%s)
-echo "integration: $((END - START))s"
+echo "test-backend: $((END - START))s"

@@ -24,6 +24,7 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 			"android/",
 			"integration_test/",
 			"drift_schemas/",
+			"stalwart-dev/",
 		},
 	})
 
@@ -33,7 +34,11 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 		WithExec([]string{"apt-get", "install", "-y",
 			"clang", "cmake", "ninja-build", "pkg-config",
 			"libgtk-3-dev", "liblzma-dev", "libsecret-1-dev",
-			"libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3"}).
+			"libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2"}).
+		WithExec([]string{"curl", "-sL", "https://github.com/stalwartlabs/mail-server/releases/download/v0.14.1/stalwart-x86_64-unknown-linux-gnu.tar.gz", "-o", "/tmp/stalwart.tar.gz"}).
+		WithExec([]string{"tar", "-xzf", "/tmp/stalwart.tar.gz", "-C", "/usr/local/bin", "stalwart"}).
+		WithExec([]string{"chmod", "+x", "/usr/local/bin/stalwart"}).
+		WithExec([]string{"rm", "/tmp/stalwart.tar.gz"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -81,13 +86,19 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 		return analyze, err
 	}
 
-	// Run unit tests only (integration tests require Stalwart)
+	// Run unit tests
 	test, err := setup.WithExec([]string{"flutter", "test", "test/unit"}).Stdout(ctx)
 	if err != nil {
 		return test, err
 	}
 
-	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\nTests:\n%s\n", analyze, test), nil
+	// Run backend tests (requires Stalwart)
+	testBackend, err := setup.WithExec([]string{"stalwart-dev/test.sh"}).Stdout(ctx)
+	if err != nil {
+		return testBackend, err
+	}
+
+	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\nUnit Tests:\n%s\n\nBackend Tests:\n%s\n", analyze, test, testBackend), nil
 }
 
 // Build and return the Linux bundle
