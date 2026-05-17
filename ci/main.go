@@ -41,10 +41,7 @@ func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y",
-			"clang", "cmake", "ninja-build", "pkg-config",
-			"libgtk-3-dev", "liblzma-dev", "libsecret-1-dev",
-			"libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2"}).
+		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "curl", "python3", "iproute2", "netcat-openbsd"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
@@ -180,7 +177,9 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		WithEnvVariable("STALWART_PASS_B", "secret").
 		WithEnvVariable("STALWART_USER_C", "bob@example.com").
 		WithEnvVariable("STALWART_PASS_C", "secret").
-		WithExec([]string{"flutter", "test", "test/backend"}).
+		// Wait for Stalwart to be ready before running tests.
+		WithExec([]string{"/bin/bash", "-c", "for i in {1..30}; do nc -z stalwart 1430 && echo 'Stalwart is ready' && break; echo 'Waiting for Stalwart...'; sleep 1; done"}).
+		WithExec([]string{"flutter", "test", "--concurrency=1", "test/backend"}).
 		Stdout(ctx)
 	if err != nil {
 		return testBackend, err
