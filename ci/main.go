@@ -19,6 +19,7 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 			"assets/",
 			"scripts/",
 			"pubspec.yaml",
+			"pubspec.lock",
 			"analysis_options.yaml",
 			"linux/",
 			"android/",
