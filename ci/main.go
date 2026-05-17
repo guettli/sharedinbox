@@ -19,7 +19,6 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 			"assets/",
 			"scripts/",
 			"pubspec.yaml",
-			"pubspec.lock",
 			"analysis_options.yaml",
 			"linux/",
 			"android/",
@@ -45,6 +44,16 @@ func (m *Ci) Base(source *dagger.Directory) *dagger.Container {
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
 		WithDirectory("/src", source).
 		WithWorkdir("/src")
+}
+
+// Hugo container for website builds
+func (m *Ci) Hugo() *dagger.Container {
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "curl", "tar", "libc6-compat", "libstdc++", "gcompat"}).
+		WithExec([]string{"curl", "-sL", "https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_0.152.2_linux-amd64.tar.gz", "-o", "/tmp/hugo.tar.gz"}).
+		WithExec([]string{"tar", "-xzf", "/tmp/hugo.tar.gz", "-C", "/usr/local/bin", "hugo"}).
+		WithExec([]string{"rm", "/tmp/hugo.tar.gz"})
 }
 
 // Setup environment: pub get and build_runner
@@ -136,6 +145,20 @@ func (m *Ci) Check(ctx context.Context, source *dagger.Directory) (string, error
 	}
 
 	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\nBackend Tests:\n%s\n", analyze, coverage, testBackend), nil
+}
+
+// Build and return the Hugo-based website bundle
+func (m *Ci) BuildWebsite(source *dagger.Directory) *dagger.Directory {
+	// Surgical inclusion for website
+	websiteSource := source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"website/"},
+	})
+
+	return m.Hugo().
+		WithDirectory("/src", websiteSource).
+		WithWorkdir("/src/website").
+		WithExec([]string{"hugo", "--minify"}).
+		Directory("public")
 }
 
 // Build and return the Linux bundle
