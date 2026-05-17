@@ -8,7 +8,7 @@ on:
 jobs:
   check:
     name: Full Project Check
-    runs-on: codeberg-medium
+    runs-on: codeberg-small
     timeout-minutes: 60
 
     steps:
@@ -36,7 +36,7 @@ jobs:
 
   build-linux:
     name: Build Linux Release
-    runs-on: codeberg-medium
+    runs-on: codeberg-small
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -71,7 +71,7 @@ jobs:
 
   deploy-playstore:
     name: Build & Deploy to Play Store
-    runs-on: codeberg-medium
+    runs-on: codeberg-small
     needs: check
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 60
@@ -113,7 +113,7 @@ jobs:
 
   publish-website:
     name: Publish Website Build History
-    runs-on: codeberg-medium
+    runs-on: codeberg-small
     needs: [build-linux, deploy-playstore]
     if: |
       always() &&
