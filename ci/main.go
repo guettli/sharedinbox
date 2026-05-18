@@ -343,9 +343,17 @@ func (m *Ci) DeployLinux(
 		Stdout(ctx)
 }
 
-// Build and return the Android APK
-func (m *Ci) BuildAndroidApk() *dagger.File {
+// setupKeystore decodes the base64 keystore secret into the container so Gradle signs with the release key.
+func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.Container {
 	return m.Setup().
+		WithSecretVariable("ANDROID_KEYSTORE_BASE64", keystoreBase64).
+		WithSecretVariable("ANDROID_KEYSTORE_PASSWORD", keystorePassword).
+		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks`})
+}
+
+// Build and return the Android APK
+func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
+	return m.setupKeystore(keystoreBase64, keystorePassword).
 		WithExec([]string{"flutter", "build", "apk", "--release"}).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
@@ -357,9 +365,11 @@ func (m *Ci) DeployApk(
 	sshUser string,
 	sshHost string,
 	commitHash string,
+	keystoreBase64 *dagger.Secret,
+	keystorePassword *dagger.Secret,
 ) (string, error) {
 	// 1. Build the APK
-	apk := m.BuildAndroidApk()
+	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword)
 
 	// 2. Deploy
 	datePath := time.Now().Format("2006/01/02")
@@ -374,8 +384,8 @@ func (m *Ci) DeployApk(
 }
 
 // Build and return the Android App Bundle (AAB)
-func (m *Ci) BuildAndroidRelease() *dagger.File {
-	return m.Setup().
+func (m *Ci) BuildAndroidRelease(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
+	return m.setupKeystore(keystoreBase64, keystorePassword).
 		WithExec([]string{"flutter", "build", "appbundle", "--release"}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
@@ -384,9 +394,11 @@ func (m *Ci) BuildAndroidRelease() *dagger.File {
 func (m *Ci) PublishAndroid(
 	ctx context.Context,
 	playStoreConfig *dagger.Secret,
+	keystoreBase64 *dagger.Secret,
+	keystorePassword *dagger.Secret,
 ) (string, error) {
 	// 1. Build the AAB
-	aab := m.BuildAndroidRelease()
+	aab := m.BuildAndroidRelease(keystoreBase64, keystorePassword)
 
 	// 2. Prepare script source
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{

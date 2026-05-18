@@ -105,17 +105,9 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Verify keystore SHA1
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/upload-keystore.jks
-          keytool -list -keystore /tmp/upload-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias upload
-          rm /tmp/upload-keystore.jks
-
       - name: Build & Deploy to Play Store
         env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
           DAGGER_NO_NAG: "1"
@@ -127,6 +119,7 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           DAGGER_NO_NAG: "1"
         run: task deploy-apk
