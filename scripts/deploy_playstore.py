@@ -36,21 +36,23 @@ def _upload_aab(session: AuthorizedSession, edit_id: str) -> int:
 
     last_exc = None
     for attempt in range(_MAX_UPLOAD_ATTEMPTS):
-        # Each attempt needs a fresh resumable upload URL — the previous URL expires on failure.
-        init_resp = session.post(
-            f"{_UPLOAD_BASE}/{PACKAGE_NAME}/edits/{edit_id}/bundles",
-            params={"uploadType": "resumable"},
-            headers={
-                "X-Upload-Content-Type": "application/octet-stream",
-                "X-Upload-Content-Length": str(file_size),
-            },
-            json={},
-            timeout=30,
-        )
-        init_resp.raise_for_status()
-        upload_url = init_resp.headers["Location"]
-
         try:
+            # Each attempt needs a fresh resumable upload URL — the previous URL expires on failure.
+            init_resp = session.post(
+                f"{_UPLOAD_BASE}/{PACKAGE_NAME}/edits/{edit_id}/bundles",
+                params={"uploadType": "resumable"},
+                headers={
+                    "X-Upload-Content-Type": "application/octet-stream",
+                    "X-Upload-Content-Length": str(file_size),
+                },
+                json={},
+                timeout=30,
+            )
+            if not init_resp.ok:
+                print(f"Init attempt {attempt + 1} failed: HTTP {init_resp.status_code}: {init_resp.text[:500]}")
+                init_resp.raise_for_status()
+            upload_url = init_resp.headers["Location"]
+
             upload_resp = session.put(
                 upload_url,
                 data=data,
@@ -60,13 +62,15 @@ def _upload_aab(session: AuthorizedSession, edit_id: str) -> int:
                 },
                 timeout=_TIMEOUT,
             )
-            upload_resp.raise_for_status()
+            if not upload_resp.ok:
+                print(f"Upload attempt {attempt + 1} failed: HTTP {upload_resp.status_code}: {upload_resp.text[:500]}")
+                upload_resp.raise_for_status()
             return upload_resp.json()["versionCode"]
         except requests.RequestException as exc:
             last_exc = exc
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
                 delay = 10 * (2 ** attempt)
-                print(f"Upload attempt {attempt + 1} failed ({exc}), retrying in {delay}s…")
+                print(f"Attempt {attempt + 1} failed ({exc}), retrying in {delay}s…")
                 time.sleep(delay)
 
     raise RuntimeError(
