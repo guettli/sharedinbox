@@ -77,7 +77,7 @@ def _patch_elem(d, vc):
 def _patch_node(d, vc):
     out = bytearray()
     for fn, wt, v in _parse(d):
-        out += _enc(2, 2, _patch_elem(v, vc)) if fn == 2 else _enc(fn, wt, v)
+        out += _enc(1, 2, _patch_elem(v, vc)) if fn == 1 else _enc(fn, wt, v)
     return bytes(out)
 
 def _dump_proto(d, depth=0, limit=3):
@@ -98,7 +98,7 @@ def _dump_proto(d, depth=0, limit=3):
 def _read_vc_from_node(d):
     """Read versionCode from XmlNode proto bytes. Returns int or None."""
     for fn, wt, v in _parse(d):
-        if fn == 2 and wt == 2:  # XmlElement
+        if fn == 1 and wt == 2:  # XmlElement
             for efn, ewt, attr in _parse(v):
                 if efn == 4 and ewt == 2 and _has_rid(attr):  # XmlAttribute with versionCode RID
                     for afn, awt, item in _parse(attr):
