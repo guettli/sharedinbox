@@ -521,7 +521,9 @@ func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, 
 		WithSecretVariable("KS_BASE64", keystoreBase64).
 		WithSecretVariable("KS_PASS", keystorePassword).
 		WithExec([]string{"sh", "-c",
-			`echo "$KS_BASE64" | base64 -d > /keystore.jks && \
+			`[ -n "$KS_BASE64" ] || { echo "ERROR: KS_BASE64 secret is empty — ANDROID_KEYSTORE_BASE64 not set"; exit 1; }
+			 [ -n "$KS_PASS" ]   || { echo "ERROR: KS_PASS secret is empty — ANDROID_KEYSTORE_PASSWORD not set"; exit 1; }
+			 echo "$KS_BASE64" | base64 -d > /keystore.jks && \
 			 jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
 			 -signedjar /signed.aab \
 			 -keystore /keystore.jks \
