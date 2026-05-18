@@ -351,10 +351,10 @@ func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagg
 		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks`})
 }
 
-// Build and return the Android APK
-func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
+// Build and return the Android APK signed with the release key.
+func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
 	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "apk", "--release"}).
+		WithExec([]string{"flutter", "build", "apk", "--release", "--build-number", buildNumber}).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
 
@@ -367,11 +367,10 @@ func (m *Ci) DeployApk(
 	commitHash string,
 	keystoreBase64 *dagger.Secret,
 	keystorePassword *dagger.Secret,
+	buildNumber string,
 ) (string, error) {
-	// 1. Build the APK
-	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword)
+	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword, buildNumber)
 
-	// 2. Deploy
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
 	apkName := fmt.Sprintf("sharedinbox-mua-%s.apk", commitHash)
@@ -383,29 +382,23 @@ func (m *Ci) DeployApk(
 		Stdout(ctx)
 }
 
-// Build and return the Android App Bundle (AAB)
-func (m *Ci) BuildAndroidRelease(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
+// Build and return the Android App Bundle (AAB) signed with the release key.
+func (m *Ci) BuildAndroidRelease(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
 	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "appbundle", "--release"}).
+		WithExec([]string{"flutter", "build", "appbundle", "--release", "--build-number", buildNumber}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
 
-// Publish the Android App Bundle to Google Play Store
-func (m *Ci) PublishAndroid(
+// UploadToPlayStore uploads a pre-built AAB to the Play Store internal track.
+func (m *Ci) UploadToPlayStore(
 	ctx context.Context,
+	aab *dagger.File,
 	playStoreConfig *dagger.Secret,
-	keystoreBase64 *dagger.Secret,
-	keystorePassword *dagger.Secret,
 ) (string, error) {
-	// 1. Build the AAB
-	aab := m.BuildAndroidRelease(keystoreBase64, keystorePassword)
-
-	// 2. Prepare script source
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/deploy_playstore.py"},
 	})
 
-	// 3. Deploy
 	return dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).

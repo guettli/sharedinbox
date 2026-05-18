@@ -203,8 +203,29 @@ tasks:
     cmds:
       - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
+  build-android-bundle:
+    desc: Build signed AAB via Dagger and export to build/app/outputs/bundle/release/
+    preconditions:
+      - sh: test -n "$ANDROID_KEYSTORE_BASE64"
+        msg: "ANDROID_KEYSTORE_BASE64 is not set"
+      - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
+        msg: "ANDROID_KEYSTORE_PASSWORD is not set"
+    cmds:
+      - mkdir -p build/app/outputs/bundle/release
+      - dagger call --progress=plain -m ci --source=. build-android-release --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(date +%s)" export --path build/app/outputs/bundle/release/app-release.aab
+
+  upload-android-bundle:
+    desc: Upload AAB from build/ to Play Store via Dagger
+    preconditions:
+      - sh: test -n "$PLAY_STORE_CONFIG_JSON"
+        msg: "PLAY_STORE_CONFIG_JSON is not set"
+      - sh: test -f build/app/outputs/bundle/release/app-release.aab
+        msg: "AAB not found — run build-android-bundle first"
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. upload-to-play-store --aab build/app/outputs/bundle/release/app-release.aab --play-store-config env:PLAY_STORE_CONFIG_JSON
+
   publish-android:
-    desc: Build and publish Android App Bundle to Play Store via Dagger
+    desc: Build signed AAB and publish to Play Store via Dagger (build + upload)
     preconditions:
       - sh: test -n "$PLAY_STORE_CONFIG_JSON"
         msg: "PLAY_STORE_CONFIG_JSON is not set"
@@ -213,7 +234,8 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD
+      - task: build-android-bundle
+      - task: upload-android-bundle
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
@@ -225,7 +247,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(date +%s)"
 
   publish-website:
     desc: Build and publish website via Dagger
