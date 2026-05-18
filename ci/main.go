@@ -33,16 +33,22 @@ def _parse(d):
         tag, p = _vr(d, p); fn, wt = tag >> 3, tag & 7
         if wt == 0: v, p = _vr(d, p); yield fn, 0, v
         elif wt == 2: ln, p = _vr(d, p); yield fn, 2, d[p:p+ln]; p += ln
+        elif wt == 5: yield fn, 5, d[p:p+4]; p += 4  # fixed32
+        elif wt == 1: yield fn, 1, d[p:p+8]; p += 8  # fixed64
         else: raise ValueError(f"wire type {wt}")
 
 def _enc(fn, wt, v):
     t = _ve((fn << 3) | wt)
-    return t + (_ve(v) if wt == 0 else _ve(len(v)) + v)
+    if wt == 0: return t + _ve(v)
+    if wt in (1, 5): return t + v  # fixed-width, pass bytes as-is
+    return t + _ve(len(v)) + v
 
 def _patch_prim(d, vc):
+    # Patch int_decimal_value (field 6) or int_hexadecimal_value (field 7),
+    # whichever is present — AAPT2 may use either.
     out = bytearray()
     for fn, wt, v in _parse(d):
-        out += _enc(6, 0, vc) if (fn == 6 and wt == 0) else _enc(fn, wt, v)
+        out += _enc(fn, 0, vc) if (fn in (6, 7) and wt == 0) else _enc(fn, wt, v)
     return bytes(out)
 
 def _patch_item(d, vc):
@@ -74,9 +80,28 @@ def _patch_node(d, vc):
         out += _enc(2, 2, _patch_elem(v, vc)) if fn == 2 else _enc(fn, wt, v)
     return bytes(out)
 
+def _read_vc_from_node(d):
+    """Read versionCode from XmlNode proto bytes. Returns int or None."""
+    for fn, wt, v in _parse(d):
+        if fn == 2 and wt == 2:  # XmlElement
+            for efn, ewt, attr in _parse(v):
+                if efn == 4 and ewt == 2 and _has_rid(attr):  # XmlAttribute with versionCode RID
+                    for afn, awt, item in _parse(attr):
+                        if afn == 6 and awt == 2:  # compiled_value (Item)
+                            for ifn, iwt, prim in _parse(item):
+                                if ifn == 7 and iwt == 2:  # prim (Primitive)
+                                    for pfn, pwt, pv in _parse(prim):
+                                        if pfn in (6, 7) and pwt == 0:
+                                            return pv
+    return None
+
 def patch(src, dst, vc):
     with zipfile.ZipFile(src) as z:
         mf = z.read(MANIFEST)
+
+    orig_vc = _read_vc_from_node(mf)
+    print(f"Original versionCode in manifest: {orig_vc}")
+
     patched = _patch_node(mf, vc)
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w') as zout:
         for info in zin.infolist():
@@ -87,7 +112,13 @@ def patch(src, dst, vc):
             zi.compress_type = info.compress_type
             zi.external_attr = info.external_attr
             zout.writestr(zi, d)
-    print(f"versionCode={vc} -> {dst}")
+
+    # Verify the patch actually took effect
+    with zipfile.ZipFile(dst) as z:
+        actual = _read_vc_from_node(z.read(MANIFEST))
+    if actual != vc:
+        sys.exit(f"ERROR: versionCode patch failed — wrote {vc} but read back {actual} (original was {orig_vc})")
+    print(f"versionCode={actual} -> {dst}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
