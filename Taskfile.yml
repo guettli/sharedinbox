@@ -212,7 +212,7 @@ tasks:
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
       - mkdir -p build/app/outputs/bundle/release
-      - dagger call --progress=plain -m ci --source=. build-android-release --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(date +%s)" export --path build/app/outputs/bundle/release/app-release.aab
+      - dagger call --progress=plain -m ci --source=. build-android-release --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)" export --path build/app/outputs/bundle/release/app-release.aab
 
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger
@@ -247,7 +247,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(date +%s)"
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
 
   publish-website:
     desc: Build and publish website via Dagger
