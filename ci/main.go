@@ -80,6 +80,21 @@ def _patch_node(d, vc):
         out += _enc(2, 2, _patch_elem(v, vc)) if fn == 2 else _enc(fn, wt, v)
     return bytes(out)
 
+def _dump_proto(d, depth=0, limit=3):
+    """Print proto field structure for debugging."""
+    pad = "  " * depth
+    for fn, wt, v in _parse(d):
+        if wt == 0:
+            print(f"{pad}[{fn}] varint={v} (0x{v:x})")
+        elif wt == 2:
+            print(f"{pad}[{fn}] bytes len={len(v)}")
+            if depth < limit:
+                _dump_proto(v, depth + 1, limit)
+        elif wt == 5:
+            print(f"{pad}[{fn}] fixed32={v.hex()}")
+        elif wt == 1:
+            print(f"{pad}[{fn}] fixed64={v.hex()}")
+
 def _read_vc_from_node(d):
     """Read versionCode from XmlNode proto bytes. Returns int or None."""
     for fn, wt, v in _parse(d):
@@ -100,6 +115,10 @@ def patch(src, dst, vc):
         mf = z.read(MANIFEST)
 
     orig_vc = _read_vc_from_node(mf)
+    if orig_vc is None:
+        print("DEBUG: could not find versionCode — dumping manifest proto structure:")
+        _dump_proto(mf, limit=4)
+        sys.exit(f"ERROR: versionCode not found in {MANIFEST}")
     print(f"Original versionCode in manifest: {orig_vc}")
 
     patched = _patch_node(mf, vc)
