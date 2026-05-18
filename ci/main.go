@@ -2,10 +2,98 @@ package main
 
 import (
 	"context"
+	"dagger/ci/internal/dagger"
 	"fmt"
 	"time"
-	"dagger/ci/internal/dagger"
 )
+
+// patchAabScript patches android:versionCode in an AAB's compiled manifest proto.
+// It strips META-INF/ (old signature) and repacks the ZIP. No external dependencies.
+const patchAabScript = `#!/usr/bin/env python3
+import sys, zipfile
+
+MANIFEST = "base/manifest/AndroidManifest.xml"
+VERSION_CODE_RID = 0x0101021b
+
+def _vr(b, p):
+    n = s = 0
+    while True:
+        c = b[p]; p += 1; n |= (c & 127) << s
+        if not (c & 128): return n, p
+        s += 7
+
+def _ve(n):
+    r = []
+    while n > 127: r.append((n & 127) | 128); n >>= 7
+    return bytes(r + [n])
+
+def _parse(d):
+    p = 0
+    while p < len(d):
+        tag, p = _vr(d, p); fn, wt = tag >> 3, tag & 7
+        if wt == 0: v, p = _vr(d, p); yield fn, 0, v
+        elif wt == 2: ln, p = _vr(d, p); yield fn, 2, d[p:p+ln]; p += ln
+        else: raise ValueError(f"wire type {wt}")
+
+def _enc(fn, wt, v):
+    t = _ve((fn << 3) | wt)
+    return t + (_ve(v) if wt == 0 else _ve(len(v)) + v)
+
+def _patch_prim(d, vc):
+    out = bytearray()
+    for fn, wt, v in _parse(d):
+        out += _enc(6, 0, vc) if (fn == 6 and wt == 0) else _enc(fn, wt, v)
+    return bytes(out)
+
+def _patch_item(d, vc):
+    out = bytearray()
+    for fn, wt, v in _parse(d):
+        out += _enc(7, 2, _patch_prim(v, vc)) if fn == 7 else _enc(fn, wt, v)
+    return bytes(out)
+
+def _has_rid(d):
+    return any(fn == 5 and wt == 0 and v == VERSION_CODE_RID for fn, wt, v in _parse(d))
+
+def _patch_attr(d, vc):
+    out = bytearray()
+    for fn, wt, v in _parse(d):
+        if fn == 3 and wt == 2: out += _enc(3, 2, str(vc).encode())
+        elif fn == 6 and wt == 2: out += _enc(6, 2, _patch_item(v, vc))
+        else: out += _enc(fn, wt, v)
+    return bytes(out)
+
+def _patch_elem(d, vc):
+    out = bytearray()
+    for fn, wt, v in _parse(d):
+        out += _enc(4, 2, _patch_attr(v, vc)) if (fn == 4 and _has_rid(v)) else _enc(fn, wt, v)
+    return bytes(out)
+
+def _patch_node(d, vc):
+    out = bytearray()
+    for fn, wt, v in _parse(d):
+        out += _enc(2, 2, _patch_elem(v, vc)) if fn == 2 else _enc(fn, wt, v)
+    return bytes(out)
+
+def patch(src, dst, vc):
+    with zipfile.ZipFile(src) as z:
+        mf = z.read(MANIFEST)
+    patched = _patch_node(mf, vc)
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w') as zout:
+        for info in zin.infolist():
+            if info.filename.startswith('META-INF/'):
+                continue  # strip old signature; jarsigner re-signs after
+            d = patched if info.filename == MANIFEST else zin.read(info.filename)
+            zi = zipfile.ZipInfo(info.filename, info.date_time)
+            zi.compress_type = info.compress_type
+            zi.external_attr = info.external_attr
+            zout.writestr(zi, d)
+    print(f"versionCode={vc} -> {dst}")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        sys.exit(f"usage: {sys.argv[0]} in.aab out.aab versionCode")
+    patch(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+`
 
 type Ci struct {
 	// The source directory of the project, filtered surgically.
@@ -382,10 +470,13 @@ func (m *Ci) DeployApk(
 		Stdout(ctx)
 }
 
-// Build and return the Android App Bundle (AAB) signed with the release key.
-func (m *Ci) BuildAndroidRelease(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
-	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", buildNumber}).
+// Build and return the Android App Bundle (AAB).
+// Uses --build-number 1 (fixed) so Dagger can fully cache this step.
+// No keystore is injected; Gradle falls back to debug signing.
+// versionCode and signing are applied separately via StampAndroidVersionCode + SignAndroidBundle.
+func (m *Ci) BuildAndroidRelease() *dagger.File {
+	return m.Setup().
+		WithExec([]string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
 
@@ -409,4 +500,46 @@ func (m *Ci) UploadToPlayStore(
 		WithWorkdir("/src").
 		WithExec([]string{"python3", "scripts/deploy_playstore.py"}).
 		Stdout(ctx)
+}
+
+// StampAndroidVersionCode patches the versionCode in a built AAB without rebuilding.
+// It rewrites the compiled manifest proto directly and strips the old signature.
+func (m *Ci) StampAndroidVersionCode(aab *dagger.File, versionCode int) *dagger.File {
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithNewFile("/patch.py", patchAabScript).
+		WithFile("/in.aab", aab).
+		WithExec([]string{"python3", "/patch.py", "/in.aab", "/out.aab", fmt.Sprintf("%d", versionCode)}).
+		File("/out.aab")
+}
+
+// SignAndroidBundle signs a stamp-patched AAB with the release upload key.
+func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
+	return dag.Container().
+		From("eclipse-temurin:17-jdk-alpine").
+		WithFile("/app.aab", aab).
+		WithSecretVariable("KS_BASE64", keystoreBase64).
+		WithSecretVariable("KS_PASS", keystorePassword).
+		WithExec([]string{"sh", "-c",
+			`echo "$KS_BASE64" | base64 -d > /keystore.jks && \
+			 jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
+			 -signedjar /signed.aab \
+			 -keystore /keystore.jks \
+			 -storepass "$KS_PASS" -keypass "$KS_PASS" \
+			 /app.aab upload`}).
+		File("/signed.aab")
+}
+
+// PublishAndroid builds a cached AAB, stamps the versionCode, re-signs, and uploads to Play Store.
+func (m *Ci) PublishAndroid(
+	ctx context.Context,
+	playStoreConfig *dagger.Secret,
+	keystoreBase64 *dagger.Secret,
+	keystorePassword *dagger.Secret,
+) (string, error) {
+	versionCode := int(time.Now().Unix())
+	aab := m.BuildAndroidRelease()
+	stamped := m.StampAndroidVersionCode(aab, versionCode)
+	signed := m.SignAndroidBundle(stamped, keystoreBase64, keystorePassword)
+	return m.UploadToPlayStore(ctx, signed, playStoreConfig)
 }

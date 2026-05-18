@@ -204,15 +204,10 @@ tasks:
       - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   build-android-bundle:
-    desc: Build signed AAB via Dagger and export to build/app/outputs/bundle/release/
-    preconditions:
-      - sh: test -n "$ANDROID_KEYSTORE_BASE64"
-        msg: "ANDROID_KEYSTORE_BASE64 is not set"
-      - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
-        msg: "ANDROID_KEYSTORE_PASSWORD is not set"
+    desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
     cmds:
       - mkdir -p build/app/outputs/bundle/release
-      - dagger call --progress=plain -m ci --source=. build-android-release --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)" export --path build/app/outputs/bundle/release/app-release.aab
+      - dagger call --progress=plain -q -m ci --source=. build-android-release -o build/app/outputs/bundle/release/app-release.aab
 
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger
@@ -225,7 +220,7 @@ tasks:
       - dagger call --progress=plain -q -m ci --source=. upload-to-play-store --aab build/app/outputs/bundle/release/app-release.aab --play-store-config env:PLAY_STORE_CONFIG_JSON
 
   publish-android:
-    desc: Build signed AAB and publish to Play Store via Dagger (build + upload)
+    desc: Build cached AAB, stamp versionCode, sign, and publish to Play Store via Dagger
     preconditions:
       - sh: test -n "$PLAY_STORE_CONFIG_JSON"
         msg: "PLAY_STORE_CONFIG_JSON is not set"
@@ -234,8 +229,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - task: build-android-bundle
-      - task: upload-android-bundle
+      - dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
