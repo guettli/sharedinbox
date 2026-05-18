@@ -44,9 +44,11 @@ func (m *Ci) Base() *dagger.Container {
 		WithExec([]string{"apt-get", "update"}).
 		// Only install missing dependencies. git, curl, python3 are already in the image.
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
-		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
-		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
-		WithMountedCache("/opt/android-sdk-linux/ndk", dag.CacheVolume("android-ndk-cache")).
+		// Locked sharing so each pub-get/gradle run gets exclusive write access,
+		// producing a deterministic output snapshot that Dagger can cache.
+		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache"), dagger.ContainerWithMountedCacheOpts{Sharing: dagger.Locked}).
+		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Sharing: dagger.Locked}).
+		WithMountedCache("/opt/android-sdk-linux/ndk", dag.CacheVolume("android-ndk-cache"), dagger.ContainerWithMountedCacheOpts{Sharing: dagger.Locked}).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
 		// Pre-install NDK to avoid slow downloads during the actual build
 		WithExec([]string{"/bin/sh", "-c", "if [ ! -d /opt/android-sdk-linux/ndk/28.2.13676358 ]; then yes | sdkmanager \"ndk;28.2.13676358\"; fi"}).
@@ -354,7 +356,7 @@ func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagg
 // Build and return the Android APK signed with the release key.
 func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
 	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "apk", "--release", "--build-number", buildNumber}).
+		WithExec([]string{"flutter", "build", "apk", "--release", "--no-pub", "--build-number", buildNumber}).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
 
@@ -385,7 +387,7 @@ func (m *Ci) DeployApk(
 // Build and return the Android App Bundle (AAB) signed with the release key.
 func (m *Ci) BuildAndroidRelease(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
 	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "appbundle", "--release", "--build-number", buildNumber}).
+		WithExec([]string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", buildNumber}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
 
