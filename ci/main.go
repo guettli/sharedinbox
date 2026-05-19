@@ -175,7 +175,10 @@ func New(
 }
 
 // Base is the Flutter toolchain container with no source mounted.
-// Its cache key is stable until the image or apt packages change.
+// Its cache key is stable until the image, apt packages, or SDK component versions change.
+// Android SDK components (NDK, CMake, build-tools, platform) are installed into the container
+// layer here so Dagger's execution cache captures them — cache volumes proved unreliable across
+// pipeline runs on the remote engine and caused Gradle to re-download ~3 min of SDKs every time.
 func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
@@ -183,9 +186,8 @@ func (m *Ci) Base() *dagger.Container {
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
-		WithMountedCache("/opt/android-sdk-linux/ndk", dag.CacheVolume("android-ndk-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
-		WithExec([]string{"/bin/sh", "-c", "if [ ! -d /opt/android-sdk-linux/ndk/28.2.13676358 ]; then yes | sdkmanager \"ndk;28.2.13676358\"; fi"})
+		WithExec([]string{"/bin/sh", "-c", `yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34"`})
 }
 
 // setup mounts a source directory into Base and runs pub get + build_runner.
