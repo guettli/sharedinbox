@@ -146,12 +146,10 @@ if __name__ == "__main__":
 `
 
 type Ci struct {
-	// The source directory of the project, filtered surgically.
 	Source *dagger.Directory
 }
 
 func New(
-	// The source directory of the project.
 	// +defaultPath=".."
 	source *dagger.Directory,
 ) *Ci {
@@ -163,6 +161,7 @@ func New(
 				"assets/",
 				"scripts/",
 				"pubspec.yaml",
+				"pubspec.lock",
 				"analysis_options.yaml",
 				"linux/",
 				"android/",
@@ -175,21 +174,69 @@ func New(
 	}
 }
 
-// Base container with all dependencies for Flutter and Linux builds
+// Base is the Flutter toolchain container with no source mounted.
+// Its cache key is stable until the image or apt packages change.
 func (m *Ci) Base() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
-		// Only install missing dependencies. git, curl, python3 are already in the image.
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithMountedCache("/opt/android-sdk-linux/ndk", dag.CacheVolume("android-ndk-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
-		// Pre-install NDK to avoid slow downloads during the actual build
-		WithExec([]string{"/bin/sh", "-c", "if [ ! -d /opt/android-sdk-linux/ndk/28.2.13676358 ]; then yes | sdkmanager \"ndk;28.2.13676358\"; fi"}).
-		WithDirectory("/src", m.Source).
-		WithWorkdir("/src")
+		WithExec([]string{"/bin/sh", "-c", "if [ ! -d /opt/android-sdk-linux/ndk/28.2.13676358 ]; then yes | sdkmanager \"ndk;28.2.13676358\"; fi"})
+}
+
+// setup mounts a source directory into Base and runs pub get + build_runner.
+// Each caller passes only the files it actually needs so Dagger's content-addressed
+// cache is scoped correctly: changing website/ won't bust the Android build cache.
+func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
+	return m.Base().
+		WithDirectory("/src", src).
+		WithWorkdir("/src").
+		WithExec([]string{"flutter", "pub", "get"}).
+		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"})
+}
+
+// Setup is the exported variant (CLI / Taskfile). Uses the full check source.
+func (m *Ci) Setup() *dagger.Container {
+	return m.setup(m.checkSrc())
+}
+
+// checkSrc is the source subset for static checks and unit tests.
+func (m *Ci) checkSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "test/", "assets/", "pubspec.yaml", "pubspec.lock", "analysis_options.yaml", "scripts/"},
+	})
+}
+
+// androidSrc is the source subset for Android builds.
+func (m *Ci) androidSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "android/", "assets/", "pubspec.yaml", "pubspec.lock", "drift_schemas/"},
+	})
+}
+
+// linuxSrc is the source subset for Linux builds and integration tests.
+func (m *Ci) linuxSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "linux/", "assets/", "pubspec.yaml", "pubspec.lock", "drift_schemas/"},
+	})
+}
+
+// backendSrc is the source subset for IMAP/JMAP backend tests.
+func (m *Ci) backendSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "test/", "assets/", "scripts/", "stalwart-dev/", "pubspec.yaml", "pubspec.lock"},
+	})
+}
+
+// integrationSrc is the source subset for UI integration tests (runs on Linux desktop).
+func (m *Ci) integrationSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "linux/", "integration_test/", "assets/", "pubspec.yaml", "pubspec.lock", "drift_schemas/"},
+	})
 }
 
 // Hugo container for website builds
@@ -211,12 +258,13 @@ func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
 		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519")
 }
 
-// Latest Stalwart Mail Server as a Dagger Service
+// Stalwart mail server service for backend and integration tests.
 func (m *Ci) Stalwart() *dagger.Service {
-	config := m.Source.Directory("stalwart-dev").File("config.toml")
+	stalwartSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"stalwart-dev/"},
+	})
+	config := stalwartSrc.Directory("stalwart-dev").File("config.toml")
 
-	// Pre-seed data directory and spam-filter version to avoid network hits on startup.
-	// We use an alpine container to create the sqlite database file.
 	dataDir := dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "add", "--no-cache", "sqlite"}).
@@ -233,12 +281,11 @@ func (m *Ci) Stalwart() *dagger.Service {
 		WithExposedPort(1430). // IMAP
 		WithExposedPort(1025). // SMTP
 		WithExposedPort(4190). // ManageSieve
-		// Explicitly run the binary with the config path to avoid bootstrap mode.
 		WithEntrypoint([]string{"stalwart", "--config", "/etc/stalwart/config.toml"}).
 		AsService()
 }
 
-// Helper to bind Stalwart service and set up environment variables for tests
+// WithStalwart binds the Stalwart service and sets test environment variables.
 func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
 	stalwart := m.Stalwart()
 	return container.
@@ -255,37 +302,34 @@ func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
 		WithEnvVariable("STALWART_PASS_C", "secret")
 }
 
-// Setup environment: pub get and build_runner
-func (m *Ci) Setup() *dagger.Container {
-	return m.Base().
-		WithExec([]string{"flutter", "pub", "get"}).
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"})
-}
-
-// Run hygiene check
+// CheckHygiene checks that no forbidden home-directory files are in the source.
 func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 	return m.Base().
+		WithDirectory("/src", m.Source).
+		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
 }
 
-// Enforce architecture — ui/ must not import data/
+// CheckLayers enforces that ui/ does not import data/.
 func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 	return m.Base().
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/"}})).
+		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "VIOLATIONS=$(grep -rn \"package:sharedinbox/data/\" lib/ui/ 2>/dev/null || true); if [ -n \"$VIOLATIONS\" ]; then echo \"ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):\"; echo \"$VIOLATIONS\"; exit 1; fi; echo \"Layer check passed.\""}).
 		Stdout(ctx)
 }
 
-// Run dart format check
+// Format runs dart format check.
 func (m *Ci) Format(ctx context.Context) (string, error) {
-	return m.Base().
+	return m.setup(m.checkSrc()).
 		WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).
 		Stdout(ctx)
 }
 
-// Verify that mocks are up to date
+// CheckMocks verifies that generated mocks are up to date.
 func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
-	return m.Setup().
+	return m.setup(m.checkSrc()).
 		WithExec([]string{"git", "init"}).
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
 		WithExec([]string{"git", "config", "user.name", "CI"}).
@@ -296,41 +340,38 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// Run coverage check
+// Coverage runs unit tests with coverage gate.
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
-	return m.Setup().
+	return m.setup(m.checkSrc()).
 		WithExec([]string{"flutter", "test", "test/unit", "--coverage", "--reporter", "expanded"}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
 }
 
-// Run backend tests (IMAP/JMAP sync logic)
+// TestBackend runs IMAP/JMAP sync tests against a live Stalwart instance.
 func (m *Ci) TestBackend(ctx context.Context) (string, error) {
-	return m.WithStalwart(m.Setup()).
+	return m.WithStalwart(m.setup(m.backendSrc())).
 		WithExec([]string{"flutter", "test", "--concurrency=1", "--reporter", "expanded", "test/backend"}).
 		Stdout(ctx)
 }
 
-// Run UI integration tests via Xvfb
+// TestIntegration runs UI integration tests via Xvfb.
 func (m *Ci) TestIntegration(ctx context.Context) (string, error) {
-	return m.WithStalwart(m.Setup()).
-		// Use xvfb-run for simpler X11 management.
-		// LIBGL_ALWAYS_SOFTWARE=1 ensures software rendering for Flutter in headless environments.
+	return m.WithStalwart(m.setup(m.integrationSrc())).
 		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
 		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "integration_test/", "-d", "linux"}).
 		Stdout(ctx)
 }
 
-// Run sync reliability runner
+// TestSyncReliability runs the sync reliability runner.
 func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
-	return m.WithStalwart(m.Setup()).
+	return m.WithStalwart(m.setup(m.backendSrc())).
 		WithExec([]string{"flutter", "test", "test/backend/sync_reliability_test.dart", "--reporter", "expanded", "--concurrency=1"}).
 		Stdout(ctx)
 }
 
-// Full check suite (equivalent to task check)
+// Check runs the full check suite.
 func (m *Ci) Check(ctx context.Context) (string, error) {
-	// Hygiene & Layers
 	if _, err := m.CheckHygiene(ctx); err != nil {
 		return "Hygiene check failed", err
 	}
@@ -338,38 +379,32 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return "Layer check failed", err
 	}
 
-	setup := m.Setup()
+	checkSetup := m.setup(m.checkSrc())
 
-	// Format (Running after Setup/pub get ensures package resolution context)
-	if _, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx); err != nil {
+	if _, err := checkSetup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx); err != nil {
 		return "Format check failed", err
 	}
 
-	// Run analyze
-	analyze, err := setup.WithExec([]string{"flutter", "analyze"}).Stdout(ctx)
+	analyze, err := checkSetup.WithExec([]string{"flutter", "analyze"}).Stdout(ctx)
 	if err != nil {
 		return analyze, err
 	}
 
-	// Verify mocks
 	mocks, err := m.CheckMocks(ctx)
 	if err != nil {
 		return mocks, err
 	}
 
-	// Run coverage gate (includes unit tests)
 	coverage, err := m.Coverage(ctx)
 	if err != nil {
 		return coverage, err
 	}
 
-	// Run backend tests
 	testBackend, err := m.TestBackend(ctx)
 	if err != nil {
 		return testBackend, err
 	}
 
-	// Run UI integration tests
 	testIntegration, err := m.TestIntegration(ctx)
 	if err != nil {
 		return testIntegration, err
@@ -378,7 +413,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, mocks, coverage, testBackend, testIntegration), nil
 }
 
-// Generate build history Hugo content by scanning the remote server
+// GenerateBuildHistory scans the remote server and produces Hugo content.
 func (m *Ci) GenerateBuildHistory(
 	ctx context.Context,
 	sshKey *dagger.Secret,
@@ -401,22 +436,19 @@ func (m *Ci) GenerateBuildHistory(
 		Directory("website/content/builds")
 }
 
-// Build and return the Hugo-based website bundle
+// BuildWebsite builds the Hugo-based website.
 func (m *Ci) BuildWebsite(
 	ctx context.Context,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) *dagger.Directory {
-	// 1. Generate build history content
 	buildHistory := m.GenerateBuildHistory(ctx, sshKey, sshUser, sshHost)
 
-	// 2. Prepare website source (base files + generated history)
 	websiteSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"website/"},
 	}).WithDirectory("website/content/builds", buildHistory)
 
-	// 3. Build with Hugo
 	return m.Hugo().
 		WithDirectory("/src", websiteSource).
 		WithWorkdir("/src/website").
@@ -424,17 +456,15 @@ func (m *Ci) BuildWebsite(
 		Directory("public")
 }
 
-// Build and deploy the website to the remote server
+// PublishWebsite builds and deploys the website to the remote server.
 func (m *Ci) PublishWebsite(
 	ctx context.Context,
 	sshKey *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) (string, error) {
-	// 1. Build the website
 	public := m.BuildWebsite(ctx, sshKey, sshUser, sshHost)
 
-	// 2. Deploy using rsync
 	return m.Deployer(sshKey).
 		WithDirectory("/public", public).
 		WithExec([]string{"rsync", "-avz", "--delete",
@@ -443,21 +473,21 @@ func (m *Ci) PublishWebsite(
 		Stdout(ctx)
 }
 
-// Build and return the Linux bundle
+// BuildLinux builds the Linux release bundle.
 func (m *Ci) BuildLinux() *dagger.Directory {
-	return m.Setup().
+	return m.setup(m.linuxSrc()).
 		WithExec([]string{"flutter", "build", "linux", "--release"}).
 		Directory("build/linux/x64/release/bundle")
 }
 
-// Build and return the Linux bundle (release)
+// BuildLinuxRelease builds the Linux release bundle.
 func (m *Ci) BuildLinuxRelease() *dagger.Directory {
-	return m.Setup().
+	return m.setup(m.linuxSrc()).
 		WithExec([]string{"flutter", "build", "linux", "--release"}).
 		Directory("build/linux/x64/release/bundle")
 }
 
-// Package and deploy the Linux release to the server
+// DeployLinux packages and deploys the Linux release to the server.
 func (m *Ci) DeployLinux(
 	ctx context.Context,
 	sshKey *dagger.Secret,
@@ -465,10 +495,8 @@ func (m *Ci) DeployLinux(
 	sshHost string,
 	commitHash string,
 ) (string, error) {
-	// 1. Build the release bundle
 	bundle := m.BuildLinuxRelease()
 
-	// 2. Package and deploy
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
 	tarball := fmt.Sprintf("sharedinbox-linux-amd64-%s.tar.gz", commitHash)
@@ -481,22 +509,22 @@ func (m *Ci) DeployLinux(
 		Stdout(ctx)
 }
 
-// setupKeystore decodes the base64 keystore secret into the container so Gradle signs with the release key.
+// setupKeystore decodes the base64 keystore into the android build container.
 func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.Container {
-	return m.Setup().
+	return m.setup(m.androidSrc()).
 		WithSecretVariable("ANDROID_KEYSTORE_BASE64", keystoreBase64).
 		WithSecretVariable("ANDROID_KEYSTORE_PASSWORD", keystorePassword).
 		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks`})
 }
 
-// Build and return the Android APK signed with the release key.
+// BuildAndroidApk builds a release APK signed with the upload key.
 func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
 	return m.setupKeystore(keystoreBase64, keystorePassword).
 		WithExec([]string{"flutter", "build", "apk", "--release", "--no-pub", "--build-number", buildNumber}).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
 
-// Deploy the Android APK to the server
+// DeployApk builds and deploys the APK to the server.
 func (m *Ci) DeployApk(
 	ctx context.Context,
 	sshKey *dagger.Secret,
@@ -520,12 +548,10 @@ func (m *Ci) DeployApk(
 		Stdout(ctx)
 }
 
-// Build and return the Android App Bundle (AAB).
-// Uses --build-number 1 (fixed) so Dagger can fully cache this step.
-// No keystore is injected; Gradle falls back to debug signing.
+// BuildAndroidRelease builds the AAB with a fixed build-number so Dagger can cache it.
 // versionCode and signing are applied separately via StampAndroidVersionCode + SignAndroidBundle.
 func (m *Ci) BuildAndroidRelease() *dagger.File {
-	return m.Setup().
+	return m.setup(m.androidSrc()).
 		WithExec([]string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
@@ -553,7 +579,6 @@ func (m *Ci) UploadToPlayStore(
 }
 
 // StampAndroidVersionCode patches the versionCode in a built AAB without rebuilding.
-// It rewrites the compiled manifest proto directly and strips the old signature.
 func (m *Ci) StampAndroidVersionCode(aab *dagger.File, versionCode int) *dagger.File {
 	return dag.Container().
 		From("python:3.12-alpine").
@@ -563,7 +588,7 @@ func (m *Ci) StampAndroidVersionCode(aab *dagger.File, versionCode int) *dagger.
 		File("/out.aab")
 }
 
-// SignAndroidBundle signs a stamp-patched AAB with the release upload key.
+// SignAndroidBundle signs an AAB with the release upload key via jarsigner.
 func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
 	return dag.Container().
 		From("eclipse-temurin:17-jdk-alpine").
