@@ -191,9 +191,9 @@ func (m *Ci) Base() *dagger.Container {
 }
 
 // pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
-// inputs, then removes non-deterministic fields from package_config.json so
-// the snapshot is byte-for-byte stable across runs. Re-executes only when
-// pubspec.yaml or pubspec.lock changes.
+// inputs, then removes non-deterministic fields from both package_config.json
+// and .flutter-plugins-dependencies so the snapshot is byte-for-byte stable
+// across runs. Re-executes only when pubspec.yaml or pubspec.lock changes.
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
@@ -203,7 +203,11 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		WithWorkdir("/src").
 		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"python3", "-c",
-			"import json; f='.dart_tool/package_config.json'; d=json.load(open(f)); [d.pop(k,None) for k in ('generated','generatorVersion')]; json.dump(d,open(f,'w'))"})
+			"import json, os\n" +
+				"f='.dart_tool/package_config.json'; d=json.load(open(f)); [d.pop(k,None) for k in ('generated','generatorVersion')]; json.dump(d,open(f,'w'))\n" +
+				"g='.flutter-plugins-dependencies'\n" +
+				"if os.path.exists(g):\n" +
+				"  d=json.load(open(g)); d.pop('date_created',None); json.dump(d,open(g,'w'))\n"})
 }
 
 // setup overlays source files onto the cached pub-get layer and runs
