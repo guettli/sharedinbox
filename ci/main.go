@@ -361,7 +361,7 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 // Coverage runs unit tests with coverage gate.
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
-		WithExec([]string{"flutter", "test", "test/unit", "--coverage", "--reporter", "expanded"}).
+		WithExec([]string{"flutter", "test", "test/unit", "--coverage", "--reporter", "expanded", "--no-pub"}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
 }
@@ -369,7 +369,7 @@ func (m *Ci) Coverage(ctx context.Context) (string, error) {
 // TestBackend runs IMAP/JMAP sync tests against a live Stalwart instance.
 func (m *Ci) TestBackend(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.backendSrc())).
-		WithExec([]string{"flutter", "test", "--concurrency=1", "--reporter", "expanded", "test/backend"}).
+		WithExec([]string{"flutter", "test", "--concurrency=1", "--reporter", "expanded", "--no-pub", "test/backend"}).
 		Stdout(ctx)
 }
 
@@ -377,14 +377,14 @@ func (m *Ci) TestBackend(ctx context.Context) (string, error) {
 func (m *Ci) TestIntegration(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.integrationSrc())).
 		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
-		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "integration_test/", "-d", "linux"}).
+		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "--no-pub", "integration_test/", "-d", "linux"}).
 		Stdout(ctx)
 }
 
 // TestSyncReliability runs the sync reliability runner.
 func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.backendSrc())).
-		WithExec([]string{"flutter", "test", "test/backend/sync_reliability_test.dart", "--reporter", "expanded", "--concurrency=1"}).
+		WithExec([]string{"flutter", "test", "test/backend/sync_reliability_test.dart", "--reporter", "expanded", "--concurrency=1", "--no-pub"}).
 		Stdout(ctx)
 }
 
@@ -403,7 +403,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return "Format check failed", err
 	}
 
-	analyze, err := checkSetup.WithExec([]string{"flutter", "analyze"}).Stdout(ctx)
+	analyze, err := checkSetup.WithExec([]string{"flutter", "analyze", "--no-pub"}).Stdout(ctx)
 	if err != nil {
 		return analyze, err
 	}
