@@ -377,7 +377,7 @@ func (m *Ci) TestBackend(ctx context.Context) (string, error) {
 func (m *Ci) TestIntegration(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.integrationSrc())).
 		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
-		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "--no-pub", "integration_test/", "-d", "linux"}).
+		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "integration_test/", "-d", "linux"}).
 		Stdout(ctx)
 }
 
@@ -403,7 +403,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return "Format check failed", err
 	}
 
-	analyze, err := checkSetup.WithExec([]string{"flutter", "analyze", "--no-pub"}).Stdout(ctx)
+	analyze, err := checkSetup.WithExec([]string{"dart", "analyze", "--fatal-infos"}).Stdout(ctx)
 	if err != nil {
 		return analyze, err
 	}
