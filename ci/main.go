@@ -191,9 +191,9 @@ func (m *Ci) Base() *dagger.Container {
 }
 
 // pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
-// inputs, then normalises the "generated" timestamp in package_config.json so
-// the snapshot is byte-for-byte stable across runs. The layer is only
-// re-executed when pubspec.yaml or pubspec.lock changes.
+// inputs, then removes non-deterministic fields from package_config.json so
+// the snapshot is byte-for-byte stable across runs. Re-executes only when
+// pubspec.yaml or pubspec.lock changes.
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
@@ -202,17 +202,19 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		WithDirectory("/src", pubspecOnly).
 		WithWorkdir("/src").
 		WithExec([]string{"flutter", "pub", "get"}).
-		WithExec([]string{"/bin/sh", "-c",
-			`sed -i 's/"generated": *"[^"]*"/"generated": "1970-01-01T00:00:00.000000Z"/' .dart_tool/package_config.json`})
+		WithExec([]string{"python3", "-c",
+			"import json; f='.dart_tool/package_config.json'; d=json.load(open(f)); [d.pop(k,None) for k in ('generated','generatorVersion')]; json.dump(d,open(f,'w'))"})
 }
 
-// setup overlays source files onto the cached pub-get layer and runs build_runner.
-// Each caller passes only the files it actually needs so Dagger's content-addressed
-// cache is scoped correctly: changing website/ won't bust the Android build cache.
+// setup overlays source files onto the cached pub-get layer and runs
+// build_runner with its incremental build graph in a dedicated cache volume.
+// Each caller passes only the files it actually needs so unrelated changes
+// don't bust the build cache.
 func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
 	return m.pubGetLayer().
 		WithDirectory("/src", src).
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"})
+		WithMountedCache("/src/.dart_tool/build", dag.CacheVolume("flutter-dart-tool-build")).
+		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
 }
 
 // Setup is the exported variant (CLI / Taskfile). Uses the full check source.
