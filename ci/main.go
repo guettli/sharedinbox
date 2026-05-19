@@ -190,14 +190,28 @@ func (m *Ci) Base() *dagger.Container {
 		WithExec([]string{"/bin/sh", "-c", `yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34"`})
 }
 
-// setup mounts a source directory into Base and runs pub get + build_runner.
+// pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
+// inputs, then normalises the "generated" timestamp in package_config.json so
+// the snapshot is byte-for-byte stable across runs. The layer is only
+// re-executed when pubspec.yaml or pubspec.lock changes.
+func (m *Ci) pubGetLayer() *dagger.Container {
+	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"pubspec.yaml", "pubspec.lock"},
+	})
+	return m.Base().
+		WithDirectory("/src", pubspecOnly).
+		WithWorkdir("/src").
+		WithExec([]string{"flutter", "pub", "get"}).
+		WithExec([]string{"/bin/sh", "-c",
+			`sed -i 's/"generated": *"[^"]*"/"generated": "1970-01-01T00:00:00.000000Z"/' .dart_tool/package_config.json`})
+}
+
+// setup overlays source files onto the cached pub-get layer and runs build_runner.
 // Each caller passes only the files it actually needs so Dagger's content-addressed
 // cache is scoped correctly: changing website/ won't bust the Android build cache.
 func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
-	return m.Base().
+	return m.pubGetLayer().
 		WithDirectory("/src", src).
-		WithWorkdir("/src").
-		WithExec([]string{"flutter", "pub", "get"}).
 		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"})
 }
 
