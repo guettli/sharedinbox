@@ -211,13 +211,9 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 }
 
 // setup overlays source files onto the cached pub-get layer and runs
-// build_runner with its incremental build graph in a dedicated cache volume.
-// Each caller passes only the files it actually needs so unrelated changes
-// don't bust the build cache.
 func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
 	return m.pubGetLayer().
 		WithDirectory("/src", src).
-		WithMountedCache("/src/.dart_tool/build", dag.CacheVolume("flutter-dart-tool-build")).
 		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
 }
 
