@@ -252,15 +252,15 @@ tasks:
       - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
   check-dagger:
-    desc: Run full check suite via Dagger (with OTEL timing report if Go is available)
+    desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
     cmds:
       - |
-        if ! command -v go >/dev/null 2>&1; then
+        if ! command -v python3 >/dev/null 2>&1; then
           dagger call --progress=plain -q -m ci --source=. check
           exit $?
         fi
         PORTFILE=$(mktemp)
-        (cd ci && go run ./otelrecv/ --port-file="$PORTFILE") &
+        python3 ci/otelrecv.py --port-file="$PORTFILE" &
         RECV_PID=$!
         cleanup() {
           kill "$RECV_PID" 2>/dev/null
