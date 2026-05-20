@@ -6,7 +6,9 @@
 
 # Build artifacts and tools
 build/
+go/
 .dart_tool/
+fvm/
 .fvm/
 .pub-cache/
 .dart-cli-completion/
@@ -48,3 +50,7 @@ snap/
 .forgejo
 .fvmrc
 .envrc
+
+# AI / tooling session data
+.claude/
+.sharedinbox-agent-logs/
