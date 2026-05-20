@@ -290,10 +290,11 @@ tasks:
         PORTFILE=$(mktemp)
         python3 ci/otelrecv.py --port-file="$PORTFILE" &
         RECV_PID=$!
+        echo "$(_ts) otelrecv started pid=$RECV_PID" >&2
         cleanup() {
-          echo "$(_ts) cleanup: killing otelrecv pid=$RECV_PID" >&2
+          echo "$(_ts) cleanup: killing otelrecv (pid=$RECV_PID)" >&2
           kill -9 "$RECV_PID" 2>/dev/null
-          wait "$RECV_PID" 2>/dev/null
+          pkill -9 -f "otelrecv.py" 2>/dev/null || true
           echo "$(_ts) cleanup: done" >&2
           rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
