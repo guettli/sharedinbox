@@ -260,15 +260,12 @@ tasks:
           exit $?
         fi
         PORTFILE=$(mktemp)
-        TIMINGFILE=$(mktemp)
-        (cd ci && go run ./otelrecv/ --port-file="$PORTFILE") > "$TIMINGFILE" &
+        (cd ci && go run ./otelrecv/ --port-file="$PORTFILE") &
         RECV_PID=$!
         cleanup() {
           kill "$RECV_PID" 2>/dev/null
           wait "$RECV_PID" 2>/dev/null
-          echo ""
-          cat "$TIMINGFILE"
-          rm -f "$PORTFILE" "$TIMINGFILE"
+          rm -f "$PORTFILE"
         }
         trap cleanup EXIT
         until [ -s "$PORTFILE" ]; do sleep 0.05; done
