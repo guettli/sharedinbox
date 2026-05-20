@@ -255,9 +255,23 @@ tasks:
     desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
     cmds:
       - |
+        DAGGER_OUT=$(mktemp)
+        RC_FILE=$(mktemp)
+        check_rc() {
+          RC=$(cat "$RC_FILE")
+          if [ "$RC" -eq 124 ]; then
+            if grep -q "All tests passed" "$DAGGER_OUT"; then
+              echo "Note: dagger hung in teardown after success; treating as exit 0." >&2
+              RC=0
+            fi
+          fi
+          return "$RC"
+        }
         if ! command -v python3 >/dev/null 2>&1; then
-          dagger call --progress=plain -q -m ci --source=. check
-          exit $?
+          { timeout 600 dagger call --progress=plain -q -m ci --source=. check; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
+          check_rc; RC=$?
+          rm -f "$DAGGER_OUT" "$RC_FILE"
+          exit $RC
         fi
         PORTFILE=$(mktemp)
         python3 ci/otelrecv.py --port-file="$PORTFILE" &
@@ -265,16 +279,17 @@ tasks:
         cleanup() {
           kill "$RECV_PID" 2>/dev/null
           wait "$RECV_PID" 2>/dev/null
-          rm -f "$PORTFILE"
+          rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
         trap cleanup EXIT
         until [ -s "$PORTFILE" ]; do sleep 0.05; done
         PORT=$(cat "$PORTFILE")
-        RC=0
-        OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
-        OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
-        dagger call --progress=plain -q -m ci --source=. check || RC=$?
-        exit $RC
+        { timeout 600 env \
+            OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
+            OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
+            dagger call --progress=plain -q -m ci --source=. check; \
+          echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
+        check_rc; exit $?
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
