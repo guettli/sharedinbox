@@ -297,9 +297,7 @@ tasks:
         trap cleanup EXIT
         until [ -s "$PORTFILE" ]; do sleep 0.05; done
         PORT=$(cat "$PORTFILE")
-        retry_dagger env \
-          OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
-          OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
+        retry_dagger \
           dagger call --progress=plain -q -m ci --source=. check
         exit $?
 
