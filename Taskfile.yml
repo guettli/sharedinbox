@@ -260,7 +260,7 @@ tasks:
         # Run dagger with timeout; capture output for retry/teardown-hang detection.
         run_dagger() {
           : > "$DAGGER_OUT"; : > "$RC_FILE"
-          { timeout 600 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
+          { timeout --kill-after=10 600 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
           RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
           if [ "$RC" -eq 124 ] && grep -q "All tests passed" "$DAGGER_OUT"; then
             echo "Note: dagger hung in teardown after success; treating as exit 0." >&2
