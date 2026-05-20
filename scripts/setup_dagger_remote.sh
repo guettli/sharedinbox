@@ -1,38 +1,25 @@
 #!/usr/bin/env bash
 # Establishes a secure tunnel to a remote Dagger Engine via stunnel.
-# Probes DAGGER_STUNNEL_URL1 and DAGGER_STUNNEL_URL2 to find the active server.
 set -euo pipefail
 
-if [ -z "${DAGGER_STUNNEL_URL1:-}" ] || [ -z "${DAGGER_STUNNEL_URL2:-}" ]; then
-    echo "Error: DAGGER_STUNNEL_URL1 and DAGGER_STUNNEL_URL2 must be set."
+if [ -z "${DAGGER_STUNNEL_URL:-}" ]; then
+    echo "Error: DAGGER_STUNNEL_URL must be set."
     exit 1
 fi
 
-ACTIVE_HOST=""
-ACTIVE_PORT=""
+# Parse host and port (e.g., example.com:8774 or just example.com)
+host=$(echo "$DAGGER_STUNNEL_URL" | cut -d: -f1)
+port=$(echo "$DAGGER_STUNNEL_URL" | cut -d: -f2)
+if [ "$host" == "$port" ]; then
+    port="8774"
+fi
 
-for url in "$DAGGER_STUNNEL_URL1" "$DAGGER_STUNNEL_URL2"; do
-    # Parse host and port (e.g., example.com:8774 or just example.com)
-    host=$(echo "$url" | cut -d: -f1)
-    port=$(echo "$url" | cut -d: -f2)
-    # Default port if not provided
-    if [ "$host" == "$port" ]; then
-        port="8774"
-    fi
-
-    echo "Probing $host:$port..."
-    if nc -zw 3 "$host" "$port" 2>/dev/null; then
-        echo "Found active Dagger server on $host:$port"
-        ACTIVE_HOST="$host"
-        ACTIVE_PORT="$port"
-        break
-    fi
-done
-
-if [ -z "$ACTIVE_HOST" ]; then
-    echo "Error: No Dagger server responded on $DAGGER_STUNNEL_URL1 or $DAGGER_STUNNEL_URL2"
+echo "Probing $host:$port..."
+if ! nc -zw 3 "$host" "$port" 2>/dev/null; then
+    echo "Error: No Dagger server responded on $host:$port"
     exit 1
 fi
+echo "Found active Dagger server on $host:$port"
 
 # 2. Setup TLS credentials (passed as env vars from secrets)
 mkdir -p /tmp/dagger-tls
@@ -50,7 +37,7 @@ pid = /tmp/stunnel.pid
 
 [dagger]
 accept = 127.0.0.1:1774
-connect = $ACTIVE_HOST:$ACTIVE_PORT
+connect = $host:$port
 CAfile = /tmp/dagger-tls/ca.crt
 cert = /tmp/dagger-tls/client.crt
 key = /tmp/dagger-tls/client.key

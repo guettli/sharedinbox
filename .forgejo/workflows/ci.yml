@@ -26,8 +26,7 @@ jobs:
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
@@ -60,8 +59,7 @@ jobs:
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
@@ -98,8 +96,7 @@ jobs:
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
@@ -149,8 +146,7 @@ jobs:
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
-          DAGGER_STUNNEL_URL1: ${{ secrets.DAGGER_STUNNEL_URL1 }}
-          DAGGER_STUNNEL_URL2: ${{ secrets.DAGGER_STUNNEL_URL2 }}
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
           DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
           DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
