@@ -129,14 +129,20 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/traces":
             self._respond(404); return
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        n = int(self.headers.get("Content-Length", 0))
+        print(f"[otelrecv] POST /v1/traces {n} bytes", file=sys.stderr, flush=True)
+        body = self.rfile.read(n)
+        print(f"[otelrecv] decoding", file=sys.stderr, flush=True)
         try:
             decoded = _decode(body)
         except Exception as exc:
+            print(f"[otelrecv] decode error: {exc}", file=sys.stderr, flush=True)
             self._respond(400, str(exc).encode()); return
+        print(f"[otelrecv] decoded {len(decoded)} spans, responding 200", file=sys.stderr, flush=True)
         with _lock:
             _spans.extend(decoded)
         self._respond(200)
+        print(f"[otelrecv] 200 sent", file=sys.stderr, flush=True)
 
     def log_message(self, *_):
         pass
@@ -173,12 +179,15 @@ def main():
             f.write(str(server.server_address[1]))
 
     def _shutdown(sig, frame):
+        print(f"[otelrecv] signal {sig}, shutting down", file=sys.stderr, flush=True)
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    print(f"[otelrecv] listening on port {server.server_address[1]}", file=sys.stderr, flush=True)
     server.serve_forever()
+    print("[otelrecv] server stopped, printing report", file=sys.stderr, flush=True)
     _report()
 
 
