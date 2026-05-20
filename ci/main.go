@@ -5,6 +5,8 @@ import (
 	"dagger/ci/internal/dagger"
 	"fmt"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // patchAabScript patches android:versionCode in an AAB's compiled manifest proto.
@@ -418,14 +420,20 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return coverage, err
 	}
 
-	testBackend, err := m.TestBackend(ctx)
-	if err != nil {
-		return testBackend, err
-	}
-
-	testIntegration, err := m.TestIntegration(ctx)
-	if err != nil {
-		return testIntegration, err
+	var testBackend, testIntegration string
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		var e error
+		testBackend, e = m.TestBackend(egCtx)
+		return e
+	})
+	eg.Go(func() error {
+		var e error
+		testIntegration, e = m.TestIntegration(egCtx)
+		return e
+	})
+	if err := eg.Wait(); err != nil {
+		return "", err
 	}
 
 	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, mocks, coverage, testBackend, testIntegration), nil
