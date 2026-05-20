@@ -115,18 +115,28 @@ _lock = threading.Lock()
 
 
 class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _respond(self, code, body=b""):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/x-protobuf")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
     def do_POST(self):
         if self.path != "/v1/traces":
-            self.send_response(404); self.end_headers(); return
+            self._respond(404); return
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         try:
             decoded = _decode(body)
         except Exception as exc:
-            self.send_response(400); self.end_headers()
-            self.wfile.write(str(exc).encode()); return
+            self._respond(400, str(exc).encode()); return
         with _lock:
             _spans.extend(decoded)
-        self.send_response(200); self.end_headers()
+        self._respond(200)
 
     def log_message(self, *_):
         pass
