@@ -252,18 +252,29 @@ tasks:
       - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
   check-dagger:
-    desc: Run full check suite via Dagger (with timing report if python3 is available)
+    desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
     cmds:
       - |
         if ! command -v python3 >/dev/null 2>&1; then
           dagger call --progress=plain -q -m ci --source=. check
           exit $?
         fi
-        RC_FILE=$(mktemp)
-        (dagger call --progress=plain -q -m ci --source=. check; echo $? >"$RC_FILE") 2>&1 | python3 ci/otelrecv.py
-        RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
-        rm -f "$RC_FILE"
-        exit "$RC"
+        PORTFILE=$(mktemp)
+        python3 ci/otelrecv.py --port-file="$PORTFILE" &
+        RECV_PID=$!
+        cleanup() {
+          kill "$RECV_PID" 2>/dev/null
+          wait "$RECV_PID" 2>/dev/null
+          rm -f "$PORTFILE"
+        }
+        trap cleanup EXIT
+        until [ -s "$PORTFILE" ]; do sleep 0.05; done
+        PORT=$(cat "$PORTFILE")
+        RC=0
+        OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
+        OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
+        dagger call --progress=plain -q -m ci --source=. check || RC=$?
+        exit $RC
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
