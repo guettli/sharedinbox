@@ -257,19 +257,32 @@ tasks:
       - |
         DAGGER_OUT=$(mktemp)
         RC_FILE=$(mktemp)
-        check_rc() {
-          RC=$(cat "$RC_FILE")
-          if [ "$RC" -eq 124 ]; then
-            if grep -q "All tests passed" "$DAGGER_OUT"; then
-              echo "Note: dagger hung in teardown after success; treating as exit 0." >&2
-              RC=0
-            fi
+        # Run dagger with timeout; capture output for retry/teardown-hang detection.
+        run_dagger() {
+          : > "$DAGGER_OUT"; : > "$RC_FILE"
+          { timeout 600 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
+          RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
+          if [ "$RC" -eq 124 ] && grep -q "All tests passed" "$DAGGER_OUT"; then
+            echo "Note: dagger hung in teardown after success; treating as exit 0." >&2
+            RC=0
           fi
           return "$RC"
         }
+        # Retry on TCP-level failures; propagate real test failures immediately.
+        retry_dagger() {
+          for attempt in 1 2 3; do
+            run_dagger "$@" && return 0
+            RC=$?
+            if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused" "$DAGGER_OUT"; then
+              echo "Network error on attempt $attempt/3, retrying..." >&2
+            else
+              return "$RC"
+            fi
+          done
+        }
         if ! command -v python3 >/dev/null 2>&1; then
-          { timeout 600 dagger call --progress=plain -q -m ci --source=. check; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
-          check_rc; RC=$?
+          retry_dagger dagger call --progress=plain -q -m ci --source=. check
+          RC=$?
           rm -f "$DAGGER_OUT" "$RC_FILE"
           exit $RC
         fi
@@ -284,12 +297,11 @@ tasks:
         trap cleanup EXIT
         until [ -s "$PORTFILE" ]; do sleep 0.05; done
         PORT=$(cat "$PORTFILE")
-        { timeout 600 env \
-            OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
-            OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
-            dagger call --progress=plain -q -m ci --source=. check; \
-          echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
-        check_rc; exit $?
+        retry_dagger env \
+          OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
+          OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
+          dagger call --progress=plain -q -m ci --source=. check
+        exit $?
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
