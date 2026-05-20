@@ -2,55 +2,15 @@
 
 # Version control
 .git/
-.gitmodules
 
-# Build artifacts and tools
+# Build artifacts
 build/
-go/
 .dart_tool/
-fvm/
-.fvm/
-.pub-cache/
-.dart-cli-completion/
-.dartServer/
-.direnv/
-.dotnet/
-.rustup/
-.task/
-.vscode/
-.vscode-server/
 coverage/
-node_modules/
-ios/Pods/
-macos/Pods/
 linux/flutter/ephemeral/
 website/public/
 website/resources/
 
-# Sensitive or system files
+# Secrets
 .env*
-.ssh/
-.local/
-.cache/
-.config/
-.atuin/
-.gemini/
-.bash*
-.profile
-.zsh*
-.zcompdump
-.tmux.conf
-.lesshst
-.metadata
-.emulator_console_auth_token
-snap/
-.gitconfig
-.flutter-plugins-dependencies
-.flutter
-.forgejo
-.fvmrc
 .envrc
-
-# AI / tooling session data
-.claude/
-.sharedinbox-agent-logs/

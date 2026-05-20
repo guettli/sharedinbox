@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Cron runs with a minimal PATH; ensure Nix profile binaries (tea, claude) are found.
-os.environ["PATH"] = f"/home/si/.nix-profile/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
+os.environ["PATH"] = f"{Path.home()}/.nix-profile/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
 
 # ── configuration ─────────────────────────────────────────────────────────────
 
