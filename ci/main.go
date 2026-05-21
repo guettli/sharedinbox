@@ -590,6 +590,16 @@ func (m *Ci) BuildAndroidRelease() *dagger.File {
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
 
+// withGoCache mounts Dagger cache volumes for GOCACHE and GOMODCACHE so Go
+// builds inside the container reuse cached packages between pipeline runs.
+func withGoCache(c *dagger.Container) *dagger.Container {
+	return c.
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build-cache")).
+		WithMountedCache("/root/go/pkg/mod", dag.CacheVolume("go-mod-cache")).
+		WithEnvVariable("GOCACHE", "/root/.cache/go-build").
+		WithEnvVariable("GOMODCACHE", "/root/go/pkg/mod")
+}
+
 // UploadToPlayStore uploads a pre-built AAB to the Play Store internal track.
 func (m *Ci) UploadToPlayStore(
 	ctx context.Context,
@@ -603,6 +613,7 @@ func (m *Ci) UploadToPlayStore(
 	return dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
+		WithMountedCache("/root/.cache/pip", dag.CacheVolume("pip-cache")).
 		WithExec([]string{"pip", "install", "requests", "google-auth"}).
 		WithFile("/src/build/app/outputs/bundle/release/app-release.aab", aab).
 		WithFile("/src/scripts/deploy_playstore.py", scriptSource.File("scripts/deploy_playstore.py")).
