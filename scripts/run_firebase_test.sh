@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Runs the Firebase Test Lab Dagger pipeline with Gradle/Dagger noise filtered out.
+# Retries up to 3 times on transient Dagger engine connectivity errors.
 set -uo pipefail
 
+OUT=$(mktemp)
 RC_FILE=$(mktemp)
-trap 'rm -f "$RC_FILE"' EXIT
+trap 'rm -f "$OUT" "$RC_FILE"' EXIT
 
 _strip_ansi() {
     sed 's/\x1b\[[0-9;]*[mGKHFJ]//g'
@@ -26,11 +28,24 @@ _filter_noise() {
     || true
 }
 
-{
-    dagger call --progress=plain -q -m ci --source=. test-android-firebase \
-        --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY \
-        --project-id "$FIREBASE_PROJECT_ID"
-    echo $? > "$RC_FILE"
-} 2>&1 | _strip_ansi | _filter_noise
+_run() {
+    : > "$OUT" ; : > "$RC_FILE"
+    {
+        dagger call --progress=plain -q -m ci --source=. test-android-firebase \
+            --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY \
+            --project-id "$FIREBASE_PROJECT_ID"
+        echo $? > "$RC_FILE"
+    } 2>&1 | tee "$OUT" | _strip_ansi | _filter_noise
+}
 
-exit "$(cat "$RC_FILE" 2>/dev/null || echo 1)"
+for attempt in 1 2 3; do
+    _run && break
+    RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
+    if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|No Dagger server responded" "$OUT"; then
+        echo "[firebase] dagger connectivity error on attempt $attempt/3, retrying..." >&2
+    else
+        exit "$RC"
+    fi
+done
+
+exit "$(cat "$RC_FILE" 2>/dev/null || echo 0)"
