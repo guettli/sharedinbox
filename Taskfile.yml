@@ -265,10 +265,8 @@ tasks:
         _ts() { date -u '+[%H:%M:%S]'; }
         run_dagger() {
           : > "$DAGGER_OUT"; : > "$RC_FILE"
-          echo "$(_ts) dagger: start" >&2
           { timeout --kill-after=10 600 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
           RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
-          echo "$(_ts) dagger: pipeline done RC=$RC" >&2
           if [ "$RC" -eq 124 ] && grep -q "All tests passed" "$DAGGER_OUT"; then
             echo "$(_ts) dagger: hung in teardown after success; treating as exit 0." >&2
             RC=0
@@ -295,24 +293,20 @@ tasks:
         PORTFILE=$(mktemp)
         python3 ci/otelrecv.py --port-file="$PORTFILE" &
         RECV_PID=$!
-        echo "$(_ts) otelrecv started pid=$RECV_PID" >&2
         cleanup() {
-          echo "$(_ts) cleanup: killing otelrecv (pid=$RECV_PID)" >&2
-          kill -9 "$RECV_PID" 2>/dev/null
+          kill "$RECV_PID" 2>/dev/null
+          wait "$RECV_PID" 2>/dev/null || true
           pkill -9 -f "otelrecv.py" 2>/dev/null || true
-          echo "$(_ts) cleanup: done" >&2
           rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
         trap cleanup EXIT
         until [ -s "$PORTFILE" ]; do sleep 0.05; done
         PORT=$(cat "$PORTFILE")
-        echo "$(_ts) otelrecv: ready on port $PORT" >&2
         retry_dagger env \
           OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
           OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
           dagger call --progress=plain -q -m ci --source=. check
         RC=$?
-        echo "$(_ts) dagger: final RC=$RC" >&2
         exit $RC
 
   integration-android:
