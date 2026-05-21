@@ -294,7 +294,6 @@ tasks:
         python3 ci/otel-receiver.py --port-file="$PORTFILE" &
         RECV_PID=$!
         cleanup() {
-          kill -9 "$RECV_PID" 2>/dev/null || true
           rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
         trap cleanup EXIT
