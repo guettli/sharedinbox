@@ -197,7 +197,7 @@ tasks:
       - sh: test -n "$FIREBASE_PROJECT_ID"
         msg: "FIREBASE_PROJECT_ID is not set"
     cmds:
-      - dagger call --progress=plain -q -m ci --source=. test-android-firebase --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY --project-id "$FIREBASE_PROJECT_ID"
+      - scripts/run_firebase_test.sh
 
   ci-graph:
     desc: Print a Mermaid diagram of the CI pipeline — paste into mermaid.live or any Markdown renderer
