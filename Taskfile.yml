@@ -291,12 +291,10 @@ tasks:
           exit $RC
         fi
         PORTFILE=$(mktemp)
-        python3 ci/otelrecv.py --port-file="$PORTFILE" &
+        python3 ci/otel-receiver.py --port-file="$PORTFILE" &
         RECV_PID=$!
         cleanup() {
-          kill "$RECV_PID" 2>/dev/null
-          wait "$RECV_PID" 2>/dev/null || true
-          pkill -9 -f "otelrecv.py" 2>/dev/null || true
+          kill -9 "$RECV_PID" 2>/dev/null || true
           rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
         trap cleanup EXIT
@@ -307,6 +305,8 @@ tasks:
           OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
           dagger call --progress=plain -q -m ci --source=. check
         RC=$?
+        curl -sf "http://127.0.0.1:$PORT/shutdown" >/dev/null 2>&1 || true
+        wait "$RECV_PID" 2>/dev/null || true
         exit $RC
 
   integration-android:

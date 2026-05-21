@@ -3,7 +3,7 @@
 Minimal OTLP HTTP/protobuf trace receiver for Dagger CI timing.
 
 Usage:
-    python3 ci/otelrecv.py --port-file=/tmp/otel.port
+    python3 ci/otel-receiver.py --port-file=/tmp/otel.port
 
 Caller sets:
     OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>
@@ -127,6 +127,12 @@ class _Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
+    def do_GET(self):
+        if self.path != "/shutdown":
+            self._respond(404); return
+        self._respond(200, b"shutting down")
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
     def do_POST(self):
         if self.path != "/v1/traces":
             self._respond(404); return
@@ -135,7 +141,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             decoded = _decode(body)
         except Exception as exc:
-            print(f"[otelrecv] decode error: {exc}", file=sys.stderr, flush=True)
+            print(f"[otel-receiver] decode error: {exc}", file=sys.stderr, flush=True)
             self._respond(400, str(exc).encode()); return
         with _lock:
             _spans.extend(decoded)
@@ -150,7 +156,7 @@ class _Handler(BaseHTTPRequestHandler):
 def _report():
     with _lock:
         if not _spans:
-            print("otelrecv: no spans received", file=sys.stderr)
+            print("otel-receiver: no spans received", file=sys.stderr)
             return
         rows = sorted(_spans, key=lambda r: r["dur"], reverse=True)
         NAME_W = 38
@@ -181,9 +187,7 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    print(f"[otelrecv] listening on port {server.server_address[1]}", file=sys.stderr, flush=True)
     server.serve_forever()
-    print("[otelrecv] server stopped, printing report", file=sys.stderr, flush=True)
     _report()
 
 
