@@ -211,7 +211,10 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithDirectory("/src", pubspecOnly).
 		WithWorkdir("/src").
-		WithExec([]string{"flutter", "pub", "get"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter pub get >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -vE '^[+~><] ' "$tmp" || true`}).
 		WithExec([]string{"python3", "-c",
 			"import json, os\n" +
 				"f='.dart_tool/package_config.json'; d=json.load(open(f)); [d.pop(k,None) for k in ('generated','generatorVersion')]; json.dump(d,open(f,'w'))\n" +
@@ -224,7 +227,10 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
 	return m.pubGetLayer().
 		WithDirectory("/src", src).
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build", "--delete-conflicting-outputs"})
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -vE '^\[' "$tmp" || true`})
 }
 
 // Setup is the exported variant (CLI / Taskfile). Uses the full check source.
@@ -362,8 +368,11 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
 		WithExec([]string{"git", "config", "user.name", "CI"}).
 		WithExec([]string{"git", "add", "."}).
-		WithExec([]string{"git", "commit", "-m", "baseline"}).
-		WithExec([]string{"flutter", "pub", "run", "build_runner", "build"}).
+		WithExec([]string{"git", "commit", "-q", "-m", "baseline"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter pub run build_runner build >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -vE '^\[' "$tmp" || true`}).
 		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
 		Stdout(ctx)
 }
@@ -371,7 +380,10 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 // Coverage runs unit tests with coverage gate.
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
-		WithExec([]string{"flutter", "test", "test/unit", "--coverage", "--reporter", "expanded", "--no-pub"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter test test/unit --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
 }
@@ -379,7 +391,10 @@ func (m *Ci) Coverage(ctx context.Context) (string, error) {
 // TestBackend runs IMAP/JMAP sync tests against a live Stalwart instance.
 func (m *Ci) TestBackend(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.backendSrc())).
-		WithExec([]string{"flutter", "test", "--concurrency=1", "--reporter", "expanded", "--no-pub", "test/backend"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter test --concurrency=1 --reporter expanded --no-pub test/backend >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		Stdout(ctx)
 }
 
@@ -387,14 +402,20 @@ func (m *Ci) TestBackend(ctx context.Context) (string, error) {
 func (m *Ci) TestIntegration(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.integrationSrc())).
 		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
-		WithExec([]string{"xvfb-run", "-s", "-screen 0 1280x720x24", "flutter", "test", "integration_test/", "-d", "linux"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`xvfb-run -s '-screen 0 1280x720x24' flutter test integration_test/ -d linux >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		Stdout(ctx)
 }
 
 // TestSyncReliability runs the sync reliability runner.
 func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.backendSrc())).
-		WithExec([]string{"flutter", "test", "test/backend/sync_reliability_test.dart", "--reporter", "expanded", "--concurrency=1", "--no-pub"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter test test/backend/sync_reliability_test.dart --reporter expanded --concurrency=1 --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		Stdout(ctx)
 }
 

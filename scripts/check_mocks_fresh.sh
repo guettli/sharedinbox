@@ -5,7 +5,14 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 echo "check-mocks: regenerating..."
-fvm flutter pub run build_runner build --delete-conflicting-outputs 2>&1
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+if fvm flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1; then
+  grep -vE '^\[' "$tmp" || true
+else
+  cat "$tmp"
+  exit 1
+fi
 
 CHANGED=$(git diff --name-only -- '*.mocks.dart')
 if [ -n "$CHANGED" ]; then
