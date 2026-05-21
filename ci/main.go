@@ -176,31 +176,39 @@ func New(
 	}
 }
 
-// Base is the Flutter toolchain container with no source mounted.
-// Its cache key is stable until the image, apt packages, or SDK component versions change.
-// Android SDK components (NDK, CMake, build-tools, platform) are installed into the container
-// layer here so Dagger's execution cache captures them — cache volumes proved unreliable across
-// pipeline runs on the remote engine and caused Gradle to re-download ~3 min of SDKs every time.
-func (m *Ci) Base() *dagger.Container {
+// toolchain returns the Flutter+Android toolchain without any mutable cache mounts.
+// Its execution cache key is stable until the image, apt packages, or SDK versions change.
+// Used as the base for pubGetLayer so flutter pub get is execution-cached between runs.
+func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
-		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
-		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
 		WithExec([]string{"/bin/sh", "-c", `yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34"`})
+}
+
+// Base is the Flutter toolchain container with mutable cache mounts attached.
+// Use for Android/Gradle builds that need the pub and Gradle caches.
+// Do NOT use as the base for pubGetLayer — the mutable pub cache volume makes
+// flutter pub get's execution cache key unstable, causing a cache miss every run.
+func (m *Ci) Base() *dagger.Container {
+	return m.toolchain().
+		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
+		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache"))
 }
 
 // pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
 // inputs, then removes non-deterministic fields from both package_config.json
 // and .flutter-plugins-dependencies so the snapshot is byte-for-byte stable
 // across runs. Re-executes only when pubspec.yaml or pubspec.lock changes.
+// Uses toolchain() (no pub cache volume) so Dagger's execution cache is stable.
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
-	return m.Base().
+	return m.toolchain().
+		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
 		WithDirectory("/src", pubspecOnly).
 		WithWorkdir("/src").
 		WithExec([]string{"flutter", "pub", "get"}).
