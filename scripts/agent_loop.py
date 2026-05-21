@@ -24,6 +24,7 @@ Resume the Claude conversation afterward with:
   claude --resume issue-91
 """
 
+import argparse
 import json
 import os
 import shlex
@@ -40,6 +41,9 @@ os.environ["PATH"] = f"{Path.home()}/.nix-profile/bin:{os.environ.get('PATH', '/
 REPO = "guettli/sharedinbox"
 STATE_FILE = Path.home() / ".sharedinbox-agent-state.json"
 MAX_AGENT_AGE_SECONDS = 3600  # 1 hour
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects" / (
+    "-" + str(Path.home())[1:].replace("/", "-")
+)
 
 # Labels used by the workflow.
 LABEL_READY = "State/Ready"
@@ -221,10 +225,55 @@ def _kill_agent(state: dict) -> None:
             pass
 
 
+# ── subcommands ───────────────────────────────────────────────────────────────
+
+
+def cmd_list() -> int:
+    """List recent agent-loop sessions, newest first."""
+    if not CLAUDE_PROJECTS_DIR.exists():
+        print(f"[agent_loop] No sessions found (directory missing: {CLAUDE_PROJECTS_DIR})")
+        return 0
+
+    sessions = []
+    for jsonl in CLAUDE_PROJECTS_DIR.glob("*.jsonl"):
+        agent_name = None
+        session_id = None
+        try:
+            with jsonl.open() as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    d = json.loads(line)
+                    if d.get("type") == "agent-name":
+                        agent_name = d.get("agentName")
+                        session_id = d.get("sessionId")
+                        break
+        except Exception:
+            continue
+        if agent_name:
+            sessions.append((jsonl.stat().st_mtime, agent_name, session_id))
+
+    if not sessions:
+        print("[agent_loop] No agent sessions found.")
+        return 0
+
+    sessions.sort(reverse=True)
+    total = len(sessions)
+    print(f"  {'DATE':<16}  {'NAME':<20}  UUID  (use with: claude --resume <uuid>)")
+    print(f"  {'-'*16}  {'-'*20}  {'-'*36}")
+    for mtime, name, sid in sessions[:20]:
+        ts = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        print(f"  {ts:<16}  {name:<20}  {sid}")
+    if total > 20:
+        print(f"  ... ({total - 20} more)")
+    return 0
+
+
 # ── main flow ─────────────────────────────────────────────────────────────────
 
 
-def main() -> int:
+def _run_loop() -> int:
     state = _read_state()
 
     # ── 1. Agent already running? ─────────────────────────────────────────────
@@ -320,6 +369,17 @@ Instructions:
     pid = _start_agent(prompt, f"issue-{issue_number}")
     _write_state(pid, issue_number, "issue")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="agent_loop")
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("list", help="List recent agent sessions")
+    args = parser.parse_args()
+
+    if args.cmd == "list":
+        return cmd_list()
+    return _run_loop()
 
 
 if __name__ == "__main__":
