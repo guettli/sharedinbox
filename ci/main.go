@@ -620,13 +620,17 @@ func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
 		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
 		WithWorkdir("/src/android").
 		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
-		WithWorkdir("/src")
+		WithWorkdir("/src").
+		WithExec([]string{"/bin/bash", "-c",
+			`apk=$(find android/app/build/outputs/apk/androidTest -name "*.apk" -type f | head -1) && \
+			 [ -n "$apk" ] || { echo "ERROR: no androidTest APK found in android/app/build/outputs/apk/androidTest"; exit 1; } && \
+			 cp "$apk" app-debug-androidTest.apk`})
 
 	return dag.Directory().
 		WithFile("app-debug.apk",
 			built.File("build/app/outputs/flutter-apk/app-debug.apk")).
 		WithFile("app-debug-androidTest.apk",
-			built.File("android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"))
+			built.File("app-debug-androidTest.apk"))
 }
 
 // TestAndroidFirebase builds Android APKs and runs instrumented tests on Firebase Test Lab.
