@@ -622,9 +622,10 @@ func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
 		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
-			`apk=$(find android/app/build/outputs/apk/androidTest -name "*.apk" -type f | head -1) && \
-			 [ -n "$apk" ] || { echo "ERROR: no androidTest APK found in android/app/build/outputs/apk/androidTest"; exit 1; } && \
-			 cp "$apk" app-debug-androidTest.apk`})
+			`apk=$(find /src -path "*androidTest*" -name "*.apk" -type f 2>/dev/null | head -1) && \
+			 [ -n "$apk" ] || { echo "ERROR: no androidTest APK found; APKs present:"; find /src -name "*.apk" -type f 2>/dev/null; exit 1; } && \
+			 echo "Found test APK: $apk" && \
+			 cp "$apk" /src/app-debug-androidTest.apk`})
 
 	return dag.Directory().
 		WithFile("app-debug.apk",
