@@ -400,6 +400,9 @@ func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
 
 // Check runs the full check suite.
 func (m *Ci) Check(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
 	if _, err := m.CheckHygiene(ctx); err != nil {
 		return "Hygiene check failed", err
 	}
