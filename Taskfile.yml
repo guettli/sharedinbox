@@ -189,6 +189,16 @@ tasks:
     cmds:
       - dagger call --progress=plain -q -m ci --source=. test-sync-reliability
 
+  test-android-firebase:
+    desc: Build Android debug APKs and run instrumented tests on Firebase Test Lab (via Dagger)
+    preconditions:
+      - sh: test -n "$FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
+        msg: "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY is not set"
+      - sh: test -n "$FIREBASE_PROJECT_ID"
+        msg: "FIREBASE_PROJECT_ID is not set"
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. test-android-firebase --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY --project-id "$FIREBASE_PROJECT_ID"
+
   ci-graph:
     desc: Print a Mermaid diagram of the CI pipeline — paste into mermaid.live or any Markdown renderer
     cmds:

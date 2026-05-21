@@ -252,6 +252,13 @@ func (m *Ci) androidSrc() *dagger.Directory {
 	})
 }
 
+// firebaseSrc is the source subset for Firebase Test Lab builds (app + instrumented tests).
+func (m *Ci) firebaseSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "android/", "integration_test/", "assets/", "pubspec.yaml", "pubspec.lock", "drift_schemas/"},
+	})
+}
+
 // linuxSrc is the source subset for Linux builds and integration tests.
 func (m *Ci) linuxSrc() *dagger.Directory {
 	return m.Source.Filter(dagger.DirectoryFilterOpts{
@@ -603,6 +610,48 @@ func (m *Ci) DeployApk(
 		WithFile("/tmp/app.apk", apk).
 		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
+		Stdout(ctx)
+}
+
+// BuildAndroidDebugApks builds the debug app APK and the androidTest APK needed for Firebase Test Lab.
+// Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
+func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
+	built := m.setup(m.firebaseSrc()).
+		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
+		WithWorkdir("/src/android").
+		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
+		WithWorkdir("/src")
+
+	return dag.Directory().
+		WithFile("app-debug.apk",
+			built.File("build/app/outputs/flutter-apk/app-debug.apk")).
+		WithFile("app-debug-androidTest.apk",
+			built.File("android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"))
+}
+
+// TestAndroidFirebase builds Android APKs and runs instrumented tests on Firebase Test Lab.
+func (m *Ci) TestAndroidFirebase(
+	ctx context.Context,
+	serviceAccountKey *dagger.Secret,
+	projectID string,
+) (string, error) {
+	apks := m.BuildAndroidDebugApks()
+
+	return dag.Container().
+		From("google/cloud-sdk:slim").
+		WithDirectory("/apks", apks).
+		WithSecretVariable("FIREBASE_SA_KEY", serviceAccountKey).
+		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
+		WithExec([]string{"/bin/bash", "-c",
+			`echo "$FIREBASE_SA_KEY" > /tmp/key.json && \
+			 gcloud auth activate-service-account --key-file=/tmp/key.json && \
+			 rm /tmp/key.json && \
+			 gcloud config set project "$FIREBASE_PROJECT_ID" && \
+			 gcloud firebase test android run \
+			   --type instrumentation \
+			   --app /apks/app-debug.apk \
+			   --test /apks/app-debug-androidTest.apk \
+			   --device model=Pixel6,version=33,locale=en,orientation=portrait`}).
 		Stdout(ctx)
 }
 

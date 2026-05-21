@@ -1,14 +1,13 @@
-# We switched to Dagger. Running the emulator tests in Dagger does not really work
-# We will use an external service for device testing.
-# TODO: Switch to device testing. First choose a service. Maybe codemagic.io
-name: Android Emulator Tests (Disabled)
+name: Android Firebase Test Lab
 
 on:
-  workflow_dispatch: # Manual trigger only
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
-  integration-android:
-    name: Android Emulator Integration Tests
+  firebase-tests:
+    name: Android Instrumented Tests (Firebase Test Lab)
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -17,18 +16,25 @@ jobs:
         with:
           fetch-depth: 50
 
-      - name: Install Android SDK
+      - name: Install Dagger & Task
         run: |
-          SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
-          if [ ! -d "$SDK/platforms/android-34" ]; then
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
-            mkdir -p "$SDK/cmdline-tools"
-            unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
-            [ -d "$SDK/cmdline-tools/cmdline-tools" ] && mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" "emulator" "system-images;android-34;google_apis;x86_64"
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;34.0.0" "platforms;android-34"
-          fi
+          mkdir -p $HOME/.local/bin
+          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
+          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
 
-      - name: Run Android Integration Tests
-        run: task integration-android
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
+      - name: Run Android Tests on Firebase Test Lab
+        env:
+          FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          DAGGER_NO_NAG: "1"
+        run: task test-android-firebase
