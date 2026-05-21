@@ -656,7 +656,7 @@ func (m *Ci) TestAndroidFirebase(
 			   --type instrumentation \
 			   --app /apks/app-debug.apk \
 			   --test /apks/app-debug-androidTest.apk \
-			   --device model=Pixel6,version=33,locale=en,orientation=portrait`}).
+			   --device model=oriole,version=33,locale=en,orientation=portrait`}).
 		Stdout(ctx)
 }
 
