@@ -189,6 +189,11 @@ tasks:
     cmds:
       - dagger call --progress=plain -q -m ci --source=. test-sync-reliability
 
+  ci-graph:
+    desc: Print a Mermaid diagram of the CI pipeline — paste into mermaid.live or any Markdown renderer
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. graph
+
   stalwart:
     desc: Start a Stalwart instance for local development (via Dagger)
     cmds:

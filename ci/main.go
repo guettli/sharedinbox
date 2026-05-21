@@ -665,3 +665,60 @@ func (m *Ci) PublishAndroid(
 	signed := m.SignAndroidBundle(stamped, keystoreBase64, keystorePassword)
 	return m.UploadToPlayStore(ctx, signed, playStoreConfig)
 }
+
+// Graph returns a Mermaid diagram of the CI pipeline structure.
+// Paste the output into any Mermaid renderer (codeberg, github, mermaid.live)
+// or save it as a .md file to get a rendered diagram.
+//
+// Usage:
+//
+//	dagger call --progress=plain -q -m ci --source=. graph
+func (m *Ci) Graph() string {
+	return `# CI Pipeline Graph
+
+` + "```" + `mermaid
+flowchart TD
+    subgraph dagger ["Dagger · Check pipeline"]
+        toolchain["toolchain\nflutter:3.41.6 + NDK + apt"]
+        pubGet["pubGetLayer\nflutter pub get"]
+        stalwart(["Stalwart service\nIMAP · JMAP · SMTP · Sieve"])
+
+        toolchain --> pubGet
+
+        pubGet --> hygiene["CheckHygiene"]
+        pubGet --> layers["CheckLayers"]
+        pubGet --> fmt["Format"]
+        pubGet --> analyze["Analyze"]
+        pubGet --> mocks["CheckMocks"]
+        pubGet --> coverage["Coverage\nunit tests + gate"]
+        pubGet --> backend["TestBackend\nIMAP / JMAP"]
+        pubGet --> integration["TestIntegration\nXvfb · Linux desktop"]
+
+        stalwart --> backend
+        stalwart --> integration
+
+        hygiene    --> check{{"✓ Check"}}
+        layers     --> check
+        fmt        --> check
+        analyze    --> check
+        mocks      --> check
+        coverage   --> check
+        backend    --> check
+        integration --> check
+    end
+
+    subgraph forgejo ["Codeberg CI · .forgejo/workflows/ci.yml"]
+        ciCheck["check"]
+        buildLinux["build-linux\n(main only)"]
+        deployPS["deploy-playstore\n(main only)"]
+        pubWeb["publish-website\n(main only)"]
+
+        ciCheck --> buildLinux
+        ciCheck --> deployPS
+        buildLinux  --> pubWeb
+        deployPS    --> pubWeb
+    end
+
+    check -- "task check-dagger" --> ciCheck
+` + "```"
+}
