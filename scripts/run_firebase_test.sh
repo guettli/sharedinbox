@@ -13,7 +13,7 @@ _strip_ansi() {
 
 _filter_noise() {
     grep -vE \
-        '> Task :.+(UP-TO-DATE|NO-SOURCE)'\
+        '> Task :.+(UP-TO-DATE|NO-SOURCE|SKIPPED)'\
 '|[0-9]+ files found for path '\''lib/'\
 '|^Inputs:'\
 '|^[[:space:]]+-[[:space:]]/'\
@@ -24,6 +24,9 @@ _filter_noise() {
 '|[0-9]+ actionable tasks'\
 '|^warning: \[options\]'\
 '|^Note: Some input files'\
+'|Starting a Gradle Daemon'\
+'|Have questions, feedback, or issues'\
+'|https://firebase\.google\.com/support'\
 '|^\s*[┆│]\s*$' \
     || true
 }

@@ -182,8 +182,8 @@ func New(
 func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
-		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
+		WithExec([]string{"apt-get", "-qq", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
 		WithExec([]string{"/bin/sh", "-c",
 			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
@@ -193,7 +193,9 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithEnvVariable("PUB_CACHE", "/home/ci/.pub-cache").
 		WithEnvVariable("HOME", "/home/ci").
 		WithUser("ci").
-		WithExec([]string{"/bin/sh", "-c", `yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34"`})
+		WithExec([]string{"/bin/sh", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`})
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.

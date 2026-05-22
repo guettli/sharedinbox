@@ -34,6 +34,7 @@ cat << EOF > "$STUNNEL_CONF"
 client = yes
 foreground = yes
 pid = /tmp/stunnel.pid
+debug = warning
 ; TCP keepalive on the remote side to prevent NAT/firewall from resetting the connection
 socket = r:SO_KEEPALIVE=1
 socket = r:TCP_KEEPIDLE=10
