@@ -36,8 +36,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Cron runs with a minimal PATH; ensure Nix profile binaries (tea, claude) are found.
-os.environ["PATH"] = f"{Path.home()}/.nix-profile/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
+# Cron runs with a minimal PATH; ensure Nix profile binaries (tea, claude) and ~/go/bin (fgj) are found.
+os.environ["PATH"] = (
+    f"{Path.home()}/.nix-profile/bin"
+    f":{Path.home()}/go/bin"
+    f":{os.environ.get('PATH', '/usr/bin:/bin')}"
+)
 
 # ── configuration ─────────────────────────────────────────────────────────────
 
@@ -66,30 +70,20 @@ def _ci_run_url(run_id: int) -> str:
     return f"{REPO_URL}/actions/runs/{run_id}"
 
 
-def _tea(*args: str) -> dict | list | None:
-    """Run a `tea api` command and return parsed JSON, or None on 204."""
-    method = "GET"
-    path = args[0]
-    extra: list[str] = []
-    body_str = None
+def _fgj(*args: str) -> None:
+    """Run a fgj command, raising on failure."""
+    cmd = ["fgj", "--hostname", "codeberg.org", *args]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"fgj {' '.join(args)} failed:\n{result.stderr or result.stdout}"
+        )
 
-    i = 1
-    while i < len(args):
-        if args[i] in ("--method", "-X") and i + 1 < len(args):
-            method = args[i + 1]
-            i += 2
-        elif args[i] in ("--data", "-d") and i + 1 < len(args):
-            body_str = args[i + 1]
-            i += 2
-        else:
-            extra.append(args[i])
-            i += 1
 
-    cmd = ["tea", "api", "--repo", REPO, "-X", method]
-    if body_str:
-        cmd += ["-d", body_str]
-    cmd.append(path)
-
+def _tea_get(path: str) -> dict | list | None:
+    """Run a tea api GET and return parsed JSON. Only use for reads — tea PATCH/PUT
+    silently fails (exits 0) when unauthenticated, so writes must go via fgj."""
+    cmd = ["tea", "api", path]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
@@ -98,36 +92,35 @@ def _tea(*args: str) -> dict | list | None:
     out = result.stdout.strip()
     if not out:
         return None
-    return json.loads(out)
+    data = json.loads(out)
+    if isinstance(data, dict) and "message" in data and "url" in data:
+        raise RuntimeError(f"tea api {path} returned error: {data['message']}")
+    return data
 
 
 def _set_labels(issue: int, add: list[str], remove: list[str]) -> None:
-    """Replace labels on an issue via the tea CLI."""
-    current = _tea(f"repos/{REPO}/issues/{issue}/labels") or []
-    current_names = {lbl["name"] for lbl in current}
-    all_labels = _tea(f"repos/{REPO}/labels") or []
-    name_to_id = {lbl["name"]: lbl["id"] for lbl in all_labels}
-
-    desired = (current_names - set(remove)) | set(add)
-    ids = [name_to_id[n] for n in desired if n in name_to_id]
-    _tea(
-        f"repos/{REPO}/issues/{issue}/labels",
-        "-X", "PUT",
-        "-d", json.dumps({"labels": ids}),
-    )
+    """Add/remove labels on an issue via fgj."""
+    cmd = ["issue", "edit", str(issue), "--repo", REPO]
+    for label in add:
+        cmd += ["--add-label", label]
+    for label in remove:
+        cmd += ["--remove-label", label]
+    _fgj(*cmd)
 
 
 def _close_issue(issue: int) -> None:
-    _tea(
-        f"repos/{REPO}/issues/{issue}",
-        "-X", "PATCH",
-        "-d", json.dumps({"state": "closed"}),
-    )
+    _fgj("issue", "close", str(issue), "--repo", REPO)
+    _set_labels(issue, add=[], remove=[LABEL_IN_PROGRESS])
 
 
 def _ready_issues() -> list[dict]:
     """Return open issues with State/Ready, Prio/High first, then oldest."""
-    data = _tea(f"repos/{REPO}/issues?state=open&type=issues&limit=50") or []
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "issue", "list",
+         "--repo", REPO, "--state", "open", "--json"],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(result.stdout) if result.stdout.strip() else []
     ready = [
         i for i in data
         if any(lbl["name"] == LABEL_READY for lbl in i.get("labels", []))
@@ -140,7 +133,7 @@ def _ready_issues() -> list[dict]:
 
 
 def _latest_ci_run() -> dict | None:
-    data = _tea(f"repos/{REPO}/actions/runs?limit=1")
+    data = _tea_get(f"repos/{REPO}/actions/runs?limit=1")
     runs = (data or {}).get("workflow_runs", [])
     return runs[0] if runs else None
 
