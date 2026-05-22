@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -578,9 +579,16 @@ String? _dbPath;
 
 /// Call after WidgetsFlutterBinding.ensureInitialized() so that the
 /// path_provider plugin channel is registered before the first DB access.
+/// On some Android versions the Pigeon channel is not ready at the very
+/// start of main(); if it fails, _openConnection() retries lazily.
 Future<void> initDatabasePath() async {
-  final dir = await getApplicationSupportDirectory();
-  _dbPath = p.join(dir.path, 'sharedinbox.db');
+  try {
+    final dir = await getApplicationSupportDirectory();
+    _dbPath = p.join(dir.path, 'sharedinbox.db');
+  } on PlatformException {
+    // Channel not yet established; LazyDatabase will resolve the path
+    // on first access, after runApp() completes initialization.
+  }
 }
 
 LazyDatabase _openConnection() {

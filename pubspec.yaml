@@ -84,7 +84,8 @@ flutter:
     - assets/
 
 dependency_overrides:
-  # path_provider_android 2.3+ uses package:jni which crashes on startup
-  # (SIGSEGV in libdartjni.so FindClassUnchecked — JNI env not ready when
-  # the Dart VM first calls into it). Pin to 2.2.x which uses Pigeon instead.
-  path_provider_android: ">=2.2.0 <2.3.0"
+  # path_provider_android 2.2.21 updated to Pigeon 26, which causes a
+  # channel-error on startup on some Android devices. 2.3+ uses package:jni
+  # (SIGSEGV in libdartjni.so FindClassUnchecked). Pin to 2.2.20 which uses
+  # stable Pigeon and is known to work reliably.
+  path_provider_android: ">=2.2.0 <2.2.21"

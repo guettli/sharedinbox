@@ -70,4 +70,39 @@ void main() {
     expect(mock.launchedUrl, contains('App%20Version%3A%201.0.0%2B42'));
     expect(mock.launchedUrl, contains('TestException%3A%20something%20broke'));
   });
+
+  testWidgets(
+    'CrashScreen used as root widget — buttons work without ScaffoldMessenger crash',
+    (tester) async {
+      // Regression test for: ScaffoldMessenger.of(context) null-crash when
+      // CrashScreen is the root widget (runApp path after startup crash).
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final mock = MockUrlLauncher();
+      UrlLauncherPlatform.instance = mock;
+
+      const exception = 'TestException: startup crash';
+      final stackTrace = StackTrace.current;
+
+      // Pump CrashScreen directly as the root — no parent MaterialApp.
+      await tester.pumpWidget(
+        CrashScreen(exception: exception, stackTrace: stackTrace),
+      );
+
+      expect(find.textContaining('TestException'), findsOneWidget);
+
+      // Tapping 'Report Issue on Codeberg' must not crash. Previously
+      // ScaffoldMessenger.of(context) threw because context was above the
+      // MaterialApp that CrashScreen itself creates.
+      await tester.tap(find.text('Report Issue on Codeberg'));
+      await tester.pumpAndSettle();
+
+      expect(
+        mock.launchedUrl,
+        contains('https://codeberg.org/guettli/sharedinbox/issues/new'),
+      );
+    },
+  );
 }
