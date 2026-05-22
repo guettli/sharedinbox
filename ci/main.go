@@ -657,8 +657,10 @@ func (m *Ci) TestAndroidFirebase(
 			   --app /apks/app-debug.apk \
 			   --test /apks/app-debug-androidTest.apk \
 			   --device model=oriole,version=33,locale=en,orientation=portrait \
-			   --results-bucket=gs://sharedinbox-ftl-results 2>&1) && echo "$out" || { echo "$out"; exit 1; } && \
-			 echo "$out" | grep -qE 'Passed|passed|test cases' || { echo "ERROR: no test case results reported — tests did not run"; exit 1; }`}).
+			   --results-bucket=gs://sharedinbox-ftl-results 2>&1); rc=$?; echo "$out"; \
+			 [ "$rc" -eq 0 ] || { echo "ERROR: gcloud firebase test exited with code $rc"; exit "$rc"; }; \
+			 echo "$out" | grep -qiE 'non-retryable error|infrastructure_failure|test execution failed' && { echo "ERROR: Firebase error detected in output"; exit 1; } || true; \
+			 echo "$out" | grep -qE 'Passed|passed' || { echo "ERROR: no passing test results reported — tests did not run"; exit 1; }`}).
 		Stdout(ctx)
 }
 
