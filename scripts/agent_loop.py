@@ -49,6 +49,7 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects" / (
 LABEL_READY = "State/Ready"
 LABEL_IN_PROGRESS = "State/InProgress"
 LABEL_QUESTION = "State/Question"
+LABEL_PRIO_HIGH = "Prio/High"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -113,13 +114,16 @@ def _close_issue(issue: int) -> None:
 
 
 def _ready_issues() -> list[dict]:
-    """Return open issues with State/Ready, oldest first."""
+    """Return open issues with State/Ready, Prio/High first, then oldest."""
     data = _tea(f"repos/{REPO}/issues?state=open&type=issues&limit=50") or []
     ready = [
         i for i in data
         if any(lbl["name"] == LABEL_READY for lbl in i.get("labels", []))
     ]
-    ready.sort(key=lambda i: i["number"])
+    ready.sort(key=lambda i: (
+        0 if any(lbl["name"] == LABEL_PRIO_HIGH for lbl in i.get("labels", [])) else 1,
+        i["number"],
+    ))
     return ready
 
 
