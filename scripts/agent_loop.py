@@ -39,6 +39,7 @@ os.environ["PATH"] = f"{Path.home()}/.nix-profile/bin:{os.environ.get('PATH', '/
 # ── configuration ─────────────────────────────────────────────────────────────
 
 REPO = "guettli/sharedinbox"
+REPO_URL = f"https://codeberg.org/{REPO}"
 STATE_FILE = Path.home() / ".sharedinbox-agent-state.json"
 MAX_AGENT_AGE_SECONDS = 3600  # 1 hour
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects" / (
@@ -52,6 +53,14 @@ LABEL_QUESTION = "State/Question"
 LABEL_PRIO_HIGH = "Prio/High"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _issue_url(number: int) -> str:
+    return f"{REPO_URL}/issues/{number}"
+
+
+def _ci_run_url(run_id: int) -> str:
+    return f"{REPO_URL}/actions/runs/{run_id}"
 
 
 def _tea(*args: str) -> dict | list | None:
@@ -145,18 +154,16 @@ def _read_state() -> dict | None:
     return None
 
 
-def _write_state(pid: int, issue: int | None, kind: str) -> None:
-    STATE_FILE.write_text(
-        json.dumps(
-            {
-                "pid": pid,
-                "issue": issue,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "type": kind,
-            },
-            indent=2,
-        )
-    )
+def _write_state(pid: int, issue: int | None, kind: str, issue_title: str | None = None) -> None:
+    data: dict = {
+        "pid": pid,
+        "issue": issue,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "type": kind,
+    }
+    if issue_title is not None:
+        data["issue_title"] = issue_title
+    STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
 def _clear_state() -> None:
@@ -191,8 +198,8 @@ def _start_agent(prompt: str, session_name: str) -> int:
     proc.stdin.write(b"\n")
     proc.stdin.close()
 
-    print(f"[agent_loop] Started agent pid={proc.pid}, log={log_file}")
-    print(f"[agent_loop]   Resume: claude --resume {shlex.quote(session_name)}")
+    print(f"Started agent pid={proc.pid}, log={log_file}")
+    print(f"  Resume: claude --resume {shlex.quote(session_name)}")
     return proc.pid
 
 
@@ -235,7 +242,7 @@ def _kill_agent(state: dict) -> None:
 def cmd_list() -> int:
     """List recent agent-loop sessions, newest first."""
     if not CLAUDE_PROJECTS_DIR.exists():
-        print(f"[agent_loop] No sessions found (directory missing: {CLAUDE_PROJECTS_DIR})")
+        print(f"No sessions found (directory missing: {CLAUDE_PROJECTS_DIR})")
         return 0
 
     sessions = []
@@ -259,7 +266,7 @@ def cmd_list() -> int:
             sessions.append((jsonl.stat().st_mtime, agent_name, session_id))
 
     if not sessions:
-        print("[agent_loop] No agent sessions found.")
+        print("No agent sessions found.")
         return 0
 
     sessions.sort(reverse=True)
@@ -278,6 +285,9 @@ def cmd_list() -> int:
 
 
 def _run_loop() -> int:
+    now = datetime.now(timezone.utc)
+    print(f"---------------------- Starting {now.strftime('%Y-%m-%d %H:%MZ')}")
+
     state = _read_state()
 
     # ── 1. Agent already running? ─────────────────────────────────────────────
@@ -287,20 +297,25 @@ def _run_loop() -> int:
         kind = state.get("type", "issue")
         pid = state.get("pid", "?")
 
+        issue_title = state.get("issue_title", "")
+        issue_ref = (
+            f"{_issue_url(issue)} {issue_title}".strip() if issue else str(issue)
+        )
+
         if age > MAX_AGENT_AGE_SECONDS:
             print(
-                f"[agent_loop] Agent pid={pid!r} (issue #{issue}) "
+                f"Agent pid={pid!r} ({issue_ref}) "
                 f"has been running for {age/60:.0f} min — aborting."
             )
             _kill_agent(state)
             _clear_state()
             if issue:
                 _set_labels(issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
-                print(f"[agent_loop] Set issue #{issue} to State/Question.")
+                print(f"Set {_issue_url(issue)} to State/Question.")
             return 1
 
         print(
-            f"[agent_loop] Agent pid={pid!r} ({kind}, issue #{issue}) "
+            f"Agent pid={pid!r} ({kind}, {issue_ref}) "
             f"still running ({age/60:.0f} min). Waiting."
         )
         return 0
@@ -313,11 +328,11 @@ def _run_loop() -> int:
     run = _latest_ci_run()
 
     if run and run.get("status") == "running":
-        print(f"[agent_loop] CI run {run['id']} is still running. Waiting.")
+        print(f"CI run {_ci_run_url(run['id'])} is still running. Waiting.")
         return 0
 
     if run and run.get("status") in ("failure", "error"):
-        print(f"[agent_loop] CI run {run['id']} failed — starting fix agent.")
+        print(f"CI run {_ci_run_url(run['id'])} failed — starting fix agent.")
         prompt = (
             "The Codeberg CI for guettli/sharedinbox just failed. "
             f"The CI run ID is {run['id']}. "
@@ -333,7 +348,7 @@ def _run_loop() -> int:
     # CI is ok (or no run) — find a Ready issue.
     issues = _ready_issues()
     if not issues:
-        print("[agent_loop] No issues with State/Ready. Nothing to do.")
+        print("No issues with State/Ready. Nothing to do.")
         return 0
 
     issue = issues[0]
@@ -341,7 +356,7 @@ def _run_loop() -> int:
     issue_title = issue["title"]
     issue_body = issue.get("body", "")
 
-    print(f"[agent_loop] Starting agent for issue #{issue_number}: {issue_title}")
+    print(f"Starting agent for {_issue_url(issue_number)} {issue_title}")
 
     # Mark InProgress before starting so the next cron tick sees it even if
     # the agent hasn't had time to do so yet.
@@ -371,7 +386,7 @@ Instructions:
 """
 
     pid = _start_agent(prompt, f"issue-{issue_number}")
-    _write_state(pid, issue_number, "issue")
+    _write_state(pid, issue_number, "issue", issue_title)
     return 0
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for agent_loop.py."""
+import contextlib
 import io
 import json
 import os
@@ -12,6 +13,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 import agent_loop
+
+
+class TestUrlHelpers(unittest.TestCase):
+    def test_issue_url(self):
+        url = agent_loop._issue_url(128)
+        self.assertEqual(url, "https://codeberg.org/guettli/sharedinbox/issues/128")
+
+    def test_ci_run_url(self):
+        url = agent_loop._ci_run_url(4145144)
+        self.assertEqual(url, "https://codeberg.org/guettli/sharedinbox/actions/runs/4145144")
 
 
 class TestStateFile(unittest.TestCase):
@@ -53,6 +64,16 @@ class TestStateFile(unittest.TestCase):
         agent_loop._write_state(1, None, "ci-fix")
         agent_loop._clear_state()
         self.assertIsNone(agent_loop._read_state())
+
+    def test_write_state_stores_issue_title(self):
+        agent_loop._write_state(42, 10, "issue", "My Test Issue")
+        data = json.loads(Path(self._tmp.name).read_text())
+        self.assertEqual(data["issue_title"], "My Test Issue")
+
+    def test_write_state_omits_issue_title_when_none(self):
+        agent_loop._write_state(42, None, "ci-fix")
+        data = json.loads(Path(self._tmp.name).read_text())
+        self.assertNotIn("issue_title", data)
 
 
 class TestAgentAlive(unittest.TestCase):
@@ -201,6 +222,55 @@ class TestMain(unittest.TestCase):
         self.assertEqual(result, 0)
         mock_labels.assert_not_called()
         mock_start.assert_not_called()
+
+
+class TestOutputFormat(unittest.TestCase):
+    """Verify output format: no [agent_loop] prefix, URLs in output."""
+
+    def test_output_starts_with_header(self):
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        first_line = buf.getvalue().splitlines()[0]
+        self.assertTrue(first_line.startswith("---------------------- Starting "),
+                        f"Unexpected first line: {first_line!r}")
+
+    def test_no_agent_loop_prefix_in_output(self):
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        self.assertNotIn("[agent_loop]", buf.getvalue())
+
+    def test_ci_run_output_contains_url(self):
+        run = {"id": 4145144, "status": "running"}
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=run), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        self.assertIn("https://codeberg.org/guettli/sharedinbox/actions/runs/4145144",
+                      buf.getvalue())
+
+    def test_issue_output_contains_url_and_title(self):
+        issue = {"number": 128, "title": "Fix something", "body": "", "labels": []}
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[issue]), \
+             patch("agent_loop._set_labels"), \
+             patch("agent_loop._start_agent", return_value=99), \
+             patch("agent_loop._write_state"), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/128", output)
+        self.assertIn("Fix something", output)
 
 
 if __name__ == "__main__":
