@@ -64,6 +64,26 @@ Once the environment is set up, you can run the Dagger pipeline. For non-interac
 nix develop --command dagger call --progress=plain -q -m ci --source=. check
 ```
 
+## Secrets
+
+All sensitive credentials are passed as `dagger.Secret` (never as plain strings).
+This prevents values from appearing in Dagger logs or being cached in the engine.
+
+| Parameter | Functions |
+|---|---|
+| `sshKey *dagger.Secret` | `Deployer`, `GenerateBuildHistory`, `BuildWebsite`, `PublishWebsite`, `DeployLinux`, `DeployApk` |
+| `keystoreBase64 *dagger.Secret` | `setupKeystore`, `BuildAndroidApk`, `DeployApk`, `SignAndroidBundle`, `PublishAndroid` |
+| `keystorePassword *dagger.Secret` | same as above |
+| `playStoreConfig *dagger.Secret` | `UploadToPlayStore`, `PublishAndroid` |
+| `serviceAccountKey *dagger.Secret` | `TestAndroidFirebase` |
+
+Secrets are injected via `WithMountedSecret` (file-based, e.g. SSH key) or
+`WithSecretVariable` (env-var-based, e.g. keystore data, Play Store JSON).
+
+The only credentials not typed as `dagger.Secret` are the test passwords
+(`STALWART_PASS_B`, `STALWART_PASS_C`) in `WithStalwart`. These are hardcoded
+development values defined in `stalwart-dev/` — not production secrets.
+
 ## CI Integration (Codeberg/Forgejo)
 
 The CI workflow in `.forgejo/workflows/ci.yml` is configured to use the Dagger module located in the `ci/` directory.
