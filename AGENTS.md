@@ -23,7 +23,9 @@ fgj issue list --json --state open | jq '[.[] | select(.labels[].name == "State/
 Rules:
 
 - Never start work on an issue without `State/Ready`
-- Switch `State/Ready` → `State/InProgress` as your **first action** when picking up an issue — before reading any code:
+- When working via the agent loop: `State/Ready` → `State/InProgress` is set automatically
+  by `agent_loop.py` before the agent starts — do **not** set it yourself.
+- When working manually: switch to `State/InProgress` as your **first action**:
   ```bash
   fgj issue edit <NUMBER> --remove-label "State/Ready" --add-label "State/InProgress"
   ```

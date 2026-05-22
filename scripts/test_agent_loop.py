@@ -158,7 +158,7 @@ class TestMain(unittest.TestCase):
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
              patch("agent_loop._start_agent", side_effect=fake_start_agent), \
              patch("agent_loop._write_state"):
-            result = agent_loop.main()
+            result = agent_loop._run_loop()
 
         self.assertEqual(result, 0)
         labels_idx = next(
@@ -184,7 +184,7 @@ class TestMain(unittest.TestCase):
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
              patch("agent_loop._start_agent", return_value=99), \
              patch("agent_loop._write_state"):
-            agent_loop.main()
+            agent_loop._run_loop()
 
         self.assertIn(agent_loop.LABEL_IN_PROGRESS, captured.get("add", []))
         self.assertIn(agent_loop.LABEL_READY, captured.get("remove", []))
@@ -196,7 +196,7 @@ class TestMain(unittest.TestCase):
              patch("agent_loop._ready_issues", return_value=[]), \
              patch("agent_loop._set_labels") as mock_labels, \
              patch("agent_loop._start_agent") as mock_start:
-            result = agent_loop.main()
+            result = agent_loop._run_loop()
 
         self.assertEqual(result, 0)
         mock_labels.assert_not_called()
