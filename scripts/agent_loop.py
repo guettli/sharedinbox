@@ -7,12 +7,15 @@ Flow
 1. Agent already running?
    a. Age > 1 h  → kill it, set its issue to State/Question, exit 1
    b. Age ≤ 1 h  → print status, exit 0  (let it keep working)
-2. No agent running → check Codeberg CI
-   a. CI is running         → print "CI running, waiting", exit 0
-   b. Latest CI failed      → start fix-CI agent, save state, exit 0
-   c. CI ok (or no run yet) → find oldest Ready issue, start issue agent,
+2. No agent running → extract pending_issue from state (if any), then check CI
+   a. CI is running         → save pending-ci state, exit 0
+   b. Latest CI failed      → start fix-CI agent (preserving pending_issue), exit 0
+   c. CI ok + pending_issue → close the issue (CI passed), exit 0
+   d. CI ok (or no run yet) → find oldest Ready issue, start issue agent,
                               save state, exit 0
-   d. No Ready issues       → print "nothing to do", exit 0
+   e. No Ready issues       → print "nothing to do", exit 0
+
+Issue agents must NOT close the issue themselves; the loop closes it after CI passes.
 
 State file: ~/.sharedinbox-agent-state.json
   { "pid": 12345, "issue": 91,
@@ -154,7 +157,7 @@ def _read_state() -> dict | None:
     return None
 
 
-def _write_state(pid: int, issue: int | None, kind: str, issue_title: str | None = None) -> None:
+def _write_state(pid: int | None, issue: int | None, kind: str, issue_title: str | None = None) -> None:
     data: dict = {
         "pid": pid,
         "issue": issue,
@@ -320,8 +323,10 @@ def _run_loop() -> int:
         )
         return 0
 
-    # Agent not running (or no state) — clean up stale state.
+    # Agent not running (or no state) — extract any pending issue, then clean up.
+    pending_issue: int | None = None
     if state:
+        pending_issue = state.get("issue")
         _clear_state()
 
     # ── 2. Check CI ───────────────────────────────────────────────────────────
@@ -329,6 +334,8 @@ def _run_loop() -> int:
 
     if run and run.get("status") == "running":
         print(f"CI run {_ci_run_url(run['id'])} is still running. Waiting.")
+        if pending_issue:
+            _write_state(None, pending_issue, "pending-ci")
         return 0
 
     if run and run.get("status") in ("failure", "error"):
@@ -342,10 +349,16 @@ def _run_loop() -> int:
             "When done, stop."
         )
         pid = _start_agent(prompt, "ci-fix")
-        _write_state(pid, None, "ci-fix")
+        _write_state(pid, pending_issue, "ci-fix")
         return 0
 
-    # CI is ok (or no run) — find a Ready issue.
+    # CI is ok (or no run).
+    if pending_issue:
+        _close_issue(pending_issue)
+        print(f"CI passed — closed {_issue_url(pending_issue)}.")
+        return 0
+
+    # Find a Ready issue.
     issues = _ready_issues()
     if not issues:
         print("No issues with State/Ready. Nothing to do.")
@@ -382,7 +395,7 @@ Instructions:
 - Push to origin/main.
 - If you hit a blocker you cannot resolve, set the issue label to State/Question
   and stop (do NOT close the issue).
-- When the work is done and pushed, close the issue and stop.
+- When the work is done and pushed, stop. The loop will close the issue after CI passes.
 """
 
     pid = _start_agent(prompt, f"issue-{issue_number}")

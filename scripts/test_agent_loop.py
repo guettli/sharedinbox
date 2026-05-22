@@ -223,6 +223,129 @@ class TestMain(unittest.TestCase):
         mock_labels.assert_not_called()
         mock_start.assert_not_called()
 
+    def test_prompt_does_not_tell_agent_to_close_issue(self):
+        """Agents must not close issues; the loop handles closing after CI passes."""
+        captured_prompt = {}
+
+        def fake_start_agent(prompt, session_name):
+            captured_prompt["prompt"] = prompt
+            return 77
+
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[self._make_issue(42)]), \
+             patch("agent_loop._set_labels"), \
+             patch("agent_loop._start_agent", side_effect=fake_start_agent), \
+             patch("agent_loop._write_state"):
+            agent_loop._run_loop()
+
+        prompt = captured_prompt.get("prompt", "")
+        # "do NOT close the issue" (blocker instruction) is fine; what must be
+        # absent is any affirmative instruction to close on completion.
+        self.assertNotIn("close the issue and stop", prompt.lower())
+
+
+class TestPendingCi(unittest.TestCase):
+    """Tests for the pending-CI state: issue closed only after CI passes."""
+
+    def _dead_state(self, issue: int, kind: str = "issue") -> dict:
+        return {
+            "pid": 999999999,  # non-existent PID
+            "issue": issue,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "type": kind,
+        }
+
+    def test_closes_issue_when_ci_passes_after_agent_finishes(self):
+        """After issue agent finishes, loop closes the issue once CI is green."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_called_once_with(10)
+
+    def test_does_not_close_issue_when_ci_fails(self):
+        """After issue agent finishes, loop must NOT close the issue if CI failed."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "failure"}), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._start_agent", return_value=55), \
+             patch("agent_loop._write_state"), \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_not_called()
+
+    def test_saves_pending_ci_state_while_ci_running(self):
+        """When CI is still running after agent finishes, pending issue is preserved."""
+        written = {}
+
+        def fake_write_state(pid, issue, kind, issue_title=None):
+            written["pid"] = pid
+            written["issue"] = issue
+            written["kind"] = kind
+
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "running"}), \
+             patch("agent_loop._write_state", side_effect=fake_write_state), \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(written.get("issue"), 10)
+        self.assertEqual(written.get("kind"), "pending-ci")
+        self.assertIsNone(written.get("pid"))
+
+    def test_ci_fix_preserves_pending_issue_in_state(self):
+        """When CI fails after agent finishes, ci-fix state includes the pending issue."""
+        written = {}
+
+        def fake_write_state(pid, issue, kind, issue_title=None):
+            written["pid"] = pid
+            written["issue"] = issue
+            written["kind"] = kind
+
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "failure"}), \
+             patch("agent_loop._start_agent", return_value=55), \
+             patch("agent_loop._write_state", side_effect=fake_write_state), \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(written.get("issue"), 10)
+        self.assertEqual(written.get("kind"), "ci-fix")
+
+    def test_closes_issue_after_ci_fix_and_ci_passes(self):
+        """After ci-fix agent finishes and CI passes, the pending issue is closed."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10, "ci-fix")), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_called_once_with(10)
+
+    def test_no_pending_issue_ci_fix_without_issue(self):
+        """ci-fix for a manual push (no pending issue) does not try to close anything."""
+        with patch("agent_loop._read_state", return_value={
+            "pid": 999999999, "issue": None, "started_at": "2026-01-01T00:00:00+00:00",
+            "type": "ci-fix",
+        }), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._ready_issues", return_value=[]), \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_not_called()
+
 
 class TestOutputFormat(unittest.TestCase):
     """Verify output format: no [agent_loop] prefix, URLs in output."""
