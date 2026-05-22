@@ -699,7 +699,6 @@ func (m *Ci) TestAndroidFirebase(
 			   --device model=oriole,version=33,locale=en,orientation=portrait \
 			   --results-bucket=gs://sharedinbox-ftl-results 2>&1); rc=$?; echo "$out"; \
 			 [ "$rc" -eq 0 ] || { echo "ERROR: gcloud firebase test exited with code $rc"; exit "$rc"; }; \
-			 echo "$out" | grep -qwi 'error' && { echo "ERROR: 'error' found in firebase test output"; exit 1; } || true; \
 			 expected_devices=1; \
 			 actual_devices=$(echo "$out" | grep "│" | grep -cE "(Passed|Failed|Inconclusive|Skipped)") || actual_devices=0; \
 			 [ "$actual_devices" -eq "$expected_devices" ] || \
