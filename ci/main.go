@@ -204,8 +204,8 @@ func (m *Ci) toolchain() *dagger.Container {
 // flutter pub get's execution cache key unstable, causing a cache miss every run.
 func (m *Ci) Base() *dagger.Container {
 	return m.toolchain().
-		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
-		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"))
+		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
 }
 
 // pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
@@ -218,7 +218,7 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
 	return m.toolchain().
-		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache")).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
