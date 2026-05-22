@@ -22,7 +22,7 @@ jobs:
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
           curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          sudo apt-get update && sudo apt-get install -y stunnel4 netcat-openbsd
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4 and netcat-openbsd must be pre-installed on the runner host. Run: sudo apt-get install -y stunnel4 netcat-openbsd"; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
