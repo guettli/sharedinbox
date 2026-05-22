@@ -184,7 +184,7 @@ func (m *Ci) toolchain() *dagger.Container {
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
-		WithExec([]string{"useradd", "-m", "-u", "1000", "-s", "/bin/bash", "ci"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
 		WithExec([]string{"/bin/sh", "-c",
 			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
 				`chown -R ci:ci "$flutter_dir"; ` +
