@@ -52,7 +52,7 @@ dependencies:
   # HTML rendering for email bodies
   webview_flutter: ^4.0.0
   url_launcher: ^6.3.2
-  flutter_markdown: ^0.7.7+1
+  flutter_markdown_plus: ^1.0.7
 
   # Background sync and local notifications
   flutter_local_notifications: ^18.0.1
