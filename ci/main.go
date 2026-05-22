@@ -647,6 +647,7 @@ func (m *Ci) TestAndroidFirebase(
 		WithDirectory("/apks", apks).
 		WithSecretVariable("FIREBASE_SA_KEY", serviceAccountKey).
 		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
+		WithEnvVariable("CACHE_BUSTER", time.Now().Format(time.RFC3339)).
 		WithExec([]string{"/bin/bash", "-c",
 			`echo "$FIREBASE_SA_KEY" > /tmp/key.json && \
 			 gcloud auth activate-service-account --key-file=/tmp/key.json && \
