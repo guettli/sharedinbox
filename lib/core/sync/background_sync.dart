@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -32,14 +33,22 @@ void callbackDispatcher() {
 }
 
 Future<void> registerBackgroundSync() async {
-  await Workmanager().initialize(callbackDispatcher);
-  await Workmanager().registerPeriodicTask(
-    _kTaskName,
-    _kTaskName,
-    frequency: const Duration(minutes: 15),
-    constraints: Constraints(networkType: NetworkType.connected),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
-  );
+  try {
+    await Workmanager().initialize(callbackDispatcher);
+    await Workmanager().registerPeriodicTask(
+      _kTaskName,
+      _kTaskName,
+      frequency: const Duration(minutes: 15),
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    );
+  } on PlatformException {
+    // WorkManager channel unavailable on this device; background sync disabled.
+  } on MissingPluginException {
+    // Plugin not registered on this device; background sync disabled.
+  } catch (_) {
+    // Unexpected initialization failure; background sync disabled.
+  }
 }
 
 Future<void> _doBackgroundSync() async {
