@@ -150,7 +150,7 @@ def _read_state() -> dict | None:
     return None
 
 
-def _write_state(pid: int | None, issue: int | None, kind: str, issue_title: str | None = None) -> None:
+def _write_state(pid: int | None, issue: int | None, kind: str, issue_title: str | None = None, session_name: str | None = None, ci_run_id: int | None = None) -> None:
     data: dict = {
         "pid": pid,
         "issue": issue,
@@ -159,6 +159,10 @@ def _write_state(pid: int | None, issue: int | None, kind: str, issue_title: str
     }
     if issue_title is not None:
         data["issue_title"] = issue_title
+    if session_name is not None:
+        data["session_name"] = session_name
+    if ci_run_id is not None:
+        data["ci_run_id_at_start"] = ci_run_id
     STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
@@ -220,6 +224,28 @@ def _agent_age_seconds(state: dict) -> float:
         return (datetime.now(timezone.utc) - started_at).total_seconds()
     except Exception:
         return 0.0
+
+
+def _git_summary() -> str:
+    """Return a one-line summary of the latest commit and whether it's been pushed."""
+    try:
+        commit = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        ahead = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD@{u}..HEAD"],
+            capture_output=True, text=True,
+        )
+        if ahead.returncode == 0 and ahead.stdout.strip() != "0":
+            push_status = f"not pushed ({ahead.stdout.strip()} ahead)"
+        elif ahead.returncode == 0:
+            push_status = "pushed"
+        else:
+            push_status = "no upstream"
+        return f"{commit} [{push_status}]"
+    except Exception:
+        return ""
 
 
 def _kill_agent(state: dict) -> None:
@@ -310,10 +336,17 @@ def _run_loop() -> int:
                 print(f"Set {_issue_url(issue)} to State/Question.")
             return 1
 
-        print(
-            f"Agent pid={pid!r} ({kind}, {issue_ref}) "
-            f"still running ({age/60:.0f} min). Waiting."
-        )
+        session_name = state.get("session_name")
+        resume_cmd = f"claude --resume {shlex.quote(session_name)}" if session_name else ""
+        git_info = _git_summary()
+        parts = [
+            f"Agent pid={pid!r} ({kind}, {issue_ref}) still running ({age/60:.0f} min). Waiting.",
+        ]
+        if resume_cmd:
+            parts.append(f"  Resume: {resume_cmd}")
+        if git_info:
+            parts.append(f"  Commit: {git_info}")
+        print("\n".join(parts))
         return 0
 
     # Agent not running (or no state) — extract any pending issue, then clean up.
@@ -342,11 +375,22 @@ def _run_loop() -> int:
             "When done, stop."
         )
         pid = _start_agent(prompt, "ci-fix")
-        _write_state(pid, pending_issue, "ci-fix")
+        _write_state(pid, pending_issue, "ci-fix", session_name="ci-fix")
         return 0
 
     # CI is ok (or no run).
     if pending_issue:
+        ci_run_id_at_start = state.get("ci_run_id_at_start") if state else None
+        latest_run_id = run["id"] if run else None
+        if ci_run_id_at_start is not None and latest_run_id == ci_run_id_at_start:
+            # CI run hasn't changed since the agent was launched → agent pushed nothing
+            # (likely crashed or hit a rate limit).
+            print(
+                f"No new CI run since agent started for {_issue_url(pending_issue)} "
+                f"(run id {latest_run_id}) — agent did nothing. Setting to State/Question."
+            )
+            _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+            return 0
         _close_issue(pending_issue)
         print(f"CI passed — closed {_issue_url(pending_issue)}.")
         return 0
@@ -391,8 +435,10 @@ Instructions:
 - When the work is done and pushed, stop. The loop will close the issue after CI passes.
 """
 
-    pid = _start_agent(prompt, f"issue-{issue_number}")
-    _write_state(pid, issue_number, "issue", issue_title)
+    session_name = f"issue-{issue_number}"
+    pid = _start_agent(prompt, session_name)
+    current_run_id = run["id"] if run else None
+    _write_state(pid, issue_number, "issue", issue_title, session_name=session_name, ci_run_id=current_run_id)
     return 0
 
 
