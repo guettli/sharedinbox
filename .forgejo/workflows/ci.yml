@@ -16,13 +16,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - name: Install Dagger & Task
+      - name: Check runner tools
         run: |
-          mkdir -p $HOME/.local/bin
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4 and netcat-openbsd must be pre-installed on the runner host. Run: sudo apt-get install -y stunnel4 netcat-openbsd"; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -49,13 +47,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - name: Install Dagger & Task
+      - name: Check runner tools
         run: |
-          mkdir -p $HOME/.local/bin
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4 and netcat-openbsd must be pre-installed on the runner host. Run: sudo apt-get install -y stunnel4 netcat-openbsd"; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -86,13 +82,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - name: Install Dagger & Task
+      - name: Check runner tools
         run: |
-          mkdir -p $HOME/.local/bin
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4 and netcat-openbsd must be pre-installed on the runner host. Run: sudo apt-get install -y stunnel4 netcat-openbsd"; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
@@ -136,13 +130,11 @@ jobs:
         with:
           fetch-depth: 50
 
-      - name: Install Dagger & Task
+      - name: Check runner tools
         run: |
-          mkdir -p $HOME/.local/bin
-          curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.local/bin sh
-          curl -sL https://taskfile.dev/install.sh | sh -s -- -b $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4 and netcat-openbsd must be pre-installed on the runner host. Run: sudo apt-get install -y stunnel4 netcat-openbsd"; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
         env:
