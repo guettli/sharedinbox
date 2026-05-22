@@ -652,12 +652,13 @@ func (m *Ci) TestAndroidFirebase(
 			 gcloud auth activate-service-account --key-file=/tmp/key.json && \
 			 rm /tmp/key.json && \
 			 gcloud config set project "$FIREBASE_PROJECT_ID" && \
-			 gcloud firebase test android run \
+			 out=$(gcloud firebase test android run \
 			   --type instrumentation \
 			   --app /apks/app-debug.apk \
 			   --test /apks/app-debug-androidTest.apk \
 			   --device model=oriole,version=33,locale=en,orientation=portrait \
-			   --results-bucket=gs://sharedinbox-ftl-results`}).
+			   --results-bucket=gs://sharedinbox-ftl-results 2>&1) && echo "$out" || { echo "$out"; exit 1; } && \
+			 echo "$out" | grep -qE 'Passed|passed|test cases' || { echo "ERROR: no test case results reported — tests did not run"; exit 1; }`}).
 		Stdout(ctx)
 }
 
