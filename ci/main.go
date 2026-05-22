@@ -184,7 +184,15 @@ func (m *Ci) toolchain() *dagger.Container {
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
-		WithEnvVariable("PUB_CACHE", "/root/.pub-cache").
+		WithExec([]string{"useradd", "-m", "-u", "1000", "-s", "/bin/bash", "ci"}).
+		WithExec([]string{"/bin/sh", "-c",
+			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
+				`chown -R ci:ci "$flutter_dir"; ` +
+				`[ -n "$ANDROID_HOME" ] && chown -R ci:ci "$ANDROID_HOME" || true; ` +
+				`mkdir -p /src && chown ci:ci /src`}).
+		WithEnvVariable("PUB_CACHE", "/home/ci/.pub-cache").
+		WithEnvVariable("HOME", "/home/ci").
+		WithUser("ci").
 		WithExec([]string{"/bin/sh", "-c", `yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34"`})
 }
 
@@ -194,8 +202,8 @@ func (m *Ci) toolchain() *dagger.Container {
 // flutter pub get's execution cache key unstable, causing a cache miss every run.
 func (m *Ci) Base() *dagger.Container {
 	return m.toolchain().
-		WithMountedCache("/root/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
-		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache"))
+		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache")).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"))
 }
 
 // pubGetLayer runs flutter pub get with only pubspec.yaml + pubspec.lock as
@@ -208,8 +216,8 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
 	return m.toolchain().
-		WithMountedCache("/root/.gradle", dag.CacheVolume("gradle-cache")).
-		WithDirectory("/src", pubspecOnly).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache")).
+		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
@@ -233,7 +241,7 @@ func (m *Ci) codegenBase() *dagger.Container {
 		Exclude: []string{"**/*.g.dart", "**/*.mocks.dart"},
 	})
 	return m.pubGetLayer().
-		WithDirectory("/src", codegenSrc).
+		WithDirectory("/src", codegenSrc, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
@@ -249,7 +257,7 @@ func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
 	return m.codegenBase().
 		WithDirectory("/src", src.Filter(dagger.DirectoryFilterOpts{
 			Exclude: []string{"**/*.g.dart", "**/*.mocks.dart"},
-		}))
+		}), dagger.ContainerWithDirectoryOpts{Owner: "ci"})
 }
 
 // Setup is the exported variant (CLI / Taskfile). Uses the full check source.
@@ -365,7 +373,7 @@ func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
 // CheckHygiene checks that no forbidden home-directory files are in the source.
 func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 	return m.Base().
-		WithDirectory("/src", m.Source).
+		WithDirectory("/src", m.Source, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
@@ -374,7 +382,7 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 // CheckLayers enforces that ui/ does not import data/.
 func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 	return m.Base().
-		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/"}})).
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/"}}), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "VIOLATIONS=$(grep -rn \"package:sharedinbox/data/\" lib/ui/ 2>/dev/null || true); if [ -n \"$VIOLATIONS\" ]; then echo \"ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):\"; echo \"$VIOLATIONS\"; exit 1; fi; echo \"Layer check passed.\""}).
 		Stdout(ctx)
@@ -393,7 +401,7 @@ func (m *Ci) Format(ctx context.Context) (string, error) {
 // comparing two freshly-generated outputs.
 func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 	return m.pubGetLayer().
-		WithDirectory("/src", m.checkSrc()).
+		WithDirectory("/src", m.checkSrc(), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"git", "init"}).
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
@@ -700,10 +708,10 @@ func (m *Ci) BuildAndroidRelease() *dagger.File {
 // builds inside the container reuse cached packages between pipeline runs.
 func withGoCache(c *dagger.Container) *dagger.Container {
 	return c.
-		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build-cache")).
-		WithMountedCache("/root/go/pkg/mod", dag.CacheVolume("go-mod-cache")).
-		WithEnvVariable("GOCACHE", "/root/.cache/go-build").
-		WithEnvVariable("GOMODCACHE", "/root/go/pkg/mod")
+		WithMountedCache("/home/ci/.cache/go-build", dag.CacheVolume("go-build-cache")).
+		WithMountedCache("/home/ci/go/pkg/mod", dag.CacheVolume("go-mod-cache")).
+		WithEnvVariable("GOCACHE", "/home/ci/.cache/go-build").
+		WithEnvVariable("GOMODCACHE", "/home/ci/go/pkg/mod")
 }
 
 // UploadToPlayStore uploads a pre-built AAB to the Play Store internal track.
