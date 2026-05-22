@@ -3,7 +3,6 @@ coverage/
 .dart_tool/
 .dart-tool/
 .packages
-pubspec.lock
 build/
 *.g.dart
 *.freezed.dart
