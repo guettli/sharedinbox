@@ -112,13 +112,15 @@ class CrashScreen extends StatelessWidget {
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
                   onPressed: () async {
-                    final report = await _buildReport();
+                    // URL carries only the title to avoid exceeding browser
+                    // URL-length limits — long stack traces caused "create
+                    // issue failed" (#146).  Use "Copy to Clipboard" first to
+                    // get the full report, then paste it in the issue body.
                     final title = Uri.encodeComponent(
                       'Crash: ${exception.toString().split('\n').first}',
                     );
-                    final body = Uri.encodeComponent(report);
                     final url = Uri.parse(
-                      'https://codeberg.org/guettli/sharedinbox/issues/new?title=$title&body=$body',
+                      'https://codeberg.org/guettli/sharedinbox/issues/new?title=$title',
                     );
                     try {
                       final launched = await launchUrl(

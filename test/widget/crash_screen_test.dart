@@ -59,6 +59,10 @@ void main() {
     await tester.tap(find.text('Report Issue on Codeberg'));
     await tester.pumpAndSettle();
 
+    // Regression for #146: URL must contain only the title, NOT the full
+    // report body.  Long stack traces caused "create issue failed" by
+    // exceeding browser URL-length limits.  The report is copied to clipboard
+    // so the user can paste it into the issue body.
     expect(
       mock.launchedUrl,
       contains('https://codeberg.org/guettli/sharedinbox/issues/new'),
@@ -67,8 +71,9 @@ void main() {
       mock.launchedUrl,
       contains('title=Crash%3A%20TestException%3A%20something%20broke'),
     );
-    expect(mock.launchedUrl, contains('App%20Version%3A%201.0.0%2B42'));
-    expect(mock.launchedUrl, contains('TestException%3A%20something%20broke'));
+    expect(mock.launchedUrl, isNot(contains('&body=')));
+    expect(mock.launchedUrl, isNot(contains('App%20Version')));
+    expect(mock.launchedUrl, isNot(contains('Stack%20Trace')));
   });
 
   testWidgets(
