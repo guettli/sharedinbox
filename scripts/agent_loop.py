@@ -138,6 +138,39 @@ def _latest_ci_run() -> dict | None:
     return runs[0] if runs else None
 
 
+def _latest_ci_run_for_branch(branch: str) -> dict | None:
+    """Return the latest CI run for a specific branch, or None."""
+    data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
+    runs = (data or {}).get("workflow_runs", [])
+    for run in runs:
+        if run.get("head_branch") == branch:
+            return run
+    return None
+
+
+def _find_pr_for_branch(branch: str) -> dict | None:
+    """Return the first open PR whose head branch matches, or None."""
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "pr", "list",
+         "--repo", REPO, "--state", "open", "--json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    prs = json.loads(result.stdout)
+    for pr in prs:
+        head = pr.get("head", {})
+        ref = head.get("ref") or head.get("label", "").split(":")[-1]
+        if ref == branch:
+            return pr
+    return None
+
+
+def _merge_pr(pr_number: int) -> None:
+    """Squash-merge a PR via fgj."""
+    _fgj("pr", "merge", str(pr_number), "--repo", REPO, "--merge-method", "squash")
+
+
 # ── state file ────────────────────────────────────────────────────────────────
 
 
@@ -351,11 +384,74 @@ def _run_loop() -> int:
 
     # Agent not running (or no state) — extract any pending issue, then clean up.
     pending_issue: int | None = None
+    ci_run_id_at_start: int | None = None
     if state:
         pending_issue = state.get("issue")
+        ci_run_id_at_start = state.get("ci_run_id_at_start")
         _clear_state()
 
-    # ── 2. Check CI ───────────────────────────────────────────────────────────
+    # ── 2. Check for a PR opened by the agent ────────────────────────────────
+    if pending_issue:
+        branch = f"issue-{pending_issue}-fix"
+        pr = _find_pr_for_branch(branch)
+        if pr:
+            pr_number = pr["number"]
+            pr_url = f"{REPO_URL}/pulls/{pr_number}"
+            print(f"Found PR #{pr_number} ({pr_url}) for issue #{pending_issue}.")
+            pr_run = _latest_ci_run_for_branch(branch)
+
+            if pr_run and pr_run.get("status") == "running":
+                print(f"CI run {_ci_run_url(pr_run['id'])} on branch {branch!r} is running. Waiting.")
+                _write_state(None, pending_issue, "pending-ci")
+                return 0
+
+            if pr_run and pr_run.get("status") in ("failure", "error"):
+                print(f"CI run {_ci_run_url(pr_run['id'])} on branch {branch!r} failed — starting fix agent.")
+                prompt = (
+                    f"The Codeberg CI for guettli/sharedinbox just failed on branch {branch!r} "
+                    f"(PR #{pr_number}). "
+                    f"CI run: {_ci_run_url(pr_run['id'])}. "
+                    "Fetch the CI logs using the task ci-logs command or the Codeberg API. "
+                    "Identify the failure, fix it, commit, and push to the same branch. "
+                    "Do NOT push to main, do NOT close the issue, do NOT merge the PR. "
+                    "Verify locally with 'task check' before pushing. "
+                    "When done, stop."
+                )
+                session_name = f"ci-fix-pr-{pr_number}"
+                pid = _start_agent(prompt, session_name)
+                _write_state(pid, pending_issue, "ci-fix", session_name=session_name)
+                return 0
+
+            if not pr_run:
+                # No CI run yet — might be that CI hasn't triggered yet.
+                # Wait up to 15 min before giving up.
+                pr_created_at = pr.get("created_at", "")
+                try:
+                    created = datetime.fromisoformat(pr_created_at.replace("Z", "+00:00"))
+                    age_s = (datetime.now(timezone.utc) - created).total_seconds()
+                except Exception:
+                    age_s = 999999
+                if age_s < 900:
+                    print(
+                        f"PR #{pr_number} has no CI run yet (created {age_s/60:.0f} min ago). Waiting."
+                    )
+                    _write_state(None, pending_issue, "pending-ci")
+                    return 0
+                print(
+                    f"No CI run for branch {branch!r} after {age_s/60:.0f} min — "
+                    "agent may not have pushed. Setting to State/Question."
+                )
+                _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                return 0
+
+            # CI passed on the PR branch — squash-merge and close.
+            print(f"CI passed on branch {branch!r} — merging PR #{pr_number}.")
+            _merge_pr(pr_number)
+            _close_issue(pending_issue)
+            print(f"Merged PR #{pr_number} and closed {_issue_url(pending_issue)}.")
+            return 0
+
+    # ── 3. Global CI check (agent pushed to main, or no pending issue) ────────
     run = _latest_ci_run()
 
     if run and run.get("status") == "running":
@@ -380,7 +476,6 @@ def _run_loop() -> int:
 
     # CI is ok (or no run).
     if pending_issue:
-        ci_run_id_at_start = state.get("ci_run_id_at_start") if state else None
         latest_run_id = run["id"] if run else None
         if ci_run_id_at_start is not None and latest_run_id == ci_run_id_at_start:
             # CI run hasn't changed since the agent was launched → agent pushed nothing
@@ -429,10 +524,15 @@ Instructions:
 - Write or update tests as appropriate.
 - Run 'task check' locally and fix any failures before committing.
 - Commit with a descriptive message referencing the issue number (e.g. "feat: ... (#{issue_number})").
-- Push to origin/main.
+- Create a branch named `issue-{issue_number}-fix`, push your changes there, and open a PR against main:
+      git checkout -b issue-{issue_number}-fix
+      git push -u origin issue-{issue_number}-fix
+      fgj pr create --title "fix: <short description> (#{issue_number})" \\
+        --head issue-{issue_number}-fix --base main --repo {REPO}
+- Do NOT push to main, do NOT close the issue, and do NOT merge the PR — the loop handles that after CI passes.
 - If you hit a blocker you cannot resolve, set the issue label to State/Question
   and stop (do NOT close the issue).
-- When the work is done and pushed, stop. The loop will close the issue after CI passes.
+- When the work is pushed and the PR is opened, stop. The loop will merge the PR and close the issue after CI passes.
 """
 
     session_name = f"issue-{issue_number}"
