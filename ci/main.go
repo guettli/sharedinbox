@@ -223,14 +223,33 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 				"  d=json.load(open(g)); d.pop('date_created',None); json.dump(d,open(g,'w'))\n"})
 }
 
-// setup overlays source files onto the cached pub-get layer and runs
-func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
+// codegenBase runs build_runner on the source subset common to all build
+// variants (lib/, test/, assets/, pubspec.*), excluding committed generated
+// files so the cache key is stable. All setup() calls share this single
+// Dagger cache entry, so build_runner compiles only once per pipeline run.
+func (m *Ci) codegenBase() *dagger.Container {
+	codegenSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"lib/", "test/", "assets/", "pubspec.yaml", "pubspec.lock"},
+		Exclude: []string{"**/*.g.dart", "**/*.mocks.dart"},
+	})
 	return m.pubGetLayer().
-		WithDirectory("/src", src).
+		WithDirectory("/src", codegenSrc).
+		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -vE '^\[' "$tmp" || true`})
+}
+
+// setup overlays platform-specific source files onto the shared codegen base.
+// Generated files (*.g.dart, *.mocks.dart) are excluded from the overlay so
+// the freshly built output from codegenBase() is not overwritten by stale
+// committed copies.
+func (m *Ci) setup(src *dagger.Directory) *dagger.Container {
+	return m.codegenBase().
+		WithDirectory("/src", src.Filter(dagger.DirectoryFilterOpts{
+			Exclude: []string{"**/*.g.dart", "**/*.mocks.dart"},
+		}))
 }
 
 // Setup is the exported variant (CLI / Taskfile). Uses the full check source.
@@ -369,8 +388,13 @@ func (m *Ci) Format(ctx context.Context) (string, error) {
 }
 
 // CheckMocks verifies that generated mocks are up to date.
+// It snapshots the committed source (including any stale *.mocks.dart) before
+// running build_runner, so git diff detects real staleness instead of always
+// comparing two freshly-generated outputs.
 func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
-	return m.setup(m.checkSrc()).
+	return m.pubGetLayer().
+		WithDirectory("/src", m.checkSrc()).
+		WithWorkdir("/src").
 		WithExec([]string{"git", "init"}).
 		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
 		WithExec([]string{"git", "config", "user.name", "CI"}).
@@ -378,7 +402,7 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 		WithExec([]string{"git", "commit", "-q", "-m", "baseline"}).
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`flutter pub run build_runner build >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -vE '^\[' "$tmp" || true`}).
 		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
 		Stdout(ctx)
@@ -763,18 +787,21 @@ flowchart TD
     subgraph dagger ["Dagger · Check pipeline"]
         toolchain["toolchain\nflutter:3.41.6 + NDK + apt"]
         pubGet["pubGetLayer\nflutter pub get"]
+        codegen["codegenBase\nbuild_runner build\n(shared cache)"]
         stalwart(["Stalwart service\nIMAP · JMAP · SMTP · Sieve"])
 
         toolchain --> pubGet
+        pubGet --> codegen
 
         pubGet --> hygiene["CheckHygiene"]
         pubGet --> layers["CheckLayers"]
-        pubGet --> fmt["Format"]
-        pubGet --> analyze["Analyze"]
-        pubGet --> mocks["CheckMocks"]
-        pubGet --> coverage["Coverage\nunit tests + gate"]
-        pubGet --> backend["TestBackend\nIMAP / JMAP"]
-        pubGet --> integration["TestIntegration\nXvfb · Linux desktop"]
+        pubGet --> mocks["CheckMocks\n(own build_runner run)"]
+
+        codegen --> fmt["Format"]
+        codegen --> analyze["Analyze"]
+        codegen --> coverage["Coverage\nunit tests + gate"]
+        codegen --> backend["TestBackend\nIMAP / JMAP"]
+        codegen --> integration["TestIntegration\nXvfb · Linux desktop"]
 
         stalwart --> backend
         stalwart --> integration
