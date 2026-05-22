@@ -1,3 +1,4 @@
+# Source: https://codeberg.org/guettli/sharedinbox/src/branch/main/.forgejo/Dockerfile
 FROM ghcr.io/catthehacker/ubuntu:go-24.04
 
 # Infrastructure tools required by CI workflows
