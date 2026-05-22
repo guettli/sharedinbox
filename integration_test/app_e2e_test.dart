@@ -112,12 +112,28 @@ void main() {
   late String userPass;
 
   setUpAll(() {
-    imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
-    imapPort = int.parse(Platform.environment['STALWART_IMAP_PORT'] ?? '1430');
-    smtpHost = Platform.environment['STALWART_SMTP_HOST'] ?? '127.0.0.1';
-    smtpPort = int.parse(Platform.environment['STALWART_SMTP_PORT'] ?? '1025');
-    userEmail = Platform.environment['STALWART_USER_B'] ?? 'alice@example.com';
-    userPass = Platform.environment['STALWART_PASS_B'] ?? 'secret';
+    const required = [
+      'STALWART_IMAP_HOST',
+      'STALWART_IMAP_PORT',
+      'STALWART_SMTP_HOST',
+      'STALWART_SMTP_PORT',
+      'STALWART_USER_B',
+      'STALWART_PASS_B',
+    ];
+    final missing = required.where((k) => Platform.environment[k] == null).toList();
+    if (missing.isNotEmpty) {
+      fail(
+        'Missing required environment variables: ${missing.join(', ')}. '
+        'This test requires a running Stalwart instance — '
+        'run via stalwart-dev/integration_ui_test.sh.',
+      );
+    }
+    imapHost = Platform.environment['STALWART_IMAP_HOST']!;
+    imapPort = int.parse(Platform.environment['STALWART_IMAP_PORT']!);
+    smtpHost = Platform.environment['STALWART_SMTP_HOST']!;
+    smtpPort = int.parse(Platform.environment['STALWART_SMTP_PORT']!);
+    userEmail = Platform.environment['STALWART_USER_B']!;
+    userPass = Platform.environment['STALWART_PASS_B']!;
   });
 
   testWidgets(
