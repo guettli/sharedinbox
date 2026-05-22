@@ -682,10 +682,16 @@ func (m *Ci) TestAndroidFirebase(
 		WithSecretVariable("FIREBASE_SA_KEY", serviceAccountKey).
 		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
 		WithExec([]string{"/bin/bash", "-c",
-			`echo "$FIREBASE_SA_KEY" > /tmp/key.json && \
-			 gcloud auth activate-service-account --key-file=/tmp/key.json && \
-			 rm /tmp/key.json && \
-			 gcloud config set project "$FIREBASE_PROJECT_ID" && \
+			`auth_err=$(mktemp); trap 'rm -f "$auth_err"' EXIT; \
+			 echo "$FIREBASE_SA_KEY" > /tmp/key.json; \
+			 gcloud auth activate-service-account --key-file=/tmp/key.json 2>"$auth_err" \
+			   || { cat "$auth_err"; exit 1; }; \
+			 rm -f /tmp/key.json; \
+			 gcloud config set project "$FIREBASE_PROJECT_ID" 2>>"$auth_err" \
+			   || { cat "$auth_err"; exit 1; }; \
+			 unknown=$(grep -vF "Activated service account credentials for:" "$auth_err" \
+			   | grep -vF "Updated property [core/project]." | grep -v "^$" || true); \
+			 [ -z "$unknown" ] || { echo "ERROR: unexpected gcloud auth output: $unknown"; exit 1; }; \
 			 out=$(gcloud firebase test android run \
 			   --type instrumentation \
 			   --app /apks/app-debug.apk \
@@ -693,8 +699,12 @@ func (m *Ci) TestAndroidFirebase(
 			   --device model=oriole,version=33,locale=en,orientation=portrait \
 			   --results-bucket=gs://sharedinbox-ftl-results 2>&1); rc=$?; echo "$out"; \
 			 [ "$rc" -eq 0 ] || { echo "ERROR: gcloud firebase test exited with code $rc"; exit "$rc"; }; \
-			 echo "$out" | grep -qiE 'non-retryable error|infrastructure_failure|test execution failed' && { echo "ERROR: Firebase error detected in output"; exit 1; } || true; \
-			 echo "$out" | grep -qE 'Passed|passed' || { echo "ERROR: no passing test results reported — tests did not run"; exit 1; }`}).
+			 echo "$out" | grep -qwi 'error' && { echo "ERROR: 'error' found in firebase test output"; exit 1; } || true; \
+			 expected_devices=1; \
+			 actual_devices=$(echo "$out" | grep "│" | grep -cE "(Passed|Failed|Inconclusive|Skipped)") || actual_devices=0; \
+			 [ "$actual_devices" -eq "$expected_devices" ] || \
+			   { echo "ERROR: expected $expected_devices test result(s) but found $actual_devices"; exit 1; }; \
+			 echo "$out" | grep -q "Passed" || { echo "ERROR: no passing test results — tests failed or did not run"; exit 1; }`}).
 		Stdout(ctx)
 }
 
