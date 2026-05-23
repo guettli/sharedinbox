@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -75,6 +76,52 @@ void main() {
     expect(mock.launchedUrl, isNot(contains('App%20Version')));
     expect(mock.launchedUrl, isNot(contains('Stack%20Trace')));
   });
+
+  testWidgets(
+    'CrashScreen copy-to-clipboard includes version and platform info',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      String? clipboardText;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (MethodCall call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText =
+                (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      const exception = 'TestException: clipboard test';
+      final stackTrace = StackTrace.current;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CrashScreen(exception: exception, stackTrace: stackTrace),
+        ),
+      );
+
+      await tester.tap(find.text('Copy to Clipboard'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(clipboardText, isNotNull);
+      expect(clipboardText, contains('App Version: 1.0.0+42'));
+      expect(clipboardText, contains('Platform:'));
+      expect(clipboardText, contains('TestException: clipboard test'));
+      // GIT_HASH is empty in test builds — no Git Commit line expected
+      expect(clipboardText, isNot(contains('Git Commit:')));
+    },
+  );
 
   testWidgets(
     'CrashScreen used as root widget — buttons work without ScaffoldMessenger crash',

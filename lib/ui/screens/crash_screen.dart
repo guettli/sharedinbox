@@ -15,6 +15,8 @@ class CrashScreen extends StatelessWidget {
   final Object exception;
   final StackTrace? stackTrace;
 
+  static const _gitHash = String.fromEnvironment('GIT_HASH');
+
   Future<String> _buildReport() async {
     String version = 'unknown';
     try {
@@ -23,7 +25,11 @@ class CrashScreen extends StatelessWidget {
     } catch (_) {}
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
+    final gitLine = _gitHash.isNotEmpty
+        ? 'Git Commit: [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash)\n'
+        : '';
     return 'App Version: $version\n'
+        '$gitLine'
         'Platform: $platform\n\n'
         'Error:\n```\n$exception\n```\n\n'
         'Stack Trace:\n```\n$stackTrace\n```';
@@ -88,6 +94,32 @@ class CrashScreen extends StatelessWidget {
                       style: const TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 10,
+                      ),
+                    ),
+                  ),
+                ],
+                if (_gitHash.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Git Commit:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () async {
+                      final url = Uri.parse(
+                        'https://codeberg.org/guettli/sharedinbox/commit/$_gitHash',
+                      );
+                      await launchUrl(
+                        url,
+                        mode: LaunchMode.externalApplication,
+                      );
+                    },
+                    child: const Text(
+                      _gitHash,
+                      style: TextStyle(
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
                       ),
                     ),
                   ),
