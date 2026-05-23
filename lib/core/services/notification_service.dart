@@ -13,7 +13,7 @@ Future<void> initNotifications() async {
   try {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _plugin.initialize(
-      const InitializationSettings(android: android),
+      settings: const InitializationSettings(android: android),
       onDidReceiveNotificationResponse: (_) {},
     );
     await _plugin
@@ -31,10 +31,10 @@ Future<void> initNotifications() async {
 Future<void> showNewMailNotification(String accountEmail) async {
   if (!Platform.isAndroid || !_initialized) return;
   await _plugin.show(
-    accountEmail.hashCode & 0x7FFFFFFF,
-    'New mail',
-    accountEmail,
-    const NotificationDetails(
+    id: accountEmail.hashCode & 0x7FFFFFFF,
+    title: 'New mail',
+    body: accountEmail,
+    notificationDetails: const NotificationDetails(
       android: AndroidNotificationDetails(
         _kChannelId,
         _kChannelName,

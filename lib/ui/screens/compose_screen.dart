@@ -162,7 +162,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   Future<void> _pickAttachments() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+    final result = await FilePicker.pickFiles();
     if (result == null) return;
     final files = result.files.where((f) => f.path != null).toList();
     if (!mounted) return;
