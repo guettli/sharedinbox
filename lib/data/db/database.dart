@@ -591,15 +591,32 @@ Future<void> initDatabasePath() async {
   }
 }
 
+/// Resolve the application support path, retrying on PlatformException to
+/// survive a race where the path_provider Pigeon channel isn't ready yet.
+Future<String> _resolveDatabasePath() async {
+  if (_dbPath != null) return _dbPath!;
+  // initDatabasePath() failed (channel not ready before runApp). Retry now
+  // that the engine is fully initialised, with brief back-off.
+  const delays = [100, 300, 600];
+  for (final ms in delays) {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      _dbPath = p.join(dir.path, 'sharedinbox.db');
+      return _dbPath!;
+    } on PlatformException {
+      await Future<void>.delayed(Duration(milliseconds: ms));
+    }
+  }
+  throw PlatformException(
+    code: 'channel-error',
+    message: 'path_provider unavailable after ${delays.length + 1} attempts — '
+        'cannot open database.',
+  );
+}
+
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final file = File(
-      _dbPath ??
-          p.join(
-            (await getApplicationSupportDirectory()).path,
-            'sharedinbox.db',
-          ),
-    );
+    final file = File(await _resolveDatabasePath());
     return NativeDatabase.createInBackground(
       file,
       setup: (db) {
