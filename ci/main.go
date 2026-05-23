@@ -216,7 +216,6 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
 	return m.toolchain().
-		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
