@@ -596,8 +596,10 @@ Future<void> initDatabasePath() async {
 Future<String> _resolveDatabasePath() async {
   if (_dbPath != null) return _dbPath!;
   // initDatabasePath() failed (channel not ready before runApp). Retry now
-  // that the engine is fully initialised, with brief back-off.
-  const delays = [100, 300, 600];
+  // that the engine is fully initialised, with back-off. Some slow Android
+  // devices need several seconds for the Pigeon channel to become ready
+  // (issue #166), so use a longer schedule than the initial attempt.
+  const delays = [200, 500, 1000, 2000];
   for (final ms in delays) {
     try {
       final dir = await getApplicationSupportDirectory();
