@@ -33,6 +33,7 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
     result = subprocess.run(
         [
             "ssh",
+            "-v",
             "-o", "StrictHostKeyChecking=no",
             "-i", "/root/.ssh/id_ed25519",
             f"{ssh_user}@{ssh_host}",
@@ -40,8 +41,10 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
         ],
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+        raise subprocess.CalledProcessError(result.returncode, result.args)
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
