@@ -22,9 +22,10 @@ State file: ~/.sharedinbox-agent-state.json
     "started_at": "2026-05-15T12:00:00+00:00", "type": "issue" }
 
 Output is written to ~/.sharedinbox-agent-logs/<session>-<timestamp>.log.
-Resume the Claude conversation afterward with:
+To resume the Claude conversation, look up the session UUID first:
 
-  claude --resume issue-91
+  scripts/agent_loop.py list          # shows NAME and UUID columns
+  claude --resume <uuid>              # use the UUID, NOT the session name
 """
 
 import argparse
@@ -225,6 +226,30 @@ def _clear_state() -> None:
     STATE_FILE.unlink(missing_ok=True)
 
 
+def _find_session_uuid(session_name: str) -> str | None:
+    """Return the Claude session UUID for *session_name*, or None if not found.
+
+    Claude stores session metadata in JSONL files; the first entry with
+    type=="agent-name" contains both the human-readable name and the UUID
+    needed for ``claude --resume <uuid>``.
+    """
+    if not CLAUDE_PROJECTS_DIR.exists():
+        return None
+    for jsonl in CLAUDE_PROJECTS_DIR.glob("*.jsonl"):
+        try:
+            with jsonl.open() as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    d = json.loads(line)
+                    if d.get("type") == "agent-name" and d.get("agentName") == session_name:
+                        return d.get("sessionId")
+        except Exception:
+            continue
+    return None
+
+
 # ── agent launcher ────────────────────────────────────────────────────────────
 
 
@@ -255,7 +280,7 @@ def _start_agent(prompt: str, session_name: str) -> int:
     proc.stdin.close()
 
     print(f"Started agent pid={proc.pid}, log={log_file}")
-    print(f"  Resume: claude --resume {shlex.quote(session_name)}")
+    print(f"  Resume: run 'scripts/agent_loop.py list' to get the UUID-based resume command")
     return proc.pid
 
 
@@ -399,7 +424,13 @@ def _run_loop() -> int:
             return 1
 
         session_name = state.get("session_name")
-        resume_cmd = f"claude --resume {shlex.quote(session_name)}" if session_name else ""
+        uuid = _find_session_uuid(session_name) if session_name else None
+        if uuid:
+            resume_cmd = f"claude --resume {shlex.quote(uuid)}"
+        elif session_name:
+            resume_cmd = f"claude --resume <uuid>  # run: scripts/agent_loop.py list"
+        else:
+            resume_cmd = ""
         git_info = _git_summary()
         parts = [
             f"Agent pid={pid!r} ({kind}, {issue_ref}) still running ({age/60:.0f} min). Waiting.",

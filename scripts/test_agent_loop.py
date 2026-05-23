@@ -489,5 +489,138 @@ class TestLatestCiRunForBranch(unittest.TestCase):
         self.assertEqual(result["id"], 10)
 
 
+class TestFindSessionUuid(unittest.TestCase):
+    """Tests for _find_session_uuid()."""
+
+    def _write_jsonl(self, directory: Path, filename: str, entries: list) -> Path:
+        path = directory / filename
+        with path.open("w") as fh:
+            for entry in entries:
+                fh.write(json.dumps(entry) + "\n")
+        return path
+
+    def test_returns_uuid_for_matching_session_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir)
+            self._write_jsonl(projects_dir, "abc123.jsonl", [
+                {"type": "agent-name", "agentName": "issue-91", "sessionId": "uuid-abc-123"},
+            ])
+            orig = agent_loop.CLAUDE_PROJECTS_DIR
+            agent_loop.CLAUDE_PROJECTS_DIR = projects_dir
+            try:
+                result = agent_loop._find_session_uuid("issue-91")
+            finally:
+                agent_loop.CLAUDE_PROJECTS_DIR = orig
+        self.assertEqual(result, "uuid-abc-123")
+
+    def test_returns_none_when_name_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir)
+            self._write_jsonl(projects_dir, "abc123.jsonl", [
+                {"type": "agent-name", "agentName": "issue-99", "sessionId": "uuid-abc-123"},
+            ])
+            orig = agent_loop.CLAUDE_PROJECTS_DIR
+            agent_loop.CLAUDE_PROJECTS_DIR = projects_dir
+            try:
+                result = agent_loop._find_session_uuid("issue-91")
+            finally:
+                agent_loop.CLAUDE_PROJECTS_DIR = orig
+        self.assertIsNone(result)
+
+    def test_returns_none_when_directory_missing(self):
+        orig = agent_loop.CLAUDE_PROJECTS_DIR
+        agent_loop.CLAUDE_PROJECTS_DIR = Path("/nonexistent/path/that/does/not/exist")
+        try:
+            result = agent_loop._find_session_uuid("issue-91")
+        finally:
+            agent_loop.CLAUDE_PROJECTS_DIR = orig
+        self.assertIsNone(result)
+
+    def test_returns_none_when_no_agent_name_entry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir)
+            self._write_jsonl(projects_dir, "abc123.jsonl", [
+                {"type": "message", "content": "hello"},
+            ])
+            orig = agent_loop.CLAUDE_PROJECTS_DIR
+            agent_loop.CLAUDE_PROJECTS_DIR = projects_dir
+            try:
+                result = agent_loop._find_session_uuid("issue-91")
+            finally:
+                agent_loop.CLAUDE_PROJECTS_DIR = orig
+        self.assertIsNone(result)
+
+    def test_scans_multiple_files_to_find_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir)
+            self._write_jsonl(projects_dir, "aaa.jsonl", [
+                {"type": "agent-name", "agentName": "issue-10", "sessionId": "uuid-10"},
+            ])
+            self._write_jsonl(projects_dir, "bbb.jsonl", [
+                {"type": "agent-name", "agentName": "issue-91", "sessionId": "uuid-91"},
+            ])
+            orig = agent_loop.CLAUDE_PROJECTS_DIR
+            agent_loop.CLAUDE_PROJECTS_DIR = projects_dir
+            try:
+                result = agent_loop._find_session_uuid("issue-91")
+            finally:
+                agent_loop.CLAUDE_PROJECTS_DIR = orig
+        self.assertEqual(result, "uuid-91")
+
+
+class TestRunLoopResumeCommand(unittest.TestCase):
+    """Tests that _run_loop() shows a UUID-based resume command when agent is running."""
+
+    def _alive_state(self, session_name="issue-91"):
+        return {
+            "pid": os.getpid(),  # own PID is always alive
+            "issue": 91,
+            "started_at": "2026-05-23T12:00:00+00:00",
+            "type": "issue",
+            "session_name": session_name,
+        }
+
+    def test_resume_shows_uuid_when_found(self):
+        buf = io.StringIO()
+        fake_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        with patch("agent_loop._read_state", return_value=self._alive_state()), \
+             patch("agent_loop._agent_alive", return_value=True), \
+             patch("agent_loop._agent_age_seconds", return_value=600), \
+             patch("agent_loop._find_session_uuid", return_value=fake_uuid), \
+             patch("agent_loop._git_summary", return_value=""), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn(f"claude --resume {fake_uuid}", output)
+
+    def test_resume_shows_list_hint_when_uuid_not_found(self):
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=self._alive_state()), \
+             patch("agent_loop._agent_alive", return_value=True), \
+             patch("agent_loop._agent_age_seconds", return_value=600), \
+             patch("agent_loop._find_session_uuid", return_value=None), \
+             patch("agent_loop._git_summary", return_value=""), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn("scripts/agent_loop.py list", output)
+        # Must NOT show the session name as a valid resume argument.
+        self.assertNotIn("claude --resume issue-91", output)
+
+    def test_resume_not_shown_when_no_session_name(self):
+        state = self._alive_state()
+        del state["session_name"]
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=state), \
+             patch("agent_loop._agent_alive", return_value=True), \
+             patch("agent_loop._agent_age_seconds", return_value=600), \
+             patch("agent_loop._find_session_uuid", return_value=None), \
+             patch("agent_loop._git_summary", return_value=""), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertNotIn("Resume:", output)
+
+
 if __name__ == "__main__":
     unittest.main()
