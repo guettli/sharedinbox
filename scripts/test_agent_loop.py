@@ -267,6 +267,33 @@ class TestPendingCi(unittest.TestCase):
         self.assertEqual(result, 0)
         mock_close.assert_called_once_with(10)
 
+    def test_ci_passed_output_includes_ci_run_url(self):
+        """'CI passed' line includes the CI run URL when a run is available."""
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value={"id": 4145144, "status": "success"}), \
+             patch("agent_loop._close_issue"), \
+             patch("agent_loop._clear_state"), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn("https://codeberg.org/guettli/sharedinbox/actions/runs/4145144", output)
+        self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/10", output)
+
+    def test_ci_passed_output_without_run_omits_ci_url(self):
+        """'CI passed' line still works when no CI run is available."""
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._close_issue"), \
+             patch("agent_loop._clear_state"), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn("CI passed", output)
+        self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/10", output)
+        self.assertNotIn("/actions/runs/", output)
+
     def test_does_not_close_issue_when_ci_fails(self):
         """After issue agent finishes, loop must NOT close the issue if CI failed."""
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \

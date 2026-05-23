@@ -528,7 +528,8 @@ def _run_loop() -> int:
             )
             return 0
         _close_issue(pending_issue)
-        print(f"CI passed — closed {_issue_url(pending_issue)}.")
+        ci_run_part = f" {_ci_run_url(run['id'])}" if run else ""
+        print(f"CI passed{ci_run_part} — closed {_issue_url(pending_issue)}.")
         return 0
 
     # Find a Ready issue.
