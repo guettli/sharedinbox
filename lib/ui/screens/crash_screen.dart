@@ -23,6 +23,7 @@ class CrashScreen extends StatelessWidget {
       final info = await PackageInfo.fromPlatform();
       version = '${info.version}+${info.buildNumber}';
     } catch (_) {}
+    final gitLine = _gitHash.isNotEmpty ? 'Git Commit: $_gitHash\n' : '';
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
     final gitLine = _gitHash.isNotEmpty
@@ -56,6 +57,14 @@ class CrashScreen extends StatelessWidget {
                   style: Theme.of(ctx).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
+                if (_gitHash.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Git Commit: $_gitHash',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 const SizedBox(height: 24),
                 const Text(
                   'Error Details:',

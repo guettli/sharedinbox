@@ -599,7 +599,7 @@ Future<String> _resolveDatabasePath() async {
   // that the engine is fully initialised, with back-off. Some slow Android
   // devices need several seconds for the Pigeon channel to become ready
   // (issue #166), so use a longer schedule than the initial attempt.
-  const delays = [200, 500, 1000, 2000];
+  const delays = [200, 500, 1000, 2000, 4000];
   for (final ms in delays) {
     try {
       final dir = await getApplicationSupportDirectory();
