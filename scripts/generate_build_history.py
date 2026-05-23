@@ -43,8 +43,13 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
         text=True,
     )
     if result.returncode != 0:
+        print(
+            f"WARNING: ssh exit {result.returncode} listing {pattern} on {ssh_user}@{ssh_host}"
+            " — build history will be empty for this pattern",
+            file=sys.stderr,
+        )
         print(result.stderr, file=sys.stderr)
-        raise subprocess.CalledProcessError(result.returncode, result.args)
+        return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
