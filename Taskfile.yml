@@ -260,11 +260,8 @@ tasks:
 
   publish-website:
     desc: Build and publish website via Dagger
-    preconditions:
-      - sh: test -n "$SSH_PRIVATE_KEY"
-        msg: "SSH_PRIVATE_KEY is not set"
     cmds:
-      - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+      - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key file:$HOME/.ssh/id_ed25519 --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
   check-dagger:
     desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
