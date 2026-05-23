@@ -199,12 +199,9 @@ func (m *Ci) toolchain() *dagger.Container {
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.
-// Use for Android/Gradle builds that need the pub and Gradle caches.
-// Do NOT use as the base for pubGetLayer — the mutable pub cache volume makes
-// flutter pub get's execution cache key unstable, causing a cache miss every run.
+// Use for Android/Gradle builds that need the Gradle cache.
 func (m *Ci) Base() *dagger.Container {
 	return m.toolchain().
-		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
 }
 
@@ -212,14 +209,13 @@ func (m *Ci) Base() *dagger.Container {
 // inputs, then removes non-deterministic fields from both package_config.json
 // and .flutter-plugins-dependencies so the snapshot is byte-for-byte stable
 // across runs. Re-executes only when pubspec.yaml or pubspec.lock changes.
-// The pub cache is stored in a volume so package downloads land in the named
-// volume rather than the container overlay (which has limited space).
+// Packages land in the execution-cache snapshot (not a named volume) so that
+// dagger prune can reclaim space from stale pubspec.lock snapshots.
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
 	return m.toolchain().
-		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
