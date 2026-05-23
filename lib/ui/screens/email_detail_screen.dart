@@ -43,15 +43,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     ref.listen<AsyncValue<(Email?, EmailBody)>>(
       emailDetailProvider(widget.emailId),
       (_, next) {
-        final email = next.valueOrNull?.$1;
+        final email = next.value?.$1;
         if (email != null && mounted) {
           setState(() => _isFlagged = email.isFlagged);
         }
       },
     );
 
-    final header = detail.valueOrNull?.$1;
-    final body = detail.valueOrNull?.$2;
+    final header = detail.value?.$1;
+    final body = detail.value?.$2;
 
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;

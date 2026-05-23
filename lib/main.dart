@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';

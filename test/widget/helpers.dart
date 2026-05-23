@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -19,6 +20,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -473,10 +475,18 @@ Widget buildApp({
   );
 
   return ProviderScope(
-    // Always neutralise the ManageSieve probe so widget tests never open a
-    // real socket. Tests that need to assert on probe behaviour should supply
-    // their own override before this default in [overrides].
+    // Defaults come first so tests can override them via [overrides].
+    //
+    // syncHealthProvider and syncLogRepositoryProvider are backed by Drift
+    // StreamQueries. When a StreamProvider that wraps a Drift query is disposed,
+    // Drift schedules a Timer.run() for cache debouncing. Flutter's test
+    // framework then fails the test with "A Timer is still pending". Replacing
+    // these with simple synchronous streams avoids the pending-timer assertion.
     overrides: [
+      syncHealthProvider.overrideWith((ref, _) => Stream.value(null)),
+      syncLogRepositoryProvider.overrideWithValue(
+        const NoOpSyncLogRepository(),
+      ),
       ...overrides,
       manageSieveProbeServiceProvider.overrideWith(
         (ref) => _NoOpManageSieveProbeService(),

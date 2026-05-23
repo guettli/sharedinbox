@@ -24,7 +24,7 @@ dependencies:
   path: ^1.9.1
 
   # State management
-  flutter_riverpod: ^2.6.1
+  flutter_riverpod: ^3.0.0
 
   # Navigation
   go_router: ^17.2.3

@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
@@ -101,7 +102,7 @@ final searchHistoryRepositoryProvider =
   return SearchHistoryRepositoryImpl(ref.watch(dbProvider));
 });
 
-final syncLogRepositoryProvider = Provider((ref) {
+final syncLogRepositoryProvider = Provider<SyncLogRepository>((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
 });
 
@@ -181,11 +182,7 @@ final manageSieveProbeServiceProvider = Provider<ManageSieveProbeService>((
 });
 
 final undoServiceProvider =
-    StateNotifierProvider<UndoService, List<UndoAction>>((ref) {
-  final service = UndoService(ref);
-  unawaited(service.init());
-  return service;
-});
+    NotifierProvider<UndoService, List<UndoAction>>(UndoService.new);
 
 /// Loads email header + body and marks the email as seen.
 /// Owned by [EmailDetailScreen]; decouples data loading from the widget tree.
@@ -194,16 +191,18 @@ final emailDetailProvider = AsyncNotifierProvider.autoDispose
   EmailDetailNotifier.new,
 );
 
-class EmailDetailNotifier
-    extends AutoDisposeFamilyAsyncNotifier<(Email?, EmailBody), String> {
+class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
+  EmailDetailNotifier(this._emailId);
+  final String _emailId;
+
   @override
-  Future<(Email?, EmailBody)> build(String emailId) async {
+  Future<(Email?, EmailBody)> build() async {
     final repo = ref.read(emailRepositoryProvider);
     final results = await Future.wait([
-      repo.getEmail(emailId),
-      repo.getEmailBody(emailId),
+      repo.getEmail(_emailId),
+      repo.getEmailBody(_emailId),
     ]);
-    unawaited(repo.setFlag(emailId, seen: true));
+    unawaited(repo.setFlag(_emailId, seen: true));
     return (results[0] as Email?, results[1] as EmailBody);
   }
 }

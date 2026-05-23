@@ -261,9 +261,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   Widget _buildSyncButton(EmailRepository emailRepo) {
     final isSyncing =
-        ref.watch(isSyncingProvider(widget.accountId)).valueOrNull ?? false;
+        ref.watch(isSyncingProvider(widget.accountId)).value ?? false;
     final hasError =
-        ref.watch(syncLastErrorProvider(widget.accountId)).valueOrNull != null;
+        ref.watch(syncLastErrorProvider(widget.accountId)).value != null;
     return IconButton(
       tooltip: isSyncing
           ? 'Syncing…'
@@ -350,7 +350,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   Widget _buildSyncErrorBanner() {
     final errorAsync = ref.watch(syncLastErrorProvider(widget.accountId));
-    final error = errorAsync.valueOrNull;
+    final error = errorAsync.value;
     if (error == null || error == _dismissedError) {
       return const SizedBox.shrink();
     }

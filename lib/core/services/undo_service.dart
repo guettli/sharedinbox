@@ -4,38 +4,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 
-class UndoService extends StateNotifier<List<UndoAction>> {
-  UndoService(this._ref) : super([]);
-
-  final Ref _ref;
+class UndoService extends Notifier<List<UndoAction>> {
   static const int _maxHistory = 10;
 
-  // Resolves once init() has loaded persisted history. Default to an already-
-  // resolved future so operations are safe even if init() is never called.
-  Future<void> _ready = Future.value();
+  // Resolves once build() has loaded persisted history.
+  late Future<void> _ready;
 
-  Future<void> init() async {
-    _ready = _ref.read(undoRepositoryProvider).getHistory().then((history) {
-      if (mounted) state = history;
+  @override
+  List<UndoAction> build() {
+    _ready = ref.read(undoRepositoryProvider).getHistory().then((history) {
+      if (ref.mounted) state = history;
     });
-    await _ready;
+    return [];
   }
+
+  /// Waits for the persisted history to finish loading. Called by tests to
+  /// ensure the provider is ready before asserting state.
+  Future<void> init() => _ready;
 
   Future<void> pushAction(UndoAction action) async {
     await _ready;
     final newList = [...state, action];
     if (newList.length > _maxHistory) {
       final removed = newList.removeAt(0);
-      await _ref.read(undoRepositoryProvider).deleteAction(removed.id);
+      await ref.read(undoRepositoryProvider).deleteAction(removed.id);
     }
     state = newList;
-    await _ref.read(undoRepositoryProvider).saveAction(action);
+    await ref.read(undoRepositoryProvider).saveAction(action);
   }
 
   Future<void> clear() async {
     await _ready;
     state = [];
-    unawaited(_ref.read(undoRepositoryProvider).clearHistory());
+    unawaited(ref.read(undoRepositoryProvider).clearHistory());
   }
 
   Future<void> undo({String? actionId}) async {
@@ -57,7 +58,7 @@ class UndoService extends StateNotifier<List<UndoAction>> {
     // happened and retry if the undo failed (e.g. after an IMAP sync reverted
     // the local change). The inverse action added below allows undoing the undo.
 
-    final repo = _ref.read(emailRepositoryProvider);
+    final repo = ref.read(emailRepositoryProvider);
 
     for (final id in action.emailIds) {
       // 1. Try to cancel the original change (if not started yet).
