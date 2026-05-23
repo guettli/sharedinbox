@@ -221,7 +221,7 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub get >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
-				`grep -vE '^[+~><] ' "$tmp" || true`}).
+				`grep -vE '^(\+|Downloading packages)' "$tmp" || true`}).
 		WithExec([]string{"python3", "-c",
 			"import json, os\n" +
 				"f='.dart_tool/package_config.json'; d=json.load(open(f)); [d.pop(k,None) for k in ('generated','generatorVersion')]; json.dump(d,open(f,'w'))\n" +
@@ -245,7 +245,7 @@ func (m *Ci) codegenBase() *dagger.Container {
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
-				`grep -vE '^\[' "$tmp" || true`})
+				`grep -vE '^\[.*s\] \|' "$tmp" || true`})
 }
 
 // setup overlays platform-specific source files onto the shared codegen base.
@@ -411,7 +411,7 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
-				`grep -vE '^\[' "$tmp" || true`}).
+				`grep -vE '^\[.*s\] \|' "$tmp" || true`}).
 		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
 		Stdout(ctx)
 }
