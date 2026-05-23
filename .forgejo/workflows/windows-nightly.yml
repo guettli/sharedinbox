@@ -11,7 +11,6 @@ jobs:
     name: Build & Deploy Windows (Nightly)
     runs-on: windows-runner
     if: false
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +31,6 @@ jobs:
 
       - name: Set up SSH key
         if: env.SKIP_BUILD != 'true'
-        continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
@@ -42,7 +40,6 @@ jobs:
 
       - name: Deploy Windows to server
         if: env.SKIP_BUILD != 'true'
-        continue-on-error: true
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
