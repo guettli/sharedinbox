@@ -524,6 +524,7 @@ func (m *Ci) GenerateBuildHistory(
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
 		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		WithExec([]string{"chmod", "700", "/root/.ssh"}).
 		WithEnvVariable("SSH_USER", sshUser).
 		WithEnvVariable("SSH_HOST", sshHost).
 		WithDirectory("/src", scriptSource).
