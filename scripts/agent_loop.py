@@ -147,12 +147,25 @@ def _latest_ci_run() -> dict | None:
 
 
 def _latest_ci_run_for_branch(branch: str) -> dict | None:
-    """Return the latest CI run for a specific branch, or None."""
+    """Return the latest CI run for a specific branch, or None.
+
+    Forgejo's workflow_runs API has no top-level head_branch field.
+    For push events the branch is in ``prettyref``; for pull_request
+    events it lives inside ``event_payload["pull_request"]["head"]["ref"]``.
+    """
     data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
     runs = (data or {}).get("workflow_runs", [])
     for run in runs:
-        if run.get("head_branch") == branch:
-            return run
+        if run.get("event") == "pull_request":
+            try:
+                payload = json.loads(run.get("event_payload", "{}"))
+                if payload.get("pull_request", {}).get("head", {}).get("ref") == branch:
+                    return run
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        else:
+            if run.get("prettyref") == branch:
+                return run
     return None
 
 

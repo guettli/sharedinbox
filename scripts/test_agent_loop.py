@@ -284,7 +284,7 @@ class TestPendingCi(unittest.TestCase):
         """When CI is still running after agent finishes, pending issue is preserved."""
         written = {}
 
-        def fake_write_state(pid, issue, kind, issue_title=None):
+        def fake_write_state(pid, issue, kind, issue_title=None, session_name=None, ci_run_id=None):
             written["pid"] = pid
             written["issue"] = issue
             written["kind"] = kind
@@ -304,7 +304,7 @@ class TestPendingCi(unittest.TestCase):
         """When CI fails after agent finishes, ci-fix state includes the pending issue."""
         written = {}
 
-        def fake_write_state(pid, issue, kind, issue_title=None):
+        def fake_write_state(pid, issue, kind, issue_title=None, session_name=None, ci_run_id=None):
             written["pid"] = pid
             written["issue"] = issue
             written["kind"] = kind
@@ -394,6 +394,72 @@ class TestOutputFormat(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/128", output)
         self.assertIn("Fix something", output)
+
+
+class TestLatestCiRunForBranch(unittest.TestCase):
+    """Tests for _latest_ci_run_for_branch — Forgejo API field mapping."""
+
+    def _make_pr_run(self, branch: str, status: str = "success") -> dict:
+        payload = json.dumps({"pull_request": {"head": {"ref": branch}}})
+        return {"event": "pull_request", "event_payload": payload, "status": status, "id": 1}
+
+    def _make_push_run(self, prettyref: str, status: str = "success") -> dict:
+        return {"event": "push", "prettyref": prettyref, "status": status, "id": 2}
+
+    def _mock_tea_runs(self, runs):
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}) as m:
+            yield m
+
+    def test_pr_event_matches_via_event_payload(self):
+        run = self._make_pr_run("issue-166-fix")
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": [run]}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], 1)
+
+    def test_pr_event_does_not_match_wrong_branch(self):
+        run = self._make_pr_run("issue-99-fix")
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": [run]}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNone(result)
+
+    def test_push_event_matches_via_prettyref(self):
+        run = self._make_push_run("issue-166-fix")
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": [run]}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], 2)
+
+    def test_push_event_prettyref_pr_number_does_not_match_branch(self):
+        # Forgejo sets prettyref="#169" for PR runs — must not match branch name.
+        run = {"event": "push", "prettyref": "#169", "status": "success", "id": 3}
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": [run]}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNone(result)
+
+    def test_head_branch_field_absent_still_works(self):
+        # Regression: the old code used run.get("head_branch") which is absent in Forgejo.
+        run = self._make_pr_run("issue-166-fix")
+        self.assertNotIn("head_branch", run)
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": [run]}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNotNone(result)
+
+    def test_returns_none_when_no_runs(self):
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": []}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertIsNone(result)
+
+    def test_returns_first_matching_run(self):
+        runs = [
+            self._make_pr_run("issue-166-fix", status="success"),
+            self._make_pr_run("issue-166-fix", status="failure"),
+        ]
+        runs[0]["id"] = 10
+        runs[1]["id"] = 11
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
+            result = agent_loop._latest_ci_run_for_branch("issue-166-fix")
+        self.assertEqual(result["id"], 10)
 
 
 if __name__ == "__main__":
