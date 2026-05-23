@@ -616,6 +616,11 @@ Future<String> _resolveDatabasePath() async {
   );
 }
 
+// These two functions are only called from unit tests (database_path_test.dart).
+// They expose internals that cannot be reached via the public API.
+Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
+void resetDatabasePathForTesting() => _dbPath = null;
+
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final file = File(await _resolveDatabasePath());
