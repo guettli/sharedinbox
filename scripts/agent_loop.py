@@ -59,6 +59,9 @@ LABEL_IN_PROGRESS = "State/InProgress"
 LABEL_QUESTION = "State/Question"
 LABEL_PRIO_HIGH = "Prio/High"
 
+# Only pick up issues filed by these accounts.
+ALLOWED_ISSUE_AUTHORS = {"guettli", "guettlibot", "guettlibot2"}
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -113,6 +116,10 @@ def _close_issue(issue: int) -> None:
     _set_labels(issue, add=[], remove=[LABEL_IN_PROGRESS])
 
 
+def _comment_issue(issue: int, body: str) -> None:
+    _fgj("issue", "comment", str(issue), "--repo", REPO, "--body", body)
+
+
 def _ready_issues() -> list[dict]:
     """Return open issues with State/Ready, Prio/High first, then oldest."""
     result = subprocess.run(
@@ -124,6 +131,7 @@ def _ready_issues() -> list[dict]:
     ready = [
         i for i in data
         if any(lbl["name"] == LABEL_READY for lbl in i.get("labels", []))
+        and i.get("user", {}).get("login", "") in ALLOWED_ISSUE_AUTHORS
     ]
     ready.sort(key=lambda i: (
         0 if any(lbl["name"] == LABEL_PRIO_HIGH for lbl in i.get("labels", [])) else 1,
@@ -366,6 +374,12 @@ def _run_loop() -> int:
             _clear_state()
             if issue:
                 _set_labels(issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                _comment_issue(
+                    issue,
+                    f"Agent (pid {pid}) was killed after running for {age/60:.0f} min "
+                    f"(limit: {MAX_AGENT_AGE_SECONDS//60} min). "
+                    "Please investigate and resume manually.",
+                )
                 print(f"Set {_issue_url(issue)} to State/Question.")
             return 1
 
@@ -442,6 +456,12 @@ def _run_loop() -> int:
                     "agent may not have pushed. Setting to State/Question."
                 )
                 _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                _comment_issue(
+                    pending_issue,
+                    f"Agent opened PR #{pr_number} but no CI run appeared on branch `{branch}` "
+                    f"after {age_s/60:.0f} min. The agent may not have pushed any commits. "
+                    "Please investigate and resume manually.",
+                )
                 return 0
 
             # CI passed on the PR branch — squash-merge and close.
@@ -485,6 +505,12 @@ def _run_loop() -> int:
                 f"(run id {latest_run_id}) — agent did nothing. Setting to State/Question."
             )
             _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+            _comment_issue(
+                pending_issue,
+                "The agent exited without pushing any changes (no new CI run was triggered). "
+                "This usually means the agent hit a rate limit or crashed at startup. "
+                "The issue has been set to State/Question — please review the agent log and retry.",
+            )
             return 0
         _close_issue(pending_issue)
         print(f"CI passed — closed {_issue_url(pending_issue)}.")

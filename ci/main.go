@@ -212,12 +212,14 @@ func (m *Ci) Base() *dagger.Container {
 // inputs, then removes non-deterministic fields from both package_config.json
 // and .flutter-plugins-dependencies so the snapshot is byte-for-byte stable
 // across runs. Re-executes only when pubspec.yaml or pubspec.lock changes.
-// Uses toolchain() (no pub cache volume) so Dagger's execution cache is stable.
+// The pub cache is stored in a volume so package downloads land in the named
+// volume rather than the container overlay (which has limited space).
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
 	})
 	return m.toolchain().
+		WithMountedCache("/home/ci/.pub-cache", dag.CacheVolume("flutter-pub-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
