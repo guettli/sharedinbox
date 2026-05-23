@@ -205,6 +205,7 @@ def _write_state(pid: int | None, issue: int | None, kind: str, issue_title: str
     if ci_run_id is not None:
         data["ci_run_id_at_start"] = ci_run_id
     STATE_FILE.write_text(json.dumps(data, indent=2))
+    STATE_FILE.chmod(0o600)
 
 
 def _clear_state() -> None:
@@ -217,11 +218,12 @@ def _clear_state() -> None:
 def _start_agent(prompt: str, session_name: str) -> int:
     """Start Claude Code as a detached background process and return its PID."""
     log_dir = Path.home() / ".sharedinbox-agent-logs"
-    log_dir.mkdir(exist_ok=True)
+    log_dir.mkdir(mode=0o700, exist_ok=True)
+    log_dir.chmod(0o700)  # fix permissions if dir already existed with wrong mode
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     log_file = log_dir / f"{session_name}-{ts}.log"
 
-    log_fh = open(log_file, "w")
+    log_fh = open(log_file, "w", opener=lambda p, f: os.open(p, f, 0o600))
     proc = subprocess.Popen(
         [
             "claude",

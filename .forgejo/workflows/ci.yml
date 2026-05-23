@@ -34,3 +34,7 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: task check-dagger
+
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid

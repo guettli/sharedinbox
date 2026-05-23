@@ -680,10 +680,8 @@ func (m *Ci) TestAndroidFirebase(
 		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
 		WithExec([]string{"/bin/bash", "-c",
 			`auth_err=$(mktemp); trap 'rm -f "$auth_err"' EXIT; \
-			 echo "$FIREBASE_SA_KEY" > /tmp/key.json; \
-			 gcloud auth activate-service-account --key-file=/tmp/key.json 2>"$auth_err" \
+			 gcloud auth activate-service-account --key-file=<(echo "$FIREBASE_SA_KEY") 2>"$auth_err" \
 			   || { cat "$auth_err"; exit 1; }; \
-			 rm -f /tmp/key.json; \
 			 gcloud config set project "$FIREBASE_PROJECT_ID" 2>>"$auth_err" \
 			   || { cat "$auth_err"; exit 1; }; \
 			 unknown=$(grep -vF "Activated service account credentials for:" "$auth_err" \

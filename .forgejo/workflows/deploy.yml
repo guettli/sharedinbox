@@ -37,6 +37,10 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: task test-android-firebase
 
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
+
   deploy-playstore:
     name: Build & Deploy to Play Store
     runs-on: ubuntu-latest
@@ -80,6 +84,10 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: task deploy-apk
 
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
+
   build-linux:
     name: Build Linux Release
     runs-on: ubuntu-latest
@@ -112,6 +120,10 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           DAGGER_NO_NAG: "1"
         run: task deploy-linux
+
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
 
   publish-website:
     name: Publish Website Build History
@@ -149,6 +161,10 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           DAGGER_NO_NAG: "1"
         run: task publish-website
+
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
 
   label-deploy-health:
     name: Update Deploy Health Label
