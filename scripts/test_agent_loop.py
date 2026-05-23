@@ -256,22 +256,35 @@ class TestPendingCi(unittest.TestCase):
             "type": kind,
         }
 
+    def _open_pr(self, branch: str = "issue-10-fix") -> dict:
+        return {"number": 5, "head": {"ref": branch}, "created_at": "2026-01-01T00:00:00+00:00"}
+
+    def _find_pr_open(self, branch, state="open"):
+        if state == "open":
+            return self._open_pr(branch)
+        return None
+
     def test_closes_issue_when_ci_passes_after_agent_finishes(self):
-        """After issue agent finishes, loop closes the issue once CI is green."""
+        """After issue agent finishes, loop merges the PR and closes the issue once CI is green."""
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._merge_pr") as mock_merge, \
              patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._clear_state"):
             result = agent_loop._run_loop()
 
         self.assertEqual(result, 0)
+        mock_merge.assert_called_once_with(5)
         mock_close.assert_called_once_with(10)
 
     def test_ci_passed_output_includes_ci_run_url(self):
         """'CI passed' line includes the CI run URL when a run is available."""
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 4145144, "status": "success"}), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 4145144, "status": "success"}), \
+             patch("agent_loop._merge_pr"), \
              patch("agent_loop._close_issue"), \
              patch("agent_loop._clear_state"), \
              contextlib.redirect_stdout(buf):
@@ -280,24 +293,51 @@ class TestPendingCi(unittest.TestCase):
         self.assertIn("https://codeberg.org/guettli/sharedinbox/actions/runs/4145144", output)
         self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/10", output)
 
-    def test_ci_passed_output_without_run_omits_ci_url(self):
-        """'CI passed' line still works when no CI run is available."""
+    def test_already_merged_pr_closes_issue_without_ci_url(self):
+        """When the PR was already merged, the issue is closed and no CI run URL appears."""
+        def find_pr(branch, state="open"):
+            if state == "closed":
+                return {"number": 5, "merged": True}
+            return None
+
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
-             patch("agent_loop._close_issue"), \
+             patch("agent_loop._find_pr_for_branch", side_effect=find_pr), \
+             patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._clear_state"), \
              contextlib.redirect_stdout(buf):
-            agent_loop._run_loop()
+            result = agent_loop._run_loop()
         output = buf.getvalue()
-        self.assertIn("CI passed", output)
-        self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/10", output)
+        self.assertEqual(result, 0)
+        mock_close.assert_called_once_with(10)
+        self.assertIn("already merged", output)
         self.assertNotIn("/actions/runs/", output)
 
-    def test_does_not_close_issue_when_ci_fails(self):
-        """After issue agent finishes, loop must NOT close the issue if CI failed."""
+    def test_no_pr_found_sets_question_label(self):
+        """When no open or merged PR exists for the pending branch, set State/Question."""
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "failure"}), \
+             patch("agent_loop._find_pr_for_branch", return_value=None), \
+             patch("agent_loop._set_labels") as mock_labels, \
+             patch("agent_loop._comment_issue") as mock_comment, \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_not_called()
+        mock_labels.assert_called_once_with(
+            10,
+            add=[agent_loop.LABEL_QUESTION],
+            remove=[agent_loop.LABEL_IN_PROGRESS],
+        )
+        mock_comment.assert_called_once()
+        self.assertIn("issue-10-fix", mock_comment.call_args[0][1])
+
+    def test_does_not_close_issue_when_ci_fails(self):
+        """After issue agent finishes, loop must NOT close the issue if CI failed on PR branch."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "failure"}), \
              patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._start_agent", return_value=55), \
              patch("agent_loop._write_state"), \
@@ -308,7 +348,7 @@ class TestPendingCi(unittest.TestCase):
         mock_close.assert_not_called()
 
     def test_saves_pending_ci_state_while_ci_running(self):
-        """When CI is still running after agent finishes, pending issue is preserved."""
+        """When CI is still running on PR branch after agent finishes, pending issue is preserved."""
         written = {}
 
         def fake_write_state(pid, issue, kind, issue_title=None, session_name=None, ci_run_id=None):
@@ -317,7 +357,8 @@ class TestPendingCi(unittest.TestCase):
             written["kind"] = kind
 
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "running"}), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "running"}), \
              patch("agent_loop._write_state", side_effect=fake_write_state), \
              patch("agent_loop._clear_state"):
             result = agent_loop._run_loop()
@@ -328,7 +369,7 @@ class TestPendingCi(unittest.TestCase):
         self.assertIsNone(written.get("pid"))
 
     def test_ci_fix_preserves_pending_issue_in_state(self):
-        """When CI fails after agent finishes, ci-fix state includes the pending issue."""
+        """When CI fails on PR branch after agent finishes, ci-fix state includes the pending issue."""
         written = {}
 
         def fake_write_state(pid, issue, kind, issue_title=None, session_name=None, ci_run_id=None):
@@ -337,7 +378,8 @@ class TestPendingCi(unittest.TestCase):
             written["kind"] = kind
 
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "failure"}), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "failure"}), \
              patch("agent_loop._start_agent", return_value=55), \
              patch("agent_loop._write_state", side_effect=fake_write_state), \
              patch("agent_loop._clear_state"):
@@ -348,14 +390,17 @@ class TestPendingCi(unittest.TestCase):
         self.assertEqual(written.get("kind"), "ci-fix")
 
     def test_closes_issue_after_ci_fix_and_ci_passes(self):
-        """After ci-fix agent finishes and CI passes, the pending issue is closed."""
+        """After ci-fix agent finishes and CI passes on PR branch, the pending issue is closed."""
         with patch("agent_loop._read_state", return_value=self._dead_state(10, "ci-fix")), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._merge_pr") as mock_merge, \
              patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._clear_state"):
             result = agent_loop._run_loop()
 
         self.assertEqual(result, 0)
+        mock_merge.assert_called_once_with(5)
         mock_close.assert_called_once_with(10)
 
     def test_no_pending_issue_ci_fix_without_issue(self):

@@ -170,11 +170,11 @@ def _latest_ci_run_for_branch(branch: str) -> dict | None:
     return None
 
 
-def _find_pr_for_branch(branch: str) -> dict | None:
-    """Return the first open PR whose head branch matches, or None."""
+def _find_pr_for_branch(branch: str, state: str = "open") -> dict | None:
+    """Return the first PR in the given state whose head branch matches, or None."""
     result = subprocess.run(
         ["fgj", "--hostname", "codeberg.org", "pr", "list",
-         "--repo", REPO, "--state", "open", "--json"],
+         "--repo", REPO, "--state", state, "--json"],
         capture_output=True, text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
@@ -511,11 +511,32 @@ def _run_loop() -> int:
                 return 0
 
             # CI passed on the PR branch — squash-merge and close.
-            print(f"CI passed on branch {branch!r} — merging PR #{pr_number}.")
+            print(f"CI passed {_ci_run_url(pr_run['id'])} on branch {branch!r} — merging PR #{pr_number}.")
             _merge_pr(pr_number)
             _close_issue(pending_issue)
             print(f"Merged PR #{pr_number} and closed {_issue_url(pending_issue)}.")
             return 0
+
+        # No open PR — check if it was already merged.
+        merged_pr = _find_pr_for_branch(branch, state="closed")
+        if merged_pr and merged_pr.get("merged"):
+            print(f"PR for branch {branch!r} was already merged — closing issue #{pending_issue}.")
+            _close_issue(pending_issue)
+            return 0
+
+        # No open or merged PR — the agent may not have created one, or it was
+        # closed without merging (the bug this block was added to catch).
+        print(
+            f"No open or merged PR found for branch {branch!r} "
+            f"(issue #{pending_issue}) — setting to State/Question."
+        )
+        _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+        _comment_issue(
+            pending_issue,
+            f"Agent finished but no open or merged PR was found for branch `{branch}`. "
+            "Please investigate and resume manually.",
+        )
+        return 0
 
     # ── 3. Global CI check (agent pushed to main, or no pending issue) ────────
     run = _latest_ci_run()

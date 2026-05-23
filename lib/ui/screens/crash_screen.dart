@@ -23,7 +23,6 @@ class CrashScreen extends StatelessWidget {
       final info = await PackageInfo.fromPlatform();
       version = '${info.version}+${info.buildNumber}';
     } catch (_) {}
-    final gitLine = _gitHash.isNotEmpty ? 'Git Commit: $_gitHash\n' : '';
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
     final gitLine = _gitHash.isNotEmpty
