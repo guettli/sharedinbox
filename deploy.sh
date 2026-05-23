@@ -8,6 +8,9 @@ set -a
 source "$REPO_DIR/.env"
 set +a
 
+# SSH_PRIVATE_KEY must not live in .env (dagger parses .env and chokes on multiline values)
+export SSH_PRIVATE_KEY=$(cat "$HOME/.ssh/id_ed25519")
+
 # Add nix profile and nix store tools (task, dagger) to PATH
 export PATH="$HOME/.nix-profile/bin:$PATH"
 for pkg in "*go-task-*/bin/task" "*dagger-*/bin/dagger"; do
