@@ -312,6 +312,7 @@ func (m *Ci) Hugo() *dagger.Container {
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "curl", "tar", "libc6-compat", "libstdc++", "gcompat"}).
 		WithExec([]string{"curl", "-sL", "https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_0.152.2_linux-amd64.tar.gz", "-o", "/tmp/hugo.tar.gz"}).
+		WithExec([]string{"sh", "-c", "echo '416bcfbdf5f68469ec9644dbe507da50fc21b94b69a125b059d64ed2cb4d8c27  /tmp/hugo.tar.gz' | sha256sum -c -"}).
 		WithExec([]string{"tar", "-xzf", "/tmp/hugo.tar.gz", "-C", "/usr/local/bin", "hugo"}).
 		WithExec([]string{"rm", "/tmp/hugo.tar.gz"})
 }
