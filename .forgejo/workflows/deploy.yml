@@ -74,6 +74,10 @@ jobs:
         run: task publish-android
 
       - name: Build & Deploy APK to server
+        # continue-on-error: step requires SSH_PRIVATE_KEY secret; if unset the task
+        # precondition fails, but we don't want that to fail the whole job — the Play
+        # Store publish above already succeeded.  The overall job stays green even
+        # though this step shows as failed/orange in the UI.
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -113,6 +117,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Build & Deploy Linux to server
+        # continue-on-error: step requires SSH_PRIVATE_KEY secret; if unset the task
+        # precondition fails, but the build step that precedes this (done via Dagger)
+        # already succeeded.  Deployment is best-effort; a missing secret should not
+        # turn the job red.  The step will show as failed/orange in the UI even though
+        # the overall job is green — this is intentional.
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -154,6 +163,8 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Generate build history and deploy website
+        # continue-on-error: website publish is best-effort; a missing SSH_PRIVATE_KEY
+        # should not block the overall workflow status.
         continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
