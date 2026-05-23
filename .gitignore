@@ -120,3 +120,4 @@ dagger-certs
 .viminfo
 /go
 .last_deployed_sha
+.fail_count
