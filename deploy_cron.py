@@ -97,7 +97,11 @@ Push a fix to `main` — the cron (every 5 min) will retry automatically on the 
 
 
 def main():
-    git('fetch', 'origin', 'main')
+    try:
+        git('fetch', 'origin', 'main')
+    except subprocess.CalledProcessError as exc:
+        print(f'git fetch failed (transient?): {exc} — skipping this run.', file=sys.stderr)
+        return
     remote_sha = git('rev-parse', 'origin/main')
 
     last_sha    = read(SHA_FILE)
