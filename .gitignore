@@ -119,3 +119,4 @@ dagger-certs
 
 .viminfo
 /go
+.last_deployed_sha
