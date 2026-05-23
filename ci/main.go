@@ -649,9 +649,12 @@ func (m *Ci) DeployApk(
 // Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
 func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
 	built := m.setup(m.firebaseSrc()).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
 		WithWorkdir("/src/android").
-		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
+		// --no-daemon avoids connecting to a stale daemon whose registry file was
+		// preserved in the Dagger layer snapshot but whose process no longer exists.
+		WithExec([]string{"./gradlew", "--no-daemon", "app:assembleAndroidTest"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
 			`apk=$(find /src -path "*androidTest*" -name "*.apk" -type f 2>/dev/null | head -1) && \
