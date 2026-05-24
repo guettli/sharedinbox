@@ -34,6 +34,104 @@ void main() {
 
       expect(find.textContaining('expires in'), findsOneWidget);
     });
+
+    testWidgets(
+      'step 2 button shows text-input fallback on platforms without camera',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+
+        // On Linux (desktop, no camera) the text fallback field must appear.
+        expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'step 2 — valid encrypted QR imports account via text fallback',
+      (tester) async {
+        // Pre-generate a key pair so we can encrypt a QR code with the same
+        // material the screen will use for decryption.
+        final material = await ShareEncryptionService.generateKeyPair();
+        final repo = FakeShareKeyRepository(material: material);
+
+        const account = Account(
+          id: 'src-1',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+
+        final encryptedQr = await ShareEncryptionService.encryptAccounts(
+          recipientKeyId: material.keyId,
+          recipientPublicKeyBytes: material.publicKeyBytes,
+          accounts: [
+            AccountPayload(
+              accountJson: account.toJson(),
+              password: 'secret',
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(shareKeyRepository: repo),
+          ),
+        );
+        await tester.pumpAndSettle(); // key generation completes
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('encryptedCodeField')),
+          encryptedQr,
+        );
+        await tester.tap(find.text('Import'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Imported 1 account successfully.'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'step 2 — invalid encrypted QR shows error and returns to pub-key step',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('encryptedCodeField')),
+          'not-a-valid-qr-code',
+        );
+        await tester.tap(find.text('Import'));
+        await tester.pumpAndSettle();
+
+        // Screen returns to the pub-key step with an error message visible.
+        expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
+        expect(find.textContaining('Import failed:'), findsWidgets);
+      },
+    );
   });
 
   group('AccountSendScreen', () {

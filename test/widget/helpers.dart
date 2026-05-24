@@ -79,11 +79,13 @@ class FakeAccountRepository implements AccountRepository {
 }
 
 class FakeShareKeyRepository implements ShareKeyRepository {
+  FakeShareKeyRepository({ShareKeyMaterial? material}) : _material = material;
+
   ShareKeyMaterial? _material;
 
   @override
   Future<ShareKeyMaterial> createKeyPair() async {
-    _material = await ShareEncryptionService.generateKeyPair();
+    _material ??= await ShareEncryptionService.generateKeyPair();
     return _material!;
   }
 
@@ -511,6 +513,7 @@ List<Override> baseOverrides({
   List<Mailbox>? mailboxes,
   DiscoveryResult? discovery,
   Exception? connectionError,
+  ShareKeyRepository? shareKeyRepository,
 }) =>
     [
       accountRepositoryProvider
@@ -525,7 +528,9 @@ List<Override> baseOverrides({
       connectionTestServiceProvider.overrideWithValue(
         FakeConnectionTestService(error: connectionError),
       ),
-      shareKeyRepositoryProvider.overrideWithValue(FakeShareKeyRepository()),
+      shareKeyRepositoryProvider.overrideWithValue(
+        shareKeyRepository ?? FakeShareKeyRepository(),
+      ),
     ];
 
 // ---------------------------------------------------------------------------

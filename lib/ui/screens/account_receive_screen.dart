@@ -87,22 +87,24 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     }
   }
 
-  // Pre-flight: start + stop the scanner to verify the plugin is available.
-  // Falls back to text entry on any exception (including MissingPluginException).
+  // Pre-flight: probe the scanner's permission-state method to verify the
+  // plugin is registered.  MissingPluginException is thrown on Android builds
+  // where the plugin is not linked (issue #204).  All other exceptions mean
+  // the plugin exists but something else failed — the MobileScanner widget
+  // will surface those via its own error builder.
   Future<void> _initScanner() async {
-    MobileScannerController? ctrl;
     bool available = false;
     try {
-      ctrl = MobileScannerController();
-      await ctrl.start();
-      await ctrl.stop();
+      await const MethodChannel(
+        'dev.steenbakker.mobile_scanner/scanner/method',
+      ).invokeMethod<int>('state');
       available = true;
+    } on MissingPluginException {
+      // Plugin not registered on this device; text fallback will be shown.
     } catch (_) {
-      // Plugin not available on this device; text fallback will be shown.
-    } finally {
-      try {
-        await ctrl?.dispose();
-      } catch (_) {}
+      // Plugin registered but state check failed; let the scanner widget
+      // handle it via its errorBuilder.
+      available = true;
     }
     if (!mounted) return;
     if (available) {
