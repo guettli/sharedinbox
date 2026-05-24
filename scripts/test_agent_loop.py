@@ -505,28 +505,40 @@ class TestOutputFormat(unittest.TestCase):
 
 
 class TestLatestMainCiRun(unittest.TestCase):
-    """_latest_main_ci_run() must return only push-to-main runs, ignoring schedule/deploy workflows."""
+    """_latest_main_ci_run() must return only ci.yml push-to-main runs."""
 
-    def test_skips_schedule_runs_returns_push_to_main(self):
-        runs = [
-            {"event": "schedule", "prettyref": "main", "status": "success", "id": 1},
-            {"event": "push", "prettyref": "main", "status": "success", "id": 2},
-        ]
+    def _ci_run(self, run_id, status="success"):
+        return {"event": "push", "prettyref": "main", "workflow_id": "ci.yml",
+                "status": status, "id": run_id}
+
+    def _deploy_run(self, run_id, status="success"):
+        return {"event": "push", "prettyref": "main", "workflow_id": "deploy.yml",
+                "status": status, "id": run_id}
+
+    def test_skips_deploy_run_returns_ci_run(self):
+        # Forgejo reports deploy.yml schedule runs as event=push/prettyref=main;
+        # must be excluded by workflow_id filter.
+        runs = [self._deploy_run(1), self._ci_run(2)]
         with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
             result = agent_loop._latest_main_ci_run()
         self.assertIsNotNone(result)
         self.assertEqual(result["id"], 2)
 
-    def test_returns_none_when_only_schedule_runs_exist(self):
-        runs = [
-            {"event": "schedule", "prettyref": "main", "status": "success", "id": 1},
-        ]
+    def test_returns_none_when_only_deploy_runs_exist(self):
+        runs = [self._deploy_run(1)]
         with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
             result = agent_loop._latest_main_ci_run()
         self.assertIsNone(result)
 
-    def test_returns_push_to_main_run(self):
-        runs = [{"event": "push", "prettyref": "main", "status": "running", "id": 42}]
+    def test_returns_none_when_only_schedule_runs_exist(self):
+        runs = [{"event": "schedule", "prettyref": "main", "workflow_id": "deploy.yml",
+                 "status": "success", "id": 1}]
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
+            result = agent_loop._latest_main_ci_run()
+        self.assertIsNone(result)
+
+    def test_returns_ci_push_to_main_run(self):
+        runs = [self._ci_run(42, status="running")]
         with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
             result = agent_loop._latest_main_ci_run()
         self.assertIsNotNone(result)

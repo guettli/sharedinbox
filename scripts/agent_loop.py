@@ -146,16 +146,18 @@ def _ready_issues() -> list[dict]:
 
 
 def _latest_main_ci_run() -> dict | None:
-    """Return the latest CI run on the main branch (excludes PR and schedule runs).
+    """Return the latest ci.yml run on the main branch.
 
-    Using the global latest run (limit=1) is wrong: a passing or failing run
-    on a PR branch could mask the true state of main.  We filter to push
-    events on the 'main' prettyref so section-3 logic only reacts to main.
+    Forgejo reports scheduled/dispatch workflows (e.g. deploy.yml) with
+    event=push and prettyref=main, so filtering by event alone is not enough.
+    We also require workflow_id == "ci.yml".
     """
     data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
     runs = (data or {}).get("workflow_runs", [])
     for run in runs:
-        if run.get("event") == "push" and run.get("prettyref") == "main":
+        if (run.get("event") == "push"
+                and run.get("prettyref") == "main"
+                and run.get("workflow_id") == "ci.yml"):
             return run
     return None
 
