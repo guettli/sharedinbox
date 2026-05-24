@@ -200,7 +200,8 @@ class TestMain(unittest.TestCase):
             return 55
 
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(10)]), \
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
              patch("agent_loop._start_agent", side_effect=fake_start_agent), \
@@ -226,7 +227,8 @@ class TestMain(unittest.TestCase):
             captured["remove"] = remove
 
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(7)]), \
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
              patch("agent_loop._start_agent", return_value=99), \
@@ -239,7 +241,8 @@ class TestMain(unittest.TestCase):
     def test_no_ready_issues_does_nothing(self):
         """main() exits cleanly with 0 when there are no ready issues."""
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              patch("agent_loop._set_labels") as mock_labels, \
              patch("agent_loop._start_agent") as mock_start:
@@ -258,7 +261,8 @@ class TestMain(unittest.TestCase):
             return 77
 
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(42)]), \
              patch("agent_loop._set_labels"), \
              patch("agent_loop._start_agent", side_effect=fake_start_agent), \
@@ -292,8 +296,9 @@ class TestPendingCi(unittest.TestCase):
 
     def test_closes_issue_when_ci_passes_after_agent_finishes(self):
         """After issue agent finishes, loop merges the PR and closes the issue once CI is green."""
+        # First call: PR found open. Second call (post-merge verification): PR closed.
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._find_pr_for_branch", side_effect=[self._open_pr(), None]), \
              patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
              patch("agent_loop._merge_pr") as mock_merge, \
              patch("agent_loop._close_issue") as mock_close, \
@@ -308,7 +313,7 @@ class TestPendingCi(unittest.TestCase):
         """'CI passed' line includes the CI run URL when a run is available."""
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
-             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._find_pr_for_branch", side_effect=[self._open_pr(), None]), \
              patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 4145144, "status": "success"}), \
              patch("agent_loop._merge_pr"), \
              patch("agent_loop._close_issue"), \
@@ -418,7 +423,7 @@ class TestPendingCi(unittest.TestCase):
     def test_closes_issue_after_ci_fix_and_ci_passes(self):
         """After ci-fix agent finishes and CI passes on PR branch, the pending issue is closed."""
         with patch("agent_loop._read_state", return_value=self._dead_state(10, "ci-fix")), \
-             patch("agent_loop._find_pr_for_branch", side_effect=self._find_pr_open), \
+             patch("agent_loop._find_pr_for_branch", side_effect=[self._open_pr(), None]), \
              patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
              patch("agent_loop._merge_pr") as mock_merge, \
              patch("agent_loop._close_issue") as mock_close, \
@@ -435,7 +440,8 @@ class TestPendingCi(unittest.TestCase):
             "pid": 999999999, "issue": None, "started_at": "2026-01-01T00:00:00+00:00",
             "type": "ci-fix",
         }), \
-             patch("agent_loop._latest_ci_run", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value={"id": 1, "status": "success"}), \
              patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._ready_issues", return_value=[]), \
              patch("agent_loop._clear_state"):
@@ -451,7 +457,8 @@ class TestOutputFormat(unittest.TestCase):
     def test_output_starts_with_header(self):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              contextlib.redirect_stdout(buf):
             agent_loop._run_loop()
@@ -462,7 +469,8 @@ class TestOutputFormat(unittest.TestCase):
     def test_no_agent_loop_prefix_in_output(self):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              contextlib.redirect_stdout(buf):
             agent_loop._run_loop()
@@ -472,7 +480,8 @@ class TestOutputFormat(unittest.TestCase):
         run = {"id": 4145144, "status": "running"}
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=run), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=run), \
              contextlib.redirect_stdout(buf):
             agent_loop._run_loop()
         self.assertIn("https://codeberg.org/guettli/sharedinbox/actions/runs/4145144",
@@ -482,7 +491,8 @@ class TestOutputFormat(unittest.TestCase):
         issue = {"number": 128, "title": "Fix something", "body": "", "labels": []}
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
-             patch("agent_loop._latest_ci_run", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[issue]), \
              patch("agent_loop._set_labels"), \
              patch("agent_loop._start_agent", return_value=99), \
@@ -492,6 +502,35 @@ class TestOutputFormat(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("https://codeberg.org/guettli/sharedinbox/issues/128", output)
         self.assertIn("Fix something", output)
+
+
+class TestLatestMainCiRun(unittest.TestCase):
+    """_latest_main_ci_run() must return only push-to-main runs, ignoring schedule/deploy workflows."""
+
+    def test_skips_schedule_runs_returns_push_to_main(self):
+        runs = [
+            {"event": "schedule", "prettyref": "main", "status": "success", "id": 1},
+            {"event": "push", "prettyref": "main", "status": "success", "id": 2},
+        ]
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
+            result = agent_loop._latest_main_ci_run()
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], 2)
+
+    def test_returns_none_when_only_schedule_runs_exist(self):
+        runs = [
+            {"event": "schedule", "prettyref": "main", "status": "success", "id": 1},
+        ]
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
+            result = agent_loop._latest_main_ci_run()
+        self.assertIsNone(result)
+
+    def test_returns_push_to_main_run(self):
+        runs = [{"event": "push", "prettyref": "main", "status": "running", "id": 42}]
+        with patch("agent_loop._tea_get", return_value={"workflow_runs": runs}):
+            result = agent_loop._latest_main_ci_run()
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], 42)
 
 
 class TestLatestCiRunForBranch(unittest.TestCase):

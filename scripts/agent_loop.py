@@ -146,16 +146,16 @@ def _ready_issues() -> list[dict]:
 
 
 def _latest_main_ci_run() -> dict | None:
-    """Return the latest CI run on the main branch (excludes PR runs).
+    """Return the latest CI run on the main branch (excludes PR and schedule runs).
 
     Using the global latest run (limit=1) is wrong: a passing or failing run
-    on a PR branch could mask the true state of main.  We filter to non-PR
+    on a PR branch could mask the true state of main.  We filter to push
     events on the 'main' prettyref so section-3 logic only reacts to main.
     """
     data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
     runs = (data or {}).get("workflow_runs", [])
     for run in runs:
-        if run.get("event") != "pull_request" and run.get("prettyref") == "main":
+        if run.get("event") == "push" and run.get("prettyref") == "main":
             return run
     return None
 
@@ -177,7 +177,7 @@ def _latest_ci_run_for_branch(branch: str) -> dict | None:
                     return run
             except (json.JSONDecodeError, AttributeError):
                 pass
-        else:
+        elif run.get("event") == "push":
             if run.get("prettyref") == branch:
                 return run
     return None
