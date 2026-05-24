@@ -33,9 +33,6 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
     result = subprocess.run(
         [
             "ssh",
-            "-v",
-            "-o", "StrictHostKeyChecking=no",
-            "-i", "/root/.ssh/id_ed25519",
             f"{ssh_user}@{ssh_host}",
             f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f | sort",
         ],

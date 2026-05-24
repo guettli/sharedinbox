@@ -318,12 +318,13 @@ func (m *Ci) Hugo() *dagger.Container {
 }
 
 // Deploy container for rsync/ssh
-func (m *Ci) Deployer(sshKey *dagger.Secret) *dagger.Container {
+func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.Container {
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
 		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
-		WithEnvVariable("RSYNC_RSH", "ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519")
+		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
+		WithEnvVariable("RSYNC_RSH", "ssh -i /root/.ssh/id_ed25519")
 }
 
 // Stalwart mail server service for backend and integration tests.
@@ -514,6 +515,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 func (m *Ci) GenerateBuildHistory(
 	ctx context.Context,
 	sshKey *dagger.Secret,
+	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) *dagger.Directory {
@@ -525,7 +527,7 @@ func (m *Ci) GenerateBuildHistory(
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
 		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
-		WithExec([]string{"chmod", "700", "/root/.ssh"}).
+		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
 		WithEnvVariable("SSH_USER", sshUser).
 		WithEnvVariable("SSH_HOST", sshHost).
 		WithDirectory("/src", scriptSource).
@@ -538,10 +540,11 @@ func (m *Ci) GenerateBuildHistory(
 func (m *Ci) BuildWebsite(
 	ctx context.Context,
 	sshKey *dagger.Secret,
+	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) *dagger.Directory {
-	buildHistory := m.GenerateBuildHistory(ctx, sshKey, sshUser, sshHost)
+	buildHistory := m.GenerateBuildHistory(ctx, sshKey, knownHosts, sshUser, sshHost)
 
 	websiteSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"website/"},
@@ -558,12 +561,13 @@ func (m *Ci) BuildWebsite(
 func (m *Ci) PublishWebsite(
 	ctx context.Context,
 	sshKey *dagger.Secret,
+	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
 ) (string, error) {
-	public := m.BuildWebsite(ctx, sshKey, sshUser, sshHost)
+	public := m.BuildWebsite(ctx, sshKey, knownHosts, sshUser, sshHost)
 
-	return m.Deployer(sshKey).
+	return m.Deployer(sshKey, knownHosts).
 		WithDirectory("/public", public).
 		WithExec([]string{"rsync", "-avz", "--delete",
 			"--exclude=*.apk", "--exclude=*.tar.gz",
@@ -589,6 +593,7 @@ func (m *Ci) BuildLinuxRelease() *dagger.Directory {
 func (m *Ci) DeployLinux(
 	ctx context.Context,
 	sshKey *dagger.Secret,
+	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
 	commitHash string,
@@ -599,11 +604,11 @@ func (m *Ci) DeployLinux(
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
 	tarball := fmt.Sprintf("sharedinbox-linux-amd64-%s.tar.gz", commitHash)
 
-	return m.Deployer(sshKey).
+	return m.Deployer(sshKey, knownHosts).
 		WithDirectory("/bundle", bundle).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
-		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		WithExec([]string{"ssh", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /root/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
 		Stdout(ctx)
 }
 
@@ -626,6 +631,7 @@ func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *da
 func (m *Ci) DeployApk(
 	ctx context.Context,
 	sshKey *dagger.Secret,
+	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
 	commitHash string,
@@ -639,10 +645,10 @@ func (m *Ci) DeployApk(
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
 	apkName := fmt.Sprintf("sharedinbox-mua-%s.apk", commitHash)
 
-	return m.Deployer(sshKey).
+	return m.Deployer(sshKey, knownHosts).
 		WithFile("/tmp/app.apk", apk).
-		WithExec([]string{"ssh", "-o", "StrictHostKeyChecking=no", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
+		WithExec([]string{"ssh", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /root/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
 		Stdout(ctx)
 }
 

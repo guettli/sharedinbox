@@ -215,8 +215,10 @@ tasks:
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   build-android-bundle:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
@@ -251,17 +253,24 @@ tasks:
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
       - sh: test -n "$ANDROID_KEYSTORE_BASE64"
         msg: "ANDROID_KEYSTORE_BASE64 is not set"
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
 
   publish-website:
     desc: Build and publish website via Dagger
+    preconditions:
+      - sh: test -n "$SSH_PRIVATE_KEY"
+        msg: "SSH_PRIVATE_KEY is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key file:$HOME/.ssh/id_ed25519 --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
+      - dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST"
 
   check-dagger:
     desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
@@ -373,25 +382,29 @@ tasks:
         msg: "SSH_USER is not set"
       - sh: test -n "$SSH_HOST"
         msg: "SSH_HOST is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
       - |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
         HASH=$(git rev-parse --short HEAD)
         DATE_PATH=$(date -u +%Y/%m/%d)
         REMOTE_DIR="public_html/builds/$DATE_PATH"
         TARBALL="sharedinbox-linux-amd64-$HASH.tar.gz"
         tar -czf /tmp/$TARBALL -C build/linux/x64/release bundle
-        ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
-        scp -o StrictHostKeyChecking=no /tmp/$TARBALL "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$TARBALL"
+        ssh "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+        scp /tmp/$TARBALL "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$TARBALL"
         DOWNLOAD_URL="https://sharedinbox.de/builds/$DATE_PATH/$TARBALL"
         # Merge with any existing latest.json so we don't overwrite the windows key
-        EXISTING=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat public_html/latest.json 2>/dev/null || echo '{}'")
+        EXISTING=$(ssh "$SSH_USER@$SSH_HOST" "cat public_html/latest.json 2>/dev/null || echo '{}'")
         WINDOWS_URL=$(echo "$EXISTING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('windows',''))" 2>/dev/null || true)
         if [ -n "$WINDOWS_URL" ]; then
           echo "{\"version\":\"$HASH\",\"linux\":\"$DOWNLOAD_URL\",\"windows\":\"$WINDOWS_URL\"}" | \
-            ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+            ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
         else
           echo "{\"version\":\"$HASH\",\"linux\":\"$DOWNLOAD_URL\"}" | \
-            ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+            ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
         fi
         echo "Uploaded $TARBALL and updated latest.json"
 
@@ -416,24 +429,28 @@ tasks:
         msg: "SSH_USER is not set"
       - sh: test -n "$SSH_HOST"
         msg: "SSH_HOST is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
       - |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
         HASH=$(git rev-parse --short HEAD)
         DATE_PATH=$(date -u +%Y/%m/%d)
         REMOTE_DIR="public_html/builds/$DATE_PATH"
         ZIPFILE="sharedinbox-windows-x64-$HASH.zip"
         cd build/windows/x64/runner && zip -r /tmp/$ZIPFILE Release/ && cd -
-        ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
-        scp -o StrictHostKeyChecking=no /tmp/$ZIPFILE "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$ZIPFILE"
+        ssh "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+        scp /tmp/$ZIPFILE "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$ZIPFILE"
         DOWNLOAD_URL="https://sharedinbox.de/builds/$DATE_PATH/$ZIPFILE"
-        EXISTING=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat public_html/latest.json 2>/dev/null || echo '{}'")
+        EXISTING=$(ssh "$SSH_USER@$SSH_HOST" "cat public_html/latest.json 2>/dev/null || echo '{}'")
         LINUX_URL=$(echo "$EXISTING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('linux',''))" 2>/dev/null || true)
         if [ -n "$LINUX_URL" ]; then
           echo "{\"version\":\"$HASH\",\"linux\":\"$LINUX_URL\",\"windows\":\"$DOWNLOAD_URL\"}" | \
-            ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+            ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
         else
           echo "{\"version\":\"$HASH\",\"windows\":\"$DOWNLOAD_URL\"}" | \
-            ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+            ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
         fi
         echo "Uploaded $ZIPFILE and updated latest.json"
 
@@ -583,14 +600,18 @@ tasks:
         msg: "SSH_USER is not set"
       - sh: test -n "$SSH_HOST"
         msg: "SSH_HOST is not set"
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
       - |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
         HASH=$(git rev-parse --short HEAD)
         DATE_PATH=$(date -u +%Y/%m/%d)
         REMOTE_DIR="public_html/builds/$DATE_PATH"
         APK_NAME="sharedinbox-mua-$HASH.apk"
-        ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
-        scp -o StrictHostKeyChecking=no \
+        ssh "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+        scp \
           build/app/outputs/flutter-apk/app-release.apk \
           "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$APK_NAME"
         echo "Uploaded $APK_NAME to $REMOTE_DIR"
@@ -619,12 +640,16 @@ tasks:
   website-deploy:
     desc: Deploy the website via rsync to public_html
     deps: [website-build]
+    preconditions:
+      - sh: test -n "$SSH_KNOWN_HOSTS"
+        msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
       - |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
         rsync -avz --delete \
           --exclude='*.apk' \
           --exclude='*.tar.gz' \
-          -e "ssh -o StrictHostKeyChecking=no" \
           website/public/ \
           ${SSH_USER}@${SSH_HOST}:public_html/
 

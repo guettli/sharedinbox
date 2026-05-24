@@ -202,6 +202,8 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       - name: Build Linux release
         run: |
@@ -215,20 +217,20 @@ jobs:
           REMOTE_DIR="public_html/builds/$DATE_PATH"
           TARBALL="sharedinbox-linux-amd64-$HASH.tar.gz"
           tar -czf /tmp/$TARBALL -C build/linux/x64/release bundle
-          ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
-          scp -o StrictHostKeyChecking=no /tmp/$TARBALL "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$TARBALL"
+          ssh "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DIR"
+          scp /tmp/$TARBALL "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$TARBALL"
           DOWNLOAD_URL="https://sharedinbox.de/builds/$DATE_PATH/$TARBALL"
-          EXISTING=$(ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" \
+          EXISTING=$(ssh "$SSH_USER@$SSH_HOST" \
             "cat public_html/latest.json 2>/dev/null || echo '{}'")
           WINDOWS_URL=$(echo "$EXISTING" | \
             python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('windows',''))" \
             2>/dev/null || true)
           if [ -n "$WINDOWS_URL" ]; then
             echo "{\"version\":\"$HASH\",\"linux\":\"$DOWNLOAD_URL\",\"windows\":\"$WINDOWS_URL\"}" | \
-              ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+              ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
           else
             echo "{\"version\":\"$HASH\",\"linux\":\"$DOWNLOAD_URL\"}" | \
-              ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
+              ssh "$SSH_USER@$SSH_HOST" "cat > public_html/latest.json"
           fi
 
       - name: Generate build history pages
@@ -244,6 +246,5 @@ jobs:
           rsync -avz --delete \
             --exclude='*.apk' \
             --exclude='*.tar.gz' \
-            -e "ssh -o StrictHostKeyChecking=no" \
             website/public/ \
             "$SSH_USER@$SSH_HOST:public_html/"
