@@ -57,7 +57,9 @@ os.environ["PATH"] = (
 REPO = "guettli/sharedinbox"
 REPO_URL = f"https://codeberg.org/{REPO}"
 STATE_FILE = Path.home() / ".sharedinbox-agent-state.json"
+HEARTBEAT_FILE = Path.home() / ".sharedinbox-agent-heartbeat"
 MAX_AGENT_AGE_SECONDS = 3600  # 1 hour
+MAX_HEARTBEAT_AGE_SECONDS = 7200  # 2 hours
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects" / (
     "-" + str(Path.home())[1:].replace("/", "-")
 )
@@ -309,6 +311,12 @@ def _clear_state() -> None:
     STATE_FILE.unlink(missing_ok=True)
 
 
+def _update_heartbeat() -> None:
+    """Record that the agent loop ran right now."""
+    HEARTBEAT_FILE.write_text(datetime.now(timezone.utc).isoformat())
+    HEARTBEAT_FILE.chmod(0o600)
+
+
 def _find_session_uuid(session_name: str) -> str | None:
     """Return the Claude session UUID for *session_name*, or None if not found.
 
@@ -478,12 +486,44 @@ def cmd_list() -> int:
     return 0
 
 
+# ── monitor subcommand ────────────────────────────────────────────────────────
+
+
+def cmd_monitor() -> int:
+    """Check that the agent loop has run within the last 2 hours.
+
+    Exits 0 if healthy, 1 if the heartbeat is missing or stale.
+    Intended to be called from a scheduled CI job or cron every 2 hours.
+    """
+    if not HEARTBEAT_FILE.exists():
+        print(
+            f"WARNING: Agent loop heartbeat file missing — "
+            f"the loop may not have run yet or the file was deleted ({HEARTBEAT_FILE})."
+        )
+        return 1
+    try:
+        last_run = datetime.fromisoformat(HEARTBEAT_FILE.read_text().strip())
+    except ValueError:
+        print(f"WARNING: Agent loop heartbeat file is corrupted: {HEARTBEAT_FILE}")
+        return 1
+    age = (datetime.now(timezone.utc) - last_run).total_seconds()
+    if age > MAX_HEARTBEAT_AGE_SECONDS:
+        print(
+            f"WARNING: Agent loop last ran {age / 3600:.1f}h ago "
+            f"(limit: {MAX_HEARTBEAT_AGE_SECONDS // 3600}h) — the loop may be stalled."
+        )
+        return 1
+    print(f"Agent loop is healthy. Last run: {age / 60:.0f} min ago.")
+    return 0
+
+
 # ── main flow ─────────────────────────────────────────────────────────────────
 
 
 def _run_loop() -> int:
     now = datetime.now(timezone.utc)
     print(f"---------------------- Starting {now.strftime('%Y-%m-%d %H:%MZ')}")
+    _update_heartbeat()
 
     state = _read_state()
 
@@ -884,10 +924,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="agent_loop")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("list", help="List recent agent sessions")
+    sub.add_parser("monitor", help="Check that the loop ran within the last 2 hours")
     args = parser.parse_args()
 
     if args.cmd == "list":
         return cmd_list()
+    if args.cmd == "monitor":
+        return cmd_monitor()
     return _run_loop()
 
 
