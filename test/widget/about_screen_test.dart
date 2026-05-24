@@ -151,6 +151,10 @@ void main() {
     expect(clipboardText, contains('Dark Mode'));
     expect(clipboardText, contains('IMAP Accounts'));
     expect(clipboardText, contains('JMAP Accounts'));
+    expect(
+      clipboardText,
+      contains('[sharedinbox.de](https://sharedinbox.de)'),
+    );
   });
 
   testWidgets('AboutScreen create-issue button opens Codeberg URL', (

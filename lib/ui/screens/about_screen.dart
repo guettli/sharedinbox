@@ -47,10 +47,14 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final osName = _capitalize(Platform.operatingSystem);
     final isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
 
-    return '## sharedinbox.de\n\n'
+    final gitCommitLine = _gitHash.isNotEmpty
+        ? '| Git Commit | [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash) |\n'
+        : '';
+    return '## [sharedinbox.de](https://sharedinbox.de)\n\n'
         '| Property | Value |\n'
         '|----------|-------|\n'
         '| App Version | $versionDisplay |\n'
+        '$gitCommitLine'
         '| Platform | ${Platform.operatingSystem} |\n'
         '| $osName Version | ${Platform.operatingSystemVersion} |\n'
         '| Resolution | ${physW}x$physH px'
