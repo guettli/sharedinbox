@@ -23,7 +23,7 @@ void main() {
       expect(find.byKey(const Key('scanEncryptedButton')), findsOneWidget);
     });
 
-    testWidgets('shows 20-minute expiry hint', (tester) async {
+    testWidgets('shows expiry countdown hint', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/receive',
@@ -32,7 +32,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('20 minutes'), findsOneWidget);
+      expect(find.textContaining('expires in'), findsOneWidget);
     });
   });
 

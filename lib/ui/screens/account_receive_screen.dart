@@ -32,6 +32,7 @@ enum _Step { generatingKey, showingPubKey, scanning, importing, done, error }
 class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   _Step _step = _Step.generatingKey;
   ShareKeyMaterial? _keyMaterial;
+  DateTime? _keyExpiresAt;
   String? _pubKeyQr;
   String? _errorMessage;
   bool _scannerActive = false;
@@ -64,6 +65,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
       );
       setState(() {
         _keyMaterial = material;
+        _keyExpiresAt = DateTime.now().toUtc().add(const Duration(minutes: 20));
         _pubKeyQr = qr;
         _step = _Step.showingPubKey;
       });
@@ -274,7 +276,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             },
           ),
           const SizedBox(height: 8),
-          const _ExpiryHint(),
+          _ExpiryHint(expiresAt: _keyExpiresAt!),
           const SizedBox(height: 32),
           if (_errorMessage != null) ...[
             Text(
@@ -404,8 +406,37 @@ bool _cameraScanSupported() =>
     Platform.isMacOS ||
     Platform.isWindows;
 
-class _ExpiryHint extends StatelessWidget {
-  const _ExpiryHint();
+class _ExpiryHint extends StatefulWidget {
+  const _ExpiryHint({required this.expiresAt});
+
+  final DateTime expiresAt;
+
+  @override
+  State<_ExpiryHint> createState() => _ExpiryHintState();
+}
+
+class _ExpiryHintState extends State<_ExpiryHint> {
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  String _formatRemaining() {
+    final remaining = widget.expiresAt.difference(DateTime.now().toUtc());
+    if (remaining.isNegative) return 'expired';
+    final minutes = remaining.inMinutes;
+    final seconds = remaining.inSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -415,7 +446,7 @@ class _ExpiryHint extends StatelessWidget {
         Icon(Icons.timer_outlined, size: 14, color: Colors.grey[600]),
         const SizedBox(width: 4),
         Text(
-          'This key expires in 20 minutes',
+          'This key expires in ${_formatRemaining()}',
           style: TextStyle(fontSize: 12, color: Colors.grey[600]),
         ),
       ],
