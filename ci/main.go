@@ -739,7 +739,7 @@ func (m *Ci) UploadToPlayStore(
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
 		WithMountedCache("/root/.cache/pip", dag.CacheVolume("pip-cache")).
-		WithExec([]string{"pip", "install", "requests", "google-auth"}).
+		WithExec([]string{"pip", "install", "google-api-python-client", "google-auth-httplib2", "httplib2"}).
 		WithFile("/src/build/app/outputs/bundle/release/app-release.aab", aab).
 		WithFile("/src/scripts/deploy_playstore.py", scriptSource.File("scripts/deploy_playstore.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
