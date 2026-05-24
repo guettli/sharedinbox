@@ -6,17 +6,49 @@ import os
 import sys
 import time
 
-import google_auth_httplib2
-import httplib2
+from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
 PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
 TRACK = "internal"
-_TIMEOUT = 300  # seconds — AAB uploads can be large
+_BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
+_UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
+
+
+def _upload_aab_resumable(session, package, edit_id, aab_path):
+    """Upload AAB using the Google resumable upload protocol."""
+    file_size = os.path.getsize(aab_path)
+    init_url = f"{_UPLOAD_BASE}/{package}/edits/{edit_id}/bundles"
+
+    # Step 1: initiate the resumable upload session
+    init_resp = session.post(
+        init_url,
+        params={"uploadType": "resumable"},
+        headers={
+            "X-Upload-Content-Type": "application/octet-stream",
+            "X-Upload-Content-Length": str(file_size),
+            "Content-Length": "0",
+        },
+        timeout=60,
+    )
+    init_resp.raise_for_status()
+    upload_url = init_resp.headers["Location"]
+
+    # Step 2: upload the file in a single PUT to the session URI
+    with open(aab_path, "rb") as f:
+        upload_resp = session.put(
+            upload_url,
+            data=f,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(file_size),
+            },
+            timeout=600,
+        )
+    upload_resp.raise_for_status()
+    return upload_resp.json()
 
 
 def main():
@@ -33,57 +65,47 @@ def main():
         json.loads(config_json),
         scopes=["https://www.googleapis.com/auth/androidpublisher"],
     )
+    session = AuthorizedSession(creds)
 
-    authorized_http = google_auth_httplib2.AuthorizedHttp(
-        creds, http=httplib2.Http(timeout=_TIMEOUT)
-    )
-    service = build("androidpublisher", "v3", http=authorized_http)
+    edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
+    edit_resp.raise_for_status()
+    edit_id = edit_resp.json()["id"]
 
-    edit = service.edits().insert(body={}, packageName=PACKAGE_NAME).execute(num_retries=3)
-    edit_id = edit["id"]
-
-    # The resumable upload can fail with RedirectMissingLocation on transient
-    # network hiccups. Retry with a fresh MediaFileUpload each time (resumable
-    # uploads can't reuse the same object) using exponential backoff.
-    version_code = None
     last_exc = None
+    bundle = None
     for attempt in range(_MAX_UPLOAD_ATTEMPTS):
         try:
-            media = MediaFileUpload(
-                AAB_PATH, mimetype="application/octet-stream", resumable=True
-            )
-            bundle = (
-                service.edits()
-                .bundles()
-                .upload(packageName=PACKAGE_NAME, editId=edit_id, media_body=media)
-                .execute(num_retries=3)
-            )
-            version_code = bundle["versionCode"]
+            bundle = _upload_aab_resumable(session, PACKAGE_NAME, edit_id, AAB_PATH)
             break
-        except httplib2.error.RedirectMissingLocation as exc:
+        except Exception as exc:
             last_exc = exc
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
                 delay = 10 * (2 ** attempt)
                 print(
-                    f"Upload attempt {attempt + 1} failed (redirect error), "
+                    f"Upload attempt {attempt + 1} failed ({type(exc).__name__}: {exc}), "
                     f"retrying in {delay}s…"
                 )
                 time.sleep(delay)
-    else:
+    if bundle is None:
         raise RuntimeError(
             f"AAB upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
         ) from last_exc
 
+    version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    service.edits().tracks().update(
-        packageName=PACKAGE_NAME,
-        editId=edit_id,
-        track=TRACK,
-        body={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
-    ).execute(num_retries=3)
+    track_resp = session.put(
+        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{TRACK}",
+        json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
+        timeout=30,
+    )
+    track_resp.raise_for_status()
 
-    service.edits().commit(packageName=PACKAGE_NAME, editId=edit_id).execute(num_retries=3)
+    commit_resp = session.post(
+        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
+        timeout=30,
+    )
+    commit_resp.raise_for_status()
     print(f"Deployed version {version_code} to {TRACK} track")
 
 
