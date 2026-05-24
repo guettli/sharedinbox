@@ -174,10 +174,70 @@ Run a secret manager co-located with the Dagger host. The CI job authenticates w
 - Vault itself becomes a security-critical single point of failure.
 - Operational overhead likely disproportionate for a small single-developer project.
 
+### Option 5: Encrypted secrets file (age) — **implemented**
+
+Store all production secrets in a file (`secrets.env`) that is encrypted with
+[age](https://age-encryption.org/) into `secrets.age`. The encrypted file is
+committed to the repository. Only the age private key — a single string — is
+stored in Codeberg as `SECRETS_AGE_KEY`. Any CI job or developer with the key
+can decrypt the file and obtain all secrets.
+
+**How it works:**
+
+1. Generate a key pair once:
+   ```bash
+   age-keygen -o ~/.config/age/sharedinbox.key
+   age-keygen -y ~/.config/age/sharedinbox.key > .age-public-key
+   ```
+2. Copy `secrets.env.example` to `secrets.env`, fill in all values, then encrypt:
+   ```bash
+   scripts/secrets-encrypt.sh   # reads public key from .age-public-key
+   git add secrets.age && git commit -m "chore: update encrypted secrets"
+   ```
+3. Add the private key content as `SECRETS_AGE_KEY` in Codeberg repository secrets.
+4. CI jobs call `scripts/secrets-decrypt.sh` (with `SECRETS_AGE_KEY` set) before
+   any step that needs production credentials. The script writes each variable
+   to `$GITHUB_ENV` so subsequent steps see them automatically.
+
+**Keeping local and CI in sync:**
+When you rotate a secret locally, update `secrets.env`, re-run
+`scripts/secrets-encrypt.sh`, and commit the new `secrets.age`. CI will pick
+up the fresh secrets on the next push — no manual CI variable updates needed.
+
+Multi-line values (SSH keys, certificates) must be stored as a single line
+with `\n` escape sequences inside double quotes. Example:
+```
+SSH_PRIVATE_KEY="<header>\n<base64 key body>\n<footer>"
+```
+
+**Pro:**
+- One secret (`SECRETS_AGE_KEY`) in Codeberg instead of many.
+- Encrypted secrets are version-controlled — rotating a secret is a git commit.
+- Local dev environment and CI always use the same encrypted source of truth.
+- `age` is a simple, audited tool with no server infrastructure.
+- The private key never appears in workflow files or logs.
+
+**Con:**
+- `secrets.age` exposes the list of variable *names* (visible in the encrypted
+  file if the format leaks, though not the values).
+- All credentials share a single key — compromising `SECRETS_AGE_KEY` exposes
+  everything at once.
+- Key rotation requires re-encrypting `secrets.age` and updating the CI secret.
+
 ### Recommendation
 
-**Option 1** (runner-level env vars) or **Option 2** (secret files) are the pragmatic starting point for a single self-hosted runner. They require no new infrastructure and move all production secrets off Codeberg immediately.
+**Option 5** (encrypted secrets file) is now the active approach. It reduces
+Codeberg secrets to exactly two categories:
+- **Dagger access credentials** — `DAGGER_STUNNEL_URL`, `DAGGER_CA_CERT`,
+  `DAGGER_CLIENT_CERT`, `DAGGER_CLIENT_KEY`.
+- **Master key** — `SECRETS_AGE_KEY`.
 
-**Option 3** (Dagger host as orchestrator) is worth considering once the trigger SSH key replaces all other secrets in Codeberg — it offers the cleanest security boundary at the cost of reduced CI observability.
+**Option 1** (runner-level env vars) or **Option 2** (secret files) remain
+valid if you prefer not to commit an encrypted file to the repository.
 
-**Option 4** (Vault) becomes worthwhile if the project grows to multiple runners or team members who each need audited access to deploy credentials.
+**Option 3** (Dagger host as orchestrator) is worth considering once the
+trigger SSH key replaces all other secrets in Codeberg — it offers the cleanest
+security boundary at the cost of reduced CI observability.
+
+**Option 4** (Vault) becomes worthwhile if the project grows to multiple
+runners or team members who each need audited access to deploy credentials.

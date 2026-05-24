@@ -183,7 +183,7 @@ func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
 		From("ghcr.io/cirruslabs/flutter:3.41.6").
 		WithExec([]string{"apt-get", "-qq", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
+		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld", "age"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
 		WithExec([]string{"/bin/sh", "-c",
 			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
@@ -381,6 +381,21 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// CheckSecrets verifies the secrets encrypt/decrypt scripts work correctly.
+func (m *Ci) CheckSecrets(ctx context.Context) (string, error) {
+	scriptSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/secrets-encrypt.sh", "scripts/secrets-decrypt.sh", "scripts/test_secrets.sh"},
+	})
+	return dag.Container().
+		From("ghcr.io/cirruslabs/flutter:3.41.6").
+		WithExec([]string{"apt-get", "-qq", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "-qq", "age"}).
+		WithDirectory("/src", scriptSrc).
+		WithWorkdir("/src").
+		WithExec([]string{"bash", "scripts/test_secrets.sh"}).
+		Stdout(ctx)
+}
+
 // CheckLayers enforces that ui/ does not import data/.
 func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 	return m.Base().
@@ -470,6 +485,9 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	}
 	if _, err := m.CheckLayers(ctx); err != nil {
 		return "Layer check failed", err
+	}
+	if _, err := m.CheckSecrets(ctx); err != nil {
+		return "Secrets script check failed", err
 	}
 
 	checkSetup := m.setup(m.checkSrc())
@@ -821,6 +839,7 @@ flowchart TD
 
         pubGet --> hygiene["CheckHygiene"]
         pubGet --> layers["CheckLayers"]
+        pubGet --> secrets["CheckSecrets\nage encrypt/decrypt"]
         pubGet --> mocks["CheckMocks\n(own build_runner run)"]
 
         codegen --> fmt["Format"]
@@ -834,6 +853,7 @@ flowchart TD
 
         hygiene    --> check{{"✓ Check"}}
         layers     --> check
+        secrets    --> check
         fmt        --> check
         analyze    --> check
         mocks      --> check

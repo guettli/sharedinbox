@@ -655,7 +655,12 @@ tasks:
 
   check-fast:
     desc: Pre-commit checks — analyze + unit+widget tests + coverage gate (no build, no integration)
-    deps: [analyze, check-coverage, check-hygiene, check-layers, check-mocks]
+    deps: [analyze, check-coverage, check-hygiene, check-layers, check-mocks, check-secrets]
+
+  check-secrets:
+    desc: Test secrets encrypt/decrypt scripts (requires age)
+    cmds:
+      - bash scripts/test_secrets.sh
 
   check-layers:
     desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed)

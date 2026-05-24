@@ -10,6 +10,7 @@ FROM ghcr.io/catthehacker/ubuntu:go-24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     stunnel4 \
     netcat-openbsd \
+    age \
     && rm -rf /var/lib/apt/lists/*
 
 # Dagger CLI — pinned to match the engine version on the runner host

@@ -22,6 +22,7 @@ assets/changelog.txt
 .env.local
 .envrc
 .direnv/
+secrets.env      # plaintext secrets — encrypted version (secrets.age) is committed
 
 # --- Android ---
 android/.gradle/

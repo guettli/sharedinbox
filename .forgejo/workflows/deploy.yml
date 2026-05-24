@@ -65,6 +65,7 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v age     >/dev/null 2>&1 || { echo "ERROR: age is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -75,11 +76,15 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Run Android Tests on Firebase Test Lab
-        if: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY != '' }}
+      - name: Decrypt production secrets
+        if: ${{ secrets.SECRETS_AGE_KEY != '' }}
         env:
-          FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY }}
-          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          SECRETS_AGE_KEY: ${{ secrets.SECRETS_AGE_KEY }}
+        run: scripts/secrets-decrypt.sh
+
+      - name: Run Android Tests on Firebase Test Lab
+        if: env.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY != ''
+        env:
           DAGGER_NO_NAG: "1"
         run: task test-android-firebase
 
@@ -103,6 +108,7 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v age     >/dev/null 2>&1 || { echo "ERROR: age is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -113,12 +119,15 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Publish Android to Play Store
-        if: ${{ secrets.PLAY_STORE_CONFIG_JSON != '' }}
+      - name: Decrypt production secrets
+        if: ${{ secrets.SECRETS_AGE_KEY != '' }}
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
+          SECRETS_AGE_KEY: ${{ secrets.SECRETS_AGE_KEY }}
+        run: scripts/secrets-decrypt.sh
+
+      - name: Publish Android to Play Store
+        if: env.PLAY_STORE_CONFIG_JSON != ''
+        env:
           DAGGER_NO_NAG: "1"
         run: task publish-android
 
@@ -142,6 +151,7 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v age     >/dev/null 2>&1 || { echo "ERROR: age is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -152,15 +162,15 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Build & Deploy APK to server
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      - name: Decrypt production secrets
+        if: ${{ secrets.SECRETS_AGE_KEY != '' }}
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SECRETS_AGE_KEY: ${{ secrets.SECRETS_AGE_KEY }}
+        run: scripts/secrets-decrypt.sh
+
+      - name: Build & Deploy APK to server
+        if: env.SSH_PRIVATE_KEY != ''
+        env:
           DAGGER_NO_NAG: "1"
         run: task deploy-apk
 
@@ -184,6 +194,7 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v age     >/dev/null 2>&1 || { echo "ERROR: age is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -194,13 +205,15 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Build & Deploy Linux to server
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      - name: Decrypt production secrets
+        if: ${{ secrets.SECRETS_AGE_KEY != '' }}
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SECRETS_AGE_KEY: ${{ secrets.SECRETS_AGE_KEY }}
+        run: scripts/secrets-decrypt.sh
+
+      - name: Build & Deploy Linux to server
+        if: env.SSH_PRIVATE_KEY != ''
+        env:
           DAGGER_NO_NAG: "1"
         run: task deploy-linux
 
@@ -226,6 +239,7 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v age     >/dev/null 2>&1 || { echo "ERROR: age is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
 
       - name: Setup Dagger Remote Engine (via stunnel)
@@ -236,13 +250,15 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Generate build history and deploy website
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      - name: Decrypt production secrets
+        if: ${{ secrets.SECRETS_AGE_KEY != '' }}
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SECRETS_AGE_KEY: ${{ secrets.SECRETS_AGE_KEY }}
+        run: scripts/secrets-decrypt.sh
+
+      - name: Generate build history and deploy website
+        if: env.SSH_PRIVATE_KEY != ''
+        env:
           DAGGER_NO_NAG: "1"
         run: task publish-website
 
