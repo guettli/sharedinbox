@@ -609,6 +609,17 @@ Future<String> _resolveDatabasePath() async {
       await Future<void>.delayed(Duration(milliseconds: ms));
     }
   }
+  // On Android, path_provider can be permanently broken on some devices
+  // regardless of how long we wait (issue #192).  Derive the path from
+  // /proc/self/cmdline (the Android process name == package name) without
+  // a platform channel as a last resort so the app can still open its DB.
+  if (Platform.isAndroid) {
+    final fallback = await _androidFallbackPath();
+    if (fallback != null) {
+      _dbPath = fallback;
+      return _dbPath!;
+    }
+  }
   throw PlatformException(
     code: 'channel-error',
     message: 'path_provider unavailable after ${delays.length + 1} attempts — '
@@ -616,10 +627,44 @@ Future<String> _resolveDatabasePath() async {
   );
 }
 
-// These two functions are only called from unit tests (database_path_test.dart).
+// Reads /proc/self/cmdline to extract the Android package name, then
+// constructs the standard app files-dir path without a platform channel.
+// Returns null when the path cannot be determined or created.
+Future<String?> _androidFallbackPath() async {
+  try {
+    final bytes = await File('/proc/self/cmdline').readAsBytes();
+    final end = bytes.indexOf(0);
+    final packageName = String.fromCharCodes(
+      end >= 0 ? bytes.sublist(0, end) : bytes,
+    ).trim();
+    // A valid Android package name contains dots but not slashes.
+    if (packageName.isEmpty ||
+        !packageName.contains('.') ||
+        packageName.contains('/')) {
+      return null;
+    }
+    for (final base in [
+      '/data/user/0/$packageName/files',
+      '/data/data/$packageName/files',
+    ]) {
+      try {
+        await Directory(base).create(recursive: true);
+        return p.join(base, 'sharedinbox.db');
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// These functions are only called from unit tests (database_path_test.dart).
 // They expose internals that cannot be reached via the public API.
 Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
 void resetDatabasePathForTesting() => _dbPath = null;
+Future<String?> androidFallbackPathForTesting() => _androidFallbackPath();
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {

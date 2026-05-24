@@ -30,10 +30,43 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
+      - name: Locate Docker daemon for local Dagger engine
+        run: |
+          # Skip if remote Dagger engine is already configured (preferred path)
+          if [ -n "${_DAGGER_RUNNER_HOST:-}" ]; then
+            echo "Remote Dagger engine configured, no local Docker needed."
+            exit 0
+          fi
+
+          # Try host Docker socket (DooD) if runner mounts it
+          if [ -S /var/run/docker.sock ]; then
+            if DOCKER_HOST=unix:///var/run/docker.sock docker info >/dev/null 2>&1; then
+              echo "Docker available via host socket."
+              echo "DOCKER_HOST=unix:///var/run/docker.sock" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          fi
+
+          echo "WARNING: No remote Dagger engine and no local Docker found." >&2
+          echo "  - Remote engine: check DAGGER_STUNNEL_URL secret and that the host proxy is running." >&2
+          echo "  - Local Docker: runner does not expose /var/run/docker.sock." >&2
+          echo "CI will likely fail at the Dagger step." >&2
+
+      - name: Prune Dagger cache before check
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
+
       - name: Run Full Check Suite
         env:
           DAGGER_NO_NAG: "1"
         run: task check-dagger
+
+      - name: Prune Dagger cache after check
+        if: always()
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
 
       - name: Cleanup TLS credentials
         if: always()

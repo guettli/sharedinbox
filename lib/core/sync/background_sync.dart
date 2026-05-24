@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -24,6 +25,9 @@ const _kResourceType = 'background_check';
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
+  // Required so that path_provider and other plugins are available in this
+  // background isolate (issue #192).
+  WidgetsFlutterBinding.ensureInitialized();
   Workmanager().executeTask((_, __) async {
     try {
       await _doBackgroundSync();

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/services.dart';
@@ -128,6 +129,28 @@ void main() {
           contains('cannot open database'),
         );
       });
+    },
+    // The Android fallback runs only on Android, so on the host machine the
+    // exception is still thrown after all retries.  Skip on Android to avoid
+    // depending on /data/user/0/... being absent in the test environment.
+    skip: Platform.isAndroid,
+  );
+
+  // Regression test for issue #192: _androidFallbackPath must return null when
+  // the process cmdline does not look like an Android package name (e.g. on
+  // the host test machine where the process is the Dart executable).
+  test(
+    '_androidFallbackPath returns null when process name is not a package name',
+    () async {
+      // On non-Android platforms the host process cmdline is a file-system path
+      // (starts with '/'), which the fallback correctly rejects.  On Android
+      // the process IS named after the package — the fallback is free to
+      // succeed or return null depending on the device state; we do not assert
+      // here so as not to constrain Android behaviour.
+      if (!Platform.isAndroid) {
+        final result = await androidFallbackPathForTesting();
+        expect(result, isNull);
+      }
     },
   );
 }

@@ -284,8 +284,13 @@ tasks:
           for attempt in 1 2 3; do
             run_dagger "$@" && return 0
             RC=$?
-            if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused" "$DAGGER_OUT"; then
+            if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|invalid return status code" "$DAGGER_OUT"; then
               echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
+            elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$DAGGER_OUT"; then
+              echo "$(_ts) dagger: disk space error on attempt $attempt/3, pruning Dagger cache..." >&2
+              dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
+              echo "$(_ts) dagger: waiting 90s for freed space to settle..." >&2
+              sleep 90
             else
               return "$RC"
             fi

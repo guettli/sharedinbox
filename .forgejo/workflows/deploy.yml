@@ -31,6 +31,7 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Run Android Tests on Firebase Test Lab
+        if: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY != '' }}
         env:
           FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY }}
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
@@ -66,6 +67,7 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Publish Android to Play Store
+        if: ${{ secrets.PLAY_STORE_CONFIG_JSON != '' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
