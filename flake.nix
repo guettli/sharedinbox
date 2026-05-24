@@ -87,9 +87,6 @@
             # Website
             hugo
 
-            # Secrets management (master-key encryption for CI sync)
-            age
-
             # Utilities
             git
             curl
