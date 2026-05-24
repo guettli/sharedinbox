@@ -195,7 +195,8 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithUser("ci").
 		WithExec([]string{"/bin/sh", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`})
+				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
+		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"})
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.
@@ -810,7 +811,7 @@ func (m *Ci) Graph() string {
 ` + "```" + `mermaid
 flowchart TD
     subgraph dagger ["Dagger · Check pipeline"]
-        toolchain["toolchain\nflutter:3.41.6 + NDK + apt"]
+        toolchain["toolchain\nflutter:3.41.6 + NDK + apt + precache"]
         pubGet["pubGetLayer\nflutter pub get"]
         codegen["codegenBase\nbuild_runner build\n(shared cache)"]
         stalwart(["Stalwart service\nIMAP · JMAP · SMTP · Sieve"])
