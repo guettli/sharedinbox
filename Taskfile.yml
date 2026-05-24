@@ -288,7 +288,7 @@ tasks:
               echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
             elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$DAGGER_OUT"; then
               echo "$(_ts) dagger: disk space error on attempt $attempt/3, pruning Dagger cache..." >&2
-              dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
+              dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' 2>/dev/null || true
               echo "$(_ts) dagger: waiting 90s for freed space to settle..." >&2
               sleep 90
             else
@@ -319,6 +319,12 @@ tasks:
         curl -sf "http://127.0.0.1:$PORT/shutdown" >/dev/null 2>&1 || true
         wait "$RECV_PID" 2>/dev/null || true
         exit $RC
+
+  dagger-prune:
+    desc: Prune the Dagger engine cache (keeps named volumes unless total exceeds 75 GB, then targets 50 GB)
+    cmds:
+      - |
+        dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }'
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)

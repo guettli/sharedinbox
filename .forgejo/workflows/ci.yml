@@ -55,7 +55,10 @@ jobs:
       - name: Prune Dagger cache before check
         env:
           DAGGER_NO_NAG: "1"
-        run: dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
+        # prune(maxUsedSpace) also reclaims named cache volumes (gradle-cache, go-build-cache, etc.)
+        # when total cache exceeds the limit; without args only unreferenced entries are removed.
+        run: |
+          dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
 
       - name: Run Full Check Suite
         env:
@@ -66,7 +69,8 @@ jobs:
         if: always()
         env:
           DAGGER_NO_NAG: "1"
-        run: dagger query '{ engine { localCache { prune } } }' 2>/dev/null || true
+        run: |
+          dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
 
       - name: Cleanup TLS credentials
         if: always()
