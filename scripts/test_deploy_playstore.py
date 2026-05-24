@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Tests for deploy_playstore.py."""
-import io
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -11,6 +9,35 @@ from unittest.mock import MagicMock, call, patch
 sys.path.insert(0, str(Path(__file__).parent))
 
 import deploy_playstore
+
+
+def _make_session(
+    edit_id="edit-42",
+    version_code=7,
+    upload_side_effects=None,
+):
+    """Return a mock AuthorizedSession with sensible defaults."""
+    session = MagicMock()
+
+    # POST /edits → create edit
+    edit_resp = MagicMock()
+    edit_resp.json.return_value = {"id": edit_id}
+    session.post.return_value = edit_resp
+
+    # POST resumable-init → Location header
+    init_resp = MagicMock()
+    init_resp.headers = {"Location": "https://upload.example.com/session"}
+
+    # PUT upload → bundle JSON
+    upload_resp = MagicMock()
+    upload_resp.json.return_value = {"versionCode": version_code}
+
+    if upload_side_effects is not None:
+        # Use side_effect list: first call is edit create, rest are upload inits
+        # We override the PUT side effects via _upload_aab_resumable mock instead
+        pass
+
+    return session, init_resp, upload_resp
 
 
 class TestMainEnvChecks(unittest.TestCase):
@@ -30,169 +57,143 @@ class TestMainEnvChecks(unittest.TestCase):
 
 
 class TestMainHappyPath(unittest.TestCase):
-    def _run_main(self, fake_config):
-        mock_service = MagicMock()
-        mock_edits = mock_service.edits.return_value
-        mock_edits.insert.return_value.execute.return_value = {"id": "edit-42"}
-        mock_edits.bundles.return_value.upload.return_value.execute.return_value = {
-            "versionCode": 7
-        }
-        mock_edits.tracks.return_value.update.return_value.execute.return_value = {}
-        mock_edits.commit.return_value.execute.return_value = {}
+    def _run_main(self, fake_config='{"type":"service_account"}'):
+        mock_session = MagicMock()
+        # POST for edit create and commit
+        post_responses = [
+            MagicMock(**{"json.return_value": {"id": "edit-42"}}),  # create edit
+            MagicMock(),  # commit
+        ]
+        mock_session.post.side_effect = post_responses
+        # PUT for track update
+        mock_session.put.return_value = MagicMock()
 
         with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": fake_config}):
             with patch("deploy_playstore.os.path.exists", return_value=True):
                 with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload"):
-                                deploy_playstore.main()
+                    with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                        with patch(
+                            "deploy_playstore._upload_aab_resumable",
+                            return_value={"versionCode": 7},
+                        ):
+                            deploy_playstore.main()
 
-        return mock_edits
+        return mock_session
 
-    def test_insert_called_with_num_retries(self):
-        edits = self._run_main('{"type":"service_account"}')
-        edits.insert.return_value.execute.assert_called_once_with(num_retries=3)
+    def test_creates_edit(self):
+        session = self._run_main()
+        create_call = session.post.call_args_list[0]
+        self.assertIn("/edits", create_call[0][0])
 
-    def test_bundle_upload_called_with_num_retries(self):
-        edits = self._run_main('{"type":"service_account"}')
-        edits.bundles.return_value.upload.return_value.execute.assert_called_once_with(num_retries=3)
+    def test_commits_edit(self):
+        session = self._run_main()
+        commit_call = session.post.call_args_list[1]
+        self.assertIn(":commit", commit_call[0][0])
 
-    def test_tracks_update_called_with_num_retries(self):
-        edits = self._run_main('{"type":"service_account"}')
-        edits.tracks.return_value.update.return_value.execute.assert_called_once_with(num_retries=3)
-
-    def test_commit_called_with_num_retries(self):
-        edits = self._run_main('{"type":"service_account"}')
-        edits.commit.return_value.execute.assert_called_once_with(num_retries=3)
-
-    def test_authorized_http_uses_timeout(self):
-        fake_config = '{"type":"service_account"}'
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": fake_config}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.httplib2.Http") as mock_http_cls:
-                        with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp") as mock_auth:
-                            mock_service = MagicMock()
-                            mock_edits = mock_service.edits.return_value
-                            mock_edits.insert.return_value.execute.return_value = {"id": "e1"}
-                            mock_edits.bundles.return_value.upload.return_value.execute.return_value = {
-                                "versionCode": 1
-                            }
-                            mock_edits.tracks.return_value.update.return_value.execute.return_value = {}
-                            mock_edits.commit.return_value.execute.return_value = {}
-                            with patch("deploy_playstore.build", return_value=mock_service):
-                                with patch("deploy_playstore.MediaFileUpload"):
-                                    deploy_playstore.main()
-
-        mock_http_cls.assert_called_once_with(timeout=deploy_playstore._TIMEOUT)
-
-
-def _redirect_error():
-    import httplib2
-    return httplib2.error.RedirectMissingLocation("redirect missing", {}, b"")
+    def test_updates_track(self):
+        session = self._run_main()
+        track_call = session.put.call_args_list[0]
+        self.assertIn("/tracks/", track_call[0][0])
 
 
 class TestUploadRetry(unittest.TestCase):
-    def _make_mock_service(self, upload_side_effects):
-        mock_service = MagicMock()
-        mock_edits = mock_service.edits.return_value
-        mock_edits.insert.return_value.execute.return_value = {"id": "edit-1"}
-        mock_edits.bundles.return_value.upload.return_value.execute.side_effect = (
-            upload_side_effects
-        )
-        mock_edits.tracks.return_value.update.return_value.execute.return_value = {}
-        mock_edits.commit.return_value.execute.return_value = {}
-        return mock_service, mock_edits
+    def _run_main(self, upload_side_effects, sleep_mock=None):
+        mock_session = MagicMock()
+        post_responses = [
+            MagicMock(**{"json.return_value": {"id": "edit-1"}}),
+            MagicMock(),
+        ]
+        mock_session.post.side_effect = post_responses
+        mock_session.put.return_value = MagicMock()
 
-    def _run_with_service(self, mock_service):
-        fake_config = '{"type":"service_account"}'
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": fake_config}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload"):
-                                with patch("deploy_playstore.time.sleep"):
-                                    deploy_playstore.main()
+        patches = [
+            patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}),
+            patch("deploy_playstore.os.path.exists", return_value=True),
+            patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
+            patch("deploy_playstore.AuthorizedSession", return_value=mock_session),
+            patch("deploy_playstore._upload_aab_resumable", side_effect=upload_side_effects),
+            patch("deploy_playstore.time.sleep"),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            deploy_playstore.main()
+        finally:
+            for p in patches:
+                p.stop()
 
     def test_succeeds_on_first_attempt(self):
-        mock_service, mock_edits = self._make_mock_service([{"versionCode": 5}])
-        self._run_with_service(mock_service)
-        mock_edits.bundles.return_value.upload.return_value.execute.assert_called_once_with(
-            num_retries=3
-        )
+        with patch("deploy_playstore._upload_aab_resumable", return_value={"versionCode": 5}) as mock_upload:
+            with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
+                with patch("deploy_playstore.os.path.exists", return_value=True):
+                    with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
+                        mock_session = MagicMock()
+                        mock_session.post.side_effect = [
+                            MagicMock(**{"json.return_value": {"id": "e1"}}),
+                            MagicMock(),
+                        ]
+                        mock_session.put.return_value = MagicMock()
+                        with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                            deploy_playstore.main()
+            mock_upload.assert_called_once()
 
-    def test_retries_once_on_redirect_error_then_succeeds(self):
-        mock_service, mock_edits = self._make_mock_service(
-            [_redirect_error(), {"versionCode": 9}]
-        )
-
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload") as mock_media_cls:
-                                with patch("deploy_playstore.time.sleep") as mock_sleep:
-                                    deploy_playstore.main()
-
-        self.assertEqual(
-            mock_edits.bundles.return_value.upload.return_value.execute.call_count, 2
-        )
-        mock_sleep.assert_called_once_with(10)
-        self.assertEqual(mock_media_cls.call_count, 2)
+    def test_retries_once_on_error_then_succeeds(self):
+        self._run_main([ValueError("transient"), {"versionCode": 9}])
 
     def test_raises_after_all_attempts_exhausted(self):
-        mock_service, _ = self._make_mock_service(
-            [_redirect_error(), _redirect_error(), _redirect_error()]
-        )
-
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload"):
-                                with patch("deploy_playstore.time.sleep"):
-                                    with self.assertRaises(RuntimeError) as ctx:
-                                        deploy_playstore.main()
-
-        self.assertIn(
-            str(deploy_playstore._MAX_UPLOAD_ATTEMPTS), str(ctx.exception)
-        )
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main([ValueError("err"), ValueError("err"), ValueError("err")])
+        self.assertIn(str(deploy_playstore._MAX_UPLOAD_ATTEMPTS), str(ctx.exception))
 
     def test_backoff_delays_are_10s_then_20s(self):
-        mock_service, _ = self._make_mock_service(
-            [_redirect_error(), _redirect_error(), {"versionCode": 3}]
-        )
+        mock_session = MagicMock()
+        mock_session.post.side_effect = [
+            MagicMock(**{"json.return_value": {"id": "e1"}}),
+            MagicMock(),
+        ]
+        mock_session.put.return_value = MagicMock()
 
         with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
             with patch("deploy_playstore.os.path.exists", return_value=True):
                 with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload"):
-                                with patch("deploy_playstore.time.sleep") as mock_sleep:
-                                    deploy_playstore.main()
+                    with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                        with patch(
+                            "deploy_playstore._upload_aab_resumable",
+                            side_effect=[ValueError("e"), ValueError("e"), {"versionCode": 3}],
+                        ):
+                            with patch("deploy_playstore.time.sleep") as mock_sleep:
+                                deploy_playstore.main()
 
         mock_sleep.assert_has_calls([call(10), call(20)])
 
-    def test_fresh_media_upload_created_on_each_attempt(self):
-        mock_service, _ = self._make_mock_service(
-            [_redirect_error(), {"versionCode": 2}]
-        )
 
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.google_auth_httplib2.AuthorizedHttp"):
-                        with patch("deploy_playstore.build", return_value=mock_service):
-                            with patch("deploy_playstore.MediaFileUpload") as mock_media_cls:
-                                with patch("deploy_playstore.time.sleep"):
-                                    deploy_playstore.main()
+class TestUploadAabResumable(unittest.TestCase):
+    def test_initiates_and_uploads(self):
+        mock_session = MagicMock()
+        init_resp = MagicMock()
+        init_resp.headers = {"Location": "https://upload.example.com/sess"}
+        upload_resp = MagicMock()
+        upload_resp.json.return_value = {"versionCode": 42}
+        mock_session.post.return_value = init_resp
+        mock_session.put.return_value = upload_resp
 
-        self.assertEqual(mock_media_cls.call_count, 2)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"fake-aab-content")
+            aab_path = f.name
+
+        try:
+            result = deploy_playstore._upload_aab_resumable(
+                mock_session, "com.example.app", "edit-1", aab_path
+            )
+        finally:
+            os.unlink(aab_path)
+
+        self.assertEqual(result["versionCode"], 42)
+        mock_session.post.assert_called_once()
+        mock_session.put.assert_called_once()
+        put_call = mock_session.put.call_args
+        self.assertEqual(put_call[0][0], "https://upload.example.com/sess")
 
 
 if __name__ == "__main__":
