@@ -3,7 +3,41 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'android/**'
+      - 'linux/**'
+      - 'assets/**'
+      - '!assets/changelog.txt'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - 'scripts/**'
+      - 'stalwart-dev/**'
+      - 'ci/**'
+      - 'Taskfile.yml'
+      - 'drift_schemas/**'
+      - '.forgejo/workflows/ci.yml'
   pull_request:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'android/**'
+      - 'linux/**'
+      - 'assets/**'
+      - '!assets/changelog.txt'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - 'scripts/**'
+      - 'stalwart-dev/**'
+      - 'ci/**'
+      - 'Taskfile.yml'
+      - 'drift_schemas/**'
+      - '.forgejo/workflows/ci.yml'
 
 jobs:
   check:

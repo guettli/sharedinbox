@@ -6,10 +6,55 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-changes:
+    name: Detect Changed Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      android: ${{ steps.diff.outputs.android }}
+      linux: ${{ steps.diff.outputs.linux }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect Android and Linux changes
+        id: diff
+        shell: bash
+        run: |
+          # On workflow_dispatch always build everything
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "linux=true"   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Diff the HEAD commit against its parent; fall back to listing HEAD's files
+          # when the parent is unavailable (initial commit, shallow clone).
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null \
+            || git show --name-only --format= HEAD)
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          android_re='^(android/|integration_test/|lib/|pubspec\.yaml|pubspec\.lock|drift_schemas/)'
+          linux_re='^(linux/|lib/|pubspec\.yaml|pubspec\.lock)'
+
+          echo "$CHANGED" | grep -qE "$android_re" \
+            && echo "android=true" >> "$GITHUB_OUTPUT" \
+            || echo "android=false" >> "$GITHUB_OUTPUT"
+
+          echo "$CHANGED" | grep -qE "$linux_re" \
+            && echo "linux=true"   >> "$GITHUB_OUTPUT" \
+            || echo "linux=false"  >> "$GITHUB_OUTPUT"
+
   test-android-firebase:
     name: Android Instrumented Tests (Firebase Test Lab)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [check-changes]
+    if: needs.check-changes.outputs.android == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +91,8 @@ jobs:
     name: Build & Deploy to Play Store
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [check-changes]
+    if: needs.check-changes.outputs.android == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +130,8 @@ jobs:
     name: Build & Deploy APK to Server
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [check-changes]
+    if: needs.check-changes.outputs.android == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +171,8 @@ jobs:
     name: Build Linux Release
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: [check-changes]
+    if: needs.check-changes.outputs.linux == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -200,7 +251,13 @@ jobs:
     name: Update Deploy Health Label
     runs-on: ubuntu-latest
     needs: [test-android-firebase, deploy-playstore, deploy-apk, build-linux]
-    if: always() && vars.DEPLOY_HEALTH_ISSUE != ''
+    if: |
+      always() && vars.DEPLOY_HEALTH_ISSUE != '' && (
+        needs.test-android-firebase.result == 'success' || needs.test-android-firebase.result == 'failure' ||
+        needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'failure' ||
+        needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'failure' ||
+        needs.build-linux.result == 'success' || needs.build-linux.result == 'failure'
+      )
     timeout-minutes: 5
 
     steps:
@@ -209,7 +266,7 @@ jobs:
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_URL: ${{ github.server_url }}
           DEPLOY_HEALTH_ISSUE: ${{ vars.DEPLOY_HEALTH_ISSUE }}
-          ALL_SUCCEEDED: ${{ needs.test-android-firebase.result == 'success' && needs.deploy-playstore.result == 'success' && needs.deploy-apk.result == 'success' && needs.build-linux.result == 'success' }}
+          ALL_SUCCEEDED: ${{ (needs.test-android-firebase.result == 'success' || needs.test-android-firebase.result == 'skipped') && (needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'skipped') && (needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'skipped') && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') }}
         run: |
           python3 - << 'PYEOF'
           import os, json, urllib.request, urllib.error

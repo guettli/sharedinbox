@@ -835,16 +835,25 @@ flowchart TD
         integration --> check
     end
 
-    subgraph forgejo ["Codeberg CI · .forgejo/workflows/ci.yml"]
+    subgraph forgejo_ci ["Codeberg CI · ci.yml (push/PR, source paths only)"]
         ciCheck["check"]
-        buildLinux["build-linux\n(main only)"]
-        deployPS["deploy-playstore\n(main only)"]
-        pubWeb["publish-website\n(main only)"]
+    end
 
-        ciCheck --> buildLinux
-        ciCheck --> deployPS
+    subgraph forgejo_deploy ["Codeberg CI · deploy.yml (hourly schedule + workflow_dispatch)"]
+        detectChanges["check-changes\ndetect android / linux diff"]
+        buildLinux["build-linux\n(linux changed)"]
+        deployPS["deploy-playstore\n(android changed)"]
+        deployApk["deploy-apk\n(android changed)"]
+        fbTest["test-android-firebase\n(android changed)"]
+        pubWeb["publish-website\n(any build succeeded)"]
+
+        detectChanges --> buildLinux
+        detectChanges --> deployPS
+        detectChanges --> deployApk
+        detectChanges --> fbTest
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
+        deployApk   --> pubWeb
     end
 
     check -- "task check-dagger" --> ciCheck
