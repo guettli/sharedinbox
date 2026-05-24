@@ -29,7 +29,8 @@ android/.gradle/
 android/local.properties
 android/app/google-services.json
 android/key.properties
-android/app/src/main/java/io/flutter/plugins/
+# android/app/src/main/java/io/flutter/plugins/ intentionally tracked so that
+# GeneratedPluginRegistrant.java (catch Throwable) is committed and used by CI.
 .android/
 Android/
 .gradle/

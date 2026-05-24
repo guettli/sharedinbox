@@ -89,3 +89,7 @@ dependency_overrides:
   # (SIGSEGV in libdartjni.so FindClassUnchecked). Pin to 2.2.20 which uses
   # stable Pigeon and is known to work reliably.
   path_provider_android: ">=2.2.0 <2.2.21"
+  # url_launcher_android 6.3.25 updated to Pigeon 26, which causes a
+  # channel-error on launchUrl on some Android devices (same root cause as
+  # path_provider_android). Pin to <6.3.25 which uses stable Pigeon.
+  url_launcher_android: ">=6.3.0 <6.3.25"

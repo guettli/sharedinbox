@@ -95,6 +95,30 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     }
   }
 
+  Future<void> _launchUrl(BuildContext context, Uri url) async {
+    try {
+      final launched =
+          await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 5),
+            content: Text('Could not open browser.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 5),
+            content: Text('Error: $e'),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _createIssue(
     BuildContext context,
     int imapCount,
@@ -167,10 +191,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                       onTapLink: (text, href, title) {
                         if (href != null) {
                           unawaited(
-                            launchUrl(
-                              Uri.parse(href),
-                              mode: LaunchMode.externalApplication,
-                            ),
+                            _launchUrl(context, Uri.parse(href)),
                           );
                         }
                       },

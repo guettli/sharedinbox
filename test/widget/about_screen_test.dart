@@ -27,6 +27,22 @@ class MockUrlLauncher extends Mock
   }
 }
 
+class ThrowingUrlLauncher extends Mock
+    with MockPlatformInterfaceMixin
+    implements UrlLauncherPlatform {
+  @override
+  Future<bool> canLaunch(String? url) async => true;
+
+  @override
+  Future<bool> launchUrl(String? url, LaunchOptions? options) async {
+    throw PlatformException(
+      code: 'channel-error',
+      message: 'Unable to establish connection on channel: '
+          '"dev.flutter.pigeon.url_launcher_android.UrlLauncherApi.launchUrl".',
+    );
+  }
+}
+
 Widget _buildScreen({List<Account> accounts = const []}) {
   return ProviderScope(
     overrides: [
@@ -180,4 +196,24 @@ void main() {
     );
     expect(mock.launchedUrl, contains('1.2.3%2B99'));
   });
+
+  testWidgets(
+    'AboutScreen link tap with failed url_launcher shows error snackbar',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      UrlLauncherPlatform.instance = ThrowingUrlLauncher();
+
+      await tester.pumpWidget(_buildScreen());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('sharedinbox.de').first);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Error:'), findsOneWidget);
+    },
+  );
 }
