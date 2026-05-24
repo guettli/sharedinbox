@@ -116,7 +116,10 @@ void main() {
 
       expect(clipboardText, isNotNull);
       expect(clipboardText, contains('App Version: 1.0.0+42'));
+      expect(clipboardText, contains('Build Mode:'));
       expect(clipboardText, contains('Platform:'));
+      expect(clipboardText, contains('Dart:'));
+      expect(clipboardText, contains('Timestamp:'));
       expect(clipboardText, contains('TestException: clipboard test'));
       // GIT_HASH is empty in test builds — no Git Commit line expected
       expect(clipboardText, isNot(contains('Git Commit:')));
@@ -163,6 +166,35 @@ void main() {
       expect(
         mock.launchedUrl,
         equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+      );
+    },
+  );
+
+  testWidgets(
+    'CrashScreen shows version, build mode, and platform in the UI',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      const exception = 'TestException: info row test';
+      final stackTrace = StackTrace.current;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CrashScreen(exception: exception, stackTrace: stackTrace),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Info row shows app version (from mock), build mode, and platform OS.
+      expect(find.textContaining('1.0.0+42'), findsWidgets);
+      // In test builds kDebugMode is true.
+      expect(find.textContaining('debug'), findsOneWidget);
+      // Platform OS is always present (linux in CI, android/ios on device).
+      expect(
+        find.textContaining(RegExp(r'linux|android|ios|windows|macos')),
+        findsWidgets,
       );
     },
   );

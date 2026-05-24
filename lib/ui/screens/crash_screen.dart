@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -17,20 +18,35 @@ class CrashScreen extends StatelessWidget {
   final StackTrace? stackTrace;
   final String gitHash;
 
-  Future<String> _buildReport() async {
-    String version = 'unknown';
+  String get _buildMode {
+    if (kDebugMode) return 'debug';
+    if (kProfileMode) return 'profile';
+    return 'release';
+  }
+
+  Future<String> _fetchVersion() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      version = '${info.version}+${info.buildNumber}';
-    } catch (_) {}
+      return '${info.version}+${info.buildNumber}';
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
+  Future<String> _buildReport() async {
+    final version = await _fetchVersion();
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
     final gitLine = gitHash.isNotEmpty
         ? 'Git Commit: [$gitHash](https://codeberg.org/guettli/sharedinbox/commit/$gitHash)\n'
         : '';
+    final timestamp = DateTime.now().toUtc().toIso8601String();
     return 'App Version: $version\n'
+        'Build Mode: $_buildMode\n'
         '$gitLine'
-        'Platform: $platform\n\n'
+        'Platform: $platform\n'
+        'Dart: ${Platform.version}\n'
+        'Timestamp: $timestamp\n\n'
         'Error:\n```\n$exception\n```\n\n'
         'Stack Trace:\n```\n$stackTrace\n```';
   }
@@ -55,6 +71,18 @@ class CrashScreen extends StatelessWidget {
                   'sharedinbox.de encountered an unexpected error and needs to be restarted.',
                   style: Theme.of(ctx).textTheme.titleMedium,
                   textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                FutureBuilder<String>(
+                  future: _fetchVersion(),
+                  builder: (context, snapshot) => Text(
+                    'v${snapshot.data ?? '…'}  •  $_buildMode  •  '
+                    '${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey[600],
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
                 if (gitHash.isNotEmpty) ...[
                   const SizedBox(height: 8),
