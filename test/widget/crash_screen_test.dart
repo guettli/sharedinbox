@@ -124,6 +124,50 @@ void main() {
   );
 
   testWidgets(
+    'CrashScreen shows git hash as clickable link above stacktrace',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final mock = MockUrlLauncher();
+      UrlLauncherPlatform.instance = mock;
+
+      const exception = 'TestException: git hash test';
+      final stackTrace = StackTrace.current;
+      const testHash = 'abc1234';
+
+      await tester.pumpWidget(
+        CrashScreen(
+          exception: exception,
+          stackTrace: stackTrace,
+          gitHash: testHash,
+        ),
+      );
+
+      // Git hash link should be present
+      final gitLinkFinder = find.textContaining('Git Commit: abc1234');
+      expect(gitLinkFinder, findsOneWidget);
+
+      // Link must appear above the stack trace
+      final stackTraceFinder = find.text('Stack Trace:');
+      expect(
+        tester.getTopLeft(gitLinkFinder).dy,
+        lessThan(tester.getTopLeft(stackTraceFinder).dy),
+      );
+
+      // Tapping the link should open the Codeberg commit URL
+      await tester.tap(gitLinkFinder);
+      await tester.pumpAndSettle();
+
+      expect(
+        mock.launchedUrl,
+        equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+      );
+    },
+  );
+
+  testWidgets(
     'CrashScreen used as root widget — buttons work without ScaffoldMessenger crash',
     (tester) async {
       // Regression test for: ScaffoldMessenger.of(context) null-crash when

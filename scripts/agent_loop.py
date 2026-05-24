@@ -8,12 +8,15 @@ Flow
    a. Age > 1 h  → kill it, set its issue to State/Question, exit 1
    b. Age ≤ 1 h  → print status, exit 0  (let it keep working)
 2. No agent running → extract pending_issue from state (if any), then check CI
-   a. CI is running         → save pending-ci state, exit 0
-   b. Latest CI failed      → start fix-CI agent (preserving pending_issue), exit 0
-   c. CI ok + pending_issue → close the issue (CI passed), exit 0
-   d. CI ok (or no run yet) → find oldest Ready issue, start issue agent,
-                              save state, exit 0
-   e. No Ready issues       → print "nothing to do", exit 0
+   a. pending_issue + open PR → check PR branch CI, merge/fix/wait as needed
+   b. Catch-up: orphaned issue-N-fix PRs with passing CI → merge them
+   c. Main CI running         → save pending-ci state, exit 0
+   d. Main CI failed          → start fix-CI agent (pushes fix to main), exit 0
+   e. Main CI ok + pending_issue → close the issue, exit 0  (dead code path —
+                                   section 2a always returns first)
+   f. Main CI ok (or no run yet) → find oldest Ready issue, start issue agent,
+                                   save state, exit 0
+   g. No Ready issues         → print "nothing to do", exit 0
 
 Issue agents must NOT close the issue themselves; the loop closes it after CI passes.
 
@@ -142,10 +145,19 @@ def _ready_issues() -> list[dict]:
     return ready
 
 
-def _latest_ci_run() -> dict | None:
-    data = _tea_get(f"repos/{REPO}/actions/runs?limit=1")
+def _latest_main_ci_run() -> dict | None:
+    """Return the latest CI run on the main branch (excludes PR runs).
+
+    Using the global latest run (limit=1) is wrong: a passing or failing run
+    on a PR branch could mask the true state of main.  We filter to non-PR
+    events on the 'main' prettyref so section-3 logic only reacts to main.
+    """
+    data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
     runs = (data or {}).get("workflow_runs", [])
-    return runs[0] if runs else None
+    for run in runs:
+        if run.get("event") != "pull_request" and run.get("prettyref") == "main":
+            return run
+    return None
 
 
 def _latest_ci_run_for_branch(branch: str) -> dict | None:
@@ -520,6 +532,9 @@ def _run_loop() -> int:
                     "Fetch the CI logs using the task ci-logs command or the Codeberg API. "
                     "Identify the failure, fix it, commit, and push to the same branch. "
                     "Do NOT push to main, do NOT close the issue, do NOT merge the PR. "
+                    "Do NOT reference any issue numbers in commit messages "
+                    "(no 'closes #N', 'fixes #N', or similar) — auto-closing the wrong "
+                    "issue via a commit message would be a bug. "
                     "Verify locally with 'task check' before pushing. "
                     "When done, stop."
                 )
@@ -558,7 +573,25 @@ def _run_loop() -> int:
 
             # CI passed on the PR branch — squash-merge and close.
             print(f"CI passed {_ci_run_url(pr_run['id'])} on branch {branch!r} — merging PR #{pr_number}.")
-            _merge_pr(pr_number)
+            try:
+                _merge_pr(pr_number)
+            except RuntimeError as e:
+                print(f"Merge of PR #{pr_number} failed: {e} — setting to State/Question.")
+                _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                _comment_issue(
+                    pending_issue,
+                    f"Automatic merge of PR #{pr_number} failed: {e}. Please merge manually.",
+                )
+                return 0
+            if _find_pr_for_branch(branch):
+                print(f"PR #{pr_number} is still open after merge attempt — setting to State/Question.")
+                _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                _comment_issue(
+                    pending_issue,
+                    f"Automatic merge of PR #{pr_number} failed (PR is still open after the "
+                    "merge command). Please merge manually.",
+                )
+                return 0
             _close_issue(pending_issue)
             print(f"Merged PR #{pr_number} and closed {_issue_url(pending_issue)}.")
             return 0
@@ -608,7 +641,26 @@ def _run_loop() -> int:
 
         if pr_run and pr_run.get("status") == "success":
             print(f"Catch-up: CI passed on PR #{pr_number} ({pr_url}) — merging.")
-            _merge_pr(pr_number)
+            try:
+                _merge_pr(pr_number)
+            except RuntimeError as e:
+                print(f"Catch-up: merge of PR #{pr_number} failed: {e} — skipping.")
+                continue
+            # Verify the merge actually happened; fgj can exit 0 without merging
+            # (e.g. branch-protection rules not satisfied).
+            if _find_pr_for_branch(branch):
+                print(
+                    f"Catch-up: PR #{pr_number} is still open after merge attempt "
+                    "— skipping to avoid infinite retry."
+                )
+                if issue_num:
+                    _set_labels(issue_num, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
+                    _comment_issue(
+                        issue_num,
+                        f"Automatic merge of PR #{pr_number} failed (PR is still open "
+                        "after the merge command). Please merge manually.",
+                    )
+                continue
             if issue_num:
                 _close_issue(issue_num)
                 print(f"Merged PR #{pr_number} and closed issue #{issue_num}.")
@@ -616,8 +668,8 @@ def _run_loop() -> int:
                 print(f"Merged PR #{pr_number}.")
             return 0
 
-    # ── 3. Global CI check (agent pushed to main, or no pending issue) ────────
-    run = _latest_ci_run()
+    # ── 3. Global CI check (main branch only) ────────────────────────────────
+    run = _latest_main_ci_run()
 
     if run and run.get("status") == "running":
         print(f"CI run {_ci_run_url(run['id'])} is still running. Waiting.")
@@ -626,17 +678,39 @@ def _run_loop() -> int:
         return 0
 
     if run and run.get("status") in ("failure", "error"):
+        # Guard: if the same main CI run has been failing since the last ci-fix
+        # agent started, that agent pushed to a branch instead of main.  Before
+        # spawning another agent, check whether any CI run is currently in
+        # progress (the branch run) and wait if so.
+        if ci_run_id_at_start is not None and run["id"] == ci_run_id_at_start:
+            check = _tea_get(f"repos/{REPO}/actions/runs?limit=5")
+            in_flight = [
+                r for r in (check or {}).get("workflow_runs", [])
+                if r.get("status") == "running"
+            ]
+            if in_flight:
+                print(
+                    f"Main CI still shows the same failed run {run['id']}; "
+                    f"{_ci_run_url(in_flight[0]['id'])} is running "
+                    "(previous ci-fix pushed to a branch). Waiting."
+                )
+                return 0
         print(f"CI run {_ci_run_url(run['id'])} failed — starting fix agent.")
         prompt = (
-            "The Codeberg CI for guettli/sharedinbox just failed. "
+            "The Codeberg CI for guettli/sharedinbox just failed on the main branch. "
             f"The CI run ID is {run['id']}. "
             "Fetch the CI logs using the task ci-logs command or the Codeberg API. "
-            "Identify the failure, fix it, commit, and push. "
+            "Identify the failure, fix it, commit, and push directly to main. "
             "Verify locally with 'task check' before pushing. "
+            "Do NOT reference any issue numbers in commit messages "
+            "(no 'closes #N', 'fixes #N', or similar) — this is a CI fix, "
+            "not an issue fix, and auto-closing an issue via a commit message would be a bug. "
+            "Do NOT close any issues. "
             "When done, stop."
         )
         pid = _start_agent(prompt, "ci-fix")
-        _write_state(pid, pending_issue, "ci-fix", session_name="ci-fix")
+        _write_state(pid, pending_issue, "ci-fix", session_name="ci-fix",
+                     ci_run_id=run["id"] if run else None)
         return 0
 
     # CI is ok (or no run).
@@ -695,7 +769,10 @@ Instructions:
 - Implement the required change, following the existing code style.
 - Write or update tests as appropriate.
 - Run 'task check' locally and fix any failures before committing.
-- Commit with a descriptive message referencing the issue number (e.g. "feat: ... (#{issue_number})").
+- Commit with a descriptive message and include (#{issue_number}) in the title,
+  e.g. "feat: description (#{issue_number})".
+  Do NOT use "Closes #N" or "Fixes #N" keywords — the loop closes the issue
+  after CI passes; using those keywords would close it prematurely or wrongly.
 - Create a branch named `issue-{issue_number}-fix`, push your changes there, and open a PR against main:
       git checkout -b issue-{issue_number}-fix
       git push -u origin issue-{issue_number}-fix

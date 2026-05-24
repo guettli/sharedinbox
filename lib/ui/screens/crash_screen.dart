@@ -10,12 +10,12 @@ class CrashScreen extends StatelessWidget {
     super.key,
     required this.exception,
     required this.stackTrace,
+    this.gitHash = const String.fromEnvironment('GIT_HASH'),
   });
 
   final Object exception;
   final StackTrace? stackTrace;
-
-  static const _gitHash = String.fromEnvironment('GIT_HASH');
+  final String gitHash;
 
   Future<String> _buildReport() async {
     String version = 'unknown';
@@ -25,8 +25,8 @@ class CrashScreen extends StatelessWidget {
     } catch (_) {}
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
-    final gitLine = _gitHash.isNotEmpty
-        ? 'Git Commit: [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash)\n'
+    final gitLine = gitHash.isNotEmpty
+        ? 'Git Commit: [$gitHash](https://codeberg.org/guettli/sharedinbox/commit/$gitHash)\n'
         : '';
     return 'App Version: $version\n'
         '$gitLine'
@@ -56,12 +56,27 @@ class CrashScreen extends StatelessWidget {
                   style: Theme.of(ctx).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                if (_gitHash.isNotEmpty) ...[
+                if (gitHash.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  const Text(
-                    'Git Commit: $_gitHash',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                    textAlign: TextAlign.center,
+                  GestureDetector(
+                    onTap: () async {
+                      final url = Uri.parse(
+                        'https://codeberg.org/guettli/sharedinbox/commit/$gitHash',
+                      );
+                      await launchUrl(
+                        url,
+                        mode: LaunchMode.externalApplication,
+                      );
+                    },
+                    child: Text(
+                      'Git Commit: $gitHash',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 24),
@@ -102,32 +117,6 @@ class CrashScreen extends StatelessWidget {
                       style: const TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 10,
-                      ),
-                    ),
-                  ),
-                ],
-                if (_gitHash.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Git Commit:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  GestureDetector(
-                    onTap: () async {
-                      final url = Uri.parse(
-                        'https://codeberg.org/guettli/sharedinbox/commit/$_gitHash',
-                      );
-                      await launchUrl(
-                        url,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    },
-                    child: const Text(
-                      _gitHash,
-                      style: TextStyle(
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline,
                       ),
                     ),
                   ),
