@@ -45,12 +45,40 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   bool _scannerActive = true;
 
   MobileScannerController? _scannerController;
+  // True when the scanner plugin fails to initialise at runtime (e.g.
+  // MissingPluginException on some Android builds).
+  bool _scannerFailed = false;
 
   @override
   void initState() {
     super.initState();
     if (_cameraScanSupported()) {
-      _scannerController = MobileScannerController();
+      unawaited(_initScanner());
+    }
+  }
+
+  // Pre-flight: start + stop the scanner to verify the plugin is available.
+  // Falls back to text entry on any exception (including MissingPluginException).
+  Future<void> _initScanner() async {
+    MobileScannerController? ctrl;
+    bool available = false;
+    try {
+      ctrl = MobileScannerController();
+      await ctrl.start();
+      await ctrl.stop();
+      available = true;
+    } catch (_) {
+      // Plugin not available on this device; text fallback will be shown.
+    } finally {
+      try {
+        await ctrl?.dispose();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (available) {
+      setState(() => _scannerController = MobileScannerController());
+    } else {
+      setState(() => _scannerFailed = true);
     }
   }
 
@@ -178,8 +206,11 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   }
 
   Widget _buildScanStep(BuildContext context) {
-    if (!_cameraScanSupported()) {
+    if (!_cameraScanSupported() || _scannerFailed) {
       return _buildTextFallbackView(context);
+    }
+    if (_scannerController == null) {
+      return const Center(child: CircularProgressIndicator());
     }
 
     return Stack(

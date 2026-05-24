@@ -37,6 +37,9 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   bool _scannerActive = false;
 
   MobileScannerController? _scannerController;
+  // True when the scanner plugin fails to initialise at runtime (e.g.
+  // MissingPluginException on some Android builds).
+  bool _scannerFailed = false;
 
   @override
   void initState() {
@@ -76,8 +79,35 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     setState(() {
       _step = _Step.scanning;
       _scannerActive = true;
-      _scannerController = MobileScannerController();
     });
+    if (_cameraScanSupported()) {
+      unawaited(_initScanner());
+    }
+  }
+
+  // Pre-flight: start + stop the scanner to verify the plugin is available.
+  // Falls back to text entry on any exception (including MissingPluginException).
+  Future<void> _initScanner() async {
+    MobileScannerController? ctrl;
+    bool available = false;
+    try {
+      ctrl = MobileScannerController();
+      await ctrl.start();
+      await ctrl.stop();
+      available = true;
+    } catch (_) {
+      // Plugin not available on this device; text fallback will be shown.
+    } finally {
+      try {
+        await ctrl?.dispose();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (available) {
+      setState(() => _scannerController = MobileScannerController());
+    } else {
+      setState(() => _scannerFailed = true);
+    }
   }
 
   Future<void> _onScanned(String rawValue) async {
@@ -266,10 +296,13 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   }
 
   Widget _buildScannerView(BuildContext context) {
-    // On platforms where the camera scanner is not available (Linux desktop),
-    // fall back to a text-input field.
-    if (!_cameraScanSupported()) {
+    // Fall back to text input when the platform has no camera support or when
+    // the scanner plugin fails to initialise at runtime (MissingPluginException).
+    if (!_cameraScanSupported() || _scannerFailed) {
       return _buildTextFallbackView(context);
+    }
+    if (_scannerController == null) {
+      return const Center(child: CircularProgressIndicator());
     }
 
     return Stack(
