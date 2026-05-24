@@ -333,6 +333,15 @@ def _agent_alive(state: dict) -> bool:
         return True
 
 
+def _is_claude_process(pid: int) -> bool:
+    """Return True if pid's comm name indicates it is a claude/node process."""
+    try:
+        comm = Path(f"/proc/{pid}/comm").read_text().strip()
+        return comm in ("claude", "node")
+    except OSError:
+        return False
+
+
 def _agent_age_seconds(state: dict) -> float:
     """Seconds elapsed since the agent was launched, from the state file timestamp."""
     try:
@@ -367,11 +376,13 @@ def _git_summary() -> str:
 def _kill_agent(state: dict) -> None:
     """Forcefully stop the running agent."""
     pid = state.get("pid")
-    if pid:
+    if pid and _is_claude_process(pid):
         try:
             os.kill(pid, 9)
         except ProcessLookupError:
             pass
+    elif pid:
+        print(f"WARNING: pid {pid} is not a claude process — skipping kill to avoid hitting recycled PID")
 
 
 # ── subcommands ───────────────────────────────────────────────────────────────

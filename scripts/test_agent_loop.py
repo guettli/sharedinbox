@@ -88,20 +88,46 @@ class TestAgentAlive(unittest.TestCase):
         self.assertFalse(agent_loop._agent_alive({"pid": None}))
 
 
+class TestIsClaudeProcess(unittest.TestCase):
+    def test_returns_true_for_claude_comm(self):
+        with patch.object(agent_loop.Path, "read_text", return_value="claude\n"):
+            self.assertTrue(agent_loop._is_claude_process(1234))
+
+    def test_returns_true_for_node_comm(self):
+        with patch.object(agent_loop.Path, "read_text", return_value="node\n"):
+            self.assertTrue(agent_loop._is_claude_process(1234))
+
+    def test_returns_false_for_other_process(self):
+        with patch.object(agent_loop.Path, "read_text", return_value="bash\n"):
+            self.assertFalse(agent_loop._is_claude_process(1234))
+
+    def test_returns_false_when_proc_missing(self):
+        with patch.object(agent_loop.Path, "read_text", side_effect=OSError):
+            self.assertFalse(agent_loop._is_claude_process(1234))
+
+
 class TestKillAgent(unittest.TestCase):
     def test_kill_sends_sigkill(self):
-        with patch("agent_loop.os.kill") as mock_kill:
-            agent_loop._kill_agent({"pid": 1234})
-            mock_kill.assert_called_once_with(1234, 9)
+        with patch("agent_loop._is_claude_process", return_value=True):
+            with patch("agent_loop.os.kill") as mock_kill:
+                agent_loop._kill_agent({"pid": 1234})
+                mock_kill.assert_called_once_with(1234, 9)
 
     def test_kill_ignores_missing_process(self):
-        with patch("agent_loop.os.kill", side_effect=ProcessLookupError):
-            agent_loop._kill_agent({"pid": 1234})  # Should not raise.
+        with patch("agent_loop._is_claude_process", return_value=True):
+            with patch("agent_loop.os.kill", side_effect=ProcessLookupError):
+                agent_loop._kill_agent({"pid": 1234})  # Should not raise.
 
     def test_kill_noop_when_no_pid(self):
         with patch("agent_loop.os.kill") as mock_kill:
             agent_loop._kill_agent({})
             mock_kill.assert_not_called()
+
+    def test_kill_skips_recycled_pid(self):
+        with patch("agent_loop._is_claude_process", return_value=False):
+            with patch("agent_loop.os.kill") as mock_kill:
+                agent_loop._kill_agent({"pid": 1234})
+                mock_kill.assert_not_called()
 
 
 class TestStartAgent(unittest.TestCase):
