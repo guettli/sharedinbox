@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+import time
 
 import google_auth_httplib2
 import httplib2
@@ -15,6 +16,7 @@ PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
 TRACK = "internal"
 _TIMEOUT = 300  # seconds — AAB uploads can be large
+_MAX_UPLOAD_ATTEMPTS = 3
 
 
 def main():
@@ -40,14 +42,38 @@ def main():
     edit = service.edits().insert(body={}, packageName=PACKAGE_NAME).execute(num_retries=3)
     edit_id = edit["id"]
 
-    media = MediaFileUpload(AAB_PATH, mimetype="application/octet-stream", resumable=True)
-    bundle = (
-        service.edits()
-        .bundles()
-        .upload(packageName=PACKAGE_NAME, editId=edit_id, media_body=media)
-        .execute(num_retries=3)
-    )
-    version_code = bundle["versionCode"]
+    # The resumable upload can fail with RedirectMissingLocation on transient
+    # network hiccups. Retry with a fresh MediaFileUpload each time (resumable
+    # uploads can't reuse the same object) using exponential backoff.
+    version_code = None
+    last_exc = None
+    for attempt in range(_MAX_UPLOAD_ATTEMPTS):
+        try:
+            media = MediaFileUpload(
+                AAB_PATH, mimetype="application/octet-stream", resumable=True
+            )
+            bundle = (
+                service.edits()
+                .bundles()
+                .upload(packageName=PACKAGE_NAME, editId=edit_id, media_body=media)
+                .execute(num_retries=3)
+            )
+            version_code = bundle["versionCode"]
+            break
+        except httplib2.error.RedirectMissingLocation as exc:
+            last_exc = exc
+            if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
+                delay = 10 * (2 ** attempt)
+                print(
+                    f"Upload attempt {attempt + 1} failed (redirect error), "
+                    f"retrying in {delay}s…"
+                )
+                time.sleep(delay)
+    else:
+        raise RuntimeError(
+            f"AAB upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
+        ) from last_exc
+
     print(f"Uploaded AAB, version code: {version_code}")
 
     service.edits().tracks().update(
