@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -294,6 +295,7 @@ class _AccountSync implements _SyncLoop {
 
   bool _isPermanentError(Object e) {
     if (isTlsConfigError(e)) return true;
+    if (e is MissingPluginException) return true;
     final s = e.toString().toLowerCase();
     // enough_mail doesn't always have typed exceptions for auth, so we check strings.
     return s.contains('invalid credentials') ||
@@ -546,6 +548,7 @@ class _JmapAccountSync implements _SyncLoop {
 
   bool _isPermanentError(Object e) {
     if (isTlsConfigError(e)) return true;
+    if (e is MissingPluginException) return true;
     final s = e.toString().toLowerCase();
     return s.contains('invalid credentials') ||
         s.contains('authentication failed') ||

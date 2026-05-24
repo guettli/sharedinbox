@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -29,6 +31,40 @@ void main() {
   test('syncNow kicks the active sync loop', () async {
     // This is hard to test without real loops, but we can verify it doesn't crash.
     manager.syncNow('unknown');
+  });
+
+  // Regression test for issue #200: when flutter_secure_storage throws
+  // MissingPluginException (channel unavailable on the device), the IMAP sync
+  // loop must stop permanently instead of retrying indefinitely with backoff.
+  test(
+      'MissingPluginException from secure storage stops IMAP sync loop permanently',
+      () async {
+    final syncLog = FakeSyncLogRepository();
+
+    final m = AccountSyncManager(
+      _AccountRepositoryWithMissingPlugin(),
+      FakeMailboxRepositoryWithInbox(),
+      FakeEmailRepository(),
+      syncLog: syncLog,
+    );
+
+    m.start();
+
+    // Allow the first sync cycle to run and fail.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(syncLog.logs, hasLength(1));
+    expect(syncLog.logs.first.success, isFalse);
+
+    // Kicking the loop should have no effect once it has stopped permanently.
+    m.syncNow('1');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    // Before the fix: kick triggers a retry → 2 log entries.
+    // After the fix: loop is permanently stopped → still exactly 1 entry.
+    expect(syncLog.logs, hasLength(1));
+
+    m.dispose();
   });
 }
 
@@ -186,4 +222,35 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
   Future<Mailbox?> findMailboxByRole(String id, String role) async => null;
   @override
   Future<void> clearForResync(String accountId) async {}
+}
+
+class _AccountRepositoryWithMissingPlugin implements AccountRepository {
+  static const _account = Account(
+    id: '1',
+    displayName: 'Test',
+    email: 'test@example.com',
+  );
+
+  @override
+  Stream<List<Account>> observeAccounts() => Stream.value([_account]);
+
+  @override
+  Future<Account?> getAccount(String id) async => _account;
+
+  @override
+  Future<String> getPassword(String accountId) => Future.error(
+        MissingPluginException(
+          'No implementation found for method read on channel '
+          'plugins.it.nomads.com/flutter_secure_storage',
+        ),
+      );
+
+  @override
+  Future<void> addAccount(Account account, String password) async {}
+
+  @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+
+  @override
+  Future<void> removeAccount(String id) async {}
 }

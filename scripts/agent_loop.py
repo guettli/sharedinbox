@@ -31,6 +31,7 @@ To resume the Claude conversation, look up the session UUID first:
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -185,6 +186,40 @@ def _find_pr_for_branch(branch: str, state: str = "open") -> dict | None:
         ref = head.get("ref") or head.get("label", "").split(":")[-1]
         if ref == branch:
             return pr
+    return None
+
+
+def _open_issue_prs() -> list[dict]:
+    """Return all open PRs with issue-{N}-fix branches, oldest-first."""
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "pr", "list",
+         "--repo", REPO, "--state", "open", "--json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    prs = json.loads(result.stdout)
+    issue_prs = []
+    for pr in prs:
+        head = pr.get("head", {})
+        ref = head.get("ref") or head.get("label", "").split(":")[-1]
+        if re.match(r"^issue-\d+-fix$", ref or ""):
+            issue_prs.append(pr)
+    issue_prs.sort(key=lambda p: p["number"])
+    return issue_prs
+
+
+def _latest_ci_run_for_pr(pr_number: int) -> dict | None:
+    """Return the latest CI run triggered by a pull_request event for the given PR number."""
+    data = _tea_get(f"repos/{REPO}/actions/runs?event=pull_request&limit=50")
+    runs = (data or {}).get("workflow_runs", [])
+    for run in runs:
+        try:
+            payload = json.loads(run.get("event_payload", "{}"))
+            if payload.get("pull_request", {}).get("number") == pr_number:
+                return run
+        except (json.JSONDecodeError, AttributeError):
+            pass
     return None
 
 
@@ -537,6 +572,38 @@ def _run_loop() -> int:
             "Please investigate and resume manually.",
         )
         return 0
+
+    # ── 2b. Catch-up: scan open issue-N-fix PRs orphaned by a cleared state ─────
+    # This handles PRs whose CI has passed but were never merged because the
+    # state file was cleared (loop restart, killed agent, manual intervention).
+    open_prs = _open_issue_prs()
+    for pr in open_prs:
+        pr_number = pr["number"]
+        pr_url = f"{REPO_URL}/pulls/{pr_number}"
+        head = pr.get("head", {})
+        branch = head.get("ref") or head.get("label", "").split(":")[-1]
+        m = re.match(r"^issue-(\d+)-fix$", branch or "")
+        issue_num = int(m.group(1)) if m else None
+        pr_run = _latest_ci_run_for_pr(pr_number)
+
+        if pr_run and pr_run.get("status") == "running":
+            print(f"Catch-up: CI {_ci_run_url(pr_run['id'])} on PR #{pr_number} still running. Waiting.")
+            _write_state(None, issue_num, "pending-ci")
+            return 0
+
+        if pr_run and pr_run.get("status") in ("failure", "error"):
+            print(f"Catch-up: CI {_ci_run_url(pr_run['id'])} on PR #{pr_number} failed — skipping.")
+            continue
+
+        if pr_run and pr_run.get("status") == "success":
+            print(f"Catch-up: CI passed on PR #{pr_number} ({pr_url}) — merging.")
+            _merge_pr(pr_number)
+            if issue_num:
+                _close_issue(issue_num)
+                print(f"Merged PR #{pr_number} and closed issue #{issue_num}.")
+            else:
+                print(f"Merged PR #{pr_number}.")
+            return 0
 
     # ── 3. Global CI check (agent pushed to main, or no pending issue) ────────
     run = _latest_ci_run()
