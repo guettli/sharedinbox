@@ -238,6 +238,7 @@ tasks:
 
   publish-android:
     desc: Build cached AAB, stamp versionCode, sign, and publish to Play Store via Dagger
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$PLAY_STORE_CONFIG_JSON"
         msg: "PLAY_STORE_CONFIG_JSON is not set"

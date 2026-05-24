@@ -38,7 +38,7 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          android_re='^(android/|integration_test/|lib/|pubspec\.yaml|pubspec\.lock|drift_schemas/)'
+          android_re='^(android/|integration_test/|lib/|pubspec\.yaml|pubspec\.lock|drift_schemas/|scripts/deploy_playstore\.py)'
           linux_re='^(linux/|lib/|pubspec\.yaml|pubspec\.lock)'
 
           echo "$CHANGED" | grep -qE "$android_re" \
@@ -97,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 100
 
       - name: Check runner tools
         run: |
