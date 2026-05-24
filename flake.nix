@@ -94,8 +94,9 @@
             sqlite
             # python3 base + Google Play API client (for scripts/deploy_playstore.py)
             (python3.withPackages (ps: with ps; [
-              google-auth
-              requests
+              google-api-python-client
+              google-auth-httplib2
+              httplib2
             ]))  # used by stalwart-dev/start and deploy_playstore.py
             fgj      # Codeberg/Forgejo CLI (like gh for GitHub)
           ]);
