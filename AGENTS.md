@@ -10,9 +10,21 @@ CLI tool `fgj` is available to query issues/PRs/actions.
 
 We use issues, follow this label state machine:
 
-- **State/Ready** — Issue is available to pick up
-- **State/InProgress** — Set this when you start working on an issue
-- **State/Question** — Set this when you hit a blocker or need clarification
+- **State/ToPlan** — Issue needs a plan written by an agent before implementation
+- **State/Planned** — Plan has been posted as a comment; awaiting human review
+- **State/Ready** — Issue is approved and ready for implementation
+- **State/InProgress** — Set while an agent (or human) is actively working
+- **State/Question** — Agent hit a blocker or needs clarification
+
+Full lifecycle:
+
+```
+State/ToPlan → State/Planned   (automated: agent_loop.py runs a planning agent)
+State/Planned → State/Ready    (manual: human reviews the plan and approves)
+State/Ready → State/InProgress (automated: agent_loop.py before starting implementation)
+State/InProgress → closed      (automated: after PR is merged and CI passes)
+any state → State/Question     (automated or manual: when blocked)
+```
 
 List open issues ready to pick up:
 
@@ -22,9 +34,11 @@ fgj issue list --json --state open | jq '[.[] | select(.labels[].name == "State/
 
 Rules:
 
-- Never start work on an issue without `State/Ready`
-- When working via the agent loop: `State/Ready` → `State/InProgress` is set automatically
-  by `agent_loop.py` before the agent starts — do **not** set it yourself.
+- Never start implementation on an issue without `State/Ready`
+- Planning agents only post a plan comment — they do NOT write code or open PRs
+- After `State/Planned`, a human must review the plan and manually add `State/Ready`
+- When working via the agent loop: label transitions are set automatically
+  by `agent_loop.py` — do **not** set them yourself.
 - When working manually: switch to `State/InProgress` as your **first action**:
   ```bash
   fgj issue edit <NUMBER> --remove-label "State/Ready" --add-label "State/InProgress"

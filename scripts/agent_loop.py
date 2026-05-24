@@ -8,21 +8,25 @@ Flow
    a. Age > 1 h  → kill it, set its issue to State/Question, exit 1
    b. Age ≤ 1 h  → print status, exit 0  (let it keep working)
 2. No agent running → extract pending_issue from state (if any), then check CI
-   a. pending_issue + open PR → check PR branch CI, merge/fix/wait as needed
-   b. Catch-up: orphaned issue-N-fix PRs with passing CI → merge them
-   c. Main CI running         → save pending-ci state, exit 0
-   d. Main CI failed          → start fix-CI agent (pushes fix to main), exit 0
-   e. Main CI ok + pending_issue → close the issue, exit 0  (dead code path —
-                                   section 2a always returns first)
-   f. Main CI ok (or no run yet) → find oldest Ready issue, start issue agent,
+   a. pending_issue type=="plan" → post resume comment, set State/Planned, exit 0
+   b. pending_issue + open PR → check PR branch CI, merge/fix/wait as needed
+   c. Catch-up: orphaned issue-N-fix PRs with passing CI → merge them
+   d. Main CI running         → save pending-ci state, exit 0
+   e. Main CI failed          → start fix-CI agent (pushes fix to main), exit 0
+   f. Main CI ok + pending_issue → close the issue, exit 0  (dead code path —
+                                   section 2b always returns first)
+   g. Main CI ok (or no run yet) → find oldest ToPlan issue, start plan agent,
                                    save state, exit 0
-   g. No Ready issues         → print "nothing to do", exit 0
+   h. No ToPlan issues        → find oldest Ready issue, start issue agent,
+                                   save state, exit 0
+   i. No Ready issues         → print "nothing to do", exit 0
 
 Issue agents must NOT close the issue themselves; the loop closes it after CI passes.
+Plan agents must NOT write any code or create PRs; they only post a plan comment.
 
 State file: ~/.sharedinbox-agent-state.json
   { "pid": 12345, "issue": 91,
-    "started_at": "2026-05-15T12:00:00+00:00", "type": "issue" }
+    "started_at": "2026-05-15T12:00:00+00:00", "type": "issue|plan|ci-fix|pending-ci" }
 
 Output is written to ~/.sharedinbox-agent-logs/<session>-<timestamp>.log.
 To resume the Claude conversation, look up the session UUID first:
@@ -63,6 +67,8 @@ LABEL_READY = "State/Ready"
 LABEL_IN_PROGRESS = "State/InProgress"
 LABEL_QUESTION = "State/Question"
 LABEL_PRIO_HIGH = "Prio/High"
+LABEL_TO_PLAN = "State/ToPlan"
+LABEL_PLANNED = "State/Planned"
 
 # Only pick up issues filed by these accounts.
 ALLOWED_ISSUE_AUTHORS = {"guettli", "guettlibot", "guettlibot2"}
@@ -143,6 +149,26 @@ def _ready_issues() -> list[dict]:
         i["number"],
     ))
     return ready
+
+
+def _to_plan_issues() -> list[dict]:
+    """Return open issues with State/ToPlan, Prio/High first, then oldest."""
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "issue", "list",
+         "--repo", REPO, "--state", "open", "--json"],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(result.stdout) if result.stdout.strip() else []
+    to_plan = [
+        i for i in data
+        if any(lbl["name"] == LABEL_TO_PLAN for lbl in i.get("labels", []))
+        and i.get("user", {}).get("login", "") in ALLOWED_ISSUE_AUTHORS
+    ]
+    to_plan.sort(key=lambda i: (
+        0 if any(lbl["name"] == LABEL_PRIO_HIGH for lbl in i.get("labels", [])) else 1,
+        i["number"],
+    ))
+    return to_plan
 
 
 def _latest_main_ci_run() -> dict | None:
@@ -504,13 +530,29 @@ def _run_loop() -> int:
 
     # Agent not running (or no state) — extract any pending issue, then clean up.
     pending_issue: int | None = None
+    pending_type: str | None = None
     ci_run_id_at_start: int | None = None
     if state:
         pending_issue = state.get("issue")
+        pending_type = state.get("type")
         ci_run_id_at_start = state.get("ci_run_id_at_start")
         _clear_state()
 
-    # ── 2. Check for a PR opened by the agent ────────────────────────────────
+    # ── 2a. Finished planning agent ───────────────────────────────────────────
+    if pending_issue and pending_type == "plan":
+        session_name = f"plan-issue-{pending_issue}"
+        uuid = _find_session_uuid(session_name)
+        if uuid:
+            resume_cmd = f"claude --resume {shlex.quote(uuid)}"
+            _comment_issue(
+                pending_issue,
+                f"Planning complete. To resume this session:\n\n```\n{resume_cmd}\n```",
+            )
+        _set_labels(pending_issue, add=[LABEL_PLANNED], remove=[LABEL_IN_PROGRESS])
+        print(f"Planning done for {_issue_url(pending_issue)} — set State/Planned.")
+        return 0
+
+    # ── 2b. Check for a PR opened by the agent ───────────────────────────────
     if pending_issue:
         branch = f"issue-{pending_issue}-fix"
         pr = _find_pr_for_branch(branch)
@@ -738,10 +780,44 @@ def _run_loop() -> int:
         print(f"CI passed{ci_run_part} — closed {_issue_url(pending_issue)}.")
         return 0
 
+    # Find a ToPlan issue — planning takes priority over implementation.
+    to_plan = _to_plan_issues()
+    if to_plan:
+        issue = to_plan[0]
+        issue_number = issue["number"]
+        issue_title = issue["title"]
+        issue_body = issue.get("body", "")
+
+        print(f"Starting planning agent for {_issue_url(issue_number)} {issue_title}")
+        _set_labels(issue_number, add=[LABEL_IN_PROGRESS], remove=[LABEL_TO_PLAN])
+
+        plan_prompt = f"""Analyze Codeberg issue #{issue_number} in the guettli/sharedinbox repository and write a detailed implementation plan.
+
+Issue title: {issue_title}
+
+Issue body:
+{issue_body}
+
+Instructions:
+- Read and understand the issue thoroughly.
+- Explore the relevant parts of the codebase to understand the current structure.
+- Write a detailed implementation plan as a comment on the issue using:
+      fgj issue comment {issue_number} --repo {REPO} --body "..."
+  The plan should cover: which files to change, what approach to take, and any risks or open questions.
+- Do NOT write any code, do NOT create any branches or PRs, do NOT modify any files.
+- If the issue is unclear or you need more information, set the label to State/Question
+  and stop (do NOT close the issue).
+- When you have posted the plan as an issue comment, stop.
+"""
+        session_name = f"plan-issue-{issue_number}"
+        pid = _start_agent(plan_prompt, session_name)
+        _write_state(pid, issue_number, "plan", issue_title, session_name=session_name)
+        return 0
+
     # Find a Ready issue.
     issues = _ready_issues()
     if not issues:
-        print("No issues with State/Ready. Nothing to do.")
+        print("No issues with State/ToPlan or State/Ready. Nothing to do.")
         return 0
 
     issue = issues[0]
