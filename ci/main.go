@@ -286,6 +286,21 @@ func (m *Ci) firebaseSrc() *dagger.Directory {
 	})
 }
 
+// androidBase wraps setup(androidSrc()) with the Gradle named-cache so that
+// Gradle dependencies survive across Dagger execution-cache misses.
+func (m *Ci) androidBase() *dagger.Container {
+	return m.setup(m.androidSrc()).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
+			dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
+}
+
+// firebaseBase wraps setup(firebaseSrc()) with the Gradle named-cache.
+func (m *Ci) firebaseBase() *dagger.Container {
+	return m.setup(m.firebaseSrc()).
+		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
+			dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
+}
+
 // linuxSrc is the source subset for Linux builds and integration tests.
 func (m *Ci) linuxSrc() *dagger.Directory {
 	return m.Source.Filter(dagger.DirectoryFilterOpts{
@@ -623,7 +638,7 @@ func (m *Ci) DeployLinux(
 
 // setupKeystore decodes the base64 keystore into the android build container.
 func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.Container {
-	return m.setup(m.androidSrc()).
+	return m.androidBase().
 		WithSecretVariable("ANDROID_KEYSTORE_BASE64", keystoreBase64).
 		WithSecretVariable("ANDROID_KEYSTORE_PASSWORD", keystorePassword).
 		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks`})
@@ -675,8 +690,7 @@ func (m *Ci) DeployApk(
 // BuildAndroidDebugApks builds the debug app APK and the androidTest APK needed for Firebase Test Lab.
 // Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
 func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
-	built := m.setup(m.firebaseSrc()).
-		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"), dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
+	built := m.firebaseBase().
 		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
 		WithWorkdir("/src/android").
 		// --no-daemon avoids connecting to a stale daemon whose registry file was
@@ -744,7 +758,7 @@ func (m *Ci) BuildAndroidRelease(
 	if commitHash != "" {
 		args = append(args, "--dart-define=GIT_HASH="+commitHash)
 	}
-	return m.setup(m.androidSrc()).
+	return m.androidBase().
 		WithExec(args).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
