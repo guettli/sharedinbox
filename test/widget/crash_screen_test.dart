@@ -147,6 +147,7 @@ void main() {
           gitHash: testHash,
         ),
       );
+      await tester.pumpAndSettle();
 
       // Git hash link should be present
       final gitLinkFinder = find.textContaining('Git Commit: abc1234');
@@ -195,6 +196,109 @@ void main() {
       expect(
         find.textContaining(RegExp(r'linux|android|ios|windows|macos')),
         findsWidgets,
+      );
+    },
+  );
+
+  testWidgets(
+    'CrashScreen shows app version as clickable link when git hash is set',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final mock = MockUrlLauncher();
+      UrlLauncherPlatform.instance = mock;
+
+      const exception = 'TestException: version link test';
+      final stackTrace = StackTrace.current;
+      const testHash = 'abc1234';
+
+      await tester.pumpWidget(
+        CrashScreen(
+          exception: exception,
+          stackTrace: stackTrace,
+          gitHash: testHash,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // App version link should be present (mocked as 1.0.0+42)
+      final versionLinkFinder = find.textContaining('App Version: 1.0.0+42');
+      expect(versionLinkFinder, findsOneWidget);
+
+      // It must appear above the git hash link
+      final gitLinkFinder = find.textContaining('Git Commit: abc1234');
+      expect(
+        tester.getTopLeft(versionLinkFinder).dy,
+        lessThan(tester.getTopLeft(gitLinkFinder).dy),
+      );
+
+      // Tapping it should open the Codeberg commit URL
+      await tester.tap(versionLinkFinder);
+      await tester.pumpAndSettle();
+
+      expect(
+        mock.launchedUrl,
+        equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+      );
+    },
+  );
+
+  testWidgets(
+    'CrashScreen copy-to-clipboard includes app version as markdown link when git hash is set',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      String? clipboardText;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (MethodCall call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText =
+                (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      const exception = 'TestException: version link clipboard test';
+      final stackTrace = StackTrace.current;
+      const testHash = 'abc1234';
+
+      await tester.pumpWidget(
+        CrashScreen(
+          exception: exception,
+          stackTrace: stackTrace,
+          gitHash: testHash,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Copy to Clipboard'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(clipboardText, isNotNull);
+      // App Version must be a markdown link pointing to the commit
+      expect(
+        clipboardText,
+        contains(
+          'App Version: [1.0.0+42](https://codeberg.org/guettli/sharedinbox/commit/abc1234)',
+        ),
+      );
+      expect(
+        clipboardText,
+        contains(
+          'Git Commit: [abc1234](https://codeberg.org/guettli/sharedinbox/commit/abc1234)',
+        ),
       );
     },
   );

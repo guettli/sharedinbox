@@ -37,11 +37,14 @@ class CrashScreen extends StatelessWidget {
     final version = await _fetchVersion();
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
+    final versionDisplay = gitHash.isNotEmpty
+        ? '[$version](https://codeberg.org/guettli/sharedinbox/commit/$gitHash)'
+        : version;
     final gitLine = gitHash.isNotEmpty
         ? 'Git Commit: [$gitHash](https://codeberg.org/guettli/sharedinbox/commit/$gitHash)\n'
         : '';
     final timestamp = DateTime.now().toUtc().toIso8601String();
-    return 'App Version: $version\n'
+    return 'App Version: $versionDisplay\n'
         'Build Mode: $_buildMode\n'
         '$gitLine'
         'Platform: $platform\n'
@@ -86,6 +89,35 @@ class CrashScreen extends StatelessWidget {
                 ),
                 if (gitHash.isNotEmpty) ...[
                   const SizedBox(height: 8),
+                  FutureBuilder<PackageInfo>(
+                    future: PackageInfo.fromPlatform(),
+                    builder: (_, snapshot) {
+                      if (!snapshot.hasData) return const SizedBox.shrink();
+                      final version =
+                          '${snapshot.data!.version}+${snapshot.data!.buildNumber}';
+                      return GestureDetector(
+                        onTap: () async {
+                          final url = Uri.parse(
+                            'https://codeberg.org/guettli/sharedinbox/commit/$gitHash',
+                          );
+                          await launchUrl(
+                            url,
+                            mode: LaunchMode.externalApplication,
+                          );
+                        },
+                        child: Text(
+                          'App Version: $version',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue,
+                            decoration: TextDecoration.underline,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 4),
                   GestureDetector(
                     onTap: () async {
                       final url = Uri.parse(
