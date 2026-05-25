@@ -360,7 +360,12 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                   : null,
             ),
             const SizedBox(height: 8),
-            FilledButton(onPressed: _save, child: const Text('Save')),
+            FilledButton(
+              onPressed: _hasStoredPassword || _passwordCtrl.text.isNotEmpty
+                  ? _save
+                  : null,
+              child: const Text('Save'),
+            ),
           ],
         ),
       ),
