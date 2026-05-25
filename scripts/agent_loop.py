@@ -263,6 +263,14 @@ def _latest_ci_run_for_pr(pr_number: int) -> dict | None:
     return None
 
 
+def _get_issue_labels(issue: int) -> list[str]:
+    """Return label names for an issue."""
+    data = _tea_get(f"repos/{REPO}/issues/{issue}")
+    if not data:
+        return []
+    return [lbl["name"] for lbl in data.get("labels", [])]
+
+
 def _merge_pr(pr_number: int) -> None:
     """Squash-merge a PR via fgj."""
     _fgj("pr", "merge", str(pr_number), "--repo", REPO, "--merge-method", "squash")
@@ -684,6 +692,9 @@ def _run_loop() -> int:
             continue
 
         if pr_run and pr_run.get("status") == "success":
+            if issue_num and LABEL_QUESTION in _get_issue_labels(issue_num):
+                print(f"Catch-up: PR #{pr_number} — issue #{issue_num} is State/Question, skipping.")
+                continue
             print(f"Catch-up: CI passed on PR #{pr_number} ({pr_url}) — merging.")
             try:
                 _merge_pr(pr_number)

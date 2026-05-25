@@ -744,5 +744,45 @@ class TestRunLoopResumeCommand(unittest.TestCase):
         self.assertNotIn("Resume:", output)
 
 
+
+class TestCatchupSkipsQuestionIssues(unittest.TestCase):
+    """Catch-up must not retry merging a PR whose issue is already State/Question."""
+
+    def _make_pr(self, pr_number=50, branch="issue-10-fix"):
+        return {"number": pr_number, "head": {"ref": branch}}
+
+    def test_skips_merge_when_issue_has_question_label(self):
+        pr = self._make_pr()
+        ci_run = {"id": 999, "status": "success"}
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[pr]), \
+             patch("agent_loop._latest_ci_run_for_pr", return_value=ci_run), \
+             patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_QUESTION]), \
+             patch("agent_loop._merge_pr") as mock_merge, \
+             patch("agent_loop._comment_issue") as mock_comment, \
+             patch("agent_loop._set_labels") as mock_labels, \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]):
+            result = agent_loop._run_loop()
+        self.assertEqual(result, 0)
+        mock_merge.assert_not_called()
+        mock_comment.assert_not_called()
+        mock_labels.assert_not_called()
+
+    def test_proceeds_with_merge_when_issue_lacks_question_label(self):
+        pr = self._make_pr()
+        ci_run = {"id": 999, "status": "success"}
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[pr]), \
+             patch("agent_loop._latest_ci_run_for_pr", return_value=ci_run), \
+             patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_IN_PROGRESS]), \
+             patch("agent_loop._merge_pr") as mock_merge, \
+             patch("agent_loop._find_pr_for_branch", return_value=None), \
+             patch("agent_loop._close_issue"):
+            result = agent_loop._run_loop()
+        self.assertEqual(result, 0)
+        mock_merge.assert_called_once_with(50)
+
+
 if __name__ == "__main__":
     unittest.main()
