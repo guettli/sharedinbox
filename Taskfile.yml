@@ -336,6 +336,14 @@ tasks:
       - |
         dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }'
 
+  renovate:
+    desc: Run Renovate bot against the repository via Dagger
+    preconditions:
+      - sh: test -n "$RENOVATE_FORGEJO_TOKEN"
+        msg: "RENOVATE_FORGEJO_TOKEN is not set"
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. renovate --renovate-token env:RENOVATE_FORGEJO_TOKEN
+
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
     deps: [_preflight, _android-sdk-check, _android-avd-setup]

@@ -842,6 +842,18 @@ func (m *Ci) PublishAndroid(
 	return m.UploadToPlayStore(ctx, signed, playStoreConfig)
 }
 
+// Renovate runs Renovate bot against the repository on Forgejo/Codeberg.
+func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string, error) {
+	return dag.Container().
+		From("renovate/renovate:39").
+		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
+		WithEnvVariable("RENOVATE_PLATFORM", "forgejo").
+		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
+		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
+		WithExec([]string{"renovate"}).
+		Stdout(ctx)
+}
+
 // Graph returns a Mermaid diagram of the CI pipeline structure.
 // Paste the output into any Mermaid renderer (codeberg, github, mermaid.live)
 // or save it as a .md file to get a rendered diagram.
