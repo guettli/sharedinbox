@@ -224,7 +224,7 @@ tasks:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
     cmds:
       - mkdir -p build/app/outputs/bundle/release
-      - dagger call --progress=plain -q -m ci --source=. build-android-release -o build/app/outputs/bundle/release/app-release.aab
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. build-android-release --commit-hash "$HASH" -o build/app/outputs/bundle/release/app-release.aab
 
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger
@@ -247,7 +247,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD
+      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger

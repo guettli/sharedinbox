@@ -584,9 +584,17 @@ func (m *Ci) BuildLinux() *dagger.Directory {
 }
 
 // BuildLinuxRelease builds the Linux release bundle.
-func (m *Ci) BuildLinuxRelease() *dagger.Directory {
+func (m *Ci) BuildLinuxRelease(
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.Directory {
+	args := []string{"flutter", "build", "linux", "--release"}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
 	return m.setup(m.linuxSrc()).
-		WithExec([]string{"flutter", "build", "linux", "--release"}).
+		WithExec(args).
 		Directory("build/linux/x64/release/bundle")
 }
 
@@ -599,7 +607,7 @@ func (m *Ci) DeployLinux(
 	sshHost string,
 	commitHash string,
 ) (string, error) {
-	bundle := m.BuildLinuxRelease()
+	bundle := m.BuildLinuxRelease(commitHash)
 
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
@@ -622,9 +630,20 @@ func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagg
 }
 
 // BuildAndroidApk builds a release APK signed with the upload key.
-func (m *Ci) BuildAndroidApk(keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret, buildNumber string) *dagger.File {
+func (m *Ci) BuildAndroidApk(
+	keystoreBase64 *dagger.Secret,
+	keystorePassword *dagger.Secret,
+	buildNumber string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	args := []string{"flutter", "build", "apk", "--release", "--no-pub", "--build-number", buildNumber}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
 	return m.setupKeystore(keystoreBase64, keystorePassword).
-		WithExec([]string{"flutter", "build", "apk", "--release", "--no-pub", "--build-number", buildNumber}).
+		WithExec(args).
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
 
@@ -640,7 +659,7 @@ func (m *Ci) DeployApk(
 	keystorePassword *dagger.Secret,
 	buildNumber string,
 ) (string, error) {
-	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword, buildNumber)
+	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword, buildNumber, commitHash)
 
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
@@ -716,9 +735,17 @@ func (m *Ci) TestAndroidFirebase(
 
 // BuildAndroidRelease builds the AAB with a fixed build-number so Dagger can cache it.
 // versionCode and signing are applied separately via StampAndroidVersionCode + SignAndroidBundle.
-func (m *Ci) BuildAndroidRelease() *dagger.File {
+func (m *Ci) BuildAndroidRelease(
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	args := []string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
 	return m.setup(m.androidSrc()).
-		WithExec([]string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}).
+		WithExec(args).
 		File("build/app/outputs/bundle/release/app-release.aab")
 }
 
@@ -790,9 +817,12 @@ func (m *Ci) PublishAndroid(
 	playStoreConfig *dagger.Secret,
 	keystoreBase64 *dagger.Secret,
 	keystorePassword *dagger.Secret,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
 ) (string, error) {
 	versionCode := int(time.Now().Unix())
-	aab := m.BuildAndroidRelease()
+	aab := m.BuildAndroidRelease(commitHash)
 	stamped := m.StampAndroidVersionCode(aab, versionCode)
 	signed := m.SignAndroidBundle(stamped, keystoreBase64, keystorePassword)
 	return m.UploadToPlayStore(ctx, signed, playStoreConfig)
