@@ -44,10 +44,11 @@ import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 // ---------------------------------------------------------------------------
 
 class FakeAccountRepository implements AccountRepository {
-  final List<Account> _accounts;
-
   FakeAccountRepository([List<Account>? accounts])
       : _accounts = List.of(accounts ?? []);
+
+  final List<Account> _accounts;
+  bool hasPassword = true;
 
   @override
   Stream<List<Account>> observeAccounts() => Stream.value(List.of(_accounts));
@@ -75,7 +76,12 @@ class FakeAccountRepository implements AccountRepository {
       _accounts.removeWhere((a) => a.id == id);
 
   @override
-  Future<String> getPassword(String accountId) async => 'test-password';
+  Future<String> getPassword(String accountId) async {
+    if (!hasPassword) {
+      throw StateError('No password stored for account $accountId');
+    }
+    return 'test-password';
+  }
 }
 
 class FakeShareKeyRepository implements ShareKeyRepository {
@@ -514,10 +520,12 @@ List<Override> baseOverrides({
   DiscoveryResult? discovery,
   Exception? connectionError,
   ShareKeyRepository? shareKeyRepository,
+  bool hasStoredPassword = true,
 }) =>
     [
-      accountRepositoryProvider
-          .overrideWithValue(FakeAccountRepository(accounts)),
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
+      ),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
       emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),

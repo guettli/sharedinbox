@@ -105,6 +105,33 @@ void main() {
       expect(find.text('Edit account'), findsNothing);
     });
 
+    testWidgets(
+        'try connection shows password required when no password stored', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            hasStoredPassword: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('editTryConnectionButton')));
+      await tester.pumpAndSettle();
+
+      // App must not crash; password field shows a validation error.
+      expect(find.text('Required'), findsOneWidget);
+    });
+
     testWidgets('connection error shows error message', (tester) async {
       tester.view.physicalSize = const Size(800, 1400);
       tester.view.devicePixelRatio = 1.0;

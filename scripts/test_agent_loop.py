@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -782,6 +783,71 @@ class TestCatchupSkipsQuestionIssues(unittest.TestCase):
             result = agent_loop._run_loop()
         self.assertEqual(result, 0)
         mock_merge.assert_called_once_with(50)
+
+
+class TestHeartbeat(unittest.TestCase):
+    """Tests for _update_heartbeat() and cmd_monitor()."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".heartbeat")
+        self._tmp.close()
+        self._orig = agent_loop.HEARTBEAT_FILE
+        agent_loop.HEARTBEAT_FILE = Path(self._tmp.name)
+        Path(self._tmp.name).unlink()  # Start with no heartbeat file.
+
+    def tearDown(self):
+        agent_loop.HEARTBEAT_FILE = self._orig
+        Path(self._tmp.name).unlink(missing_ok=True)
+
+    def test_update_heartbeat_writes_timestamp(self):
+        agent_loop._update_heartbeat()
+        content = Path(self._tmp.name).read_text().strip()
+        dt = datetime.fromisoformat(content)
+        age = (datetime.now(timezone.utc) - dt).total_seconds()
+        self.assertLess(age, 5)
+
+    def test_update_heartbeat_creates_file(self):
+        self.assertFalse(Path(self._tmp.name).exists())
+        agent_loop._update_heartbeat()
+        self.assertTrue(Path(self._tmp.name).exists())
+
+    def test_monitor_healthy_when_recent(self):
+        agent_loop._update_heartbeat()
+        result = agent_loop.cmd_monitor()
+        self.assertEqual(result, 0)
+
+    def test_monitor_warns_when_heartbeat_missing(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = agent_loop.cmd_monitor()
+        self.assertEqual(result, 1)
+        self.assertIn("WARNING", buf.getvalue())
+
+    def test_monitor_warns_when_stale(self):
+        stale = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        Path(self._tmp.name).write_text(stale)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = agent_loop.cmd_monitor()
+        self.assertEqual(result, 1)
+        self.assertIn("WARNING", buf.getvalue())
+
+    def test_monitor_warns_when_corrupted(self):
+        Path(self._tmp.name).write_text("not-a-timestamp")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = agent_loop.cmd_monitor()
+        self.assertEqual(result, 1)
+        self.assertIn("WARNING", buf.getvalue())
+
+    def test_run_loop_updates_heartbeat(self):
+        self.assertFalse(Path(self._tmp.name).exists())
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]):
+            agent_loop._run_loop()
+        self.assertTrue(Path(self._tmp.name).exists())
 
 
 if __name__ == "__main__":
