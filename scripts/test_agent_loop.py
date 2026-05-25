@@ -785,6 +785,90 @@ class TestCatchupSkipsQuestionIssues(unittest.TestCase):
         mock_merge.assert_called_once_with(50)
 
 
+class TestMergeFailsOpen(unittest.TestCase):
+    """Tests for auto-resolution when a PR is still open after the merge command."""
+
+    def _dead_state(self, issue: int, kind: str = "issue") -> dict:
+        return {
+            "pid": 999999999,
+            "issue": issue,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "type": kind,
+        }
+
+    def _open_pr(self, branch: str = "issue-10-fix") -> dict:
+        return {"number": 5, "head": {"ref": branch}, "created_at": "2026-01-01T00:00:00+00:00"}
+
+    def test_merge_fails_open_with_conflicts_spawns_rebase_agent(self):
+        """mergeable=false → rebase agent spawned, state written as pending-ci."""
+        written_state = {}
+
+        def fake_write_state(pid, issue, kind, issue_title=None, session_name=None, ci_run_id=None):
+            written_state["pid"] = pid
+            written_state["issue"] = issue
+            written_state["kind"] = kind
+            written_state["session_name"] = session_name
+
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._find_pr_for_branch", side_effect=[self._open_pr(), self._open_pr()]), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._merge_pr"), \
+             patch("agent_loop._tea_get", return_value={"mergeable": False}), \
+             patch("agent_loop._start_agent", return_value=77) as mock_start, \
+             patch("agent_loop._write_state", side_effect=fake_write_state), \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_start.assert_called_once()
+        prompt = mock_start.call_args[0][0]
+        self.assertIn("Rebase branch", prompt)
+        self.assertIn("issue-10-fix", prompt)
+        self.assertEqual(written_state.get("kind"), "pending-ci")
+        self.assertEqual(written_state.get("issue"), 10)
+
+    def test_merge_fails_open_no_conflicts_retries_and_succeeds(self):
+        """mergeable=true, second attempt succeeds → issue closed."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._find_pr_for_branch",
+                   side_effect=[self._open_pr(), self._open_pr(), None]), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._merge_pr"), \
+             patch("agent_loop._tea_get", return_value={"mergeable": True}), \
+             patch("agent_loop.time.sleep"), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_called_once_with(10)
+
+    def test_merge_fails_open_no_conflicts_all_retries_exhausted(self):
+        """All retries exhausted with PR still open → falls through to State/Question."""
+        with patch("agent_loop._read_state", return_value=self._dead_state(10)), \
+             patch("agent_loop._find_pr_for_branch",
+                   side_effect=[self._open_pr(), self._open_pr(),
+                                 self._open_pr(), self._open_pr()]), \
+             patch("agent_loop._latest_ci_run_for_branch", return_value={"id": 1, "status": "success"}), \
+             patch("agent_loop._merge_pr"), \
+             patch("agent_loop._tea_get", return_value={"mergeable": True}), \
+             patch("agent_loop.time.sleep"), \
+             patch("agent_loop._set_labels") as mock_labels, \
+             patch("agent_loop._comment_issue") as mock_comment, \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._clear_state"):
+            result = agent_loop._run_loop()
+
+        self.assertEqual(result, 0)
+        mock_close.assert_not_called()
+        mock_labels.assert_called_once_with(
+            10,
+            add=[agent_loop.LABEL_QUESTION],
+            remove=[agent_loop.LABEL_IN_PROGRESS],
+        )
+        mock_comment.assert_called_once()
+
+
 class TestHeartbeat(unittest.TestCase):
     """Tests for _update_heartbeat() and cmd_monitor()."""
 

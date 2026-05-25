@@ -42,6 +42,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -276,6 +277,41 @@ def _get_issue_labels(issue: int) -> list[str]:
 def _merge_pr(pr_number: int) -> None:
     """Squash-merge a PR via fgj."""
     _fgj("pr", "merge", str(pr_number), "--repo", REPO, "--merge-method", "squash")
+
+
+def _handle_pr_still_open_after_merge(pr_number: int, branch: str, issue_num: int | None) -> str:
+    """Handle a PR that is still open after a successful _merge_pr() call.
+
+    Returns one of:
+      "rebase-spawned" — merge conflict detected; rebase agent started, state written
+      "merged"         — PR closed after a retry
+      "fallback"       — all options exhausted; caller should set State/Question
+    """
+    pr_data = _tea_get(f"repos/{REPO}/pulls/{pr_number}")
+    mergeable = (pr_data or {}).get("mergeable")
+
+    if mergeable is False:
+        prompt = (
+            f"Rebase branch `{branch}` onto main to resolve merge conflicts, then push. "
+            "Do not change any logic — only resolve conflicts and push."
+        )
+        session_name = f"rebase-pr-{pr_number}"
+        pid = _start_agent(prompt, session_name)
+        _write_state(pid, issue_num, "pending-ci", session_name=session_name)
+        print(f"PR #{pr_number} has merge conflicts — spawned rebase agent (pid={pid}).")
+        return "rebase-spawned"
+
+    for attempt in range(1, 3):
+        time.sleep(5)
+        try:
+            _merge_pr(pr_number)
+        except RuntimeError as e:
+            print(f"PR #{pr_number} merge retry {attempt} failed: {e}")
+        if not _find_pr_for_branch(branch):
+            print(f"PR #{pr_number} merged on retry {attempt}.")
+            return "merged"
+
+    return "fallback"
 
 
 # ── state file ────────────────────────────────────────────────────────────────
@@ -676,6 +712,13 @@ def _run_loop() -> int:
                 )
                 return 0
             if _find_pr_for_branch(branch):
+                merge_result = _handle_pr_still_open_after_merge(pr_number, branch, pending_issue)
+                if merge_result == "rebase-spawned":
+                    return 0
+                if merge_result == "merged":
+                    _close_issue(pending_issue)
+                    print(f"Merged PR #{pr_number} and closed {_issue_url(pending_issue)}.")
+                    return 0
                 print(f"PR #{pr_number} is still open after merge attempt — setting to State/Question.")
                 _set_labels(pending_issue, add=[LABEL_QUESTION], remove=[LABEL_IN_PROGRESS])
                 _comment_issue(
@@ -744,6 +787,16 @@ def _run_loop() -> int:
             # Verify the merge actually happened; fgj can exit 0 without merging
             # (e.g. branch-protection rules not satisfied).
             if _find_pr_for_branch(branch):
+                merge_result = _handle_pr_still_open_after_merge(pr_number, branch, issue_num)
+                if merge_result == "rebase-spawned":
+                    return 0
+                if merge_result == "merged":
+                    if issue_num:
+                        _close_issue(issue_num)
+                        print(f"Catch-up: merged PR #{pr_number} and closed issue #{issue_num} after retry.")
+                    else:
+                        print(f"Catch-up: merged PR #{pr_number} after retry.")
+                    return 0
                 print(
                     f"Catch-up: PR #{pr_number} is still open after merge attempt "
                     "— skipping to avoid infinite retry."
