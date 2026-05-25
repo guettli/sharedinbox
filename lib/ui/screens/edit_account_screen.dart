@@ -38,6 +38,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   var _sieveSsl = true;
   var _verbose = false;
   final _jmapUrlCtrl = TextEditingController();
+  bool _hasStoredPassword = false;
 
   // -- "Try connection" state ------------------------------------------------
   bool _tryTesting = false;
@@ -63,6 +64,11 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       context.pop();
       return;
     }
+    try {
+      await repo.getPassword(account.id);
+      _hasStoredPassword = true;
+    } catch (_) {}
+    if (!mounted) return;
     _account = account;
     _displayNameCtrl.text = account.displayName;
     _usernameCtrl.text = account.username;
@@ -267,10 +273,12 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ),
             _field(
               _passwordCtrl,
-              'New password (leave blank to keep)',
+              _hasStoredPassword
+                  ? 'New password (leave blank to keep)'
+                  : 'Password',
               key: const Key('editPasswordField'),
               obscure: true,
-              required: false,
+              required: !_hasStoredPassword,
             ),
             if (account.type == AccountType.jmap) ...[
               const Divider(height: 32),
