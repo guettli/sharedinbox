@@ -1,0 +1,33 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
+      - name: Run Renovate
+        env:
+          DAGGER_NO_NAG: "1"
+          RENOVATE_FORGEJO_TOKEN: ${{ secrets.RENOVATE_FORGEJO_TOKEN }}
+        run: task renovate
+
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
