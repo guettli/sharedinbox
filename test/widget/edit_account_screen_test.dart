@@ -105,7 +105,8 @@ void main() {
       expect(find.text('Edit account'), findsNothing);
     });
 
-    testWidgets('try connection shows password required when no password stored', (
+    testWidgets(
+        'try connection shows password required when no password stored', (
       tester,
     ) async {
       tester.view.physicalSize = const Size(800, 1400);
