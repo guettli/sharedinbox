@@ -70,16 +70,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             onPressed: header == null
                 ? null
                 : () {
-                    unawaited(_reply(context, header, body, replyAll: false));
-                  },
-          ),
-          IconButton(
-            icon: const Icon(Icons.reply_all),
-            tooltip: 'Reply all',
-            onPressed: header == null
-                ? null
-                : () {
-                    unawaited(_reply(context, header, body, replyAll: true));
+                    unawaited(
+                      _replyWithRecipientDialog(context, header, body),
+                    );
                   },
           ),
           IconButton(
@@ -120,6 +113,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             icon: const Icon(Icons.access_time),
             tooltip: 'Snooze',
             onPressed: header == null ? null : () => _snooze(context, header),
+          ),
+          IconButton(
+            icon: const Icon(Icons.report_outlined),
+            tooltip: 'Mark as spam',
+            onPressed: header == null
+                ? null
+                : () {
+                    unawaited(_markAsSpam(context, header));
+                  },
           ),
           IconButton(
             icon: const Icon(Icons.delete),
@@ -303,17 +305,78 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return '\n\n— On $date, $from wrote:\n$quoted';
   }
 
-  Future<void> _reply(
+  Future<void> _replyWithRecipientDialog(
+    BuildContext context,
+    Email header,
+    EmailBody? body,
+  ) async {
+    final account =
+        await ref.read(accountRepositoryProvider).getAccount(header.accountId);
+    final ownEmail = account?.email.toLowerCase() ?? '';
+
+    final seen = <String>{};
+    final candidates = <_Candidate>[];
+
+    void addIfNew(EmailAddress addr, _Placement defaultPlacement) {
+      final key = addr.email.toLowerCase();
+      if (key == ownEmail || seen.contains(key)) return;
+      seen.add(key);
+      candidates.add(_Candidate(addr, defaultPlacement));
+    }
+
+    for (final addr in header.from) {
+      addIfNew(addr, _Placement.to);
+    }
+    for (final addr in header.to) {
+      addIfNew(addr, _Placement.to);
+    }
+    for (final addr in header.cc) {
+      addIfNew(addr, _Placement.cc);
+    }
+
+    if (!context.mounted) return;
+
+    if (candidates.length <= 1) {
+      final to = candidates
+          .where((c) => c.placement == _Placement.to)
+          .map((c) => c.address.email)
+          .join(', ');
+      final cc = candidates
+          .where((c) => c.placement == _Placement.cc)
+          .map((c) => c.address.email)
+          .join(', ');
+      await _composeReply(context, header, body, to: to, cc: cc);
+      return;
+    }
+
+    final confirmed = await showDialog<List<_Candidate>>(
+      context: context,
+      builder: (ctx) => _ReplyAllDialog(candidates: candidates),
+    );
+
+    if (confirmed == null || !context.mounted) return;
+
+    final to = confirmed
+        .where((c) => c.placement == _Placement.to)
+        .map((c) => c.address.email)
+        .join(', ');
+    final cc = confirmed
+        .where((c) => c.placement == _Placement.cc)
+        .map((c) => c.address.email)
+        .join(', ');
+    await _composeReply(context, header, body, to: to, cc: cc);
+  }
+
+  Future<void> _composeReply(
     BuildContext context,
     Email header,
     EmailBody? body, {
-    required bool replyAll,
+    required String to,
+    required String cc,
   }) async {
-    final to = header.from.isNotEmpty ? header.from.first.email : '';
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
-    final cc = replyAll ? header.to.map((a) => a.email).join(', ') : '';
     final quoted = await _quotedBody(header, body);
     if (!context.mounted) return;
     unawaited(
@@ -328,6 +391,38 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _markAsSpam(BuildContext context, Email header) async {
+    final mailboxRepo = ref.read(mailboxRepositoryProvider);
+    final junk = await mailboxRepo.findMailboxByRole(header.accountId, 'junk');
+
+    if (junk == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No Junk folder found')),
+      );
+      return;
+    }
+
+    await ref
+        .read(emailRepositoryProvider)
+        .moveEmail(widget.emailId, junk.path);
+
+    unawaited(
+      ref.read(undoServiceProvider.notifier).pushAction(
+            UndoAction(
+              id: DateTime.now().toIso8601String(),
+              accountId: header.accountId,
+              type: UndoType.move,
+              emailIds: [widget.emailId],
+              sourceMailboxPath: header.mailboxPath,
+              destinationMailboxPath: junk.path,
+            ),
+          ),
+    );
+
+    if (context.mounted) context.pop();
   }
 
   Future<void> _forward(
@@ -666,6 +761,94 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+enum _Placement { to, cc, skip }
+
+class _Candidate {
+  _Candidate(this.address, this.placement);
+  final EmailAddress address;
+  _Placement placement;
+}
+
+class _ReplyAllDialog extends StatefulWidget {
+  const _ReplyAllDialog({required this.candidates});
+  final List<_Candidate> candidates;
+
+  @override
+  State<_ReplyAllDialog> createState() => _ReplyAllDialogState();
+}
+
+class _ReplyAllDialogState extends State<_ReplyAllDialog> {
+  late final List<_Candidate> _candidates;
+
+  @override
+  void initState() {
+    super.initState();
+    _candidates = [
+      for (final c in widget.candidates) _Candidate(c.address, c.placement),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Reply All'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final c in _candidates)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.address.toString(),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SegmentedButton<_Placement>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(
+                          value: _Placement.to,
+                          label: Text('To'),
+                        ),
+                        ButtonSegment(
+                          value: _Placement.cc,
+                          label: Text('Cc'),
+                        ),
+                        ButtonSegment(
+                          value: _Placement.skip,
+                          label: Text('Skip'),
+                        ),
+                      ],
+                      selected: {c.placement},
+                      onSelectionChanged: (s) =>
+                          setState(() => c.placement = s.first),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _candidates),
+          child: const Text('Reply'),
+        ),
+      ],
     );
   }
 }

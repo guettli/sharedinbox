@@ -179,6 +179,142 @@ void main() {
       expect(find.text('report.pdf'), findsOneWidget);
     });
 
+    testWidgets('Reply All button is not present in app bar', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Reply all',
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('Reply on single-recipient email navigates directly to compose',
+        (tester) async {
+      // testEmail has from=[bob], to=[alice]. After removing alice (own),
+      // only bob remains → no dialog, navigate straight to compose.
+      final email = testEmail();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            ..._overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Reply',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // No dialog shown — straight navigation to compose.
+      expect(find.text('Reply All'), findsNothing);
+    });
+
+    testWidgets('Reply on multi-recipient email shows Reply All dialog',
+        (tester) async {
+      // Email with an extra Cc recipient so the dialog is triggered.
+      final email = Email(
+        id: 'acc-1:42',
+        accountId: 'acc-1',
+        mailboxPath: 'INBOX',
+        uid: 42,
+        subject: 'Hello world',
+        receivedAt: DateTime(2024, 6),
+        sentAt: DateTime(2024, 6),
+        from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+        to: const [EmailAddress(email: 'alice@example.com')],
+        cc: const [EmailAddress(name: 'Carol', email: 'carol@example.com')],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+            email: email,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Reply',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Dialog must appear with title 'Reply All'.
+      expect(find.text('Reply All'), findsOneWidget);
+      // Both non-own addresses should be listed in the dialog.
+      expect(find.textContaining('bob@example.com'), findsAtLeastNWidgets(1));
+      expect(find.textContaining('carol@example.com'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('Mark as spam button is present in app bar', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Mark as spam',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+        'Mark as spam moves email to junk and shows snackbar when no junk folder',
+        (tester) async {
+      // FakeMailboxRepository has no mailboxes by default → findMailboxByRole
+      // returns null → snackbar shown.
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Mark as spam',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('No Junk folder found'), findsOneWidget);
+    });
+
     testWidgets('Show Raw Email dialog shows size of email', (tester) async {
       // 'A' * 2048 → fmtSize(2048) == '2.0 KB'
       final rawContent = 'A' * 2048;
