@@ -106,7 +106,8 @@ void main() {
     });
 
     testWidgets(
-        'try connection shows password required when no password stored', (
+        'try connection button is disabled when no password stored or entered',
+        (
       tester,
     ) async {
       tester.view.physicalSize = const Size(800, 1400);
@@ -125,11 +126,41 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('editTryConnectionButton')));
+      final button = tester.widget<OutlinedButton>(
+        find.byKey(const Key('editTryConnectionButton')),
+      );
+      expect(button.onPressed, isNull);
+    });
+
+    testWidgets(
+        'try connection button is enabled after typing password with no stored password',
+        (tester) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            hasStoredPassword: false,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      // App must not crash; password field shows a validation error.
-      expect(find.text('Required'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('editPasswordField')),
+        'mypassword',
+      );
+      await tester.pump();
+
+      final button = tester.widget<OutlinedButton>(
+        find.byKey(const Key('editTryConnectionButton')),
+      );
+      expect(button.onPressed, isNotNull);
     });
 
     testWidgets('connection error shows error message', (tester) async {

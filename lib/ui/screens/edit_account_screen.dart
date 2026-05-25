@@ -51,6 +51,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _smtpHostCtrl.addListener(_rebuild);
     _sieveHostCtrl.addListener(_rebuild);
     _imapHostCtrl.addListener(_rebuild);
+    _passwordCtrl.addListener(_rebuild);
     unawaited(_load());
   }
 
@@ -90,6 +91,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _smtpHostCtrl.removeListener(_rebuild);
     _sieveHostCtrl.removeListener(_rebuild);
     _imapHostCtrl.removeListener(_rebuild);
+    _passwordCtrl.removeListener(_rebuild);
     for (final c in [
       _displayNameCtrl,
       _usernameCtrl,
@@ -353,7 +355,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               testing: _tryTesting,
               okMessage: _tryOk,
               errorMessage: _tryErr,
-              onPressed: _tryConnection,
+              onPressed: _hasStoredPassword || _passwordCtrl.text.isNotEmpty
+                  ? _tryConnection
+                  : null,
             ),
             const SizedBox(height: 8),
             FilledButton(onPressed: _save, child: const Text('Save')),
