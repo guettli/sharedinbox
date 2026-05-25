@@ -61,6 +61,7 @@ dependencies:
   # App version metadata for crash reports
   package_info_plus: ^10.1.0
   share_plus: ^13.1.0
+  device_info_plus: ^13.1.0
 
 dev_dependencies:
   flutter_test:

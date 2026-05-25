@@ -6,6 +6,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:sharedinbox/core/db_schema_version.dart';
 
 part 'database.g.dart';
 
@@ -329,7 +330,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 32;
+  int get schemaVersion => dbSchemaVersion;
 
   Future<void> _createEmailFts() async {
     await customStatement('''

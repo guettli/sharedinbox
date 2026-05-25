@@ -80,6 +80,9 @@ void main() {
     expect(find.textContaining('Dark Mode'), findsWidgets);
     expect(find.textContaining('IMAP Accounts'), findsWidgets);
     expect(find.textContaining('JMAP Accounts'), findsWidgets);
+    expect(find.textContaining('Locale'), findsWidgets);
+    expect(find.textContaining('Text Scale'), findsWidgets);
+    expect(find.textContaining('DB Schema Version'), findsWidgets);
     // Buttons are in the body, not in the AppBar actions
     expect(find.byIcon(Icons.copy), findsOneWidget);
     expect(find.byIcon(Icons.bug_report), findsOneWidget);
@@ -167,6 +170,9 @@ void main() {
     expect(clipboardText, contains('Dark Mode'));
     expect(clipboardText, contains('IMAP Accounts'));
     expect(clipboardText, contains('JMAP Accounts'));
+    expect(clipboardText, contains('Locale'));
+    expect(clipboardText, contains('Text Scale'));
+    expect(clipboardText, contains('DB Schema Version'));
     expect(
       clipboardText,
       contains('[sharedinbox.de](https://sharedinbox.de)'),

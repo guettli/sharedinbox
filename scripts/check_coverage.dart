@@ -11,6 +11,7 @@ const _minCoveragePercent = 80;
 
 // Pure-abstract interfaces: no executable code, Dart VM never instruments them.
 const _noCode = {
+  'lib/core/db_schema_version.dart',
   'lib/core/repositories/account_repository.dart',
   'lib/core/repositories/draft_repository.dart',
   'lib/core/repositories/email_repository.dart',
