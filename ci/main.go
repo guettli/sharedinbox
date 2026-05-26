@@ -847,7 +847,7 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 	return dag.Container().
 		From("renovate/renovate:39").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
-		WithEnvVariable("RENOVATE_PLATFORM", "forgejo").
+		WithEnvVariable("RENOVATE_PLATFORM", "gitea").
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
