@@ -181,6 +181,8 @@ class FakeSyncLogRepository implements SyncLogRepository {
     required String accountId,
     required bool success,
     String? errorMessage,
+    String? stackTrace,
+    bool isPermanent = false,
     required String protocol,
     required int emailsFetched,
     required int emailsSkipped,

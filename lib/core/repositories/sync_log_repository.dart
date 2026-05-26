@@ -19,6 +19,8 @@ class SyncLogEntry {
     required this.id,
     required this.result,
     this.errorMessage,
+    this.stackTrace,
+    this.isPermanent = false,
     required this.protocol,
     required this.emailsFetched,
     required this.emailsSkipped,
@@ -34,6 +36,8 @@ class SyncLogEntry {
   final int id;
   final String result; // 'ok' or 'error'
   final String? errorMessage;
+  final String? stackTrace;
+  final bool isPermanent;
   final String protocol; // 'imap' or 'jmap'
   final int emailsFetched;
   final int emailsSkipped;
@@ -54,6 +58,8 @@ abstract class SyncLogRepository {
     required String accountId,
     required bool success,
     String? errorMessage,
+    String? stackTrace,
+    bool isPermanent = false,
     required String protocol,
     required int emailsFetched,
     required int emailsSkipped,
@@ -81,6 +87,8 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     required String accountId,
     required bool success,
     String? errorMessage,
+    String? stackTrace,
+    bool isPermanent = false,
     required String protocol,
     required int emailsFetched,
     required int emailsSkipped,
