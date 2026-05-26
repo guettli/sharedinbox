@@ -847,11 +847,11 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 	// Codeberg's GET /pulls?state=all&limit=100 times out with a 504, but limit=10
 	// completes in ~9 s. Patch the compiled pr-cache.js to use 10 instead of the
 	// hardcoded 20/100 values before launching renovate.
-	const patchCmd = `echo "=== finding pr-cache.js ===" && \
-		find /usr/local/renovate -name "pr-cache.js" 2>/dev/null && \
-		find /usr/local/renovate -name "*.js" 2>/dev/null | grep -i "gitea" | head -10 && \
-		ls /usr/local/renovate/ && \
-		echo "=== done ==="`
+	const patchCmd = `for f in \
+			/usr/local/renovate/dist/modules/platform/forgejo/pr-cache.js \
+			/usr/local/renovate/dist/modules/platform/gitea/pr-cache.js; do \
+		sed -i 's/limit: this\.items\.length ? 20 : 100/limit: this.items.length ? 10 : 10/' "$f" && echo "patched $f"; \
+		done`
 	return dag.Container().
 		From("renovate/renovate:43").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
