@@ -844,6 +844,10 @@ func (m *Ci) PublishAndroid(
 
 // Renovate runs Renovate bot against the repository on Forgejo/Codeberg.
 func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string, error) {
+	// Codeberg's GET /pulls?state=all&limit=100 times out (504) but limit=20 succeeds.
+	// Renovate uses limit=100 for the initial cache build and limit=20 for incremental
+	// syncs. Pre-seeding the cache with one dummy entry forces the limit=20 path.
+	const prCacheJSON = `{"revision":13,"platform":{"gitea":{"pullRequestsCache":{"items":{"999999":{}},"updated_at":null,"author":"guettlibot"}}}}`
 	return dag.Container().
 		From("renovate/renovate:43").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
@@ -851,6 +855,8 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
+		WithEnvVariable("RENOVATE_REPOSITORY_CACHE", "enabled").
+		WithNewFile("/tmp/renovate/cache/renovate/repository/forgejo/guettli/sharedinbox.json", prCacheJSON).
 		WithExec([]string{"renovate"}).
 		Stdout(ctx)
 }
