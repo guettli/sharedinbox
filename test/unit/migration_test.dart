@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 32);
+      expect(db.schemaVersion, 33);
       await db.close();
     });
 
@@ -193,6 +193,11 @@ void main() {
 
       // v32: local_sieve_applied table.
       await db.customSelect('SELECT count(*) FROM local_sieve_applied').get();
+
+      // v33: error_stack_trace and is_permanent columns on sync_logs.
+      final syncLogColumns = await _tableColumns(db, 'sync_logs');
+      expect(syncLogColumns, contains('error_stack_trace'));
+      expect(syncLogColumns, contains('is_permanent'));
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
@@ -381,11 +386,16 @@ void main() {
           await _tableColumns(db, 'sync_log_mailboxes');
       expect(syncLogMailboxColumns, contains('duration_ms'));
 
+      // v33: error_stack_trace and is_permanent columns on sync_logs.
+      final syncLogColumns = await _tableColumns(db, 'sync_logs');
+      expect(syncLogColumns, contains('error_stack_trace'));
+      expect(syncLogColumns, contains('is_permanent'));
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 32', () async {
+    test('fresh install creates all tables at schemaVersion 33', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -425,6 +435,11 @@ void main() {
       final syncLogMailboxColumns =
           await _tableColumns(db, 'sync_log_mailboxes');
       expect(syncLogMailboxColumns, contains('duration_ms'));
+
+      // v33: error_stack_trace and is_permanent columns on sync_logs.
+      final syncLogColumns = await _tableColumns(db, 'sync_logs');
+      expect(syncLogColumns, contains('error_stack_trace'));
+      expect(syncLogColumns, contains('is_permanent'));
 
       await db.close();
     });

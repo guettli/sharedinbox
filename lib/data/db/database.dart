@@ -193,6 +193,9 @@ class SyncLogs extends Table {
   DateTimeColumn get finishedAt => dateTime()();
   // Added in schema v13: raw protocol log when account.verbose == true.
   TextColumn get protocolLog => text().nullable()();
+  // Added in schema v33: stack trace and permanent flag for error entries.
+  TextColumn get errorStackTrace => text().nullable()();
+  BoolColumn get isPermanent => boolean().withDefault(const Constant(false))();
 }
 
 /// Per-mailbox breakdown for a single sync cycle.
@@ -570,6 +573,10 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 32) {
             await m.createTable(localSieveApplied);
+          }
+          if (from >= 7 && from < 33) {
+            await m.addColumn(syncLogs, syncLogs.errorStackTrace);
+            await m.addColumn(syncLogs, syncLogs.isPermanent);
           }
         },
       );

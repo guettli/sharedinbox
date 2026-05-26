@@ -1,15 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:sharedinbox/core/db_schema_version.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/utils/about_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AboutScreen extends ConsumerStatefulWidget {
@@ -25,84 +23,17 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   late final Stream<List<Account>> _accountsStream;
   String? _deviceModel;
 
-  static const _gitHash = String.fromEnvironment('GIT_HASH');
-
   @override
   void initState() {
     super.initState();
     _accountsStream = ref.read(accountRepositoryProvider).observeAccounts();
-    _deviceModelFuture = _fetchDeviceModel();
+    _deviceModelFuture = getDeviceModel();
     unawaited(
       _deviceModelFuture.then((model) {
         if (mounted) setState(() => _deviceModel = model);
       }),
     );
   }
-
-  static Future<String?> _fetchDeviceModel() async {
-    try {
-      final info = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
-        final android = await info.androidInfo;
-        return '${android.manufacturer} / ${android.model}';
-      } else if (Platform.isIOS) {
-        final ios = await info.iosInfo;
-        return ios.utsname.machine;
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  String _buildMarkdown(
-    BuildContext context,
-    PackageInfo? pkg,
-    int imapCount,
-    int jmapCount, {
-    String? deviceModel,
-  }) {
-    final size = MediaQuery.of(context).size;
-    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
-    final physW = (size.width * pixelRatio).toInt();
-    final physH = (size.height * pixelRatio).toInt();
-    final version =
-        pkg != null ? '${pkg.version}+${pkg.buildNumber}' : 'unknown';
-    final versionDisplay = _gitHash.isNotEmpty
-        ? '[$version](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash)'
-        : version;
-    final osName = _capitalize(Platform.operatingSystem);
-    final isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
-    final locale = Localizations.localeOf(context).toString();
-    final textScale =
-        MediaQuery.of(context).textScaler.scale(1.0).toStringAsFixed(1);
-
-    final gitCommitLine = _gitHash.isNotEmpty
-        ? '| Git Commit | [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash) |\n'
-        : '';
-    final deviceModelLine =
-        deviceModel != null ? '| Device Model | $deviceModel |\n' : '';
-    return '## [sharedinbox.de](https://sharedinbox.de)\n\n'
-        '| Property | Value |\n'
-        '|----------|-------|\n'
-        '| App Version | $versionDisplay |\n'
-        '$gitCommitLine'
-        '| Platform | ${Platform.operatingSystem} |\n'
-        '| $osName Version | ${Platform.operatingSystemVersion} |\n'
-        '$deviceModelLine'
-        '| Resolution | ${physW}x$physH px'
-        ' (logical: ${size.width.toInt()}x${size.height.toInt()} pt,'
-        ' ratio: ${pixelRatio.toStringAsFixed(1)}x) |\n'
-        '| Dart Version | ${Platform.version.split(' ').first} |\n'
-        '| Processors | ${Platform.numberOfProcessors} |\n'
-        '| Dark Mode | ${isDark ? 'yes' : 'no'} |\n'
-        '| Locale | $locale |\n'
-        '| Text Scale | $textScale× |\n'
-        '| DB Schema Version | $dbSchemaVersion |\n'
-        '| IMAP Accounts | $imapCount |\n'
-        '| JMAP Accounts | $jmapCount |\n';
-  }
-
-  static String _capitalize(String s) =>
-      s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
   Future<void> _copyToClipboard(
     BuildContext context,
@@ -120,11 +51,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     if (!context.mounted) return;
     await Clipboard.setData(
       ClipboardData(
-        text: _buildMarkdown(
-          context,
-          pkg,
-          imapCount,
-          jmapCount,
+        text: buildAboutMarkdown(
+          context: context,
+          pkg: pkg,
+          imapCount: imapCount,
+          jmapCount: jmapCount,
           deviceModel: deviceModel,
         ),
       ),
@@ -178,11 +109,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     } catch (_) {}
     if (!context.mounted) return;
     final body = Uri.encodeComponent(
-      _buildMarkdown(
-        context,
-        pkg,
-        imapCount,
-        jmapCount,
+      buildAboutMarkdown(
+        context: context,
+        pkg: pkg,
+        imapCount: imapCount,
+        jmapCount: jmapCount,
         deviceModel: deviceModel,
       ),
     );
@@ -235,11 +166,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                       return const Center(child: CircularProgressIndicator());
                     }
                     return Markdown(
-                      data: _buildMarkdown(
-                        context,
-                        snapshot.data,
-                        imapCount,
-                        jmapCount,
+                      data: buildAboutMarkdown(
+                        context: context,
+                        pkg: snapshot.data,
+                        imapCount: imapCount,
+                        jmapCount: jmapCount,
                         deviceModel: _deviceModel,
                       ),
                       selectable: true,
