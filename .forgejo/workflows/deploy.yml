@@ -50,7 +50,7 @@ jobs:
                   r for r in data.get("workflow_runs", [])
                   if r.get("workflow_id") == "deploy.yml" and r.get("status") == "success"
               ]
-              print(runs[0]["head_sha"] if runs else "")
+              print(runs[0].get("commit_sha") or "")
           except Exception as e:
               print(f"API check failed: {e}", file=sys.stderr)
               print("")
