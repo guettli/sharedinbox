@@ -13,20 +13,42 @@ jobs:
   deploy:
     name: Build & Deploy Website
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Check runner tools
+        run: |
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
+
+      - name: Setup Dagger Remote Engine (via stunnel)
+        env:
+          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
+          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
+          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
+          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
       - name: Build & Deploy Website
+        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: task website-deploy
+          DAGGER_NO_NAG: "1"
+        run: task publish-website
 
       - name: Verify Website
         env:
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
         run: scripts/website-verify.sh
+
+      - name: Cleanup TLS credentials
+        if: always()
+        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
