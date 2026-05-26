@@ -859,7 +859,9 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
+		WithUser("root").
 		WithExec([]string{"/bin/sh", "-c", patchCmd}).
+		WithUser("ubuntu").
 		WithExec([]string{"renovate"}).
 		Stdout(ctx)
 }
