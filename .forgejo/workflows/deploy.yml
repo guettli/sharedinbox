@@ -22,11 +22,45 @@ jobs:
       - name: Detect Android and Linux changes
         id: diff
         shell: bash
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
         run: |
           # On workflow_dispatch always build everything
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "android=true" >> "$GITHUB_OUTPUT"
             echo "linux=true"   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # Skip if this exact commit was already successfully deployed (prevents
+          # hourly schedule from redeploying the same commit on every tick).
+          LAST_DEPLOYED_SHA=$(python3 - << 'PYEOF'
+          import json, os, sys, urllib.request
+          token = os.environ.get("FORGEJO_TOKEN", "")
+          server = os.environ.get("GITHUB_SERVER_URL", "").rstrip("/")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          url = f"{server}/api/v1/repos/{repo}/actions/runs?workflow_id=deploy.yml&status=success&limit=5"
+          req = urllib.request.Request(url, headers={"Authorization": f"token {token}"})
+          try:
+              with urllib.request.urlopen(req) as r:
+                  data = json.loads(r.read())
+              runs = [
+                  r for r in data.get("workflow_runs", [])
+                  if r.get("workflow_id") == "deploy.yml" and r.get("status") == "success"
+              ]
+              print(runs[0]["head_sha"] if runs else "")
+          except Exception as e:
+              print(f"API check failed: {e}", file=sys.stderr)
+              print("")
+          PYEOF
+          )
+
+          if [ -n "$LAST_DEPLOYED_SHA" ] && [ "$HEAD_SHA" = "$LAST_DEPLOYED_SHA" ]; then
+            echo "HEAD $HEAD_SHA already successfully deployed — skipping"
+            echo "android=false" >> "$GITHUB_OUTPUT"
+            echo "linux=false"   >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
