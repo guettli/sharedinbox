@@ -845,9 +845,9 @@ func (m *Ci) PublishAndroid(
 // Renovate runs Renovate bot against the repository on Forgejo/Codeberg.
 func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string, error) {
 	return dag.Container().
-		From("renovate/renovate:39").
+		From("renovate/renovate:43").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
-		WithEnvVariable("RENOVATE_PLATFORM", "gitea").
+		WithEnvVariable("RENOVATE_PLATFORM", "forgejo").
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
