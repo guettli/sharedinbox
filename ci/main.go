@@ -850,6 +850,7 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 		WithEnvVariable("RENOVATE_PLATFORM", "forgejo").
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://codeberg.org").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
+		WithEnvVariable("LOG_LEVEL", "info").
 		WithExec([]string{"renovate"}).
 		Stdout(ctx)
 }
