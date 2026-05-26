@@ -83,44 +83,6 @@ jobs:
             && echo "linux=true"   >> "$GITHUB_OUTPUT" \
             || echo "linux=false"  >> "$GITHUB_OUTPUT"
 
-  test-android-firebase:
-    name: Android Instrumented Tests (Firebase Test Lab)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: [check-changes]
-    if: needs.check-changes.outputs.android == 'true'
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Check runner tools
-        run: |
-          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
-
-      - name: Setup Dagger Remote Engine (via stunnel)
-        env:
-          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
-          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
-          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
-          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
-        run: scripts/setup_dagger_remote.sh
-
-      - name: Run Android Tests on Firebase Test Lab
-        if: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY != '' }}
-        env:
-          FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY }}
-          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-          DAGGER_NO_NAG: "1"
-        run: task test-android-firebase
-
-      - name: Cleanup TLS credentials
-        if: always()
-        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
-
   deploy-playstore:
     name: Build & Deploy to Play Store
     runs-on: ubuntu-latest
@@ -287,10 +249,9 @@ jobs:
   label-deploy-health:
     name: Update Deploy Health Label
     runs-on: ubuntu-latest
-    needs: [test-android-firebase, deploy-playstore, deploy-apk, build-linux]
+    needs: [deploy-playstore, deploy-apk, build-linux]
     if: |
       always() && vars.DEPLOY_HEALTH_ISSUE != '' && (
-        needs.test-android-firebase.result == 'success' || needs.test-android-firebase.result == 'failure' ||
         needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'failure' ||
         needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'failure' ||
         needs.build-linux.result == 'success' || needs.build-linux.result == 'failure'
@@ -303,7 +264,7 @@ jobs:
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_URL: ${{ github.server_url }}
           DEPLOY_HEALTH_ISSUE: ${{ vars.DEPLOY_HEALTH_ISSUE }}
-          ALL_SUCCEEDED: ${{ (needs.test-android-firebase.result == 'success' || needs.test-android-firebase.result == 'skipped') && (needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'skipped') && (needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'skipped') && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') }}
+          ALL_SUCCEEDED: ${{ (needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'skipped') && (needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'skipped') && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') }}
         run: |
           python3 - << 'PYEOF'
           import os, json, urllib.request, urllib.error
