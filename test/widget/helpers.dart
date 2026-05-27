@@ -25,6 +25,7 @@ import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
@@ -505,13 +506,12 @@ Widget buildApp({
   return ProviderScope(
     // Defaults come first so tests can override them via [overrides].
     //
-    // syncHealthProvider and syncLogRepositoryProvider are backed by Drift
-    // StreamQueries. When a StreamProvider that wraps a Drift query is disposed,
-    // Drift schedules a Timer.run() for cache debouncing. Flutter's test
-    // framework then fails the test with "A Timer is still pending". Replacing
-    // these with simple synchronous streams avoids the pending-timer assertion.
+    // syncLogRepositoryProvider is backed by a Drift StreamQuery. When the
+    // provider is disposed, Drift schedules a Timer.run() for cache
+    // debouncing. Flutter's test framework then fails the test with "A Timer
+    // is still pending". Replacing it with a synchronous stream avoids this.
+    // syncHealthProvider has the same issue and is overridden in baseOverrides.
     overrides: [
-      syncHealthProvider.overrideWith((ref, _) => Stream.value(null)),
       syncLogRepositoryProvider.overrideWithValue(
         const NoOpSyncLogRepository(),
       ),
@@ -541,6 +541,7 @@ List<Override> baseOverrides({
   Exception? connectionError,
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
+  SyncHealthRow? syncHealth,
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
@@ -559,6 +560,9 @@ List<Override> baseOverrides({
       shareKeyRepositoryProvider.overrideWithValue(
         shareKeyRepository ?? FakeShareKeyRepository(),
       ),
+      // syncHealthProvider is backed by a Drift StreamQuery; override with a
+      // plain stream to avoid "A Timer is still pending" in tests.
+      syncHealthProvider.overrideWith((ref, _) => Stream.value(syncHealth)),
     ];
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 
 import 'helpers.dart';
 
@@ -206,5 +207,50 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('sharedinbox.de'), findsOneWidget);
     });
+
+    testWidgets('shows Healthy when sync health is healthy', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            syncHealth: SyncHealthRow(
+              accountId: kTestAccount.id,
+              lastVerifiedAt: DateTime(2024, 6),
+              isHealthy: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Healthy'), findsOneWidget);
+    });
+
+    testWidgets(
+      'shows discrepancy details when sync health has discrepancies',
+      (tester) async {
+        const summary =
+            '{"INBOX":{"missingLocally":3,"missingOnServer":0,"flagMismatches":1}}';
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts',
+            overrides: baseOverrides(
+              accounts: [kTestAccount],
+              syncHealth: SyncHealthRow(
+                accountId: kTestAccount.id,
+                lastVerifiedAt: DateTime(2024, 6),
+                isHealthy: false,
+                discrepancySummary: summary,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('missing locally: 3'), findsOneWidget);
+        expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
+      },
+    );
   });
 }

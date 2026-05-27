@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -124,7 +125,6 @@ class _AccountTile extends ConsumerWidget {
               if (h == null) return const Text('Sync health: Not verified yet');
               final date = h.lastVerifiedAt.toLocal().toString().split('.')[0];
               return Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text('Sync health: '),
                   Icon(
@@ -133,7 +133,13 @@ class _AccountTile extends ConsumerWidget {
                     color: h.isHealthy ? Colors.green : Colors.orange,
                   ),
                   const SizedBox(width: 4),
-                  Text(h.isHealthy ? 'Healthy' : 'Discrepancies found'),
+                  Flexible(
+                    child: Text(
+                      h.isHealthy
+                          ? 'Healthy'
+                          : _formatDiscrepancies(h.discrepancySummary),
+                    ),
+                  ),
                   Text(' ($date)', style: const TextStyle(fontSize: 10)),
                 ],
               );
@@ -290,6 +296,30 @@ class _AccountTile extends ConsumerWidget {
           ).read(accountRepositoryProvider).removeAccount(account.id);
         }
     }
+  }
+}
+
+String _formatDiscrepancies(String? summary) {
+  if (summary == null) return 'Discrepancies found';
+  try {
+    final decoded = jsonDecode(summary) as Map<String, dynamic>;
+    var missingLocally = 0;
+    var missingOnServer = 0;
+    var flagMismatches = 0;
+    for (final v in decoded.values) {
+      final m = v as Map<String, dynamic>;
+      missingLocally += (m['missingLocally'] as int? ?? 0);
+      missingOnServer += (m['missingOnServer'] as int? ?? 0);
+      flagMismatches += (m['flagMismatches'] as int? ?? 0);
+    }
+    final parts = <String>[];
+    if (missingLocally > 0) parts.add('missing locally: $missingLocally');
+    if (missingOnServer > 0) parts.add('missing on server: $missingOnServer');
+    if (flagMismatches > 0) parts.add('flag mismatches: $flagMismatches');
+    if (parts.isEmpty) return 'Discrepancies found';
+    return 'Discrepancies found (${parts.join(', ')})';
+  } catch (_) {
+    return 'Discrepancies found';
   }
 }
 
