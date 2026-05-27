@@ -6,5 +6,11 @@
   "labels": ["dependencies"],
   "github-actions": {
     "fileMatch": ["^\\.forgejo/workflows/[^/]+\\.ya?ml$"]
-  }
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
+      "addLabels": ["automerge"]
+    }
+  ]
 }
