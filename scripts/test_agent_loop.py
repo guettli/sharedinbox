@@ -714,7 +714,7 @@ class TestRunLoopResumeCommand(unittest.TestCase):
              contextlib.redirect_stdout(buf):
             agent_loop._run_loop()
         output = buf.getvalue()
-        self.assertIn(f"claude --resume {fake_uuid}", output)
+        self.assertIn(f"claude --resume {fake_uuid} --dangerously-skip-permissions", output)
 
     def test_resume_shows_list_hint_when_uuid_not_found(self):
         buf = io.StringIO()

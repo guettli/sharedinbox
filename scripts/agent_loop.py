@@ -32,7 +32,7 @@ Output is written to ~/.sharedinbox-agent-logs/<session>-<timestamp>.log.
 To resume the Claude conversation, look up the session UUID first:
 
   scripts/agent_loop.py list          # shows NAME and UUID columns
-  claude --resume <uuid>              # use the UUID, NOT the session name
+  claude --resume <uuid> --dangerously-skip-permissions   # use the UUID, NOT the session name
 """
 
 import argparse
@@ -542,7 +542,7 @@ def cmd_list() -> int:
 
     sessions.sort(reverse=True)
     total = len(sessions)
-    print(f"  {'DATE':<16}  {'NAME':<20}  UUID  (use with: claude --resume <uuid>)")
+    print(f"  {'DATE':<16}  {'NAME':<20}  UUID  (use with: claude --resume <uuid> --dangerously-skip-permissions)")
     print(f"  {'-'*16}  {'-'*20}  {'-'*36}")
     for mtime, name, sid in sessions[:20]:
         ts = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
@@ -626,9 +626,9 @@ def _run_loop() -> int:
         session_name = state.get("session_name")
         uuid = _find_session_uuid(session_name) if session_name else None
         if uuid:
-            resume_cmd = f"claude --resume {shlex.quote(uuid)}"
+            resume_cmd = f"claude --resume {shlex.quote(uuid)} --dangerously-skip-permissions"
         elif session_name:
-            resume_cmd = f"claude --resume <uuid>  # run: scripts/agent_loop.py list"
+            resume_cmd = f"claude --resume <uuid> --dangerously-skip-permissions  # run: scripts/agent_loop.py list"
         else:
             resume_cmd = ""
         git_info = _git_summary()
@@ -657,7 +657,7 @@ def _run_loop() -> int:
         session_name = f"plan-issue-{pending_issue}"
         uuid = _find_session_uuid(session_name)
         if uuid:
-            resume_cmd = f"claude --resume {shlex.quote(uuid)}"
+            resume_cmd = f"claude --resume {shlex.quote(uuid)} --dangerously-skip-permissions"
             _comment_issue(
                 pending_issue,
                 f"Planning complete. To resume this session:\n\n```\n{resume_cmd}\n```",
