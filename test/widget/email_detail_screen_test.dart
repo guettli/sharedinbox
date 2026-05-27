@@ -475,6 +475,44 @@ void main() {
       expect(find.text('Share'), findsOneWidget);
     });
 
+    testWidgets(
+      'long-press on unsubscribe chip shows URL tooltip',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader: '<https://example.com/unsubscribe>',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe'), findsOneWidget);
+
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is Tooltip && w.message == 'https://example.com/unsubscribe',
+          ),
+          findsOneWidget,
+        );
+
+        await tester.longPress(find.text('Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('https://example.com/unsubscribe'),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
       tester,
     ) async {

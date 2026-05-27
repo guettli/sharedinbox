@@ -588,6 +588,7 @@ Email testEmail({
   bool isSeen = false,
   bool isFlagged = false,
   bool hasAttachment = false,
+  String? listUnsubscribeHeader,
 }) =>
     Email(
       id: id,
@@ -603,6 +604,7 @@ Email testEmail({
       isSeen: isSeen,
       isFlagged: isFlagged,
       hasAttachment: hasAttachment,
+      listUnsubscribeHeader: listUnsubscribeHeader,
     );
 
 class FakeSearchHistoryRepository implements SearchHistoryRepository {

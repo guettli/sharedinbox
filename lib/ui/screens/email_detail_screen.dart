@@ -938,10 +938,13 @@ class _UnsubscribeChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final uri = _parseUnsubscribeUri(header);
     if (uri == null) return const SizedBox.shrink();
-    return ActionChip(
-      avatar: const Icon(Icons.unsubscribe_outlined, size: 16),
-      label: const Text('Unsubscribe'),
-      onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
+    return Tooltip(
+      message: uri.toString(),
+      child: ActionChip(
+        avatar: const Icon(Icons.unsubscribe_outlined, size: 16),
+        label: const Text('Unsubscribe'),
+        onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
+      ),
     );
   }
 }
