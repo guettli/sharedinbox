@@ -31,10 +31,13 @@ String buildEmailHtml(String htmlBody, {bool loadRemoteImages = false}) {
 <meta name="color-scheme" content="light">
 <meta http-equiv="Content-Security-Policy" content="$csp">
 <style>
-body { margin: 0; padding: 0; font-family: sans-serif; word-break: break-word; color-scheme: light; background-color: #ffffff; color: #000000; }
+body { margin: 0; padding: 0; font-family: sans-serif; word-break: break-word; overflow-x: hidden; color-scheme: light; background-color: #ffffff; color: #000000; }
 img { max-width: 100%; height: auto; }
 a { color: #1976D2; }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; max-width: 100%; }
+table { width: 100%; border-collapse: collapse; }
+td, th { overflow-wrap: break-word; word-break: break-word; }
+pre { white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 </style>
 </head>
 <body>

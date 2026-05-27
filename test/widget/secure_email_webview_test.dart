@@ -41,6 +41,20 @@ void main() {
       expect(html, contains('https: http: data: blob:'));
       _expectLightMode(html);
     });
+
+    test('prevents horizontal overflow so wide HTML emails are not cut off',
+        () {
+      final html =
+          buildEmailHtml('<table width="600"><tr><td>x</td></tr></table>');
+      // Body clips overflow so fixed-width email tables don't escape the viewport.
+      expect(html, contains('overflow-x: hidden'));
+      // Tables are forced to full viewport width so fixed pixel widths don't overflow.
+      expect(html, contains('table { width: 100%'));
+      // All elements are capped at viewport width via max-width.
+      expect(html, contains('max-width: 100%'));
+      // Pre-formatted text wraps instead of stretching the page.
+      expect(html, contains('white-space: pre-wrap'));
+    });
   });
 
   // On Linux (the test host) the widget falls back to plain text extracted via
