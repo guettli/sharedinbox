@@ -109,7 +109,12 @@ def _tea_get(path: str) -> dict | list | None:
     out = result.stdout.strip()
     if not out:
         return None
-    data = json.loads(out)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"tea api {path} returned non-JSON (exit 0):\n{out[:500]}"
+        ) from exc
     if isinstance(data, dict) and "message" in data and "url" in data:
         raise RuntimeError(f"tea api {path} returned error: {data['message']}")
     return data

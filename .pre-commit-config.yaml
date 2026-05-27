@@ -33,12 +33,12 @@ repos:
       - id: ci-no-direct-dagger
         name: check for direct dagger calls in workflows (use Task instead)
         language: system
-        entry: "bash -c 'git grep \"dagger call\" .forgejo/workflows/ && echo \"ERROR: Direct dagger calls found in workflows. Use Taskfile instead.\" && exit 1 || exit 0'"
+        entry: "bash -c 'git --no-pager grep \"dagger call\" .forgejo/workflows/ && echo \"ERROR: Direct dagger calls found in workflows. Use Taskfile instead.\" && exit 1 || exit 0'"
         pass_filenames: false
         always_run: true
       - id: dagger-progress-plain
         name: ensure all dagger calls use --progress=plain
         language: system
-        entry: "bash -c 'git grep \"dagger call\" -- \":!.pre-commit-config.yaml\" | grep -v \"\\-\\-progress=plain\" && echo \"ERROR: All dagger calls must include --progress=plain\" && exit 1 || exit 0'"
+        entry: "bash -c 'git --no-pager grep \"dagger call\" -- \":!.pre-commit-config.yaml\" | grep -v \"\\-\\-progress=plain\" && echo \"ERROR: All dagger calls must include --progress=plain\" && exit 1 || exit 0'"
         pass_filenames: false
         always_run: true
