@@ -14,6 +14,7 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
+import 'fake_imap.dart' show SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -432,5 +433,177 @@ void main() {
       expect(result, isNotNull);
       expect(result!.role, 'inbox');
     });
+
+    group('createMailboxWithRole', () {
+      test('IMAP: creates mailbox on server and persists with role', () async {
+        final spy = SnoozeSpyImapClient();
+        final db = openTestDatabase();
+        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+        final mailboxes = MailboxRepositoryImpl(
+          db,
+          accounts,
+          imapConnect: (_, __, ___) async => spy,
+        );
+        await accounts.addAccount(_account, 'pw');
+
+        final result = await mailboxes.createMailboxWithRole(
+          'acc-1',
+          'Archive',
+          'archive',
+        );
+
+        expect(spy.createdMailbox, 'Archive');
+        expect(result.name, 'Archive');
+        expect(result.role, 'archive');
+        expect(result.path, 'Archive');
+
+        final found = await mailboxes.findMailboxByRole('acc-1', 'archive');
+        expect(found, isNotNull);
+        expect(found!.name, 'Archive');
+      });
+
+      test('JMAP: creates mailbox on server and persists with role', () async {
+        final r = _makeRepos(
+          httpClient: _mockJmap(
+            apiResponses: [
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Mailbox/set',
+                    {
+                      'accountId': 'acct1',
+                      'created': {
+                        'new-mailbox': {'id': 'mbx-archive'},
+                      },
+                    },
+                    '0',
+                  ],
+                ],
+              },
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        final result = await r.mailboxes
+            .createMailboxWithRole('jmap-1', 'Archive', 'archive');
+
+        expect(result.name, 'Archive');
+        expect(result.role, 'archive');
+        expect(result.path, 'mbx-archive');
+
+        final found = await r.mailboxes.findMailboxByRole('jmap-1', 'archive');
+        expect(found, isNotNull);
+        expect(found!.name, 'Archive');
+      });
+
+      test(
+        'JMAP: throws when server returns no created ID',
+        () async {
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                {
+                  'sessionState': 'sess1',
+                  'methodResponses': [
+                    [
+                      'Mailbox/set',
+                      {
+                        'accountId': 'acct1',
+                        'created': null,
+                        'notCreated': {
+                          'new-mailbox': {'type': 'serverFail'},
+                        },
+                      },
+                      '0',
+                    ],
+                  ],
+                },
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+
+          await expectLater(
+            r.mailboxes.createMailboxWithRole('jmap-1', 'Archive', 'archive'),
+            throwsA(isA<Exception>()),
+          );
+        },
+      );
+    });
+
+    group('syncMailboxes IMAP preserves manually-set role', () {
+      test('existing role is kept when server returns no special-use flag',
+          () async {
+        final spy = SnoozeSpyImapClient();
+        // Make listMailboxes return a plain folder without \Archive.
+        final db = openTestDatabase();
+        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+
+        // Override listMailboxes to return one plain folder.
+        final fakeClient = _PlainArchiveImapClient();
+        final mailboxes = MailboxRepositoryImpl(
+          db,
+          accounts,
+          imapConnect: (_, __, ___) async => fakeClient,
+        );
+        await accounts.addAccount(_account, 'pw');
+
+        // Pre-seed the DB with role='archive' (as if user created the folder).
+        await db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Archive',
+                accountId: 'acc-1',
+                path: 'Archive',
+                name: 'Archive',
+                role: const Value('archive'),
+              ),
+            );
+
+        await mailboxes.syncMailboxes('acc-1');
+
+        final found = await mailboxes.findMailboxByRole('acc-1', 'archive');
+        expect(
+          found,
+          isNotNull,
+          reason: 'Manually-set role should be preserved after sync',
+        );
+        expect(found!.path, 'Archive');
+        // Suppress unused warning on spy.
+        expect(spy, isNotNull);
+      });
+    });
   });
+}
+
+/// Fake IMAP client that lists one mailbox named 'Archive' without any
+/// special-use flags, and logs out cleanly.
+class _PlainArchiveImapClient extends SnoozeSpyImapClient {
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [
+        imap.Mailbox(
+          encodedName: 'Archive',
+          encodedPath: 'Archive',
+          pathSeparator: '/',
+          flags: [], // No \Archive special-use flag
+        ),
+      ];
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox mailbox,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      mailbox;
+
+  @override
+  Future<dynamic> logout() async {}
 }

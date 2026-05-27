@@ -149,6 +149,22 @@ class _FakeMailboxes implements MailboxRepository {
 
   @override
   Future<void> clearForResync(String accountId) async {}
+
+  @override
+  Future<Mailbox> createMailboxWithRole(
+    String accountId,
+    String name,
+    String role,
+  ) async =>
+      Mailbox(
+        id: '$accountId:$name',
+        accountId: accountId,
+        path: name,
+        name: name,
+        role: role,
+        unreadCount: 0,
+        totalCount: 0,
+      );
 }
 
 class _FakeEmails implements EmailRepository {

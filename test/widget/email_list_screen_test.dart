@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
@@ -631,5 +632,150 @@ void main() {
 
       expect(find.text('This is the preview text'), findsOneWidget);
     });
+
+    group('archive with missing folder', () {
+      testWidgets('shows dialog when archive folder is not found', (
+        tester,
+      ) async {
+        final email = testEmail(subject: 'To archive');
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              // No archive folder in the repo.
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(emails: [email]),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Enter selection mode and tap archive.
+        await tester.longPress(find.text('To archive'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.archive));
+        await tester.pumpAndSettle();
+
+        expect(find.text('No archive folder found'), findsOneWidget);
+        expect(find.text('Choose existing folder'), findsOneWidget);
+        expect(find.text('Create "Archive"'), findsOneWidget);
+      });
+
+      testWidgets('tapping Create creates the folder and moves emails', (
+        tester,
+      ) async {
+        final email = testEmail(subject: 'To archive');
+        final movedTo = <String>[];
+
+        final fakeEmailRepo = _SpyEmailRepository(
+          emails: [email],
+          onMove: (id, path) => movedTo.add(path),
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeEmailRepo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('To archive'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.archive));
+        await tester.pumpAndSettle();
+
+        // Tap "Create Archive".
+        await tester.tap(find.text('Create "Archive"'));
+        await tester.pumpAndSettle();
+
+        expect(movedTo, contains('Archive'));
+      });
+
+      testWidgets(
+        'tapping Choose existing opens folder picker and moves emails',
+        (tester) async {
+          final email = testEmail(subject: 'To archive');
+          final movedTo = <String>[];
+
+          final fakeEmailRepo = _SpyEmailRepository(
+            emails: [email],
+            onMove: (id, path) => movedTo.add(path),
+          );
+          const archiveFolder = Mailbox(
+            id: 'acc-1:OldArchive',
+            accountId: 'acc-1',
+            path: 'OldArchive',
+            name: 'OldArchive',
+            unreadCount: 0,
+            totalCount: 0,
+          );
+
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+              overrides: [
+                accountRepositoryProvider.overrideWithValue(
+                  FakeAccountRepository([kTestAccount]),
+                ),
+                // Repo has a folder but it has no 'archive' role.
+                mailboxRepositoryProvider.overrideWithValue(
+                  FakeMailboxRepository([archiveFolder]),
+                ),
+                emailRepositoryProvider.overrideWithValue(fakeEmailRepo),
+              ],
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.longPress(find.text('To archive'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byIcon(Icons.archive));
+          await tester.pumpAndSettle();
+
+          // Tap "Choose existing folder".
+          await tester.tap(find.text('Choose existing folder'));
+          await tester.pumpAndSettle();
+
+          // Bottom sheet with folder list appears.
+          expect(find.text('OldArchive'), findsOneWidget);
+
+          await tester.tap(find.text('OldArchive'));
+          await tester.pumpAndSettle();
+
+          expect(movedTo, contains('OldArchive'));
+        },
+      );
+    });
   });
+}
+
+/// Email repository spy that records [moveEmail] calls.
+class _SpyEmailRepository extends FakeEmailRepository {
+  _SpyEmailRepository({
+    super.emails,
+    required void Function(String emailId, String path) onMove,
+  }) : _onMove = onMove;
+
+  final void Function(String emailId, String path) _onMove;
+
+  @override
+  Future<void> moveEmail(String emailId, String destMailboxPath) async {
+    _onMove(emailId, destMailboxPath);
+  }
 }

@@ -164,8 +164,28 @@ class FakeMailboxRepository implements MailboxRepository {
   @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
       _mailboxes.where((m) => m.role == role).firstOrNull;
+
   @override
   Future<void> clearForResync(String accountId) async {}
+
+  @override
+  Future<Mailbox> createMailboxWithRole(
+    String accountId,
+    String name,
+    String role,
+  ) async {
+    final mailbox = Mailbox(
+      id: '$accountId:$name',
+      accountId: accountId,
+      path: name,
+      name: name,
+      role: role,
+      unreadCount: 0,
+      totalCount: 0,
+    );
+    _mailboxes.add(mailbox);
+    return mailbox;
+  }
 }
 
 class FakeEmailRepository implements EmailRepository {

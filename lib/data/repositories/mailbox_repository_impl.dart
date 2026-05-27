@@ -79,6 +79,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
     );
     try {
       final mailboxes = await client.listMailboxes(recursive: true);
+
+      // Pre-load existing DB roles so we can preserve manually-set roles for
+      // folders the server doesn't tag with a special-use attribute.
+      final existingRows = await (_db.select(_db.mailboxes)
+            ..where((t) => t.accountId.equals(account.id)))
+          .get();
+      final existingRoles = {for (final r in existingRows) r.id: r.role};
+
       for (final mb in mailboxes) {
         final path = mb.path;
         final id = '${account.id}:$path';
@@ -96,6 +104,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
           log('STATUS skipped for $path: $e');
         }
 
+        // Use the server-assigned role when available; fall back to the
+        // existing DB role so that manually-created folders (e.g. a user
+        // who just created their Archive folder) keep their role across syncs
+        // when the IMAP server does not expose a special-use attribute.
+        final role = _imapRole(mb) ?? existingRoles[id];
+
         await _db.into(_db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
                 id: id,
@@ -104,7 +118,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 name: mb.name,
                 unreadCount: Value(unread),
                 totalCount: Value(total),
-                role: Value(_imapRole(mb)),
+                role: Value(role),
               ),
             );
       }
@@ -309,5 +323,105 @@ class MailboxRepositoryImpl implements MailboxRepository {
     await (_db.delete(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .go();
+  }
+
+  @override
+  Future<model.Mailbox> createMailboxWithRole(
+    String accountId,
+    String name,
+    String role,
+  ) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        return _createMailboxWithRoleImap(account, password, name, role);
+      case account_model.AccountType.jmap:
+        return _createMailboxWithRoleJmap(account, password, name, role);
+    }
+  }
+
+  Future<model.Mailbox> _createMailboxWithRoleImap(
+    account_model.Account account,
+    String password,
+    String name,
+    String role,
+  ) async {
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
+    try {
+      await client.createMailbox(name);
+    } finally {
+      await client.logout();
+    }
+    final id = '${account.id}:$name';
+    await _db.into(_db.mailboxes).insertOnConflictUpdate(
+          MailboxesCompanion.insert(
+            id: id,
+            accountId: account.id,
+            path: name,
+            name: name,
+            role: Value(role),
+          ),
+        );
+    final row = await (_db.select(_db.mailboxes)..where((t) => t.id.equals(id)))
+        .getSingle();
+    return _toModel(row);
+  }
+
+  Future<model.Mailbox> _createMailboxWithRoleJmap(
+    account_model.Account account,
+    String password,
+    String name,
+    String role,
+  ) async {
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) {
+      throw Exception('JMAP account ${account.id} has no jmapUrl');
+    }
+    final jmap = await JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+    final responses = await jmap.call([
+      [
+        'Mailbox/set',
+        {
+          'accountId': jmap.accountId,
+          'create': {
+            'new-mailbox': {'name': name, 'role': role},
+          },
+        },
+        '0',
+      ],
+    ]);
+    final result = _responseArgs(responses, 0, 'Mailbox/set');
+    final created = result['created'] as Map<String, dynamic>?;
+    final newId =
+        (created?['new-mailbox'] as Map<String, dynamic>?)?['id'] as String?;
+    if (newId == null) {
+      throw Exception(
+        'Failed to create mailbox "$name": server returned no ID',
+      );
+    }
+    final dbId = '${account.id}:$newId';
+    await _db.into(_db.mailboxes).insertOnConflictUpdate(
+          MailboxesCompanion.insert(
+            id: dbId,
+            accountId: account.id,
+            path: newId,
+            name: name,
+            role: Value(role),
+          ),
+        );
+    final row = await (_db.select(_db.mailboxes)
+          ..where((t) => t.id.equals(dbId)))
+        .getSingle();
+    return _toModel(row);
   }
 }

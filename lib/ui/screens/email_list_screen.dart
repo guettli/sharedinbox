@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
@@ -23,6 +24,8 @@ int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
 
 String _fmtDate(DateTime dt) =>
     _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
+
+enum _MissingFolderChoice { chooseExisting, createNew }
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -420,24 +423,79 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
-  Future<void> _batchMoveToRole(String role, String notFoundMessage) async {
+  Future<void> _batchMoveToRole(
+    String role, {
+    required String dialogTitle,
+    required String createFolderName,
+  }) async {
     final ids = _selectedEmailIds;
     _clearSelection();
-    final mailbox = await ref
-        .read(mailboxRepositoryProvider)
-        .findMailboxByRole(widget.accountId, role);
+
+    final mailboxRepo = ref.read(mailboxRepositoryProvider);
+    Mailbox? mailbox =
+        await mailboxRepo.findMailboxByRole(widget.accountId, role);
+
     if (!mounted) return;
+
     if (mailbox == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 5),
-          content: Text(notFoundMessage),
+      final choice = await showDialog<_MissingFolderChoice>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(dialogTitle),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, _MissingFolderChoice.chooseExisting),
+              child: const Text('Choose existing folder'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, _MissingFolderChoice.createNew),
+              child: Text('Create "$createFolderName"'),
+            ),
+          ],
         ),
       );
-      return;
+      if (!mounted || choice == null) return;
+
+      switch (choice) {
+        case _MissingFolderChoice.chooseExisting:
+          final mailboxes =
+              await mailboxRepo.observeMailboxes(widget.accountId).first;
+          if (!mounted) return;
+          final chosen = await showModalBottomSheet<String>(
+            context: context,
+            builder: (ctx) => ListView(
+              shrinkWrap: true,
+              children: [
+                const ListTile(
+                  title: Text(
+                    'Move to…',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                for (final m
+                    in mailboxes.where((m) => m.path != widget.mailboxPath))
+                  ListTile(
+                    leading: const Icon(Icons.folder_outlined),
+                    title: Text(m.name),
+                    onTap: () => Navigator.pop(ctx, m.path),
+                  ),
+              ],
+            ),
+          );
+          if (chosen == null || !mounted) return;
+          mailbox = mailboxes.firstWhere((m) => m.path == chosen);
+        case _MissingFolderChoice.createNew:
+          mailbox = await mailboxRepo.createMailboxWithRole(
+            widget.accountId,
+            createFolderName,
+            role,
+          );
+          if (!mounted) return;
+      }
     }
+
     final repo = ref.read(emailRepositoryProvider);
 
     // Fetch full email data before moving so we can restore them if user clicks Undo.
@@ -463,8 +521,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
-  Future<void> _batchArchive() =>
-      _batchMoveToRole('archive', 'No archive folder found');
+  Future<void> _batchArchive() => _batchMoveToRole(
+        'archive',
+        dialogTitle: 'No archive folder found',
+        createFolderName: 'Archive',
+      );
 
   Future<void> _refreshSearchAndPopIfEmpty() async {
     if (!mounted || !_searching) return;
@@ -543,8 +604,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
   }
 
-  Future<void> _batchMarkSpam() =>
-      _batchMoveToRole('junk', 'No spam folder found');
+  Future<void> _batchMarkSpam() => _batchMoveToRole(
+        'junk',
+        dialogTitle: 'No spam folder found',
+        createFolderName: 'Junk',
+      );
 
   Future<void> _batchMove() async {
     final ids = _selectedEmailIds;
