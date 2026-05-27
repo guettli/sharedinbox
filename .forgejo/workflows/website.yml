@@ -1,4 +1,4 @@
-name: Deploy Website
+name: Update Website
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   deploy:
-    name: Build & Deploy Website
+    name: Build & Update Website
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -34,7 +34,7 @@ jobs:
           DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Build & Deploy Website
+      - name: Build & Update Website
         if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -45,6 +45,7 @@ jobs:
         run: task publish-website
 
       - name: Verify Website
+        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         env:
           SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
         run: scripts/website-verify.sh
