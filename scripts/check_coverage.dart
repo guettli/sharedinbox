@@ -20,7 +20,9 @@ const _noCode = {
   'lib/core/repositories/sync_log_repository.dart',
   'lib/core/repositories/undo_repository.dart',
   'lib/core/repositories/search_history_repository.dart',
+  'lib/core/repositories/user_preferences_repository.dart',
   'lib/core/models/undo_action.dart',
+  'lib/core/models/user_preferences.dart',
   'lib/core/storage/secure_storage.dart',
 };
 
@@ -73,6 +75,8 @@ const _excluded = {
   'lib/data/repositories/sync_log_repository_impl.dart',
   'lib/data/repositories/undo_repository_impl.dart',
   'lib/data/repositories/search_history_repository_impl.dart',
+  'lib/data/repositories/user_preferences_repository_impl.dart',
+  'lib/ui/screens/user_preferences_screen.dart',
   'lib/core/services/update_service.dart',
 };
 

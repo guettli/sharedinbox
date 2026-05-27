@@ -307,6 +307,17 @@ class LocalSieveApplied extends Table {
   Set<Column> get primaryKey => {accountId, messageId};
 }
 
+/// App-wide user preferences, stored as a singleton row (id always 1).
+@DataClassName('UserPreferencesRow')
+class UserPreferences extends Table {
+  IntColumn get id => integer()();
+  // 'bottom' (default) | 'top'
+  TextColumn get menuPosition => text().withDefault(const Constant('bottom'))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 
 @DriftDatabase(
@@ -327,6 +338,7 @@ class LocalSieveApplied extends Table {
     LocalSieveScripts,
     LocalSieveApplied,
     ShareKeys,
+    UserPreferences,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -577,6 +589,9 @@ class AppDatabase extends _$AppDatabase {
           if (from >= 7 && from < 33) {
             await m.addColumn(syncLogs, syncLogs.errorStackTrace);
             await m.addColumn(syncLogs, syncLogs.isPermanent);
+          }
+          if (from < 34) {
+            await m.createTable(userPreferences);
           }
         },
       );

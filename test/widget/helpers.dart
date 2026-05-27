@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -21,6 +22,7 @@ import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -39,6 +41,7 @@ import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Fake repositories
@@ -432,6 +435,10 @@ Widget buildApp({
             builder: (ctx, state) => const AccountSendScreen(),
           ),
           GoRoute(
+            path: 'preferences',
+            builder: (ctx, state) => const UserPreferencesScreen(),
+          ),
+          GoRoute(
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
               accountId: state.pathParameters['accountId']!,
@@ -514,6 +521,9 @@ Widget buildApp({
     overrides: [
       syncLogRepositoryProvider.overrideWithValue(
         const NoOpSyncLogRepository(),
+      ),
+      userPreferencesRepositoryProvider.overrideWithValue(
+        FakeUserPreferencesRepository(),
       ),
       ...overrides,
       manageSieveProbeServiceProvider.overrideWith(
@@ -610,6 +620,23 @@ Email testEmail({
       hasAttachment: hasAttachment,
       listUnsubscribeHeader: listUnsubscribeHeader,
     );
+
+class FakeUserPreferencesRepository implements UserPreferencesRepository {
+  FakeUserPreferencesRepository({
+    this.menuPosition = MenuPosition.bottom,
+  });
+
+  MenuPosition menuPosition;
+
+  @override
+  Stream<UserPreferences> observePreferences() =>
+      Stream.value(UserPreferences(menuPosition: menuPosition));
+
+  @override
+  Future<void> updateMenuPosition(MenuPosition position) async {
+    menuPosition = position;
+  }
+}
 
 class FakeSearchHistoryRepository implements SearchHistoryRepository {
   final List<String> _history = [];

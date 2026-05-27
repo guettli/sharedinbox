@@ -67,6 +67,14 @@ class AccountListScreen extends ConsumerWidget {
                 unawaited(context.push('/accounts/about'));
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('Preferences'),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                unawaited(context.push('/accounts/preferences'));
+              },
+            ),
           ],
         ),
       ),

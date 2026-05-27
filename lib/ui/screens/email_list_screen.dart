@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
@@ -148,16 +149,21 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
+    final prefs =
+        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
+    final menuAtBottom = prefs.menuPosition == MenuPosition.bottom;
 
     return Scaffold(
-      appBar: _buildAppBar(repo, accountAsync),
+      appBar: _buildAppBar(repo, accountAsync, menuAtBottom: menuAtBottom),
       drawer: _selecting
           ? null
           : FolderDrawer(
               accountId: widget.accountId,
               currentMailboxPath: widget.mailboxPath,
             ),
-      bottomNavigationBar: _selecting ? _selectionBottomBar() : null,
+      bottomNavigationBar: _selecting
+          ? _selectionBottomBar()
+          : (menuAtBottom ? _folderNavBottomBar() : null),
       body: Column(
         children: [
           _buildSyncErrorBanner(),
@@ -173,12 +179,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   PreferredSizeWidget _buildAppBar(
     EmailRepository emailRepo,
-    AsyncValue<Account?> accountAsync,
-  ) {
+    AsyncValue<Account?> accountAsync, {
+    required bool menuAtBottom,
+  }) {
     final selectionCount =
         _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
 
     return AppBar(
+      automaticallyImplyLeading: !menuAtBottom,
       leading: _selecting
           ? IconButton(
               icon: const Icon(Icons.close),
@@ -298,6 +306,22 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 );
               }
             },
+    );
+  }
+
+  Widget _folderNavBottomBar() {
+    return BottomAppBar(
+      child: Row(
+        children: [
+          Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.menu),
+              tooltip: 'Open folders',
+              onPressed: () => Scaffold.of(context).openDrawer(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

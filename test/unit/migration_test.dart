@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 33);
+      expect(db.schemaVersion, 34);
       await db.close();
     });
 
@@ -198,6 +198,9 @@ void main() {
       final syncLogColumns = await _tableColumns(db, 'sync_logs');
       expect(syncLogColumns, contains('error_stack_trace'));
       expect(syncLogColumns, contains('is_permanent'));
+
+      // v34: user_preferences table.
+      await db.customSelect('SELECT count(*) FROM user_preferences').get();
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
@@ -391,11 +394,14 @@ void main() {
       expect(syncLogColumns, contains('error_stack_trace'));
       expect(syncLogColumns, contains('is_permanent'));
 
+      // v34: user_preferences table.
+      await db.customSelect('SELECT count(*) FROM user_preferences').get();
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 33', () async {
+    test('fresh install creates all tables at schemaVersion 34', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -422,6 +428,7 @@ void main() {
           'local_sieve_scripts', // v29
           'share_keys', // v31
           'local_sieve_applied', // v32
+          'user_preferences', // v34
         ]),
       );
 

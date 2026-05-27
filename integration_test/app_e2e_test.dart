@@ -317,7 +317,7 @@ void main() {
 
       // ── Check Sent folder ──────────────────────────────────────────────────
       // Use the drawer to switch folders (no back button on Linux desktop).
-      await tester.tap(find.byTooltip('Open navigation menu'));
+      await tester.tap(find.byTooltip('Open folders'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Sent'));
       await tester.pumpAndSettle();
@@ -331,7 +331,7 @@ void main() {
       expect(find.text(subject), findsOneWidget);
 
       // ── Check Inbox ────────────────────────────────────────────────────────
-      await tester.tap(find.byTooltip('Open navigation menu'));
+      await tester.tap(find.byTooltip('Open folders'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('INBOX'));
       await tester.pumpAndSettle();

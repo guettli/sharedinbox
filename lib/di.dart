@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -13,6 +14,7 @@ import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
+import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -21,7 +23,8 @@ import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Email, EmailBody;
+import 'package:sharedinbox/data/db/database.dart'
+    hide Email, EmailBody, UserPreferences;
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
@@ -33,6 +36,7 @@ import 'package:sharedinbox/data/repositories/search_history_repository_impl.dar
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 /// Swappable IMAP connection factory — override in tests to use plaintext.
@@ -226,4 +230,14 @@ final accountConnectionStatusProvider =
   await ref
       .read(connectionTestServiceProvider)
       .testConnection(account, password);
+});
+
+final userPreferencesRepositoryProvider =
+    Provider<UserPreferencesRepository>((ref) {
+  return UserPreferencesRepositoryImpl(ref.watch(dbProvider));
+});
+
+final userPreferencesProvider =
+    StreamProvider.autoDispose<UserPreferences>((ref) {
+  return ref.watch(userPreferencesRepositoryProvider).observePreferences();
 });

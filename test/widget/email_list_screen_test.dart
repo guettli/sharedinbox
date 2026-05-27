@@ -316,7 +316,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('INBOX'), findsOneWidget);
-      expect(find.byType(BottomAppBar), findsNothing);
+      expect(find.byIcon(Icons.close), findsNothing);
     });
 
     testWidgets('tapping clear icon in search bar clears results', (

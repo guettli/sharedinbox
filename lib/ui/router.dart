@@ -20,6 +20,7 @@ import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/undo_log_screen.dart';
+import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 
 final router = GoRouter(
@@ -55,6 +56,10 @@ final router = GoRouter(
             GoRoute(
               path: 'about',
               builder: (ctx, state) => const AboutScreen(),
+            ),
+            GoRoute(
+              path: 'preferences',
+              builder: (ctx, state) => const UserPreferencesScreen(),
             ),
             GoRoute(
               path: ':accountId/edit',

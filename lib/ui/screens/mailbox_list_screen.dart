@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
@@ -17,8 +18,12 @@ class MailboxListScreen extends ConsumerWidget {
     final mailboxRepo = ref.watch(mailboxRepositoryProvider);
     final emailRepo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(accountId));
+    final prefs =
+        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
+    final menuAtBottom = prefs.menuPosition == MenuPosition.bottom;
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !menuAtBottom,
         title: const Text('Folders'),
         actions: [
           IconButton(
@@ -42,6 +47,19 @@ class MailboxListScreen extends ConsumerWidget {
         ],
       ),
       drawer: FolderDrawer(accountId: accountId),
+      bottomNavigationBar: menuAtBottom
+          ? BottomAppBar(
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.menu),
+                    tooltip: 'Open folders',
+                    onPressed: () => Scaffold.of(context).openDrawer(),
+                  ),
+                ],
+              ),
+            )
+          : null,
       body: Column(
         children: [
           // ── Failed-mutation banner ───────────────────────────────────────
