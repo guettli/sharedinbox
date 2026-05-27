@@ -59,6 +59,84 @@ class UserPreferencesScreen extends ConsumerWidget {
                 ],
               ),
             ),
+            const Divider(),
+            ListTile(
+              title: Text(
+                'Single mail view button position',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'Where the back button is shown in the single mail view.',
+              ),
+            ),
+            RadioGroup<MenuPosition>(
+              groupValue: prefs.mailViewButtonPosition,
+              onChanged: (value) {
+                if (value == null) return;
+                unawaited(
+                  ref
+                      .read(userPreferencesRepositoryProvider)
+                      .updateMailViewButtonPosition(value),
+                );
+              },
+              child: const Column(
+                children: [
+                  RadioListTile<MenuPosition>(
+                    title: Text('Bottom (default)'),
+                    subtitle: Text(
+                      'Show the back button at the bottom of the screen.',
+                    ),
+                    value: MenuPosition.bottom,
+                  ),
+                  RadioListTile<MenuPosition>(
+                    title: Text('Top'),
+                    subtitle: Text(
+                      'Show the back button in the top bar.',
+                    ),
+                    value: MenuPosition.top,
+                  ),
+                ],
+              ),
+            ),
+            const Divider(),
+            ListTile(
+              title: Text(
+                'After mail action',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'What to show after deleting, archiving, or otherwise handling a message.',
+              ),
+            ),
+            RadioGroup<AfterMailViewAction>(
+              groupValue: prefs.afterMailViewAction,
+              onChanged: (value) {
+                if (value == null) return;
+                unawaited(
+                  ref
+                      .read(userPreferencesRepositoryProvider)
+                      .updateAfterMailViewAction(value),
+                );
+              },
+              child: const Column(
+                children: [
+                  RadioListTile<AfterMailViewAction>(
+                    title: Text('Next message (default)'),
+                    subtitle: Text(
+                      'Show the next message in the mailbox.',
+                    ),
+                    value: AfterMailViewAction.nextMessage,
+                  ),
+                  RadioListTile<AfterMailViewAction>(
+                    title: Text('Return to mailbox'),
+                    subtitle: Text(
+                      'Return to the message list.',
+                    ),
+                    value: AfterMailViewAction.showMailbox,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

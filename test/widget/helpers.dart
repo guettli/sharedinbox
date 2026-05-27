@@ -414,6 +414,7 @@ class _NoOpManageSieveProbeService implements ManageSieveProbeService {
 Widget buildApp({
   required String initialLocation,
   required List<Override> overrides,
+  UserPreferencesRepository? userPreferences,
 }) {
   final testRouter = GoRouter(
     initialLocation: initialLocation,
@@ -523,7 +524,7 @@ Widget buildApp({
         const NoOpSyncLogRepository(),
       ),
       userPreferencesRepositoryProvider.overrideWithValue(
-        FakeUserPreferencesRepository(),
+        userPreferences ?? FakeUserPreferencesRepository(),
       ),
       ...overrides,
       manageSieveProbeServiceProvider.overrideWith(
@@ -624,17 +625,36 @@ Email testEmail({
 class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
     this.menuPosition = MenuPosition.bottom,
+    this.mailViewButtonPosition = MenuPosition.bottom,
+    this.afterMailViewAction = AfterMailViewAction.nextMessage,
   });
 
   MenuPosition menuPosition;
+  MenuPosition mailViewButtonPosition;
+  AfterMailViewAction afterMailViewAction;
 
   @override
-  Stream<UserPreferences> observePreferences() =>
-      Stream.value(UserPreferences(menuPosition: menuPosition));
+  Stream<UserPreferences> observePreferences() => Stream.value(
+        UserPreferences(
+          menuPosition: menuPosition,
+          mailViewButtonPosition: mailViewButtonPosition,
+          afterMailViewAction: afterMailViewAction,
+        ),
+      );
 
   @override
   Future<void> updateMenuPosition(MenuPosition position) async {
     menuPosition = position;
+  }
+
+  @override
+  Future<void> updateMailViewButtonPosition(MenuPosition position) async {
+    mailViewButtonPosition = position;
+  }
+
+  @override
+  Future<void> updateAfterMailViewAction(AfterMailViewAction action) async {
+    afterMailViewAction = action;
   }
 }
 

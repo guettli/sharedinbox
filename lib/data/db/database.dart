@@ -313,6 +313,12 @@ class UserPreferences extends Table {
   IntColumn get id => integer()();
   // 'bottom' (default) | 'top'
   TextColumn get menuPosition => text().withDefault(const Constant('bottom'))();
+  // Added in schema v35: 'bottom' (default) | 'top'
+  TextColumn get mailViewButtonPosition =>
+      text().withDefault(const Constant('bottom'))();
+  // Added in schema v36: 'nextMessage' (default) | 'showMailbox'
+  TextColumn get afterMailViewAction =>
+      text().withDefault(const Constant('nextMessage'))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -592,6 +598,18 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 34) {
             await m.createTable(userPreferences);
+          }
+          if (from >= 34 && from < 35) {
+            await m.addColumn(
+              userPreferences,
+              userPreferences.mailViewButtonPosition,
+            );
+          }
+          if (from >= 34 && from < 36) {
+            await m.addColumn(
+              userPreferences,
+              userPreferences.afterMailViewAction,
+            );
           }
         },
       );

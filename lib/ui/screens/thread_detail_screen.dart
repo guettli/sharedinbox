@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
@@ -28,9 +29,16 @@ class ThreadDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.watch(emailRepositoryProvider);
+    final prefs =
+        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
+    final buttonAtBottom = prefs.mailViewButtonPosition == MenuPosition.bottom;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Thread')),
+      appBar: AppBar(
+        title: const Text('Thread'),
+        automaticallyImplyLeading: !buttonAtBottom,
+      ),
+      bottomNavigationBar: buttonAtBottom ? _buildBackButtonBar(context) : null,
       body: StreamBuilder<List<Email>>(
         stream: repo.observeEmailsInThread(accountId, mailboxPath, threadId),
         builder: (context, snapshot) {
@@ -57,6 +65,20 @@ class ThreadDetailScreen extends ConsumerWidget {
             },
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildBackButtonBar(BuildContext context) {
+    return BottomAppBar(
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back),
+            tooltip: 'Back',
+            onPressed: () => context.pop(),
+          ),
+        ],
       ),
     );
   }

@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 34);
+      expect(db.schemaVersion, 36);
       await db.close();
     });
 
@@ -201,6 +201,13 @@ void main() {
 
       // v34: user_preferences table.
       await db.customSelect('SELECT count(*) FROM user_preferences').get();
+
+      // v35: mail_view_button_position column on user_preferences.
+      final userPrefsColumns = await _tableColumns(db, 'user_preferences');
+      expect(userPrefsColumns, contains('mail_view_button_position'));
+
+      // v36: after_mail_view_action column on user_preferences.
+      expect(userPrefsColumns, contains('after_mail_view_action'));
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
@@ -397,11 +404,18 @@ void main() {
       // v34: user_preferences table.
       await db.customSelect('SELECT count(*) FROM user_preferences').get();
 
+      // v35: mail_view_button_position column on user_preferences.
+      final userPrefsColumns = await _tableColumns(db, 'user_preferences');
+      expect(userPrefsColumns, contains('mail_view_button_position'));
+
+      // v36: after_mail_view_action column on user_preferences.
+      expect(userPrefsColumns, contains('after_mail_view_action'));
+
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 34', () async {
+    test('fresh install creates all tables at schemaVersion 36', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -447,6 +461,13 @@ void main() {
       final syncLogColumns = await _tableColumns(db, 'sync_logs');
       expect(syncLogColumns, contains('error_stack_trace'));
       expect(syncLogColumns, contains('is_permanent'));
+
+      // v35: mail_view_button_position column on user_preferences.
+      final userPrefsColumns = await _tableColumns(db, 'user_preferences');
+      expect(userPrefsColumns, contains('mail_view_button_position'));
+
+      // v36: after_mail_view_action column on user_preferences.
+      expect(userPrefsColumns, contains('after_mail_view_action'));
 
       await db.close();
     });

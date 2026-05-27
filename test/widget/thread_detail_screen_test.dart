@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
@@ -140,6 +141,60 @@ void main() {
 
       expect(find.byIcon(Icons.reply), findsNothing);
       expect(find.byIcon(Icons.expand_more), findsOneWidget);
+    });
+
+    testWidgets('shows bottom app bar with back button by default', (
+      tester,
+    ) async {
+      final email = _threadEmail();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/threads/thread-1',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BottomAppBar), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+    });
+
+    testWidgets('hides bottom app bar when button position is top', (
+      tester,
+    ) async {
+      final email = _threadEmail();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/threads/thread-1',
+          userPreferences: FakeUserPreferencesRepository(
+            mailViewButtonPosition: MenuPosition.top,
+          ),
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BottomAppBar), findsNothing);
     });
 
     testWidgets('flagged email shows star icon', (tester) async {

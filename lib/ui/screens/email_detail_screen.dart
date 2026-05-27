@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -98,6 +99,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             icon: const Icon(Icons.delete),
             tooltip: 'Delete',
             onPressed: () async {
+              final nextEmailId = await _getNextEmailIdIfNeeded(header);
               final destPath = await repo.deleteEmail(widget.emailId);
 
               if (header != null) {
@@ -116,7 +118,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 );
               }
 
-              if (context.mounted) context.pop();
+              if (context.mounted) _navigateTo(context, header, nextEmailId);
             },
           ),
           IconButton(
@@ -171,8 +173,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ],
             onSelected: (value) async {
               if (value == 'mark_unread') {
+                final nextEmailId = await _getNextEmailIdIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
-                if (context.mounted) context.pop();
+                if (context.mounted) _navigateTo(context, header, nextEmailId);
               } else if (value == 'headers' && body != null) {
                 _showHeaders(context, body);
               } else if (value == 'structure' && body != null) {
@@ -250,6 +253,39 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ],
       ],
     );
+  }
+
+  Future<String?> _getNextEmailIdIfNeeded(Email? header) async {
+    if (header == null) return null;
+    final prefs = ref.read(userPreferencesProvider).value;
+    final action =
+        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
+    if (action != AfterMailViewAction.nextMessage) return null;
+
+    final threads = await ref
+        .read(emailRepositoryProvider)
+        .observeThreads(header.accountId, header.mailboxPath)
+        .first;
+
+    final currentIndex =
+        threads.indexWhere((t) => t.emailIds.contains(widget.emailId));
+    if (currentIndex >= 0 && currentIndex + 1 < threads.length) {
+      return threads[currentIndex + 1].latestEmailId;
+    }
+    return null;
+  }
+
+  void _navigateTo(BuildContext context, Email? header, String? nextEmailId) {
+    if (!context.mounted) return;
+    if (nextEmailId != null && header != null) {
+      context.go(
+        '/accounts/${header.accountId}'
+        '/mailboxes/${Uri.encodeComponent(header.mailboxPath)}'
+        '/emails/${Uri.encodeComponent(nextEmailId)}',
+      );
+    } else {
+      context.pop();
+    }
   }
 
   Future<void> _downloadAndOpen(EmailAttachment att) async {
@@ -403,6 +439,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<void> _archive(BuildContext context, Email header) async {
+    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    if (!context.mounted) return;
+
     final mailbox = await resolveMailboxByRole(
       context,
       ref.read(mailboxRepositoryProvider),
@@ -432,10 +471,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) context.pop();
+    if (context.mounted) _navigateTo(context, header, nextEmailId);
   }
 
   Future<void> _markAsSpam(BuildContext context, Email header) async {
+    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    if (!context.mounted) return;
+
     final mailbox = await resolveMailboxByRole(
       context,
       ref.read(mailboxRepositoryProvider),
@@ -465,7 +507,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) context.pop();
+    if (context.mounted) _navigateTo(context, header, nextEmailId);
   }
 
   Future<void> _forward(
@@ -490,6 +532,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<void> _moveTo(BuildContext context, Email header) async {
+    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+
     final mailboxRepo = ref.read(mailboxRepositoryProvider);
     final mailboxes =
         await mailboxRepo.observeMailboxes(header.accountId).first;
@@ -538,10 +582,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) context.pop();
+    if (context.mounted) _navigateTo(context, header, nextEmailId);
   }
 
   Future<void> _snooze(BuildContext context, Email header) async {
+    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    if (!context.mounted) return;
+
     final until = await showModalBottomSheet<DateTime>(
       context: context,
       builder: (ctx) => const SnoozePicker(),
@@ -569,7 +616,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
         ),
       );
-      context.pop();
+      _navigateTo(context, header, nextEmailId);
     }
   }
 
