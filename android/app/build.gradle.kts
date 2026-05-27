@@ -67,7 +67,7 @@ flutter {
 
 dependencies {
     // Required for flutter_local_notifications and other plugins that need Java 8+ APIs on API < 26.
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // integration_test is a dev dependency; the Flutter plugin loader adds it as
     // debugImplementation only, but GeneratedPluginRegistrant.java (in src/main)
     // references its class in all variants. Make it available for release compilation
