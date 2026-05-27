@@ -202,6 +202,7 @@ class TestMain(unittest.TestCase):
 
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(10)]), \
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
@@ -229,6 +230,7 @@ class TestMain(unittest.TestCase):
 
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(7)]), \
              patch("agent_loop._set_labels", side_effect=fake_set_labels), \
@@ -243,6 +245,7 @@ class TestMain(unittest.TestCase):
         """main() exits cleanly with 0 when there are no ready issues."""
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              patch("agent_loop._set_labels") as mock_labels, \
@@ -263,6 +266,7 @@ class TestMain(unittest.TestCase):
 
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[self._make_issue(42)]), \
              patch("agent_loop._set_labels"), \
@@ -442,6 +446,7 @@ class TestPendingCi(unittest.TestCase):
             "type": "ci-fix",
         }), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value={"id": 1, "status": "success"}), \
              patch("agent_loop._close_issue") as mock_close, \
              patch("agent_loop._ready_issues", return_value=[]), \
@@ -459,6 +464,7 @@ class TestOutputFormat(unittest.TestCase):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              contextlib.redirect_stdout(buf):
@@ -471,6 +477,7 @@ class TestOutputFormat(unittest.TestCase):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]), \
              contextlib.redirect_stdout(buf):
@@ -482,6 +489,7 @@ class TestOutputFormat(unittest.TestCase):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=run), \
              contextlib.redirect_stdout(buf):
             agent_loop._run_loop()
@@ -493,6 +501,7 @@ class TestOutputFormat(unittest.TestCase):
         buf = io.StringIO()
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[issue]), \
              patch("agent_loop._set_labels"), \
@@ -757,6 +766,7 @@ class TestCatchupSkipsQuestionIssues(unittest.TestCase):
         ci_run = {"id": 999, "status": "success"}
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[pr]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_ci_run_for_pr", return_value=ci_run), \
              patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_QUESTION]), \
              patch("agent_loop._merge_pr") as mock_merge, \
@@ -783,6 +793,71 @@ class TestCatchupSkipsQuestionIssues(unittest.TestCase):
             result = agent_loop._run_loop()
         self.assertEqual(result, 0)
         mock_merge.assert_called_once_with(50)
+
+
+class TestMergedPrCatchup(unittest.TestCase):
+    """Catch-up closes issues whose PRs were already merged outside the normal flow."""
+
+    def _make_merged_pr(self, pr_number=283, branch="issue-282-fix"):
+        return {"number": pr_number, "merged": True, "head": {"ref": branch}}
+
+    def test_closes_issue_when_pr_was_merged(self):
+        """When a merged issue-N-fix PR exists and the issue still has labels, close it."""
+        pr = self._make_merged_pr()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[pr]), \
+             patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_QUESTION]), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]):
+            result = agent_loop._run_loop()
+        self.assertEqual(result, 0)
+        mock_close.assert_called_once_with(282)
+
+    def test_skips_when_issue_has_no_labels(self):
+        """When _get_issue_labels returns [] (likely already closed), skip the issue."""
+        pr = self._make_merged_pr()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[pr]), \
+             patch("agent_loop._get_issue_labels", return_value=[]), \
+             patch("agent_loop._close_issue") as mock_close, \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]):
+            result = agent_loop._run_loop()
+        self.assertEqual(result, 0)
+        mock_close.assert_not_called()
+
+    def test_output_mentions_merged_pr_and_issue(self):
+        """The catch-up log line names the PR number and issue number."""
+        pr = self._make_merged_pr(pr_number=283, branch="issue-282-fix")
+        buf = io.StringIO()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[pr]), \
+             patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_QUESTION]), \
+             patch("agent_loop._close_issue"), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]), \
+             contextlib.redirect_stdout(buf):
+            agent_loop._run_loop()
+        output = buf.getvalue()
+        self.assertIn("283", output)
+        self.assertIn("282", output)
+
+    def test_continues_on_close_error(self):
+        """If _close_issue raises, the loop continues instead of crashing."""
+        pr = self._make_merged_pr()
+        with patch("agent_loop._read_state", return_value=None), \
+             patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[pr]), \
+             patch("agent_loop._get_issue_labels", return_value=[agent_loop.LABEL_QUESTION]), \
+             patch("agent_loop._close_issue", side_effect=RuntimeError("already closed")), \
+             patch("agent_loop._latest_main_ci_run", return_value=None), \
+             patch("agent_loop._ready_issues", return_value=[]):
+            result = agent_loop._run_loop()
+        self.assertEqual(result, 0)
 
 
 class TestMergeFailsOpen(unittest.TestCase):
@@ -928,6 +1003,7 @@ class TestHeartbeat(unittest.TestCase):
         self.assertFalse(Path(self._tmp.name).exists())
         with patch("agent_loop._read_state", return_value=None), \
              patch("agent_loop._open_issue_prs", return_value=[]), \
+             patch("agent_loop._merged_issue_prs", return_value=[]), \
              patch("agent_loop._latest_main_ci_run", return_value=None), \
              patch("agent_loop._ready_issues", return_value=[]):
             agent_loop._run_loop()

@@ -11,15 +11,18 @@ Flow
    a. pending_issue type=="plan" → post resume comment, set State/Planned, exit 0
    b. pending_issue + open PR → check PR branch CI, merge/fix/wait as needed
    c. Catch-up: orphaned issue-N-fix PRs with passing CI → merge them
-   d. Main CI running         → save pending-ci state, exit 0
-   e. Main CI failed          → start fix-CI agent (pushes fix to main), exit 0
-   f. Main CI ok + pending_issue → close the issue, exit 0  (dead code path —
+   d. Catch-up: close issues for PRs already merged (e.g., merged manually after
+                State/Question was set because CI path filter didn't trigger) → exit 0
+   e. Catch-up: Renovate PRs with passing CI → merge them
+   f. Main CI running         → save pending-ci state, exit 0
+   g. Main CI failed          → start fix-CI agent (pushes fix to main), exit 0
+   h. Main CI ok + pending_issue → close the issue, exit 0  (dead code path —
                                    section 2b always returns first)
-   g. Main CI ok (or no run yet) → find oldest ToPlan issue, start plan agent,
+   i. Main CI ok (or no run yet) → find oldest ToPlan issue, start plan agent,
                                    save state, exit 0
-   h. No ToPlan issues        → find oldest Ready issue, start issue agent,
+   j. No ToPlan issues        → find oldest Ready issue, start issue agent,
                                    save state, exit 0
-   i. No Ready issues         → print "nothing to do", exit 0
+   k. No Ready issues         → print "nothing to do", exit 0
 
 Issue agents must NOT close the issue themselves; the loop closes it after CI passes.
 Plan agents must NOT write any code or create PRs; they only post a plan comment.
@@ -43,6 +46,8 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -120,6 +125,30 @@ def _fgj_run_list(limit: int = 20) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _tea_get(path: str) -> dict:
+    """Make an authenticated GET request to the Codeberg API and return parsed JSON.
+
+    Tries FORGEJO_TOKEN env var first, then ``fgj auth token`` for the token.
+    """
+    token = os.environ.get("FORGEJO_TOKEN", "")
+    if not token:
+        r = subprocess.run(
+            ["fgj", "--hostname", "codeberg.org", "auth", "token"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            token = r.stdout.strip()
+    url = f"https://codeberg.org/api/v1{path}"
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"token {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"GET {path}: HTTP {e.code} {e.reason}") from e
+
+
 def _set_labels(issue: int, add: list[str], remove: list[str]) -> None:
     """Add/remove labels on an issue via fgj."""
     cmd = ["issue", "edit", str(issue), "--repo", REPO]
@@ -186,7 +215,8 @@ def _latest_main_ci_run() -> dict | None:
     event=push and prettyref=main, so filtering by event alone is not enough.
     We also require workflow_id == "ci.yml".
     """
-    for run in _fgj_run_list(limit=20):
+    data = _tea_get(f"/repos/{REPO}/actions/runs?limit=20")
+    for run in data.get("workflow_runs", []):
         if (run.get("event") == "push"
                 and run.get("prettyref") == "main"
                 and run.get("workflow_id") == "ci.yml"):
@@ -197,19 +227,22 @@ def _latest_main_ci_run() -> dict | None:
 def _latest_ci_run_for_branch(branch: str) -> dict | None:
     """Return the latest CI run for a specific branch, or None.
 
-    For push events fgj reports the branch in ``prettyref``; for pull_request
-    events ``prettyref`` is ``#N``, so we resolve the PR number first.
+    For pull_request events the branch is embedded in the JSON ``event_payload``
+    field; for push events it appears directly in ``prettyref``.
     """
-    runs = _fgj_run_list(limit=20)
-    pr_data = _find_pr_for_branch(branch)
-    pr_ref = f"#{pr_data['number']}" if pr_data else None
-    for run in runs:
+    data = _tea_get(f"/repos/{REPO}/actions/runs?limit=20")
+    for run in data.get("workflow_runs", []):
         if run.get("event") == "pull_request":
-            if pr_ref and run.get("prettyref") == pr_ref:
-                return run
-        elif run.get("event") == "push":
-            if run.get("prettyref") == branch:
-                return run
+            payload_str = run.get("event_payload", "")
+            if payload_str:
+                try:
+                    payload = json.loads(payload_str)
+                    if payload.get("pull_request", {}).get("head", {}).get("ref") == branch:
+                        return run
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+        elif run.get("event") == "push" and run.get("prettyref") == branch:
+            return run
     return None
 
 
@@ -269,6 +302,35 @@ def _open_renovate_prs() -> list[dict]:
     return renovate_prs
 
 
+def _merged_issue_prs() -> list[dict]:
+    """Return recently merged PRs with issue-{N}-fix branches, oldest-first.
+
+    Used for catch-up: if the loop set State/Question (e.g., no CI run detected)
+    but the PR was later merged manually, we still want to close the issue.
+    """
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "pr", "list",
+         "--repo", REPO, "--state", "closed", "--json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    try:
+        prs = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    merged = []
+    for pr in prs:
+        if not pr.get("merged"):
+            continue
+        head = pr.get("head", {})
+        ref = head.get("ref") or head.get("label", "").split(":")[-1]
+        if re.match(r"^issue-\d+-fix$", ref or ""):
+            merged.append(pr)
+    merged.sort(key=lambda p: p["number"])
+    return merged
+
+
 def _latest_ci_run_for_pr(pr_number: int) -> dict | None:
     """Return the latest CI run triggered by a pull_request event for the given PR number."""
     pr_ref = f"#{pr_number}"
@@ -307,17 +369,10 @@ def _handle_pr_still_open_after_merge(pr_number: int, branch: str, issue_num: in
       "merged"         — PR closed after a retry
       "fallback"       — all options exhausted; caller should set State/Question
     """
-    result = subprocess.run(
-        ["fgj", "--hostname", "codeberg.org", "pr", "view", str(pr_number),
-         "--repo", REPO, "--json"],
-        capture_output=True, text=True,
-    )
-    pr_data: dict = {}
-    if result.returncode == 0 and result.stdout.strip():
-        try:
-            pr_data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            pass
+    try:
+        pr_data = _tea_get(f"/repos/{REPO}/pulls/{pr_number}")
+    except RuntimeError:
+        pr_data = {}
     mergeable = pr_data.get("mergeable")
 
     if mergeable is False:
@@ -846,7 +901,31 @@ def _run_loop() -> int:
                 print(f"Merged PR #{pr_number}.")
             return 0
 
-    # ── 2c. Catch-up: merge Renovate PRs with passing CI ─────────────────────
+    # ── 2c. Catch-up: close issues whose PRs were already merged ─────────────
+    # Handles the case where State/Question was set (e.g., no CI run appeared
+    # because the changed paths didn't match ci.yml's path filter) but the PR
+    # was merged manually afterward. The next loop tick closes the issue.
+    for pr in _merged_issue_prs():
+        head = pr.get("head", {})
+        branch = head.get("ref") or head.get("label", "").split(":")[-1]
+        m = re.match(r"^issue-(\d+)-fix$", branch or "")
+        if not m:
+            continue
+        issue_num = int(m.group(1))
+        labels = _get_issue_labels(issue_num)
+        if not labels:
+            # Issue is likely already closed — skip.
+            continue
+        pr_number = pr["number"]
+        print(f"Catch-up (merged PR): PR #{pr_number} for issue #{issue_num} was merged — closing.")
+        try:
+            _close_issue(issue_num)
+        except RuntimeError as e:
+            print(f"Catch-up (merged PR): could not close issue #{issue_num}: {e}")
+            continue
+        return 0
+
+    # ── 2d. Catch-up: merge Renovate PRs with passing CI ─────────────────────
     # The merge-renovate CI job only fires on pull_request events. If a Renovate
     # PR had CI run before that job was added (or the automerge label was absent),
     # it stays open forever. Detect and merge those here.
