@@ -290,11 +290,10 @@ void main() {
       );
     });
 
-    testWidgets(
-        'Mark as spam moves email to junk and shows snackbar when no junk folder',
+    testWidgets('Mark as spam shows dialog when no junk folder',
         (tester) async {
       // FakeMailboxRepository has no mailboxes by default → findMailboxByRole
-      // returns null → snackbar shown.
+      // returns null → dialog shown.
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -312,7 +311,76 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('No Junk folder found'), findsOneWidget);
+      expect(find.text('No spam folder found'), findsOneWidget);
+    });
+
+    testWidgets('Archive button is present in app bar', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Archive',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Archive shows dialog when no archive folder', (tester) async {
+      // FakeMailboxRepository has no mailboxes by default → findMailboxByRole
+      // returns null → dialog shown.
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Archive',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('No archive folder found'), findsOneWidget);
+    });
+
+    testWidgets('Mark as unread is in popup menu, not a standalone button',
+        (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // No standalone icon button for mark as unread.
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Mark as unread',
+        ),
+        findsNothing,
+      );
+
+      // It appears in the popup menu.
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mark as unread'), findsOneWidget);
     });
 
     testWidgets('Show Raw Email dialog shows size of email', (tester) async {

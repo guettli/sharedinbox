@@ -7,10 +7,10 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/widgets/email_tile.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
@@ -24,8 +24,6 @@ int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
 
 String _fmtDate(DateTime dt) =>
     _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
-
-enum _MissingFolderChoice { chooseExisting, createNew }
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -431,70 +429,17 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final ids = _selectedEmailIds;
     _clearSelection();
 
-    final mailboxRepo = ref.read(mailboxRepositoryProvider);
-    Mailbox? mailbox =
-        await mailboxRepo.findMailboxByRole(widget.accountId, role);
+    final mailbox = await resolveMailboxByRole(
+      context,
+      ref.read(mailboxRepositoryProvider),
+      widget.accountId,
+      widget.mailboxPath,
+      role,
+      dialogTitle: dialogTitle,
+      createFolderName: createFolderName,
+    );
 
-    if (!mounted) return;
-
-    if (mailbox == null) {
-      final choice = await showDialog<_MissingFolderChoice>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(dialogTitle),
-          actions: [
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, _MissingFolderChoice.chooseExisting),
-              child: const Text('Choose existing folder'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, _MissingFolderChoice.createNew),
-              child: Text('Create "$createFolderName"'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || choice == null) return;
-
-      switch (choice) {
-        case _MissingFolderChoice.chooseExisting:
-          final mailboxes =
-              await mailboxRepo.observeMailboxes(widget.accountId).first;
-          if (!mounted) return;
-          final chosen = await showModalBottomSheet<String>(
-            context: context,
-            builder: (ctx) => ListView(
-              shrinkWrap: true,
-              children: [
-                const ListTile(
-                  title: Text(
-                    'Move to…',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-                for (final m
-                    in mailboxes.where((m) => m.path != widget.mailboxPath))
-                  ListTile(
-                    leading: const Icon(Icons.folder_outlined),
-                    title: Text(m.name),
-                    onTap: () => Navigator.pop(ctx, m.path),
-                  ),
-              ],
-            ),
-          );
-          if (chosen == null || !mounted) return;
-          mailbox = mailboxes.firstWhere((m) => m.path == chosen);
-        case _MissingFolderChoice.createNew:
-          mailbox = await mailboxRepo.createMailboxWithRole(
-            widget.accountId,
-            createFolderName,
-            role,
-          );
-          if (!mounted) return;
-      }
-    }
+    if (!mounted || mailbox == null) return;
 
     final repo = ref.read(emailRepositoryProvider);
 

@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -85,42 +86,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   },
           ),
           IconButton(
-            icon: const Icon(Icons.mark_email_unread_outlined),
-            tooltip: 'Mark as unread',
-            onPressed: () async {
-              await repo.setFlag(widget.emailId, seen: false);
-              if (context.mounted) context.pop();
-            },
-          ),
-          IconButton(
-            icon: Icon(
-              _isFlagged ? Icons.star : Icons.star_border,
-              color: _isFlagged ? Colors.amber : null,
-            ),
-            tooltip: _isFlagged ? 'Unflag' : 'Flag',
-            onPressed: () async {
-              final next = !_isFlagged;
-              await repo.setFlag(widget.emailId, flagged: next);
-              if (mounted) setState(() => _isFlagged = next);
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.drive_file_move_outline),
-            tooltip: 'Move to folder',
-            onPressed: header == null ? null : () => _moveTo(context, header),
-          ),
-          IconButton(
-            icon: const Icon(Icons.access_time),
-            tooltip: 'Snooze',
-            onPressed: header == null ? null : () => _snooze(context, header),
-          ),
-          IconButton(
-            icon: const Icon(Icons.report_outlined),
-            tooltip: 'Mark as spam',
+            icon: const Icon(Icons.archive),
+            tooltip: 'Archive',
             onPressed: header == null
                 ? null
                 : () {
-                    unawaited(_markAsSpam(context, header));
+                    unawaited(_archive(context, header));
                   },
           ),
           IconButton(
@@ -148,8 +119,43 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               if (context.mounted) context.pop();
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.report_outlined),
+            tooltip: 'Mark as spam',
+            onPressed: header == null
+                ? null
+                : () {
+                    unawaited(_markAsSpam(context, header));
+                  },
+          ),
+          IconButton(
+            icon: const Icon(Icons.drive_file_move_outline),
+            tooltip: 'Move to folder',
+            onPressed: header == null ? null : () => _moveTo(context, header),
+          ),
+          IconButton(
+            icon: const Icon(Icons.access_time),
+            tooltip: 'Snooze',
+            onPressed: header == null ? null : () => _snooze(context, header),
+          ),
+          IconButton(
+            icon: Icon(
+              _isFlagged ? Icons.star : Icons.star_border,
+              color: _isFlagged ? Colors.amber : null,
+            ),
+            tooltip: _isFlagged ? 'Unflag' : 'Flag',
+            onPressed: () async {
+              final next = !_isFlagged;
+              await repo.setFlag(widget.emailId, flagged: next);
+              if (mounted) setState(() => _isFlagged = next);
+            },
+          ),
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'mark_unread',
+                child: Text('Mark as unread'),
+              ),
               const PopupMenuItem(
                 value: 'headers',
                 child: Text('Show Mail Headers'),
@@ -163,8 +169,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Show Raw Email'),
               ),
             ],
-            onSelected: (value) {
-              if (value == 'headers' && body != null) {
+            onSelected: (value) async {
+              if (value == 'mark_unread') {
+                await repo.setFlag(widget.emailId, seen: false);
+                if (context.mounted) context.pop();
+              } else if (value == 'headers' && body != null) {
                 _showHeaders(context, body);
               } else if (value == 'structure' && body != null) {
                 _showStructure(context, body);
@@ -393,21 +402,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  Future<void> _markAsSpam(BuildContext context, Email header) async {
-    final mailboxRepo = ref.read(mailboxRepositoryProvider);
-    final junk = await mailboxRepo.findMailboxByRole(header.accountId, 'junk');
+  Future<void> _archive(BuildContext context, Email header) async {
+    final mailbox = await resolveMailboxByRole(
+      context,
+      ref.read(mailboxRepositoryProvider),
+      header.accountId,
+      header.mailboxPath,
+      'archive',
+      dialogTitle: 'No archive folder found',
+      createFolderName: 'Archive',
+    );
 
-    if (junk == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No Junk folder found')),
-      );
-      return;
-    }
+    if (mailbox == null || !context.mounted) return;
 
     await ref
         .read(emailRepositoryProvider)
-        .moveEmail(widget.emailId, junk.path);
+        .moveEmail(widget.emailId, mailbox.path);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -417,7 +427,40 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               type: UndoType.move,
               emailIds: [widget.emailId],
               sourceMailboxPath: header.mailboxPath,
-              destinationMailboxPath: junk.path,
+              destinationMailboxPath: mailbox.path,
+            ),
+          ),
+    );
+
+    if (context.mounted) context.pop();
+  }
+
+  Future<void> _markAsSpam(BuildContext context, Email header) async {
+    final mailbox = await resolveMailboxByRole(
+      context,
+      ref.read(mailboxRepositoryProvider),
+      header.accountId,
+      header.mailboxPath,
+      'junk',
+      dialogTitle: 'No spam folder found',
+      createFolderName: 'Junk',
+    );
+
+    if (mailbox == null || !context.mounted) return;
+
+    await ref
+        .read(emailRepositoryProvider)
+        .moveEmail(widget.emailId, mailbox.path);
+
+    unawaited(
+      ref.read(undoServiceProvider.notifier).pushAction(
+            UndoAction(
+              id: DateTime.now().toIso8601String(),
+              accountId: header.accountId,
+              type: UndoType.move,
+              emailIds: [widget.emailId],
+              sourceMailboxPath: header.mailboxPath,
+              destinationMailboxPath: mailbox.path,
             ),
           ),
     );
