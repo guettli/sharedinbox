@@ -46,7 +46,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Cron runs with a minimal PATH; ensure Nix profile binaries (tea, claude) and ~/go/bin (fgj) are found.
+# Cron runs with a minimal PATH; ensure Nix profile binaries (claude) and ~/go/bin (fgj) are found.
 os.environ["PATH"] = (
     f"{Path.home()}/.nix-profile/bin"
     f":{Path.home()}/go/bin"
@@ -97,27 +97,27 @@ def _fgj(*args: str) -> None:
         )
 
 
-def _tea_get(path: str) -> dict | list | None:
-    """Run a tea api GET and return parsed JSON. Only use for reads — tea PATCH/PUT
-    silently fails (exits 0) when unauthenticated, so writes must go via fgj."""
-    cmd = ["tea", "api", path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def _fgj_run_list(limit: int = 20) -> list[dict]:
+    """Return workflow runs via fgj actions run list."""
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "actions", "run", "list",
+         "--repo", REPO, "--json", "-L", str(limit)],
+        capture_output=True, text=True,
+    )
     if result.returncode != 0:
         raise RuntimeError(
-            f"tea api {path} failed:\n{result.stderr or result.stdout}"
+            f"fgj actions run list failed:\n{result.stderr or result.stdout}"
         )
     out = result.stdout.strip()
     if not out:
-        return None
+        return []
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"tea api {path} returned non-JSON (exit 0):\n{out[:500]}"
+            f"fgj actions run list returned non-JSON:\n{out[:500]}"
         ) from exc
-    if isinstance(data, dict) and "message" in data and "url" in data:
-        raise RuntimeError(f"tea api {path} returned error: {data['message']}")
-    return data
+    return data if isinstance(data, list) else []
 
 
 def _set_labels(issue: int, add: list[str], remove: list[str]) -> None:
@@ -186,9 +186,7 @@ def _latest_main_ci_run() -> dict | None:
     event=push and prettyref=main, so filtering by event alone is not enough.
     We also require workflow_id == "ci.yml".
     """
-    data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
-    runs = (data or {}).get("workflow_runs", [])
-    for run in runs:
+    for run in _fgj_run_list(limit=20):
         if (run.get("event") == "push"
                 and run.get("prettyref") == "main"
                 and run.get("workflow_id") == "ci.yml"):
@@ -199,20 +197,16 @@ def _latest_main_ci_run() -> dict | None:
 def _latest_ci_run_for_branch(branch: str) -> dict | None:
     """Return the latest CI run for a specific branch, or None.
 
-    Forgejo's workflow_runs API has no top-level head_branch field.
-    For push events the branch is in ``prettyref``; for pull_request
-    events it lives inside ``event_payload["pull_request"]["head"]["ref"]``.
+    For push events fgj reports the branch in ``prettyref``; for pull_request
+    events ``prettyref`` is ``#N``, so we resolve the PR number first.
     """
-    data = _tea_get(f"repos/{REPO}/actions/runs?limit=20")
-    runs = (data or {}).get("workflow_runs", [])
+    runs = _fgj_run_list(limit=20)
+    pr_data = _find_pr_for_branch(branch)
+    pr_ref = f"#{pr_data['number']}" if pr_data else None
     for run in runs:
         if run.get("event") == "pull_request":
-            try:
-                payload = json.loads(run.get("event_payload", "{}"))
-                if payload.get("pull_request", {}).get("head", {}).get("ref") == branch:
-                    return run
-            except (json.JSONDecodeError, AttributeError):
-                pass
+            if pr_ref and run.get("prettyref") == pr_ref:
+                return run
         elif run.get("event") == "push":
             if run.get("prettyref") == branch:
                 return run
@@ -259,24 +253,27 @@ def _open_issue_prs() -> list[dict]:
 
 def _latest_ci_run_for_pr(pr_number: int) -> dict | None:
     """Return the latest CI run triggered by a pull_request event for the given PR number."""
-    data = _tea_get(f"repos/{REPO}/actions/runs?event=pull_request&limit=50")
-    runs = (data or {}).get("workflow_runs", [])
-    for run in runs:
-        try:
-            payload = json.loads(run.get("event_payload", "{}"))
-            if payload.get("pull_request", {}).get("number") == pr_number:
-                return run
-        except (json.JSONDecodeError, AttributeError):
-            pass
+    pr_ref = f"#{pr_number}"
+    for run in _fgj_run_list(limit=50):
+        if run.get("event") == "pull_request" and run.get("prettyref") == pr_ref:
+            return run
     return None
 
 
 def _get_issue_labels(issue: int) -> list[str]:
     """Return label names for an issue."""
-    data = _tea_get(f"repos/{REPO}/issues/{issue}")
-    if not data:
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "issue", "view", str(issue),
+         "--repo", REPO, "--json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
         return []
-    return [lbl["name"] for lbl in data.get("labels", [])]
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    return [lbl["name"] for lbl in data.get("issue", {}).get("labels", [])]
 
 
 def _merge_pr(pr_number: int) -> None:
@@ -292,8 +289,18 @@ def _handle_pr_still_open_after_merge(pr_number: int, branch: str, issue_num: in
       "merged"         — PR closed after a retry
       "fallback"       — all options exhausted; caller should set State/Question
     """
-    pr_data = _tea_get(f"repos/{REPO}/pulls/{pr_number}")
-    mergeable = (pr_data or {}).get("mergeable")
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "pr", "view", str(pr_number),
+         "--repo", REPO, "--json"],
+        capture_output=True, text=True,
+    )
+    pr_data: dict = {}
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            pr_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            pass
+    mergeable = pr_data.get("mergeable")
 
     if mergeable is False:
         prompt = (
@@ -836,9 +843,8 @@ def _run_loop() -> int:
         # spawning another agent, check whether any CI run is currently in
         # progress (the branch run) and wait if so.
         if ci_run_id_at_start is not None and run["id"] == ci_run_id_at_start:
-            check = _tea_get(f"repos/{REPO}/actions/runs?limit=5")
             in_flight = [
-                r for r in (check or {}).get("workflow_runs", [])
+                r for r in _fgj_run_list(limit=5)
                 if r.get("status") == "running"
             ]
             if in_flight:

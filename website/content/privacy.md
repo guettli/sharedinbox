@@ -25,7 +25,8 @@ The app processes the following data **exclusively on your device**:
   device's secure storage and never transmitted to us.
 - **Email messages and attachments** — fetched directly from your email provider's IMAP server and
   displayed in the app. We never receive, store, or process your emails.
-- **App settings and configuration** — stored locally on your device.
+- **App settings and configuration** — stored locally on your device. The app will never upload
+  this data to sharedinbox.de or any third-party service.
 
 ### Network connections
 
