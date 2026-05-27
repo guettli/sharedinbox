@@ -251,6 +251,24 @@ def _open_issue_prs() -> list[dict]:
     return issue_prs
 
 
+def _open_renovate_prs() -> list[dict]:
+    """Return all open PRs from Renovate (renovate/* branches), oldest-first."""
+    result = subprocess.run(
+        ["fgj", "--hostname", "codeberg.org", "pr", "list",
+         "--repo", REPO, "--state", "open", "--json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    prs = json.loads(result.stdout)
+    renovate_prs = [
+        pr for pr in prs
+        if (pr.get("head", {}).get("ref") or "").startswith("renovate/")
+    ]
+    renovate_prs.sort(key=lambda p: p["number"])
+    return renovate_prs
+
+
 def _latest_ci_run_for_pr(pr_number: int) -> dict | None:
     """Return the latest CI run triggered by a pull_request event for the given PR number."""
     pr_ref = f"#{pr_number}"
@@ -827,6 +845,40 @@ def _run_loop() -> int:
             else:
                 print(f"Merged PR #{pr_number}.")
             return 0
+
+    # ── 2c. Catch-up: merge Renovate PRs with passing CI ─────────────────────
+    # The merge-renovate CI job only fires on pull_request events. If a Renovate
+    # PR had CI run before that job was added (or the automerge label was absent),
+    # it stays open forever. Detect and merge those here.
+    for pr in _open_renovate_prs():
+        pr_number = pr["number"]
+        pr_url = f"{REPO_URL}/pulls/{pr_number}"
+        pr_run = _latest_ci_run_for_pr(pr_number)
+
+        if pr_run and pr_run.get("status") == "running":
+            print(f"Catch-up (Renovate): CI {_ci_run_url(pr_run['id'])} on PR #{pr_number} still running. Waiting.")
+            return 0
+
+        if pr_run and pr_run.get("status") in ("failure", "error"):
+            print(f"Catch-up (Renovate): CI {_ci_run_url(pr_run['id'])} on PR #{pr_number} failed — skipping.")
+            continue
+
+        if pr_run and pr_run.get("status") == "success":
+            print(f"Catch-up (Renovate): CI passed on PR #{pr_number} ({pr_url}) — merging.")
+            try:
+                _merge_pr(pr_number)
+            except RuntimeError as e:
+                print(f"Catch-up (Renovate): merge of PR #{pr_number} failed: {e} — skipping.")
+                continue
+            branch = pr.get("head", {}).get("ref", "")
+            if _find_pr_for_branch(branch):
+                print(f"Catch-up (Renovate): PR #{pr_number} still open after merge — skipping.")
+                continue
+            print(f"Catch-up (Renovate): merged PR #{pr_number}.")
+            return 0
+
+        if pr_run is None:
+            print(f"Catch-up (Renovate): no CI run for PR #{pr_number} ({pr_url}) — skipping (needs manual review).")
 
     # ── 3. Global CI check (main branch only) ────────────────────────────────
     run = _latest_main_ci_run()
