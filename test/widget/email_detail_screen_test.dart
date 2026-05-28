@@ -271,7 +271,8 @@ void main() {
       expect(find.textContaining('carol@example.com'), findsAtLeastNWidgets(1));
     });
 
-    testWidgets('Mark as spam button is present in app bar', (tester) async {
+    testWidgets('Mark as spam is in popup menu, not a standalone button',
+        (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -282,12 +283,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // No standalone icon button for mark as spam.
       expect(
         find.byWidgetPredicate(
           (w) => w is Tooltip && w.message == 'Mark as spam',
         ),
-        findsOneWidget,
+        findsNothing,
       );
+
+      // It appears in the popup menu.
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mark as spam'), findsOneWidget);
     });
 
     testWidgets('Mark as spam shows dialog when no junk folder',
@@ -304,11 +312,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Mark as spam',
-        ),
-      );
+      // Open the popup menu first, then tap Mark as spam.
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mark as spam'));
       await tester.pumpAndSettle();
 
       expect(find.text('No spam folder found'), findsOneWidget);

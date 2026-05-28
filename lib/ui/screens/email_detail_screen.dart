@@ -78,15 +78,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   },
           ),
           IconButton(
-            icon: const Icon(Icons.forward),
-            tooltip: 'Forward',
-            onPressed: header == null
-                ? null
-                : () {
-                    unawaited(_forward(context, header, body));
-                  },
-          ),
-          IconButton(
             icon: const Icon(Icons.archive),
             tooltip: 'Archive',
             onPressed: header == null
@@ -122,25 +113,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.report_outlined),
-            tooltip: 'Mark as spam',
-            onPressed: header == null
-                ? null
-                : () {
-                    unawaited(_markAsSpam(context, header));
-                  },
-          ),
-          IconButton(
-            icon: const Icon(Icons.drive_file_move_outline),
-            tooltip: 'Move to folder',
-            onPressed: header == null ? null : () => _moveTo(context, header),
-          ),
-          IconButton(
-            icon: const Icon(Icons.access_time),
-            tooltip: 'Snooze',
-            onPressed: header == null ? null : () => _snooze(context, header),
-          ),
-          IconButton(
             icon: Icon(
               _isFlagged ? Icons.star : Icons.star_border,
               color: _isFlagged ? Colors.amber : null,
@@ -155,9 +127,26 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
               const PopupMenuItem(
+                value: 'forward',
+                child: Text('Forward'),
+              ),
+              const PopupMenuItem(
+                value: 'move',
+                child: Text('Move to folder'),
+              ),
+              const PopupMenuItem(
+                value: 'snooze',
+                child: Text('Snooze'),
+              ),
+              const PopupMenuItem(
+                value: 'spam',
+                child: Text('Mark as spam'),
+              ),
+              const PopupMenuItem(
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
               ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'headers',
                 child: Text('Show Mail Headers'),
@@ -172,7 +161,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ),
             ],
             onSelected: (value) async {
-              if (value == 'mark_unread') {
+              if (value == 'forward' && header != null) {
+                unawaited(_forward(context, header, body));
+              } else if (value == 'move' && header != null) {
+                unawaited(_moveTo(context, header));
+              } else if (value == 'snooze' && header != null) {
+                unawaited(_snooze(context, header));
+              } else if (value == 'spam' && header != null) {
+                unawaited(_markAsSpam(context, header));
+              } else if (value == 'mark_unread') {
                 final nextEmailId = await _getNextEmailIdIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
                 if (context.mounted) _navigateTo(context, header, nextEmailId);
