@@ -5,7 +5,7 @@
   ],
   "labels": ["dependencies"],
   "github-actions": {
-    "fileMatch": ["^\\.forgejo/workflows/[^/]+\\.ya?ml$"]
+    "enabled": false
   },
   "packageRules": [
     {
