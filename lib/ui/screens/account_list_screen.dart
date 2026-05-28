@@ -120,15 +120,76 @@ class _AccountTile extends ConsumerWidget {
     final health = ref.watch(syncHealthProvider(account.id));
     final typeLabel = account.type == AccountType.jmap ? 'JMAP' : 'IMAP';
 
-    return ListTile(
-      leading: const Icon(Icons.account_circle),
-      title: Text(account.displayName),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('${account.email}\n$typeLabel'),
-          const SizedBox(height: 4),
-          health.when(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          leading: const Icon(Icons.account_circle),
+          title: Text(account.displayName),
+          subtitle: Text('${account.email}\n$typeLabel'),
+          isThreeLine: true,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              status.when(
+                loading: () => const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                data: (_) =>
+                    const Icon(Icons.check_circle, color: Colors.green),
+                error: (e, _) => Tooltip(
+                  message: e.toString(),
+                  child: const Icon(Icons.error_outline, color: Colors.red),
+                ),
+              ),
+              PopupMenuButton<_AccountAction>(
+                onSelected: (action) => _onAction(context, action),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: _AccountAction.syncLog,
+                    child: Text('Sync log'),
+                  ),
+                  const PopupMenuItem(
+                    value: _AccountAction.verifySync,
+                    child: Text('Verify sync health'),
+                  ),
+                  const PopupMenuItem(
+                    value: _AccountAction.forceSync,
+                    child: Text('Force full sync'),
+                  ),
+                  const PopupMenuItem(
+                    value: _AccountAction.edit,
+                    child: Text('Edit'),
+                  ),
+                  if (_sieveSupported(account))
+                    const PopupMenuItem(
+                      value: _AccountAction.emailFiltersRemote,
+                      child: Text('Server email filters'),
+                    ),
+                  const PopupMenuItem(
+                    value: _AccountAction.emailFiltersLocal,
+                    child: Text('Local email filters'),
+                  ),
+                  const PopupMenuItem(
+                    value: _AccountAction.send,
+                    child: Text('Send accounts'),
+                  ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: _AccountAction.delete,
+                    child: Text('Delete'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          onTap: () => context.push('/accounts/${account.id}/mailboxes'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(72, 0, 16, 8),
+          child: health.when(
             data: (h) {
               if (h == null) return const Text('Sync health: Not verified yet');
               final date = h.lastVerifiedAt.toLocal().toString().split('.')[0];
@@ -141,7 +202,7 @@ class _AccountTile extends ConsumerWidget {
                     color: h.isHealthy ? Colors.green : Colors.orange,
                   ),
                   const SizedBox(width: 4),
-                  Flexible(
+                  Expanded(
                     child: Text(
                       h.isHealthy
                           ? 'Healthy'
@@ -155,66 +216,8 @@ class _AccountTile extends ConsumerWidget {
             loading: () => const Text('Sync health: checking...'),
             error: (e, _) => Text('Sync health error: $e'),
           ),
-        ],
-      ),
-      isThreeLine: true,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          status.when(
-            loading: () => const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            data: (_) => const Icon(Icons.check_circle, color: Colors.green),
-            error: (e, _) => Tooltip(
-              message: e.toString(),
-              child: const Icon(Icons.error_outline, color: Colors.red),
-            ),
-          ),
-          PopupMenuButton<_AccountAction>(
-            onSelected: (action) => _onAction(context, action),
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: _AccountAction.syncLog,
-                child: Text('Sync log'),
-              ),
-              const PopupMenuItem(
-                value: _AccountAction.verifySync,
-                child: Text('Verify sync health'),
-              ),
-              const PopupMenuItem(
-                value: _AccountAction.forceSync,
-                child: Text('Force full sync'),
-              ),
-              const PopupMenuItem(
-                value: _AccountAction.edit,
-                child: Text('Edit'),
-              ),
-              if (_sieveSupported(account))
-                const PopupMenuItem(
-                  value: _AccountAction.emailFiltersRemote,
-                  child: Text('Server email filters'),
-                ),
-              const PopupMenuItem(
-                value: _AccountAction.emailFiltersLocal,
-                child: Text('Local email filters'),
-              ),
-              const PopupMenuItem(
-                value: _AccountAction.send,
-                child: Text('Send accounts'),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: _AccountAction.delete,
-                child: Text('Delete'),
-              ),
-            ],
-          ),
-        ],
-      ),
-      onTap: () => context.push('/accounts/${account.id}/mailboxes'),
+        ),
+      ],
     );
   }
 

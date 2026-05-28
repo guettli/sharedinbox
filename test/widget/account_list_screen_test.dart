@@ -252,5 +252,29 @@ void main() {
         expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'sync health row is positioned below the account name row',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts',
+            overrides: baseOverrides(
+              accounts: [kTestAccount],
+              syncHealth: SyncHealthRow(
+                accountId: kTestAccount.id,
+                lastVerifiedAt: DateTime(2024, 6),
+                isHealthy: true,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final namePos = tester.getTopLeft(find.text('Alice')).dy;
+        final healthPos = tester.getTopLeft(find.textContaining('Healthy')).dy;
+        expect(healthPos, greaterThan(namePos));
+      },
+    );
   });
 }

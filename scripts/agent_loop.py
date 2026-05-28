@@ -912,9 +912,11 @@ def _run_loop() -> int:
         if not m:
             continue
         issue_num = int(m.group(1))
-        labels = _get_issue_labels(issue_num)
-        if not labels:
-            # Issue is likely already closed — skip.
+        try:
+            issue_data = _tea_get(f"/repos/{REPO}/issues/{issue_num}")
+        except RuntimeError:
+            continue
+        if issue_data.get("state") != "open":
             continue
         pr_number = pr["number"]
         print(f"Catch-up (merged PR): PR #{pr_number} for issue #{issue_num} was merged — closing.")
