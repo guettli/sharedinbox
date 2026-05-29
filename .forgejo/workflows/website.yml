@@ -1,6 +1,8 @@
 name: Update Website
 
 on:
+  schedule:
+    - cron: '0 * * * *'   # every hour on the hour
   push:
     branches: [main]
     paths:

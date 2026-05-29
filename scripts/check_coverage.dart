@@ -78,6 +78,7 @@ const _excluded = {
   'lib/data/repositories/user_preferences_repository_impl.dart',
   'lib/ui/screens/user_preferences_screen.dart',
   'lib/core/services/update_service.dart',
+  'lib/ui/screens/user_preferences_screen.dart',
 };
 
 void main() {
