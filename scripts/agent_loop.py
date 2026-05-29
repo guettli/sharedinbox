@@ -79,7 +79,7 @@ LABEL_TO_PLAN = "State/ToPlan"
 LABEL_PLANNED = "State/Planned"
 
 # Only pick up issues filed by these accounts.
-ALLOWED_ISSUE_AUTHORS = {"guettli", "guettlibot", "guettlibot2"}
+ALLOWED_ISSUE_AUTHORS = {"guettli", "guettlibot", "guettlibot2", "forgejo-actions"}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
