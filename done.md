@@ -4,6 +4,18 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Tasks (2026-05-29)
+
+- **Merge PR #307 — user preferences and configurable navigation (Issue #315)**: Confirmed that
+  all features from PR #307 (issue #299) were already merged into main via separate PRs:
+  - Configurable menu bar position (bottom/top) for mailbox view — merged via #298/#303
+  - Configurable back button position for single mail view — merged via #299/#307 features in #300
+  - Configurable "after mail action" (next message / return to mailbox) — merged via #300/#308
+  - Archive button with `resolveMailboxByRole` helper — merged via #287/#291, #286/#290
+  - User preferences DB schema (v34–v36: `user_preferences` table) — in main
+  - PR #307 and issue #299 closed.
+  - Issue #315 closed.
+
 ## Tasks (2026-05-26)
 
 - **Renovate Bot (Issue #257)**: Renovate Bot runs daily via Forgejo Actions to keep
