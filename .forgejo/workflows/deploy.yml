@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Detect Android and Linux changes
         id: diff
@@ -48,7 +48,7 @@ jobs:
                   data = json.loads(r.read())
               runs = [
                   r for r in data.get("workflow_runs", [])
-                  if r.get("workflow_id") == "deploy.yml" and r.get("status") == "success"
+                  if r.get("status") == "success"
               ]
               print(runs[0].get("commit_sha") or "")
           except Exception as e:
@@ -64,10 +64,17 @@ jobs:
             exit 0
           fi
 
-          # Diff the HEAD commit against its parent; fall back to listing HEAD's files
-          # when the parent is unavailable (initial commit, shallow clone).
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null \
-            || git show --name-only --format= HEAD)
+          # Diff from the last successfully deployed commit to catch all changes since
+          # that deploy, not just the most recent commit. Falls back to HEAD~1 when
+          # LAST_DEPLOYED_SHA is unknown or not in local history.
+          if [ -n "$LAST_DEPLOYED_SHA" ] && git cat-file -e "$LAST_DEPLOYED_SHA" 2>/dev/null; then
+            echo "Diffing from last deployed SHA $LAST_DEPLOYED_SHA"
+            CHANGED=$(git diff --name-only "$LAST_DEPLOYED_SHA" HEAD 2>/dev/null \
+              || git show --name-only --format= HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null \
+              || git show --name-only --format= HEAD)
+          fi
 
           echo "Changed files:"
           echo "$CHANGED"
