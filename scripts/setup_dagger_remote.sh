@@ -24,6 +24,12 @@ for attempt in $(seq 1 $MAX_PROBE_ATTEMPTS); do
     fi
     if [ "$attempt" -eq "$MAX_PROBE_ATTEMPTS" ]; then
         echo "Warning: No Dagger server responded on $host:$port after $MAX_PROBE_ATTEMPTS attempts"
+        if ! docker info >/dev/null 2>&1; then
+            echo "Error: Remote Dagger engine is unavailable AND local Docker daemon is not running."
+            echo "Cannot proceed. Ensure either the remote server at $host:$port is accessible"
+            echo "or that Docker is running locally (check: sudo systemctl start docker)."
+            exit 1
+        fi
         echo "Remote engine unavailable — CI will use the local Dagger engine."
         exit 0
     fi
