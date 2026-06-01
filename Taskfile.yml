@@ -298,7 +298,7 @@ tasks:
               echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
             elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$DAGGER_OUT"; then
               echo "$(_ts) dagger: disk space error on attempt $attempt/3, pruning Dagger cache..." >&2
-              dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' 2>/dev/null || true
+              timeout 120 dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' 2>/dev/null || true
               echo "$(_ts) dagger: waiting 90s for freed space to settle..." >&2
               sleep 90
             else
@@ -319,7 +319,16 @@ tasks:
           rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
         }
         trap cleanup EXIT
-        until [ -s "$PORTFILE" ]; do sleep 0.05; done
+        until [ -s "$PORTFILE" ]; do
+          sleep 0.05
+          if ! kill -0 "$RECV_PID" 2>/dev/null; then
+            echo "$(_ts) otel-receiver.py died before writing port file; falling back to plain run" >&2
+            retry_dagger dagger call --progress=plain -q -m ci --source=. check
+            RC=$?
+            rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
+            exit $RC
+          fi
+        done
         PORT=$(cat "$PORTFILE")
         retry_dagger env \
           OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \

@@ -74,7 +74,7 @@ jobs:
 
           # Try host Docker socket (DooD) if runner mounts it
           if [ -S /var/run/docker.sock ]; then
-            if DOCKER_HOST=unix:///var/run/docker.sock docker info >/dev/null 2>&1; then
+            if DOCKER_HOST=unix:///var/run/docker.sock timeout 30 docker info >/dev/null 2>&1; then
               echo "Docker available via host socket."
               echo "DOCKER_HOST=unix:///var/run/docker.sock" >> "$GITHUB_ENV"
               exit 0
@@ -92,7 +92,7 @@ jobs:
         # prune(maxUsedSpace) also reclaims named cache volumes (gradle-cache, go-build-cache, etc.)
         # when total cache exceeds the limit; without args only unreferenced entries are removed.
         run: |
-          dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
+          timeout 120 dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
 
       - name: Run Full Check Suite
         env:
@@ -104,7 +104,7 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
+          timeout 120 dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
 
       - name: Cleanup TLS credentials
         if: always()
