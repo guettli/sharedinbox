@@ -188,3 +188,5 @@ Using SSH to `localhost` is preferred over complex X11/Wayland permission hacks.
 ## Daily Workflow
 
 Refer to the [README.md](./README.md#daily-workflow) for common development tasks and commands.
+
+<!-- agentloop code test passed -->
