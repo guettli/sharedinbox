@@ -156,6 +156,7 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
 
+    if (threadEmails.isEmpty) return;
     final latest = threadEmails.last;
 
     // Collect unique participants across the whole thread.
