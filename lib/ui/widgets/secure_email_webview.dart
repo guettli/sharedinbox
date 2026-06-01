@@ -111,12 +111,16 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
       );
 
   Future<void> _measureHeight(String _) async {
-    final result = await _controller!.runJavaScriptReturningResult(
-      'document.documentElement.scrollHeight',
-    );
-    final h = double.tryParse(result.toString());
-    if (h != null && h > 0 && mounted) {
-      setState(() => _height = h);
+    try {
+      final result = await _controller!.runJavaScriptReturningResult(
+        'document.documentElement.scrollHeight',
+      );
+      final h = double.tryParse(result.toString());
+      if (h != null && h > 0 && mounted) {
+        setState(() => _height = h);
+      }
+    } catch (_) {
+      // WebView not ready yet; height stays at default
     }
   }
 
