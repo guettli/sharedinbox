@@ -238,7 +238,12 @@ class EmailRepositoryImpl implements EmailRepository {
     try {
       await client.selectMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
-      final msg = fetch.messages.first;
+      final msg = fetch.messages.firstOrNull;
+      if (msg == null) {
+        throw StateError(
+          'IMAP server returned no message for UID ${emailRow.uid}.',
+        );
+      }
       final textBody = msg.decodeTextPlainPart();
       final rawHtml = msg.decodeTextHtmlPart();
       final htmlBody =
@@ -2813,7 +2818,12 @@ class EmailRepositoryImpl implements EmailRepository {
         emailRow.uid,
         'BODY.PEEK[]',
       );
-      final msg = fetch.messages.first;
+      final msg = fetch.messages.firstOrNull;
+      if (msg == null) {
+        throw StateError(
+          'IMAP server returned no message for UID ${emailRow.uid}.',
+        );
+      }
       final part = msg.getPart(attachment.fetchPartId) ?? msg;
       final bytes = part.decodeContentBinary();
       if (bytes == null) {
@@ -2879,7 +2889,13 @@ class EmailRepositoryImpl implements EmailRepository {
         emailRow.uid,
         'BODY.PEEK[]',
       );
-      return fetch.messages.first.renderMessage();
+      final msg = fetch.messages.firstOrNull;
+      if (msg == null) {
+        throw StateError(
+          'IMAP server returned no message for UID ${emailRow.uid}.',
+        );
+      }
+      return msg.renderMessage();
     } finally {
       await client.logout();
     }

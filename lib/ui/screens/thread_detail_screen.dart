@@ -163,6 +163,17 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
           FutureBuilder<EmailBody>(
             future: _bodyFuture,
             builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'Failed to load email: ${snapshot.error}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                );
+              }
               if (!snapshot.hasData) {
                 return const Center(
                   child: Padding(
