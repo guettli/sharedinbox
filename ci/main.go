@@ -181,7 +181,7 @@ func New(
 // Used as the base for pubGetLayer so flutter pub get is execution-cached between runs.
 func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/cirruslabs/flutter:3.41.6").
+		From("ghcr.io/cirruslabs/flutter:3.44.0").
 		WithExec([]string{"apt-get", "-qq", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).

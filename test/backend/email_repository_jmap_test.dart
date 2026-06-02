@@ -107,8 +107,7 @@ void main() {
     AccountRepositoryImpl accounts,
     EmailRepositoryImpl emails,
     MailboxRepositoryImpl mailboxes,
-  })
-  makeRepo() {
+  }) makeRepo() {
     final db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
     final emails = EmailRepositoryImpl(
@@ -128,13 +127,12 @@ void main() {
   ) async {
     await accounts.addAccount(account, userPass);
     await mailboxes.syncMailboxes('test-jmap');
-    final row =
-        await (db.select(db.mailboxes)
-              ..where(
-                (t) => t.accountId.equals('test-jmap') & t.role.equals('inbox'),
-              )
-              ..limit(1))
-            .getSingleOrNull();
+    final row = await (db.select(db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals('test-jmap') & t.role.equals('inbox'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
     if (row == null) throw StateError('INBOX not found after syncMailboxes');
     return row.path;
   }
@@ -272,21 +270,18 @@ void main() {
       );
 
       // A sent copy should appear in the Sent mailbox.
-      final sentRow =
-          await (r.db.select(r.db.mailboxes)
-                ..where(
-                  (t) =>
-                      t.accountId.equals('test-jmap') & t.role.equals('sent'),
-                )
-                ..limit(1))
-              .getSingleOrNull();
+      final sentRow = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals('test-jmap') & t.role.equals('sent'),
+            )
+            ..limit(1))
+          .getSingleOrNull();
       final sentId = sentRow?.path;
 
       if (sentId != null) {
         await r.emails.syncEmails('test-jmap', sentId);
-        final sentEmails = await r.emails
-            .observeEmails('test-jmap', sentId)
-            .first;
+        final sentEmails =
+            await r.emails.observeEmails('test-jmap', sentId).first;
         expect(sentEmails.any((e) => e.subject == subject), isTrue);
       } else {
         // If no Sent mailbox exists, just verify sendEmail didn't throw.
@@ -353,13 +348,12 @@ void main() {
     await r.emails.syncEmails('test-jmap', inboxId);
 
     // Find a destination mailbox (Trash).
-    final trashRow =
-        await (r.db.select(r.db.mailboxes)
-              ..where(
-                (t) => t.accountId.equals('test-jmap') & t.role.equals('trash'),
-              )
-              ..limit(1))
-            .getSingleOrNull();
+    final trashRow = await (r.db.select(r.db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals('test-jmap') & t.role.equals('trash'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
     if (trashRow == null) {
       markTestSkipped('No trash mailbox found on this Stalwart instance');
       return;

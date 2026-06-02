@@ -88,11 +88,10 @@ void main() {
       await tester.tap(find.text('Top').first);
       await tester.pumpAndSettle();
 
-      final repo =
-          ProviderScope.containerOf(
-                tester.element(find.byType(UserPreferencesScreen)),
-              ).read(userPreferencesRepositoryProvider)
-              as FakeUserPreferencesRepository;
+      final repo = ProviderScope.containerOf(
+        tester.element(find.byType(UserPreferencesScreen)),
+      ).read(userPreferencesRepositoryProvider)
+          as FakeUserPreferencesRepository;
 
       expect(repo.menuPosition, MenuPosition.top);
     });
@@ -111,11 +110,10 @@ void main() {
         await tester.tap(find.text('Top').last);
         await tester.pumpAndSettle();
 
-        final repo =
-            ProviderScope.containerOf(
-                  tester.element(find.byType(UserPreferencesScreen)),
-                ).read(userPreferencesRepositoryProvider)
-                as FakeUserPreferencesRepository;
+        final repo = ProviderScope.containerOf(
+          tester.element(find.byType(UserPreferencesScreen)),
+        ).read(userPreferencesRepositoryProvider)
+            as FakeUserPreferencesRepository;
 
         expect(repo.mailViewButtonPosition, MenuPosition.top);
       },
@@ -175,11 +173,10 @@ void main() {
       await tester.tap(find.text('Return to mailbox'));
       await tester.pumpAndSettle();
 
-      final repo =
-          ProviderScope.containerOf(
-                tester.element(find.byType(UserPreferencesScreen)),
-              ).read(userPreferencesRepositoryProvider)
-              as FakeUserPreferencesRepository;
+      final repo = ProviderScope.containerOf(
+        tester.element(find.byType(UserPreferencesScreen)),
+      ).read(userPreferencesRepositoryProvider)
+          as FakeUserPreferencesRepository;
 
       expect(repo.afterMailViewAction, AfterMailViewAction.showMailbox);
     });

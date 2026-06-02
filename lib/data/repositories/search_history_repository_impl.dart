@@ -10,11 +10,10 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
 
   @override
   Future<List<String>> getRecentSearches() async {
-    final rows =
-        await (_db.select(_db.searchHistoryEntries)
-              ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
-              ..limit(_maxEntries))
-            .get();
+    final rows = await (_db.select(_db.searchHistoryEntries)
+          ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
+          ..limit(_maxEntries))
+        .get();
     return rows.map((r) => r.query).toList();
   }
 
@@ -27,11 +26,10 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
       // Remove existing entry for same query (deduplication).
       await (_db.delete(
         _db.searchHistoryEntries,
-      )..where((t) => t.query.equals(trimmed))).go();
+      )..where((t) => t.query.equals(trimmed)))
+          .go();
 
-      await _db
-          .into(_db.searchHistoryEntries)
-          .insert(
+      await _db.into(_db.searchHistoryEntries).insert(
             SearchHistoryEntriesCompanion.insert(
               query: trimmed,
               searchedAt: DateTime.now(),
@@ -39,17 +37,17 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
           );
 
       // Prune to the most recent _maxEntries.
-      final keepIds =
-          await (_db.select(_db.searchHistoryEntries)
-                ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
-                ..limit(_maxEntries))
-              .map((r) => r.id)
-              .get();
+      final keepIds = await (_db.select(_db.searchHistoryEntries)
+            ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
+            ..limit(_maxEntries))
+          .map((r) => r.id)
+          .get();
 
       if (keepIds.isNotEmpty) {
         await (_db.delete(
           _db.searchHistoryEntries,
-        )..where((t) => t.id.isNotIn(keepIds))).go();
+        )..where((t) => t.id.isNotIn(keepIds)))
+            .go();
       }
     });
   }

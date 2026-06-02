@@ -186,9 +186,7 @@ class _EmailRepositoryImplContract extends EmailRepositoryContract {
     bool isFlagged = false,
     DateTime? receivedAt,
   }) async {
-    await _db
-        .into(_db.emails)
-        .insert(
+    await _db.into(_db.emails).insert(
           EmailsCompanion.insert(
             id: id,
             accountId: _account.id,

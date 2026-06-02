@@ -10,7 +10,7 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 
 class DraftRepositoryImpl implements DraftRepository {
   DraftRepositoryImpl(this._db, this._accounts, {ImapConnectFn? imapConnect})
-    : _imapConnect = imapConnect;
+      : _imapConnect = imapConnect;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
@@ -51,9 +51,7 @@ class DraftRepositoryImpl implements DraftRepository {
       );
     }
 
-    final newId = await _db
-        .into(_db.drafts)
-        .insert(
+    final newId = await _db.into(_db.drafts).insert(
           DraftsCompanion.insert(
             accountId: Value(accountId),
             replyToEmailId: Value(replyToEmailId),
@@ -94,7 +92,8 @@ class DraftRepositoryImpl implements DraftRepository {
   Future<SavedDraft?> getDraft(int id) async {
     final row = await (_db.select(
       _db.drafts,
-    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    )..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
 
@@ -111,9 +110,8 @@ class DraftRepositoryImpl implements DraftRepository {
     final account = await _accounts.getAccount(accountId);
     if (account == null || account.type != AccountType.imap) return;
 
-    final username = account.username.isNotEmpty
-        ? account.username
-        : account.email;
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
     imap.ImapClient? client;
     try {
       client = await connect(account, username, password);
@@ -134,11 +132,11 @@ class DraftRepositoryImpl implements DraftRepository {
     final messageCount = selectResult.messagesExists;
 
     // Upload local drafts that have no server counterpart.
-    final localDrafts =
-        await (_db.select(_db.drafts)..where(
-              (t) => t.accountId.equals(accountId) & t.imapServerId.isNull(),
-            ))
-            .get();
+    final localDrafts = await (_db.select(_db.drafts)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.imapServerId.isNull(),
+          ))
+        .get();
 
     for (final row in localDrafts) {
       final builder = imap.MessageBuilder()
@@ -152,8 +150,8 @@ class DraftRepositoryImpl implements DraftRepository {
         targetMailboxPath: 'Drafts',
         flags: [r'\Draft'],
       );
-      final uidList = appendResult.responseCodeAppendUid?.targetSequence
-          .toList();
+      final uidList =
+          appendResult.responseCodeAppendUid?.targetSequence.toList();
       final uid = (uidList != null && uidList.isNotEmpty)
           ? uidList.first.toString()
           : null;
@@ -166,12 +164,11 @@ class DraftRepositoryImpl implements DraftRepository {
 
     // Download server drafts not tracked locally.
     if (messageCount > 0) {
-      final knownServerIds =
-          await (_db.select(_db.drafts)..where(
-                (t) =>
-                    t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
-              ))
-              .get();
+      final knownServerIds = await (_db.select(_db.drafts)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
+            ))
+          .get();
       final knownIds = knownServerIds.map((r) => r.imapServerId!).toSet();
 
       final seq = imap.MessageSequence.fromAll();
@@ -182,9 +179,7 @@ class DraftRepositoryImpl implements DraftRepository {
         if (msg.flags?.contains(r'\Deleted') ?? false) continue;
         final env = msg.envelope;
         final now = DateTime.now();
-        await _db
-            .into(_db.drafts)
-            .insert(
+        await _db.into(_db.drafts).insert(
               DraftsCompanion.insert(
                 accountId: Value(accountId),
                 toText: Value(_addressListToText(env?.to)),
@@ -210,14 +205,14 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   SavedDraft _toModel(Draft row) => SavedDraft(
-    id: row.id,
-    accountId: row.accountId,
-    replyToEmailId: row.replyToEmailId,
-    toText: row.toText,
-    ccText: row.ccText,
-    subjectText: row.subjectText,
-    bodyText: row.bodyText,
-    updatedAt: row.updatedAt,
-    imapServerId: row.imapServerId,
-  );
+        id: row.id,
+        accountId: row.accountId,
+        replyToEmailId: row.replyToEmailId,
+        toText: row.toText,
+        ccText: row.ccText,
+        subjectText: row.subjectText,
+        bodyText: row.bodyText,
+        updatedAt: row.updatedAt,
+        imapServerId: row.imapServerId,
+      );
 }

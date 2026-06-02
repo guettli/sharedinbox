@@ -55,8 +55,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final header = detail.value?.$1;
     final body = detail.value?.$2;
 
-    final isMobile =
-        defaultTargetPlatform == TargetPlatform.android ||
+    final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
     return Scaffold(
@@ -94,9 +93,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
               if (header != null) {
                 unawaited(
-                  ref
-                      .read(undoServiceProvider.notifier)
-                      .pushAction(
+                  ref.read(undoServiceProvider.notifier).pushAction(
                         UndoAction(
                           id: DateTime.now().toIso8601String(),
                           accountId: header.accountId,
@@ -324,9 +321,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<String> _quotedBody(Email header, EmailBody? body) async {
     final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
-    final from = header.from.isNotEmpty
-        ? header.from.first.toString()
-        : '(unknown)';
+    final from =
+        header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
     final rawText = body?.textBody;
     final text = (rawText != null && rawText.isNotEmpty)
         ? rawText
@@ -340,9 +336,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     Email header,
     EmailBody? body,
   ) async {
-    final account = await ref
-        .read(accountRepositoryProvider)
-        .getAccount(header.accountId);
+    final account =
+        await ref.read(accountRepositoryProvider).getAccount(header.accountId);
     final ownEmail = account?.email.toLowerCase() ?? '';
 
     final seen = <String>{};
@@ -445,9 +440,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         .moveEmail(widget.emailId, mailbox.path);
 
     unawaited(
-      ref
-          .read(undoServiceProvider.notifier)
-          .pushAction(
+      ref.read(undoServiceProvider.notifier).pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -483,9 +476,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         .moveEmail(widget.emailId, mailbox.path);
 
     unawaited(
-      ref
-          .read(undoServiceProvider.notifier)
-          .pushAction(
+      ref.read(undoServiceProvider.notifier).pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -522,14 +513,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final nextEmailId = await _getNextEmailIdIfNeeded(header);
 
     final mailboxRepo = ref.read(mailboxRepositoryProvider);
-    final mailboxes = await mailboxRepo
-        .observeMailboxes(header.accountId)
-        .first;
+    final mailboxes =
+        await mailboxRepo.observeMailboxes(header.accountId).first;
 
     // Remove the current mailbox from the list.
-    final destinations = mailboxes
-        .where((m) => m.path != header.mailboxPath)
-        .toList();
+    final destinations =
+        mailboxes.where((m) => m.path != header.mailboxPath).toList();
 
     if (!context.mounted) return;
 
@@ -559,9 +548,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
 
     unawaited(
-      ref
-          .read(undoServiceProvider.notifier)
-          .pushAction(
+      ref.read(undoServiceProvider.notifier).pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -641,8 +628,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 Text(
                   fmtSize(raw.length),
                   style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(ctx).colorScheme.outline,
-                  ),
+                        color: Theme.of(ctx).colorScheme.outline,
+                      ),
                 ),
                 const SizedBox(height: 4),
                 Flexible(
@@ -822,8 +809,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                         child: Text(
                           row.label,
                           style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                            fontFamily: 'monospace',
-                          ),
+                                fontFamily: 'monospace',
+                              ),
                         ),
                       ),
                     ],

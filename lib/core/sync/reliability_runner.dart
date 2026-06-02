@@ -76,14 +76,11 @@ class ReliabilityRunner {
         }
       }
 
-      final isHealthy =
-          totalMissingLocally == 0 &&
+      final isHealthy = totalMissingLocally == 0 &&
           totalMissingOnServer == 0 &&
           totalFlagMismatches == 0;
 
-      await _db
-          .into(_db.syncHealth)
-          .insertOnConflictUpdate(
+      await _db.into(_db.syncHealth).insertOnConflictUpdate(
             SyncHealthCompanion.insert(
               accountId: accountId,
               lastVerifiedAt: DateTime.now(),

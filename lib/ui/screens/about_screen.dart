@@ -153,12 +153,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       stream: _accountsStream,
       builder: (context, accountSnapshot) {
         final accounts = accountSnapshot.data ?? [];
-        final imapCount = accounts
-            .where((a) => a.type == AccountType.imap)
-            .length;
-        final jmapCount = accounts
-            .where((a) => a.type == AccountType.jmap)
-            .length;
+        final imapCount =
+            accounts.where((a) => a.type == AccountType.imap).length;
+        final jmapCount =
+            accounts.where((a) => a.type == AccountType.jmap).length;
 
         return Scaffold(
           appBar: AppBar(title: const Text('About')),

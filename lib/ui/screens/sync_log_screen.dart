@@ -40,8 +40,8 @@ String _buildSyncEntryMarkdown(SyncLogEntry entry) {
   final statusLabel = entry.isOk
       ? 'OK'
       : entry.isPermanent
-      ? 'Error (permanent)'
-      : 'Error';
+          ? 'Error (permanent)'
+          : 'Error';
   buf.writeln('| Status | $statusLabel |');
   buf.writeln('| Emails fetched | ${entry.emailsFetched} |');
   buf.writeln('| Emails up-to-date | ${entry.emailsSkipped} |');
@@ -98,16 +98,16 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
         .read(syncLogRepositoryProvider)
         .observeSyncLogs(widget.accountId)
         .listen((entries) {
-          setState(() {
-            if (_syncing &&
-                _presynCount != null &&
-                entries.length > _presynCount!) {
-              _syncing = false;
-              _presynCount = null;
-            }
-            _entries = entries;
-          });
-        });
+      setState(() {
+        if (_syncing &&
+            _presynCount != null &&
+            entries.length > _presynCount!) {
+          _syncing = false;
+          _presynCount = null;
+        }
+        _entries = entries;
+      });
+    });
   }
 
   @override
@@ -125,10 +125,8 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
   }
 
   Future<void> _copyEntry(SyncLogEntry entry, BuildContext context) async {
-    final accounts = await ref
-        .read(accountRepositoryProvider)
-        .observeAccounts()
-        .first;
+    final accounts =
+        await ref.read(accountRepositoryProvider).observeAccounts().first;
     final imapCount = accounts.where((a) => a.type == AccountType.imap).length;
     final jmapCount = accounts.where((a) => a.type == AccountType.jmap).length;
 
@@ -206,17 +204,16 @@ class _SyncLogTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final durationLabel = _fmtDuration(entry.duration);
-    final proto = entry.protocol.isEmpty
-        ? ''
-        : ' · ${entry.protocol.toUpperCase()}';
+    final proto =
+        entry.protocol.isEmpty ? '' : ' · ${entry.protocol.toUpperCase()}';
     final theme = Theme.of(context);
     final errorColor = theme.colorScheme.error;
 
     final subtitleText = entry.isOk
         ? '${entry.emailsFetched} new · ${entry.emailsSkipped} up-to-date · took $durationLabel'
         : entry.isPermanent
-        ? 'Error (permanent) · took $durationLabel'
-        : 'Error · took $durationLabel';
+            ? 'Error (permanent) · took $durationLabel'
+            : 'Error · took $durationLabel';
 
     return ExpansionTile(
       leading: Icon(
@@ -341,18 +338,18 @@ class _SyncLogTile extends StatelessWidget {
   }
 
   Widget _row(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 1),
-    child: Row(
-      children: [
-        SizedBox(
-          width: 180,
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 180,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            Expanded(child: Text(value, style: const TextStyle(fontSize: 12))),
+          ],
         ),
-        Expanded(child: Text(value, style: const TextStyle(fontSize: 12))),
-      ],
-    ),
-  );
+      );
 }

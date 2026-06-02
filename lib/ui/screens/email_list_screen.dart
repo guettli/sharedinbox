@@ -92,9 +92,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   void _clearSelection() => setState(() {
-    _selectedThreadIds.clear();
-    _selectedSearchIds.clear();
-  });
+        _selectedThreadIds.clear();
+        _selectedSearchIds.clear();
+      });
 
   void _selectAll() {
     setState(() {
@@ -182,9 +182,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     AsyncValue<Account?> accountAsync, {
     required bool menuAtBottom,
   }) {
-    final selectionCount = _searching
-        ? _selectedSearchIds.length
-        : _selectedThreadIds.length;
+    final selectionCount =
+        _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
 
     return AppBar(
       automaticallyImplyLeading: !menuAtBottom,
@@ -278,8 +277,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       tooltip: isSyncing
           ? 'Syncing…'
           : hasError
-          ? 'Sync error'
-          : 'Sync',
+              ? 'Sync error'
+              : 'Sync',
       icon: isSyncing
           ? const SizedBox(
               width: 20,
@@ -287,8 +286,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : hasError
-          ? const Icon(Icons.sync_problem, color: Colors.red)
-          : const Icon(Icons.sync),
+              ? const Icon(Icons.sync_problem, color: Colors.red)
+              : const Icon(Icons.sync),
       onPressed: isSyncing
           ? null
           : () async {
@@ -466,7 +465,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     // Fetch full email data before moving so we can restore them if user clicks Undo.
     final originalEmails = (await Future.wait(
       ids.map((id) => repo.getEmail(id)),
-    )).whereType<Email>().toList();
+    ))
+        .whereType<Email>()
+        .toList();
 
     for (final id in ids) {
       await repo.moveEmail(id, mailbox.path);
@@ -485,10 +486,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _batchArchive() => _batchMoveToRole(
-    'archive',
-    dialogTitle: 'No archive folder found',
-    createFolderName: 'Archive',
-  );
+        'archive',
+        dialogTitle: 'No archive folder found',
+        createFolderName: 'Archive',
+      );
 
   Future<void> _refreshSearchAndPopIfEmpty() async {
     if (!mounted || !_searching) return;
@@ -527,7 +528,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     // This is especially important for IMAP where we hard-delete the row locally.
     final originalEmails = (await Future.wait(
       ids.map((id) => repo.getEmail(id)),
-    )).whereType<Email>().toList();
+    ))
+        .whereType<Email>()
+        .toList();
 
     String? lastDestPath;
     for (final id in ids) {
@@ -566,10 +569,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _batchMarkSpam() => _batchMoveToRole(
-    'junk',
-    dialogTitle: 'No spam folder found',
-    createFolderName: 'Junk',
-  );
+        'junk',
+        dialogTitle: 'No spam folder found',
+        createFolderName: 'Junk',
+      );
 
   Future<void> _batchMove() async {
     final ids = _selectedEmailIds;
@@ -577,9 +580,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         .read(mailboxRepositoryProvider)
         .observeMailboxes(widget.accountId)
         .first;
-    final destinations = mailboxes
-        .where((m) => m.path != widget.mailboxPath)
-        .toList();
+    final destinations =
+        mailboxes.where((m) => m.path != widget.mailboxPath).toList();
 
     if (!mounted) return;
 
@@ -611,7 +613,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     // Fetch full email data before moving so we can restore them if user clicks Undo.
     final originalEmails = (await Future.wait(
       ids.map((id) => repo.getEmail(id)),
-    )).whereType<Email>().toList();
+    ))
+        .whereType<Email>()
+        .toList();
 
     for (final id in ids) {
       await repo.moveEmail(id, chosen);
@@ -642,7 +646,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     // Fetch full email data before snoozing so we can restore them if user clicks Undo.
     final originalEmails = (await Future.wait(
       ids.map((id) => repo.getEmail(id)),
-    )).whereType<Email>().toList();
+    ))
+        .whereType<Email>()
+        .toList();
 
     for (final id in ids) {
       await repo.snoozeEmail(id, until);
@@ -683,10 +689,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         }
         final t = threads[i];
         final isSelected = _selectedThreadIds.contains(t.threadId);
-        final senderNames = t.participants
-            .map((a) => a.name ?? a.email)
-            .take(3)
-            .join(', ');
+        final senderNames =
+            t.participants.map((a) => a.name ?? a.email).take(3).join(', ');
 
         final tile = ListTile(
           leading: SizedBox(
@@ -698,9 +702,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                   )
                 : Icon(
                     t.hasUnread ? Icons.mail : Icons.mail_outline,
-                    color: t.hasUnread
-                        ? Theme.of(ctx).colorScheme.primary
-                        : null,
+                    color:
+                        t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
                   ),
           ),
           title: Row(
@@ -760,12 +763,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           onTap: _selecting
               ? () => _toggleThreadSelection(t)
               : t.messageCount > 1
-              ? () => context.push(
-                  '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/threads/${Uri.encodeComponent(t.threadId)}',
-                )
-              : () => context.push(
-                  '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(t.latestEmailId)}',
-                ),
+                  ? () => context.push(
+                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/threads/${Uri.encodeComponent(t.threadId)}',
+                      )
+                  : () => context.push(
+                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(t.latestEmailId)}',
+                      ),
           onLongPress: () => _toggleThreadSelection(t),
         );
 
@@ -773,9 +776,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         // (single-email threads) or the whole thread.
         return Dismissible(
           key: ValueKey(t.threadId),
-          direction: _selecting
-              ? DismissDirection.none
-              : DismissDirection.horizontal,
+          direction:
+              _selecting ? DismissDirection.none : DismissDirection.horizontal,
           background: _swipeBackground(
             alignment: Alignment.centerLeft,
             color: Colors.green,
@@ -797,7 +799,9 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             // Fetch full email data before moving/deleting.
             final originalEmails = (await Future.wait(
               t.emailIds.map((id) => repo.getEmail(id)),
-            )).whereType<Email>().toList();
+            ))
+                .whereType<Email>()
+                .toList();
 
             if (direction == DismissDirection.startToEnd) {
               final archive = await ref

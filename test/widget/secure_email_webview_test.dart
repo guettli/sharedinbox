@@ -11,12 +11,12 @@ void _expectLightMode(String html) {
 }
 
 Widget _wrap(Widget child) => MaterialApp(
-  theme: ThemeData(
-    colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-    useMaterial3: true,
-  ),
-  home: Scaffold(body: child),
-);
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
+      ),
+      home: Scaffold(body: child),
+    );
 
 void main() {
   group('buildEmailHtml', () {
@@ -44,7 +44,8 @@ void main() {
       _expectLightMode(html);
     });
 
-    test('prevents horizontal overflow so wide HTML emails are not cut off', () {
+    test('prevents horizontal overflow so wide HTML emails are not cut off',
+        () {
       final html = buildEmailHtml(
         '<table width="600"><tr><td>x</td></tr></table>',
       );

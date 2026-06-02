@@ -11,7 +11,8 @@ class LocalSieveRepository {
   Future<List<SieveScript>> listScripts(String accountId) async {
     final rows = await (_db.select(
       _db.localSieveScripts,
-    )..where((t) => t.accountId.equals(accountId))).get();
+    )..where((t) => t.accountId.equals(accountId)))
+        .get();
     return rows
         .map(
           (r) => SieveScript(
@@ -26,11 +27,10 @@ class LocalSieveRepository {
 
   Future<String> getScriptContent(String accountId, String blobId) async {
     final rowId = int.parse(blobId);
-    final row =
-        await (_db.select(
-              _db.localSieveScripts,
-            )..where((t) => t.id.equals(rowId) & t.accountId.equals(accountId)))
-            .getSingleOrNull();
+    final row = await (_db.select(
+      _db.localSieveScripts,
+    )..where((t) => t.id.equals(rowId) & t.accountId.equals(accountId)))
+        .getSingleOrNull();
     if (row == null) throw Exception('Local script not found: $blobId');
     return row.content;
   }
@@ -46,16 +46,16 @@ class LocalSieveRepository {
       await (_db.update(_db.localSieveScripts)
             ..where((t) => t.id.equals(rowId) & t.accountId.equals(accountId)))
           .write(
-            LocalSieveScriptsCompanion(
-              name: Value(name),
-              content: Value(content),
-            ),
-          );
-      final updated =
-          await (_db.select(_db.localSieveScripts)..where(
-                (t) => t.id.equals(rowId) & t.accountId.equals(accountId),
-              ))
-              .getSingleOrNull();
+        LocalSieveScriptsCompanion(
+          name: Value(name),
+          content: Value(content),
+        ),
+      );
+      final updated = await (_db.select(_db.localSieveScripts)
+            ..where(
+              (t) => t.id.equals(rowId) & t.accountId.equals(accountId),
+            ))
+          .getSingleOrNull();
       return SieveScript(
         id: id,
         name: name,
@@ -63,9 +63,7 @@ class LocalSieveRepository {
         isActive: updated?.isActive ?? false,
       );
     }
-    final rowId = await _db
-        .into(_db.localSieveScripts)
-        .insert(
+    final rowId = await _db.into(_db.localSieveScripts).insert(
           LocalSieveScriptsCompanion.insert(
             accountId: accountId,
             name: name,
@@ -80,7 +78,8 @@ class LocalSieveRepository {
     final rowId = int.parse(scriptId);
     await (_db.delete(
       _db.localSieveScripts,
-    )..where((t) => t.id.equals(rowId) & t.accountId.equals(accountId))).go();
+    )..where((t) => t.id.equals(rowId) & t.accountId.equals(accountId)))
+        .go();
   }
 
   Future<void> activateScript(String accountId, String scriptId) async {

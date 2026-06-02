@@ -27,9 +27,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     String? protocolLog,
   }) async {
     await _db.transaction(() async {
-      final logId = await _db
-          .into(_db.syncLogs)
-          .insert(
+      final logId = await _db.into(_db.syncLogs).insert(
             SyncLogsCompanion.insert(
               accountId: accountId,
               result: success ? 'ok' : 'error',
@@ -48,9 +46,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
             ),
           );
       for (final s in mailboxStats) {
-        await _db
-            .into(_db.syncLogMailboxes)
-            .insert(
+        await _db.into(_db.syncLogMailboxes).insert(
               SyncLogMailboxesCompanion.insert(
                 syncLogId: logId,
                 mailboxPath: s.mailboxPath,
@@ -74,11 +70,10 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     return logsQuery.watch().asyncMap((rows) async {
       final entries = <SyncLogEntry>[];
       for (final r in rows) {
-        final mailboxRows =
-            await (_db.select(_db.syncLogMailboxes)
-                  ..where((t) => t.syncLogId.equals(r.id))
-                  ..orderBy([(t) => OrderingTerm.asc(t.mailboxPath)]))
-                .get();
+        final mailboxRows = await (_db.select(_db.syncLogMailboxes)
+              ..where((t) => t.syncLogId.equals(r.id))
+              ..orderBy([(t) => OrderingTerm.asc(t.mailboxPath)]))
+            .get();
         entries.add(
           SyncLogEntry(
             id: r.id,

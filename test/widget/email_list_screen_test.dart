@@ -27,7 +27,8 @@ class _MutableFakeEmailRepository extends FakeEmailRepository {
     String accountId,
     String mailboxPath,
     String query,
-  ) async => _results;
+  ) async =>
+      _results;
 }
 
 final _kDate = DateTime(2024, 6);

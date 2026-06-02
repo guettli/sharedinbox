@@ -34,9 +34,7 @@ void main() {
   });
 
   test('cancelPendingChange removes an unattempted change', () async {
-    await db
-        .into(db.pendingChanges)
-        .insert(
+    await db.into(db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: 'acc1',
             resourceType: 'Email',
@@ -55,9 +53,7 @@ void main() {
   });
 
   test('cancelPendingChange does not remove attempted changes', () async {
-    await db
-        .into(db.pendingChanges)
-        .insert(
+    await db.into(db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: 'acc1',
             resourceType: 'Email',
@@ -78,9 +74,7 @@ void main() {
 
   test('cancelPendingChange only removes the latest matching change', () async {
     final now = DateTime.now();
-    await db
-        .into(db.pendingChanges)
-        .insert(
+    await db.into(db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: 'acc1',
             resourceType: 'Email',
@@ -90,9 +84,7 @@ void main() {
             createdAt: now,
           ),
         );
-    await db
-        .into(db.pendingChanges)
-        .insert(
+    await db.into(db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: 'acc1',
             resourceType: 'Email',

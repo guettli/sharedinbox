@@ -101,9 +101,8 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
   @override
   void initState() {
     super.initState();
-    _bodyFuture = ref
-        .read(emailRepositoryProvider)
-        .getEmailBody(widget.email.id);
+    _bodyFuture =
+        ref.read(emailRepositoryProvider).getEmailBody(widget.email.id);
     _expanded = widget.isLatest;
     if (widget.email.isSeen == false) {
       unawaited(
@@ -230,9 +229,8 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
   }
 
   void _reply(BuildContext context, EmailBody body, {required bool replyAll}) {
-    final to = widget.email.from.isNotEmpty
-        ? widget.email.from.first.email
-        : '';
+    final to =
+        widget.email.from.isNotEmpty ? widget.email.from.first.email : '';
     final subject = (widget.email.subject?.startsWith('Re:') ?? false)
         ? widget.email.subject!
         : 'Re: ${widget.email.subject ?? ''}';
@@ -292,9 +290,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
       if (!mounted) return;
       if (original != null) {
         unawaited(
-          ref
-              .read(undoServiceProvider.notifier)
-              .pushAction(
+          ref.read(undoServiceProvider.notifier).pushAction(
                 UndoAction(
                   id: DateTime.now().toIso8601String(),
                   accountId: widget.email.accountId,

@@ -111,9 +111,7 @@ class _MailboxRepositoryImplContract extends MailboxRepositoryContract {
     int unread = 0,
     int total = 0,
   }) async {
-    await _db
-        .into(_db.mailboxes)
-        .insert(
+    await _db.into(_db.mailboxes).insert(
           MailboxesCompanion.insert(
             id: id,
             accountId: _account.id,

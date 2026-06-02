@@ -4,12 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
-  theme: ThemeData(
-    colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-    useMaterial3: true,
-  ),
-  home: Scaffold(body: child),
-);
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
+      ),
+      home: Scaffold(body: child),
+    );
 
 void main() {
   group('TryConnectionButton', () {

@@ -24,11 +24,11 @@ class SnoozeSpyImapClient extends FakeImapClient {
   String? movedToMailbox;
 
   imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
-    encodedName: path,
-    encodedPath: path,
-    pathSeparator: '/',
-    flags: [],
-  );
+        encodedName: path,
+        encodedPath: path,
+        pathSeparator: '/',
+        flags: [],
+      );
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(
@@ -53,7 +53,8 @@ class SnoozeSpyImapClient extends FakeImapClient {
     imap.StoreAction? action,
     bool? silent,
     int? unchangedSinceModSequence,
-  }) async => imap.StoreImapResult();
+  }) async =>
+      imap.StoreImapResult();
 
   @override
   Future<imap.GenericImapResult> uidMove(
@@ -71,7 +72,8 @@ class SnoozeSpyImapClient extends FakeImapClient {
     String? fetchContentDefinition, {
     int? changedSinceModSequence,
     Duration? responseTimeout,
-  }) async => const imap.FetchImapResult([], null);
+  }) async =>
+      const imap.FetchImapResult([], null);
 }
 
 /// Minimal fake SMTP client; only `quit` is exercised by ConnectionTestService.

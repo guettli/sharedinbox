@@ -8,8 +8,8 @@ import 'package:test/test.dart';
 // Mirrors the encoding logic in EmailRepositoryImpl so we can test it
 // independently without spinning up a database.
 String encodeAddresses(List<EmailAddress> addresses) => jsonEncode(
-  addresses.map((a) => {'name': a.name, 'email': a.email}).toList(),
-);
+      addresses.map((a) => {'name': a.name, 'email': a.email}).toList(),
+    );
 
 List<EmailAddress> decodeAddresses(String json) {
   final list = jsonDecode(json) as List<dynamic>;

@@ -23,15 +23,14 @@ class AccountRepositoryImpl implements AccountRepository {
   Future<model.Account?> getAccount(String id) async {
     final row = await (_db.select(
       _db.accounts,
-    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    )..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
 
   @override
   Future<void> addAccount(model.Account account, String password) async {
-    await _db
-        .into(_db.accounts)
-        .insertOnConflictUpdate(
+    await _db.into(_db.accounts).insertOnConflictUpdate(
           AccountsCompanion.insert(
             id: account.id,
             displayName: account.displayName,
@@ -59,7 +58,8 @@ class AccountRepositoryImpl implements AccountRepository {
   Future<void> updateAccount(model.Account account, {String? password}) async {
     await (_db.update(
       _db.accounts,
-    )..where((t) => t.id.equals(account.id))).write(
+    )..where((t) => t.id.equals(account.id)))
+        .write(
       AccountsCompanion(
         displayName: Value(account.displayName),
         email: Value(account.email),
@@ -102,22 +102,22 @@ class AccountRepositoryImpl implements AccountRepository {
   String _passwordKey(String accountId) => 'account_password_$accountId';
 
   model.Account _toModel(Account row) => model.Account(
-    id: row.id,
-    displayName: row.displayName,
-    email: row.email,
-    username: row.username,
-    type: model.AccountType.values.byName(row.accountType),
-    imapHost: row.imapHost,
-    imapPort: row.imapPort,
-    imapSsl: row.imapSsl,
-    smtpHost: row.smtpHost,
-    smtpPort: row.smtpPort,
-    smtpSsl: row.smtpSsl,
-    manageSieveHost: row.manageSieveHost,
-    manageSievePort: row.manageSievePort,
-    manageSieveSsl: row.manageSieveSsl,
-    manageSieveAvailable: row.manageSieveAvailable,
-    jmapUrl: row.jmapUrl,
-    verbose: row.verbose,
-  );
+        id: row.id,
+        displayName: row.displayName,
+        email: row.email,
+        username: row.username,
+        type: model.AccountType.values.byName(row.accountType),
+        imapHost: row.imapHost,
+        imapPort: row.imapPort,
+        imapSsl: row.imapSsl,
+        smtpHost: row.smtpHost,
+        smtpPort: row.smtpPort,
+        smtpSsl: row.smtpSsl,
+        manageSieveHost: row.manageSieveHost,
+        manageSievePort: row.manageSievePort,
+        manageSieveSsl: row.manageSieveSsl,
+        manageSieveAvailable: row.manageSieveAvailable,
+        jmapUrl: row.jmapUrl,
+        verbose: row.verbose,
+      );
 }

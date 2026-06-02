@@ -138,7 +138,7 @@ void main() {
   }
 
   ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-  makeRepo() {
+      makeRepo() {
     final db = openTestDatabase();
     final storage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, storage);
@@ -346,9 +346,7 @@ void main() {
       final emailId = emails.first.id;
 
       // Simulate a legacy row with no cachedAt.
-      await r.db
-          .into(r.db.emailBodies)
-          .insertOnConflictUpdate(
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
               textBody: const Value('stale text'),
@@ -374,9 +372,7 @@ void main() {
       final emailId = emails.first.id;
 
       // Simulate a row cached 8 days ago.
-      await r.db
-          .into(r.db.emailBodies)
-          .insertOnConflictUpdate(
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
               textBody: const Value('old text'),

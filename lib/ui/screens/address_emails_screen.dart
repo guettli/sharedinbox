@@ -51,37 +51,38 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _emails!.isEmpty
-          ? const Center(child: Text('No emails'))
-          : ListView.builder(
-              itemCount: _emails!.length,
-              itemBuilder: (ctx, i) {
-                final e = _emails![i];
-                final sender = e.from.isNotEmpty
-                    ? (e.from.first.name ?? e.from.first.email)
-                    : '(unknown)';
-                return ListTile(
-                  leading: Icon(
-                    e.isSeen ? Icons.mail_outline : Icons.mail,
-                    color: e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-                  ),
-                  title: Text(sender),
-                  subtitle: Text(
-                    e.subject ?? '(no subject)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Text(
-                    e.mailboxPath,
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                  onTap: () => context.push(
-                    '/accounts/${widget.accountId}/mailboxes'
-                    '/${Uri.encodeComponent(e.mailboxPath)}'
-                    '/emails/${Uri.encodeComponent(e.id)}',
-                  ),
-                );
-              },
-            ),
+              ? const Center(child: Text('No emails'))
+              : ListView.builder(
+                  itemCount: _emails!.length,
+                  itemBuilder: (ctx, i) {
+                    final e = _emails![i];
+                    final sender = e.from.isNotEmpty
+                        ? (e.from.first.name ?? e.from.first.email)
+                        : '(unknown)';
+                    return ListTile(
+                      leading: Icon(
+                        e.isSeen ? Icons.mail_outline : Icons.mail,
+                        color:
+                            e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
+                      ),
+                      title: Text(sender),
+                      subtitle: Text(
+                        e.subject ?? '(no subject)',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: Text(
+                        e.mailboxPath,
+                        style: Theme.of(ctx).textTheme.bodySmall,
+                      ),
+                      onTap: () => context.push(
+                        '/accounts/${widget.accountId}/mailboxes'
+                        '/${Uri.encodeComponent(e.mailboxPath)}'
+                        '/emails/${Uri.encodeComponent(e.id)}',
+                      ),
+                    );
+                  },
+                ),
     );
   }
 }

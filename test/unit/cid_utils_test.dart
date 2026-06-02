@@ -59,8 +59,7 @@ void main() {
 
     test('leaves HTML unchanged when there are no inline parts', () {
       // A plain text-only message.
-      const plainMime =
-          'MIME-Version: 1.0\r\n'
+      const plainMime = 'MIME-Version: 1.0\r\n'
           'Content-Type: text/plain\r\n'
           '\r\n'
           'Hello';

@@ -41,19 +41,20 @@ class _FakeFile extends Fake implements File {
     FileMode mode = FileMode.write,
     Encoding encoding = utf8,
     bool flush = false,
-  }) async => this;
+  }) async =>
+      this;
 }
 
 // Shared overrides for email detail tests.
 List<Override> _overrides({required EmailBody body, Email? email}) => [
-  accountRepositoryProvider.overrideWithValue(
-    FakeAccountRepository([kTestAccount]),
-  ),
-  mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-  emailRepositoryProvider.overrideWithValue(
-    FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
-  ),
-];
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository([kTestAccount]),
+      ),
+      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+      emailRepositoryProvider.overrideWithValue(
+        FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
+      ),
+    ];
 
 void main() {
   group('EmailDetailScreen', () {

@@ -76,8 +76,7 @@ void main() {
     AppDatabase db,
     AccountRepositoryImpl accounts,
     MailboxRepositoryImpl mailboxes,
-  })
-  makeRepo() {
+  }) makeRepo() {
     final db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
     final mailboxes = MailboxRepositoryImpl(

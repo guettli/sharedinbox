@@ -15,42 +15,44 @@ Email _email({
   String subject = 'Hello world',
   bool isSeen = true,
   bool isFlagged = false,
-}) => Email(
-  id: id,
-  accountId: 'acc-1',
-  mailboxPath: 'INBOX',
-  uid: int.parse(id.split(':').last),
-  subject: subject,
-  receivedAt: _kDate,
-  sentAt: _kDate,
-  from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-  to: const [EmailAddress(email: 'alice@example.com')],
-  cc: const [],
-  isSeen: isSeen,
-  isFlagged: isFlagged,
-  hasAttachment: false,
-);
+}) =>
+    Email(
+      id: id,
+      accountId: 'acc-1',
+      mailboxPath: 'INBOX',
+      uid: int.parse(id.split(':').last),
+      subject: subject,
+      receivedAt: _kDate,
+      sentAt: _kDate,
+      from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      to: const [EmailAddress(email: 'alice@example.com')],
+      cc: const [],
+      isSeen: isSeen,
+      isFlagged: isFlagged,
+      hasAttachment: false,
+    );
 
 List<Override> _overrides({
   List<Email> emails = const [],
   List<Email> searchResults = const [],
   String? syncError,
-}) => [
-  accountRepositoryProvider.overrideWithValue(
-    FakeAccountRepository([kTestAccount]),
-  ),
-  mailboxRepositoryProvider.overrideWithValue(
-    FakeMailboxRepository([kTestMailbox]),
-  ),
-  emailRepositoryProvider.overrideWithValue(
-    FakeEmailRepository(emails: emails, searchResults: searchResults),
-  ),
-  draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-  searchHistoryRepositoryProvider.overrideWithValue(
-    FakeSearchHistoryRepository(),
-  ),
-  syncLastErrorProvider.overrideWith((ref, _) => Stream.value(syncError)),
-];
+}) =>
+    [
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository([kTestAccount]),
+      ),
+      mailboxRepositoryProvider.overrideWithValue(
+        FakeMailboxRepository([kTestMailbox]),
+      ),
+      emailRepositoryProvider.overrideWithValue(
+        FakeEmailRepository(emails: emails, searchResults: searchResults),
+      ),
+      draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+      searchHistoryRepositoryProvider.overrideWithValue(
+        FakeSearchHistoryRepository(),
+      ),
+      syncLastErrorProvider.overrideWith((ref, _) => Stream.value(syncError)),
+    ];
 
 void main() {
   group('EmailListScreen goldens', () {

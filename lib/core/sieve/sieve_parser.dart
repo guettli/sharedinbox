@@ -421,8 +421,8 @@ class _Scanner {
     if (_isWordChar(ch)) {
       final start = _pos;
       var end = _pos + 1;
-      while (end < _src.length &&
-          (_isWordChar(_src[end]) || _src[end] == ':')) {
+      while (
+          end < _src.length && (_isWordChar(_src[end]) || _src[end] == ':')) {
         // Include trailing colon for "text:" multiline token.
         if (_src[end] == ':') {
           end++;

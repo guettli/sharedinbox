@@ -107,9 +107,7 @@ void main() {
     'verifySyncReliability identifies extra local emails (missing on server)',
     () async {
       // 1. Manually insert a row into local DB that doesn't exist on server
-      await db
-          .into(db.emails)
-          .insert(
+      await db.into(db.emails).insert(
             EmailsCompanion.insert(
               id: 'test:999',
               accountId: 'test',

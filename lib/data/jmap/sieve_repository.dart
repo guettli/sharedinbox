@@ -9,18 +9,18 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/data/imap/managesieve_client.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
-typedef ManageSieveConnectFn =
-    Future<ManageSieveClient> Function({
-      required String host,
-      required int port,
-      required bool useTls,
-    });
+typedef ManageSieveConnectFn = Future<ManageSieveClient> Function({
+  required String host,
+  required int port,
+  required bool useTls,
+});
 
 Future<ManageSieveClient> _defaultManageSieveConnect({
   required String host,
   required int port,
   required bool useTls,
-}) => ManageSieveClient.connect(host: host, port: port, useTls: useTls);
+}) =>
+    ManageSieveClient.connect(host: host, port: port, useTls: useTls);
 
 class SieveRepository {
   SieveRepository(
@@ -51,13 +51,16 @@ class SieveRepository {
       });
     }
     return _withJmap(account, (jmap) async {
-      final responses = await jmap.call([
+      final responses = await jmap.call(
         [
-          'SieveScript/get',
-          {'accountId': jmap.accountId, 'ids': null},
-          '0',
+          [
+            'SieveScript/get',
+            {'accountId': jmap.accountId, 'ids': null},
+            '0',
+          ],
         ],
-      ], withSieve: true);
+        withSieve: true,
+      );
       final result = _responseArgs(responses, 0, 'SieveScript/get');
       final list = result['list'] as List<dynamic>;
       return list.map((e) {
@@ -123,9 +126,12 @@ class SieveRepository {
                 id: {'name': name, 'blobId': blobId},
               },
             };
-      final responses = await jmap.call([
-        ['SieveScript/set', setArgs, '0'],
-      ], withSieve: true);
+      final responses = await jmap.call(
+        [
+          ['SieveScript/set', setArgs, '0'],
+        ],
+        withSieve: true,
+      );
       final result = _responseArgs(responses, 0, 'SieveScript/set');
       if (id == null) {
         final created = result['created'] as Map<String, dynamic>?;
@@ -164,16 +170,19 @@ class SieveRepository {
       return;
     }
     await _withJmap(account, (jmap) async {
-      final responses = await jmap.call([
+      final responses = await jmap.call(
         [
-          'SieveScript/set',
-          {
-            'accountId': jmap.accountId,
-            'destroy': [scriptId],
-          },
-          '0',
+          [
+            'SieveScript/set',
+            {
+              'accountId': jmap.accountId,
+              'destroy': [scriptId],
+            },
+            '0',
+          ],
         ],
-      ], withSieve: true);
+        withSieve: true,
+      );
       final result = _responseArgs(responses, 0, 'SieveScript/set');
       final notDestroyed = result['notDestroyed'] as Map<String, dynamic>?;
       if (notDestroyed != null && notDestroyed.containsKey(scriptId)) {
@@ -192,13 +201,16 @@ class SieveRepository {
       return;
     }
     await _withJmap(account, (jmap) async {
-      await jmap.call([
+      await jmap.call(
         [
-          'SieveScript/activate',
-          {'accountId': jmap.accountId, 'id': scriptId},
-          '0',
+          [
+            'SieveScript/activate',
+            {'accountId': jmap.accountId, 'id': scriptId},
+            '0',
+          ],
         ],
-      ], withSieve: true);
+        withSieve: true,
+      );
     });
   }
 
@@ -219,9 +231,8 @@ class SieveRepository {
       throw Exception('Account has no JMAP URL');
     }
     final password = await _accounts.getPassword(account.id);
-    final username = account.username.isNotEmpty
-        ? account.username
-        : account.email;
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
     final jmap = await JmapClient.connect(
       httpClient: _httpClient,
       jmapUrl: Uri.parse(jmapUrl),
@@ -247,9 +258,8 @@ class SieveRepository {
       throw Exception('Account has no ManageSieve host configured');
     }
     final password = await _accounts.getPassword(account.id);
-    final username = account.username.isNotEmpty
-        ? account.username
-        : account.email;
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
     final client = await _manageSieveConnect(
       host: host,
       port: account.manageSievePort,

@@ -64,9 +64,8 @@ class SieveInterpreter {
     return switch (rule.joinType) {
       'allof' => rule.conditions.every((c) => _evalCondition(c, email)),
       'anyof' => rule.conditions.any((c) => _evalCondition(c, email)),
-      _ =>
-        rule.conditions.length == 1 &&
-            _evalCondition(rule.conditions.first, email),
+      _ => rule.conditions.length == 1 &&
+          _evalCondition(rule.conditions.first, email),
     };
   }
 

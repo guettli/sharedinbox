@@ -46,11 +46,11 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     try {
       final scripts = widget.isLocal
           ? await ref
-                .read(localSieveRepositoryProvider)
-                .listScripts(widget.accountId)
+              .read(localSieveRepositoryProvider)
+              .listScripts(widget.accountId)
           : await ref
-                .read(sieveRepositoryProvider)
-                .listScripts(widget.accountId);
+              .read(sieveRepositoryProvider)
+              .listScripts(widget.accountId);
       if (mounted) {
         setState(() {
           _scripts = scripts;
@@ -207,10 +207,10 @@ class _SieveSourceBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = isLocal
         ? 'Local Filters run Sieve scripts directly on this device. '
-              'Remote Filters, which run on the mail server, are configured separately.'
+            'Remote Filters, which run on the mail server, are configured separately.'
         : 'Remote Filters run Sieve scripts on the mail server '
-              '(ManageSieve or JMAP). '
-              'Local Filters, which run on this device, are configured separately.';
+            '(ManageSieve or JMAP). '
+            'Local Filters, which run on this device, are configured separately.';
     return Container(
       width: double.infinity,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -228,8 +228,8 @@ class _SieveSourceBanner extends StatelessWidget {
             child: Text(
               text,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
           ),
         ],

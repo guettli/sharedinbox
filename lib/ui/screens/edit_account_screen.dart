@@ -117,8 +117,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         int.tryParse(_sievePortCtrl.text) ?? account.manageSievePort;
     // Reset the cached probe result when any field that affects the probe
     // changed; the post-save probe will refill it.
-    final sieveSettingsChanged =
-        imapHost != account.imapHost ||
+    final sieveSettingsChanged = imapHost != account.imapHost ||
         sieveHost != account.manageSieveHost ||
         sievePort != account.manageSievePort ||
         _sieveSsl != account.manageSieveSsl;
@@ -139,12 +138,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       manageSieveHost: sieveHost,
       manageSievePort: sievePort,
       manageSieveSsl: isLocalhost(effectiveSieveHost) ? _sieveSsl : true,
-      manageSieveAvailable: sieveSettingsChanged
-          ? null
-          : account.manageSieveAvailable,
-      jmapUrl: _jmapUrlCtrl.text.trim().isEmpty
-          ? null
-          : _jmapUrlCtrl.text.trim(),
+      manageSieveAvailable:
+          sieveSettingsChanged ? null : account.manageSieveAvailable,
+      jmapUrl:
+          _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
       verbose: _verbose,
     );
   }
@@ -154,8 +151,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     final password = _passwordCtrl.text.isNotEmpty
         ? _passwordCtrl.text
         : await ref
-              .read(accountRepositoryProvider)
-              .getPassword(widget.accountId);
+            .read(accountRepositoryProvider)
+            .getPassword(widget.accountId);
     setState(() {
       _tryTesting = true;
       _tryOk = null;
@@ -395,8 +392,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
           labelText: label,
           border: const OutlineInputBorder(),
         ),
-        validator:
-            validator ??
+        validator: validator ??
             (required
                 ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
                 : null),

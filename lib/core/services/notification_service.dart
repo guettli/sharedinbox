@@ -18,8 +18,7 @@ Future<void> initNotifications() async {
     );
     await _plugin
         .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
+            AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
     _initialized = true;
   } on MissingPluginException {

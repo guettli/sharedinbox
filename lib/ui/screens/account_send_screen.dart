@@ -117,10 +117,8 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     }
 
     // Load all available accounts.
-    final accounts = await ref
-        .read(accountRepositoryProvider)
-        .observeAccounts()
-        .first;
+    final accounts =
+        await ref.read(accountRepositoryProvider).observeAccounts().first;
 
     if (!mounted) return;
 
@@ -197,11 +195,11 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         _Step.selectAccounts => _buildSelectStep(context),
         _Step.showEncrypted => _buildEncryptedQrStep(context),
         _Step.error => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('Error: $_errorMessage'),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('Error: $_errorMessage'),
+            ),
           ),
-        ),
       },
     );
   }

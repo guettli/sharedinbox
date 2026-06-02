@@ -16,8 +16,7 @@ String buildEmailHtml(String htmlBody, {bool loadRemoteImages = false}) {
   final imgSrc = loadRemoteImages ? 'https: http: data: blob:' : 'data: blob:';
   // script-src 'none' blocks page scripts; JS mode stays unrestricted so the
   // controller can call runJavaScriptReturningResult for height measurement.
-  const cspBase =
-      "default-src 'none'; "
+  const cspBase = "default-src 'none'; "
       "style-src 'unsafe-inline'; "
       "script-src 'none'; "
       "object-src 'none'; "
@@ -107,9 +106,9 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
   }
 
   String _buildHtml() => buildEmailHtml(
-    widget.htmlBody,
-    loadRemoteImages: widget.loadRemoteImages,
-  );
+        widget.htmlBody,
+        loadRemoteImages: widget.loadRemoteImages,
+      );
 
   Future<void> _measureHeight(String _) async {
     try {
@@ -141,14 +140,13 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
     final host = uri.host;
     final parts = host.split('.');
     // Bold the registered domain (last two DNS labels) to aid phishing detection.
-    final boldStart =
-        (parts.length >= 2
-                ? host.length -
-                      parts.last.length -
-                      1 -
-                      parts[parts.length - 2].length
-                : 0)
-            .clamp(0, host.length);
+    final boldStart = (parts.length >= 2
+            ? host.length -
+                parts.last.length -
+                1 -
+                parts[parts.length - 2].length
+            : 0)
+        .clamp(0, host.length);
 
     final confirmed = await showDialog<bool>(
       context: context,

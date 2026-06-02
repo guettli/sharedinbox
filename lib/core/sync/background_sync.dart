@@ -83,9 +83,8 @@ Future<void> _checkAccount(
 ) async {
   try {
     final password = await accountRepo.getPassword(account.id);
-    final username = account.username.isNotEmpty
-        ? account.username
-        : account.email;
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
     final client = await connectImap(account, username, password);
     try {
       final status = await client.statusMailbox(
@@ -94,18 +93,16 @@ Future<void> _checkAccount(
       );
       final currentUidNext = status.uidNext;
 
-      final stored =
-          await (db.select(db.syncStates)..where(
-                (t) =>
-                    t.accountId.equals(account.id) &
-                    t.resourceType.equals(_kResourceType),
-              ))
-              .getSingleOrNull();
+      final stored = await (db.select(db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(account.id) &
+                  t.resourceType.equals(_kResourceType),
+            ))
+          .getSingleOrNull();
       final lastUidNext = _parseUidNext(stored?.state);
 
-      await db
-          .into(db.syncStates)
-          .insertOnConflictUpdate(
+      await db.into(db.syncStates).insertOnConflictUpdate(
             SyncStatesCompanion.insert(
               accountId: account.id,
               resourceType: _kResourceType,

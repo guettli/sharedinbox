@@ -67,15 +67,16 @@ class _FakeMailboxes implements MailboxRepository {
     String accountId,
     String name,
     String role,
-  ) async => Mailbox(
-    id: '$accountId:$name',
-    accountId: accountId,
-    path: name,
-    name: name,
-    role: role,
-    unreadCount: 0,
-    totalCount: 0,
-  );
+  ) async =>
+      Mailbox(
+        id: '$accountId:$name',
+        accountId: accountId,
+        path: name,
+        name: name,
+        role: role,
+        unreadCount: 0,
+        totalCount: 0,
+      );
 }
 
 class _FakeEmails implements EmailRepository {
@@ -99,7 +100,8 @@ class _FakeEmails implements EmailRepository {
     String a,
     String m, {
     int limit = 50,
-  }) => Stream.value([]);
+  }) =>
+      Stream.value([]);
   @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
       Stream.value([]);
@@ -136,7 +138,8 @@ class _FakeEmails implements EmailRepository {
     String? a,
     String q, {
     int limit = 10,
-  }) async => [];
+  }) async =>
+      [];
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String a) =>
       Stream.value([]);

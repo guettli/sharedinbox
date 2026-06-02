@@ -227,7 +227,8 @@ void main() {
       expect(find.textContaining('Healthy'), findsOneWidget);
     });
 
-    testWidgets('shows discrepancy details when sync health has discrepancies', (
+    testWidgets('shows discrepancy details when sync health has discrepancies',
+        (
       tester,
     ) async {
       const summary =

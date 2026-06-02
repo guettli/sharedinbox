@@ -70,8 +70,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     unawaited(_loadAccounts());
     // Only restore if no prefill fields were provided (avoids overwriting a
     // fresh reply with an old draft from a previous reply to the same email).
-    final hasPrefill =
-        widget.prefillTo != null ||
+    final hasPrefill = widget.prefillTo != null ||
         widget.prefillSubject != null ||
         widget.prefillBody != null;
     if (!hasPrefill) unawaited(_restoreDraft());
@@ -82,10 +81,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   Future<void> _loadAccounts() async {
-    final accounts = await ref
-        .read(accountRepositoryProvider)
-        .observeAccounts()
-        .first;
+    final accounts =
+        await ref.read(accountRepositoryProvider).observeAccounts().first;
     if (!mounted) return;
     setState(() {
       _accounts = accounts;
@@ -224,9 +221,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     setState(() => _sending = true);
     try {
-      final account = (await ref
-          .read(accountRepositoryProvider)
-          .getAccount(_accountId!))!;
+      final account =
+          (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
         to: _to.text
@@ -399,9 +395,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         displayStringForOption: (option) {
           final text = ctrl.text;
           final lastComma = text.lastIndexOf(',');
-          final prefix = lastComma >= 0
-              ? '${text.substring(0, lastComma + 1)} '
-              : '';
+          final prefix =
+              lastComma >= 0 ? '${text.substring(0, lastComma + 1)} ' : '';
           return '$prefix${option.email}, ';
         },
         optionsBuilder: (value) async {

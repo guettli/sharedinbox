@@ -29,10 +29,10 @@ class AccountSyncManager {
     SyncLogRepository syncLog = const NoOpSyncLogRepository(),
     DraftRepository? drafts,
     OnNewMailCallback? onNewMail,
-  }) : _imapConnect = imapConnect,
-       _syncLog = syncLog,
-       _drafts = drafts,
-       _onNewMail = onNewMail;
+  })  : _imapConnect = imapConnect,
+        _syncLog = syncLog,
+        _drafts = drafts,
+        _onNewMail = onNewMail;
 
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
@@ -69,26 +69,26 @@ class AccountSyncManager {
         final id = account.id;
         final loop = switch (account.type) {
           AccountType.imap => _AccountSync(
-            account,
-            _accounts,
-            _mailboxes,
-            _emails,
-            _imapConnect,
-            _syncLog,
-            _drafts,
-            _onNewMail,
-            onSyncStart: () => _emitSyncing(id, syncing: true),
-            onSyncEnd: () => _emitSyncing(id, syncing: false),
-          ),
+              account,
+              _accounts,
+              _mailboxes,
+              _emails,
+              _imapConnect,
+              _syncLog,
+              _drafts,
+              _onNewMail,
+              onSyncStart: () => _emitSyncing(id, syncing: true),
+              onSyncEnd: () => _emitSyncing(id, syncing: false),
+            ),
           AccountType.jmap => _JmapAccountSync(
-            account,
-            _mailboxes,
-            _emails,
-            _accounts,
-            _syncLog,
-            onSyncStart: () => _emitSyncing(id, syncing: true),
-            onSyncEnd: () => _emitSyncing(id, syncing: false),
-          ),
+              account,
+              _mailboxes,
+              _emails,
+              _accounts,
+              _syncLog,
+              onSyncStart: () => _emitSyncing(id, syncing: true),
+              onSyncEnd: () => _emitSyncing(id, syncing: false),
+            ),
         };
         _active[account.id] = loop;
         loop.start();
@@ -129,33 +129,33 @@ class AccountSyncManager {
 
     final accounts = await _accounts.observeAccounts().first;
     final account = accounts.cast<Account?>().firstWhere(
-      (a) => a?.id == accountId,
-      orElse: () => null,
-    );
+          (a) => a?.id == accountId,
+          orElse: () => null,
+        );
     if (account == null) return;
 
     final loop = switch (account.type) {
       AccountType.imap => _AccountSync(
-        account,
-        _accounts,
-        _mailboxes,
-        _emails,
-        _imapConnect,
-        _syncLog,
-        _drafts,
-        _onNewMail,
-        onSyncStart: () => _emitSyncing(accountId, syncing: true),
-        onSyncEnd: () => _emitSyncing(accountId, syncing: false),
-      ),
+          account,
+          _accounts,
+          _mailboxes,
+          _emails,
+          _imapConnect,
+          _syncLog,
+          _drafts,
+          _onNewMail,
+          onSyncStart: () => _emitSyncing(accountId, syncing: true),
+          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+        ),
       AccountType.jmap => _JmapAccountSync(
-        account,
-        _mailboxes,
-        _emails,
-        _accounts,
-        _syncLog,
-        onSyncStart: () => _emitSyncing(accountId, syncing: true),
-        onSyncEnd: () => _emitSyncing(accountId, syncing: false),
-      ),
+          account,
+          _mailboxes,
+          _emails,
+          _accounts,
+          _syncLog,
+          onSyncStart: () => _emitSyncing(accountId, syncing: true),
+          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+        ),
     };
     _active[accountId] = loop;
     loop.start();
@@ -184,8 +184,8 @@ class _AccountSync implements _SyncLoop {
     this._onNewMail, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
-  }) : _onSyncStart = onSyncStart,
-       _onSyncEnd = onSyncEnd;
+  })  : _onSyncStart = onSyncStart,
+        _onSyncEnd = onSyncEnd;
 
   final Account account;
   final AccountRepository _accounts;
@@ -379,9 +379,8 @@ class _AccountSync implements _SyncLoop {
     if (!_running) return;
     _stopSignal = Completer<void>();
     final password = await _accounts.getPassword(account.id);
-    final username = account.username.isNotEmpty
-        ? account.username
-        : account.email;
+    final username =
+        account.username.isNotEmpty ? account.username : account.email;
     final client = await _imapConnect(account, username, password);
     _idleClient = client;
     try {
@@ -397,13 +396,12 @@ class _AccountSync implements _SyncLoop {
                 e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
           )
           .listen((e) {
-            if (e is imap.ImapMessagesExistEvent &&
-                e.newMessagesExists > e.oldMessagesExists) {
-              hasNewMail = true;
-            }
-            if (!newMessageCompleter.isCompleted)
-              newMessageCompleter.complete();
-          });
+        if (e is imap.ImapMessagesExistEvent &&
+            e.newMessagesExists > e.oldMessagesExists) {
+          hasNewMail = true;
+        }
+        if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
+      });
 
       await client.idleStart();
 
@@ -445,8 +443,8 @@ class _JmapAccountSync implements _SyncLoop {
     this._syncLog, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
-  }) : _onSyncStart = onSyncStart,
-       _onSyncEnd = onSyncEnd;
+  })  : _onSyncStart = onSyncStart,
+        _onSyncEnd = onSyncEnd;
 
   final Account account;
   final MailboxRepository _mailboxes;
@@ -642,15 +640,13 @@ class _JmapAccountSync implements _SyncLoop {
     // Try JMAP push (RFC 8887 EventSource). Falls back to poll timer when
     // the server doesn't advertise an eventSourceUrl or the connection fails.
     final pushReady = Completer<void>();
-    final pushSub = _emails
-        .watchJmapPush(account.id, password)
-        .listen(
-          (_) {
-            if (!pushReady.isCompleted) pushReady.complete();
-          },
-          onDone: () {},
-          onError: (_) {},
-        );
+    final pushSub = _emails.watchJmapPush(account.id, password).listen(
+      (_) {
+        if (!pushReady.isCompleted) pushReady.complete();
+      },
+      onDone: () {},
+      onError: (_) {},
+    );
 
     final pollTimer = Timer(_pollInterval, () {
       if (_stopSignal != null && !_stopSignal!.isCompleted) {

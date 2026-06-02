@@ -11,9 +11,7 @@ void main() {
   late final db = openTestDatabase();
 
   setUpAll(() async {
-    await db
-        .into(db.accounts)
-        .insert(
+    await db.into(db.accounts).insert(
           AccountsCompanion.insert(
             id: 'acc1',
             displayName: 'Test',
@@ -122,7 +120,8 @@ void main() {
 
     final rows = await (db.select(
       db.syncLogs,
-    )..where((r) => r.result.equals('error'))).get();
+    )..where((r) => r.result.equals('error')))
+        .get();
     expect(rows, hasLength(1));
     expect(rows.first.result, 'error');
     expect(rows.first.errorMessage, 'Connection refused');

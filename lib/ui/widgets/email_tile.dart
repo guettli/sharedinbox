@@ -37,17 +37,15 @@ class EmailTile extends StatelessWidget {
     final date = email.sentAt != null ? _dateFmt.format(email.sentAt!) : '';
 
     return ListTile(
-      leading:
-          leading ??
+      leading: leading ??
           Icon(
             email.isSeen ? Icons.mail_outline : Icons.mail,
             color: email.isSeen ? null : Theme.of(context).colorScheme.primary,
           ),
       title: Text(
         sender,
-        style: email.isSeen
-            ? null
-            : const TextStyle(fontWeight: FontWeight.bold),
+        style:
+            email.isSeen ? null : const TextStyle(fontWeight: FontWeight.bold),
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Column(

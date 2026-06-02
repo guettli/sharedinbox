@@ -162,9 +162,8 @@ void main() {
       final allTriggers = await db
           .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
           .get();
-      final triggerNames = allTriggers
-          .map((r) => r.read<String>('name'))
-          .toSet();
+      final triggerNames =
+          allTriggers.map((r) => r.read<String>('name')).toSet();
       expect(
         triggerNames,
         containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
@@ -361,9 +360,8 @@ void main() {
         final allIndexes = await db
             .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
             .get();
-        final indexNames = allIndexes
-            .map((r) => r.read<String>('name'))
-            .toSet();
+        final indexNames =
+            allIndexes.map((r) => r.read<String>('name')).toSet();
         expect(indexNames, contains('mailboxes_account_id'));
         expect(indexNames, contains('threads_latest_date'));
 
@@ -371,9 +369,8 @@ void main() {
         final allTriggers = await db
             .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
             .get();
-        final triggerNames = allTriggers
-            .map((r) => r.read<String>('name'))
-            .toSet();
+        final triggerNames =
+            allTriggers.map((r) => r.read<String>('name')).toSet();
         expect(
           triggerNames,
           containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),

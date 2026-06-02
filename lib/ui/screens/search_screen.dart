@@ -84,9 +84,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         emailRepo.getEmailsByAddress(widget.accountId, query),
       ).wait;
 
-      final matchedMailboxes =
-          allMailboxes.where((m) => _hasWordPrefix(m.name, ql)).toList()
-            ..sort(compareMailboxes);
+      final matchedMailboxes = allMailboxes
+          .where((m) => _hasWordPrefix(m.name, ql))
+          .toList()
+        ..sort(compareMailboxes);
 
       // Collect unique addresses from address-search results where the
       // email or display name contains the query.
@@ -306,9 +307,8 @@ class _FolderTile extends StatelessWidget {
             : null,
       ),
       subtitle: Text(accountId, style: Theme.of(context).textTheme.bodySmall),
-      trailing: mb.unreadCount > 0
-          ? Badge(label: Text('${mb.unreadCount}'))
-          : null,
+      trailing:
+          mb.unreadCount > 0 ? Badge(label: Text('${mb.unreadCount}')) : null,
       onTap: () => context.go(
         '/accounts/$accountId/mailboxes'
         '/${Uri.encodeComponent(mb.path)}/emails',

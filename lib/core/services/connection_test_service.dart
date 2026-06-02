@@ -6,24 +6,30 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/managesieve_client.dart';
 
-typedef ImapConnectForTestFn =
-    Future<imap.ImapClient> Function(Account, String username, String password);
+typedef ImapConnectForTestFn = Future<imap.ImapClient> Function(
+  Account,
+  String username,
+  String password,
+);
 
-typedef SmtpConnectForTestFn =
-    Future<imap.SmtpClient> Function(Account, String username, String password);
+typedef SmtpConnectForTestFn = Future<imap.SmtpClient> Function(
+  Account,
+  String username,
+  String password,
+);
 
-typedef ManageSieveConnectForTestFn =
-    Future<ManageSieveClient> Function({
-      required String host,
-      required int port,
-      required bool useTls,
-    });
+typedef ManageSieveConnectForTestFn = Future<ManageSieveClient> Function({
+  required String host,
+  required int port,
+  required bool useTls,
+});
 
 Future<ManageSieveClient> _defaultManageSieveConnect({
   required String host,
   required int port,
   required bool useTls,
-}) => ManageSieveClient.connect(host: host, port: port, useTls: useTls);
+}) =>
+    ManageSieveClient.connect(host: host, port: port, useTls: useTls);
 
 abstract class ConnectionTestService {
   /// Verifies credentials and returns the effective username used.
@@ -37,9 +43,9 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     ImapConnectForTestFn imapConnect = connectImap,
     SmtpConnectForTestFn smtpConnect = connectSmtp,
     ManageSieveConnectForTestFn manageSieveConnect = _defaultManageSieveConnect,
-  }) : _imapConnect = imapConnect,
-       _smtpConnect = smtpConnect,
-       _manageSieveConnect = manageSieveConnect;
+  })  : _imapConnect = imapConnect,
+        _smtpConnect = smtpConnect,
+        _manageSieveConnect = manageSieveConnect;
 
   final http.Client _httpClient;
   final ImapConnectForTestFn _imapConnect;
@@ -156,9 +162,12 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     for (final username in candidates) {
       try {
         final credentials = base64.encode(utf8.encode('$username:$password'));
-        final resp = await _httpClient
-            .get(sessionUri, headers: {'Authorization': 'Basic $credentials'})
-            .timeout(const Duration(seconds: 10));
+        final resp = await _httpClient.get(
+          sessionUri,
+          headers: {
+            'Authorization': 'Basic $credentials',
+          },
+        ).timeout(const Duration(seconds: 10));
         if (resp.statusCode == 401 || resp.statusCode == 403) {
           lastError = Exception(
             'Authentication failed: wrong username or password',

@@ -13,14 +13,14 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   Stream<pref.UserPreferences> observePreferences() {
     return (_db.select(
       _db.userPreferences,
-    )..where((t) => t.id.equals(_rowId))).watchSingleOrNull().map(_rowToModel);
+    )..where((t) => t.id.equals(_rowId)))
+        .watchSingleOrNull()
+        .map(_rowToModel);
   }
 
   @override
   Future<void> updateMenuPosition(pref.MenuPosition position) async {
-    await _db
-        .into(_db.userPreferences)
-        .insertOnConflictUpdate(
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
           UserPreferencesCompanion(
             id: const Value(_rowId),
             menuPosition: Value(position.name),
@@ -30,9 +30,7 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
 
   @override
   Future<void> updateMailViewButtonPosition(pref.MenuPosition position) async {
-    await _db
-        .into(_db.userPreferences)
-        .insertOnConflictUpdate(
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
           UserPreferencesCompanion(
             id: const Value(_rowId),
             mailViewButtonPosition: Value(position.name),
@@ -44,9 +42,7 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   Future<void> updateAfterMailViewAction(
     pref.AfterMailViewAction action,
   ) async {
-    await _db
-        .into(_db.userPreferences)
-        .insertOnConflictUpdate(
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
           UserPreferencesCompanion(
             id: const Value(_rowId),
             afterMailViewAction: Value(action.name),

@@ -37,8 +37,7 @@ class ThrowingUrlLauncher extends Mock
   Future<bool> launchUrl(String? url, LaunchOptions? options) async {
     throw PlatformException(
       code: 'channel-error',
-      message:
-          'Unable to establish connection on channel: '
+      message: 'Unable to establish connection on channel: '
           '"dev.flutter.pigeon.url_launcher_android.UrlLauncherApi.launchUrl".',
     );
   }

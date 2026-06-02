@@ -17,8 +17,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     http.Client? httpClient,
-  }) : _imapConnect = imapConnect,
-       _httpClient = httpClient ?? http.Client();
+  })  : _imapConnect = imapConnect,
+        _httpClient = httpClient ?? http.Client();
 
   final AppDatabase _db;
   final AccountRepository _accounts;
@@ -45,13 +45,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String accountId,
     String role,
   ) async {
-    final row =
-        await (_db.select(_db.mailboxes)
-              ..where(
-                (t) => t.accountId.equals(accountId) & t.role.equals(role),
-              )
-              ..limit(1))
-            .getSingleOrNull();
+    final row = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals(role),
+          )
+          ..limit(1))
+        .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
 
@@ -85,7 +84,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // folders the server doesn't tag with a special-use attribute.
       final existingRows = await (_db.select(
         _db.mailboxes,
-      )..where((t) => t.accountId.equals(account.id))).get();
+      )..where((t) => t.accountId.equals(account.id)))
+          .get();
       final existingRoles = {for (final r in existingRows) r.id: r.role};
 
       for (final mb in mailboxes) {
@@ -111,9 +111,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // when the IMAP server does not expose a special-use attribute.
         final role = _imapRole(mb) ?? existingRoles[id];
 
-        await _db
-            .into(_db.mailboxes)
-            .insertOnConflictUpdate(
+        await _db.into(_db.mailboxes).insertOnConflictUpdate(
               MailboxesCompanion.insert(
                 id: id,
                 accountId: account.id,
@@ -218,7 +216,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
     for (final jmapId in destroyed) {
       await (_db.delete(
         _db.mailboxes,
-      )..where((t) => t.id.equals('$accountId:$jmapId'))).go();
+      )..where((t) => t.id.equals('$accountId:$jmapId')))
+          .go();
     }
 
     await _saveSyncState(accountId, 'Mailbox', newState);
@@ -239,9 +238,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final dbId = '$accountId:$jmapId';
       // For JMAP accounts, path stores the JMAP mailbox ID so that
       // Email rows can reference it via mailboxPath.
-      await _db
-          .into(_db.mailboxes)
-          .insertOnConflictUpdate(
+      await _db.into(_db.mailboxes).insertOnConflictUpdate(
             MailboxesCompanion.insert(
               id: dbId,
               accountId: accountId,
@@ -258,13 +255,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
   // ── sync_state helpers ────────────────────────────────────────────────────
 
   Future<String?> _loadSyncState(String accountId, String resourceType) async {
-    final row =
-        await (_db.select(_db.syncStates)..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  t.resourceType.equals(resourceType),
-            ))
-            .getSingleOrNull();
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
+        .getSingleOrNull();
     return row?.state;
   }
 
@@ -273,9 +270,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String resourceType,
     String state,
   ) async {
-    await _db
-        .into(_db.syncStates)
-        .insertOnConflictUpdate(
+    await _db.into(_db.syncStates).insertOnConflictUpdate(
           SyncStatesCompanion.insert(
             accountId: accountId,
             resourceType: resourceType,
@@ -304,14 +299,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   model.Mailbox _toModel(MailboxRow row) => model.Mailbox(
-    id: row.id,
-    accountId: row.accountId,
-    path: row.path,
-    name: row.name,
-    unreadCount: row.unreadCount,
-    totalCount: row.totalCount,
-    role: row.role,
-  );
+        id: row.id,
+        accountId: row.accountId,
+        path: row.path,
+        name: row.name,
+        unreadCount: row.unreadCount,
+        totalCount: row.totalCount,
+        role: row.role,
+      );
 
   /// Maps enough_mail special-use flags (RFC 6154) to JMAP role strings (RFC 8621).
   static String? _imapRole(imap.Mailbox mb) {
@@ -328,7 +323,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<void> clearForResync(String accountId) async {
     await (_db.delete(
       _db.mailboxes,
-    )..where((t) => t.accountId.equals(accountId))).go();
+    )..where((t) => t.accountId.equals(accountId)))
+        .go();
   }
 
   @override
@@ -364,9 +360,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       await client.logout();
     }
     final id = '${account.id}:$name';
-    await _db
-        .into(_db.mailboxes)
-        .insertOnConflictUpdate(
+    await _db.into(_db.mailboxes).insertOnConflictUpdate(
           MailboxesCompanion.insert(
             id: id,
             accountId: account.id,
@@ -377,7 +371,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
     final row = await (_db.select(
       _db.mailboxes,
-    )..where((t) => t.id.equals(id))).getSingle();
+    )..where((t) => t.id.equals(id)))
+        .getSingle();
     return _toModel(row);
   }
 
@@ -419,9 +414,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
     }
     final dbId = '${account.id}:$newId';
-    await _db
-        .into(_db.mailboxes)
-        .insertOnConflictUpdate(
+    await _db.into(_db.mailboxes).insertOnConflictUpdate(
           MailboxesCompanion.insert(
             id: dbId,
             accountId: account.id,
@@ -432,7 +425,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
     final row = await (_db.select(
       _db.mailboxes,
-    )..where((t) => t.id.equals(dbId))).getSingle();
+    )..where((t) => t.id.equals(dbId)))
+        .getSingle();
     return _toModel(row);
   }
 }

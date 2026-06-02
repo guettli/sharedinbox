@@ -33,9 +33,8 @@ String buildAboutMarkdown({
   final gitCommitLine = _gitHash.isNotEmpty
       ? '| Git Commit | [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash) |\n'
       : '';
-  final deviceModelLine = deviceModel != null
-      ? '| Device Model | $deviceModel |\n'
-      : '';
+  final deviceModelLine =
+      deviceModel != null ? '| Device Model | $deviceModel |\n' : '';
 
   return '## [sharedinbox.de](https://sharedinbox.de)\n\n'
       '| Property | Value |\n'
