@@ -38,7 +38,8 @@ fi
 
 # Verify the connection
 echo "Verifying connection to Dagger engine via SSH tunnel..."
-if ! timeout 45 dagger query --progress=plain '{ version }' ; then
+# Use a simple command that doesn't require complex GraphQL operations.
+if ! timeout 45 dagger core --help >/dev/null 2>&1 ; then
     echo "Error: Dagger engine unreachable via tunnel at localhost:8080"
     # Debug
     ps aux | grep ssh
