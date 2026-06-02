@@ -17,25 +17,13 @@ fi
 # 1. Decrypt secrets using SOPS
 echo "Decrypting secrets with SOPS..."
 export SOPS_AGE_KEY="$SOPS_AGE_KEY"
-
 SECRETS_JSON=$(mktemp)
 trap "rm -f $SECRETS_JSON" EXIT
 
-# Decrypt the SOPS file to JSON
 sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
 DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
 DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
-
-if [ "$DAGGER_SSH_KEY" == "null" ] || [ -z "$DAGGER_SSH_KEY" ]; then
-    echo "Error: DAGGER_SSH_KEY not found in secrets.enc.yaml"
-    exit 1
-fi
-
-if [ "$DAGGER_ENGINE_HOST" == "null" ] || [ -z "$DAGGER_ENGINE_HOST" ]; then
-    echo "Error: DAGGER_ENGINE_HOST not found in secrets.enc.yaml"
-    exit 1
-fi
 
 # 2. Setup SSH key
 mkdir -p ~/.ssh
@@ -56,26 +44,28 @@ Host dagger-engine
     ControlPersist 10m
 SSHEOF
 
-# Append to main ssh config if not already there
-if ! grep -q "config.dagger" ~/.ssh/config 2>/dev/null; then
+if ! grep -q "Include ~/.ssh/config.dagger" ~/.ssh/config 2>/dev/null; then
     echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
 fi
 
-# 4. Export environment for subsequent CI steps
-export DAGGER_HOST="ssh://dagger-engine"
-
-if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "DAGGER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
-    echo "Tunnel established via SSH. Dagger is configured to use the remote engine at $DAGGER_ENGINE_HOST"
-else
-    echo "Dagger configured at ssh://dagger-engine"
+# 4. Debug SSH
+echo "Testing SSH connection to $DAGGER_ENGINE_HOST..."
+if ! ssh -F ~/.ssh/config.dagger dagger-engine "id && dagger version" ; then
+    echo "Error: Basic SSH connection to dagger-engine failed."
+    exit 1
 fi
 
-# 5. Verify connection
+# 5. Export environment
+export DAGGER_HOST="ssh://dagger-engine"
+if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "DAGGER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
+fi
+
+# 6. Verify connection
 echo "Verifying Dagger connection..."
-# We need to make sure we use the same environment in the probe
-if ! DAGGER_HOST=ssh://dagger-engine timeout 30 dagger query '{ version }' >/dev/null 2>&1; then
+if ! dagger query '{ version }' >/dev/null ; then
     echo "Error: Dagger engine is unreachable via SSH at $DAGGER_ENGINE_HOST"
+    # Try one more thing: explicit socket if we suspect something
     exit 1
 fi
 echo "Dagger connection verified."
