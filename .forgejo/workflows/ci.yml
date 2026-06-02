@@ -1,66 +1,14 @@
 name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
+on: [push, pull_request]
 jobs:
   check:
     name: Full Project Check
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 50
-
-      - name: Check runner tools
-        run: |
-          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          command -v sops >/dev/null 2>&1 || { echo "ERROR: sops is not installed in the runner image."; exit 1; }
-          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is not installed in the runner image."; exit 1; }
-
-      - name: Setup Dagger Remote Engine (via SSH/SOPS)
+      - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
-
-      - name: Locate Docker daemon for local Dagger engine
-        run: |
-          if [ -n "${_DAGGER_RUNNER_HOST:-}" ]; then
-            echo "Remote Dagger engine configured, no local Docker needed."
-            exit 0
-          fi
-          if [ -S /var/run/docker.sock ]; then
-            if DOCKER_HOST=unix:///var/run/docker.sock timeout 30 docker info >/dev/null 2>&1; then
-              echo "Docker available via host socket."
-              echo "DOCKER_HOST=unix:///var/run/docker.sock" >> "$GITHUB_ENV"
-              exit 0
-            fi
-          fi
-          echo "WARNING: No remote Dagger engine and no local Docker found." >&2
-          exit 1
-
-      - name: Prune Dagger cache before check
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          timeout 120 dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
-
       - name: Run Full Check Suite
-        env:
-          DAGGER_NO_NAG: "1"
         run: task check-dagger
-
-      - name: Prune Dagger cache after check
-        if: always()
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          timeout 120 dagger query '{ engine { localCache { prune(maxUsedSpace: "75gb", targetSpace: "50gb") } } }' || true
-
-      - name: Cleanup credentials
-        if: always()
-        run: rm -rf ~/.ssh/dagger_key ~/.ssh/config.dagger
