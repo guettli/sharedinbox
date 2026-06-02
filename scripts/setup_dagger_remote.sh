@@ -22,30 +22,26 @@ chmod 700 ~/.ssh
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts to satisfy Dagger's internal Go SSH client.
-# This prevents verification failures that could block the connection.
+# Add remote host to known_hosts
 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-# Use ssh-agent to manage the key. Dagger's internal client will use this
-# to authenticate without needing explicit identity file parameters in the URL.
-eval "$(ssh-agent -s)"
-ssh-add ~/.ssh/dagger_key
+# Create a background SSH tunnel to the Dagger engine.
+# We map local port 8080 to remote port 1774 (where our socat bridge is listening).
+echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
+ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:localhost:1774 "dagger@$DAGGER_ENGINE_HOST"
 
-# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST for Dagger engine redirection.
-# This tells the local Dagger CLI to use the remote engine via an SSH tunnel.
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger@$DAGGER_ENGINE_HOST"
+# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://localhost:8080"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger@$DAGGER_ENGINE_HOST" >> "$GITHUB_ENV"
-    echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-    echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080" >> "$GITHUB_ENV"
 fi
 
-# Verify the connection by running a simple Dagger query.
-echo "Verifying connection to remote Dagger engine at $DAGGER_ENGINE_HOST..."
+# Verify the connection
+echo "Verifying connection to Dagger engine via SSH tunnel..."
 if ! timeout 45 dagger query --progress=plain '{ version }' ; then
-    echo "Error: Dagger engine unreachable via SSH at $DAGGER_ENGINE_HOST"
-    # Debug: verify raw SSH connectivity to rule out basic network/auth issues.
-    ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no "dagger@$DAGGER_ENGINE_HOST" "id"
+    echo "Error: Dagger engine unreachable via tunnel at localhost:8080"
+    # Debug
+    ps aux | grep ssh
     exit 1
 fi
 echo "Dagger connection verified successfully."
