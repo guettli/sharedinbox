@@ -54,14 +54,12 @@ jobs:
         run: |
           command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
           command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          dpkg -s stunnel4 netcat-openbsd >/dev/null 2>&1 || { echo "ERROR: stunnel4/netcat-openbsd are not installed in the runner image. Add them to .forgejo/Dockerfile."; exit 1; }
+          command -v sops >/dev/null 2>&1 || { echo "ERROR: sops is not installed in the runner image."; exit 1; }
+          command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is not installed in the runner image."; exit 1; }
 
-      - name: Setup Dagger Remote Engine (via stunnel)
+      - name: Setup Dagger Remote Engine (via SSH/SOPS)
         env:
-          DAGGER_STUNNEL_URL: ${{ secrets.DAGGER_STUNNEL_URL }}
-          DAGGER_CA_CERT: ${{ secrets.DAGGER_CA_CERT }}
-          DAGGER_CLIENT_CERT: ${{ secrets.DAGGER_CLIENT_CERT }}
-          DAGGER_CLIENT_KEY: ${{ secrets.DAGGER_CLIENT_KEY }}
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
       - name: Locate Docker daemon for local Dagger engine
@@ -108,7 +106,7 @@ jobs:
 
       - name: Cleanup TLS credentials
         if: always()
-        run: rm -rf /tmp/dagger-tls /tmp/stunnel-dagger.conf /tmp/stunnel.pid
+        run: rm -rf ~/.ssh/dagger_key ~/.ssh/config.dagger /tmp/stunnel.pid
 
   merge-renovate:
     name: Auto-merge Renovate PR
