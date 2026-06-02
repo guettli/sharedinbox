@@ -22,7 +22,8 @@ chmod 700 ~/.ssh
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-cat << SSHEOF > ~/.ssh/config.dagger
+# Append config directly to avoid 'Include' issues in some Go-based SSH clients
+cat << SSHEOF >> ~/.ssh/config
 Host dagger-engine
     HostName $DAGGER_ENGINE_HOST
     User dagger
@@ -32,22 +33,20 @@ Host dagger-engine
     UserKnownHostsFile /dev/null
 SSHEOF
 
-if ! grep -q "Include ~/.ssh/config.dagger" ~/.ssh/config 2>/dev/null; then
-    echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
-fi
-
 # Export _EXPERIMENTAL_DAGGER_RUNNER_HOST for redirection
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger-engine"
+# Use the full SSH URL format to ensure Dagger has everything it needs
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger@$DAGGER_ENGINE_HOST?identityFile=~/.ssh/dagger_key&strictHostKeyChecking=no"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger@$DAGGER_ENGINE_HOST?identityFile=~/.ssh/dagger_key&strictHostKeyChecking=no" >> "$GITHUB_ENV"
 fi
 
 # Verify
 echo "Verifying connection to remote Dagger engine..."
-if ! timeout 30 dagger query '{ version }' >/dev/null ; then
+# Use --progress=plain to see what's happening if it hangs/fails
+if ! timeout 45 dagger query --progress=plain '{ version }' ; then
     echo "Error: Dagger engine unreachable via SSH at $DAGGER_ENGINE_HOST"
     # Debug: try to just run id over ssh
-    ssh -F ~/.ssh/config.dagger dagger-engine "id"
+    ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no "dagger@$DAGGER_ENGINE_HOST" "id"
     exit 1
 fi
 echo "Dagger connection verified."
