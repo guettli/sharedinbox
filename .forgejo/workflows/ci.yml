@@ -3,41 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - 'lib/**'
-      - 'test/**'
-      - 'integration_test/**'
-      - 'android/**'
-      - 'linux/**'
-      - 'assets/**'
-      - '!assets/changelog.txt'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
-      - 'scripts/**'
-      - 'stalwart-dev/**'
-      - 'ci/**'
-      - 'Taskfile.yml'
-      - 'drift_schemas/**'
-      - '.forgejo/workflows/ci.yml'
   pull_request:
-    paths:
-      - 'lib/**'
-      - 'test/**'
-      - 'integration_test/**'
-      - 'android/**'
-      - 'linux/**'
-      - 'assets/**'
-      - '!assets/changelog.txt'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
-      - 'scripts/**'
-      - 'stalwart-dev/**'
-      - 'ci/**'
-      - 'Taskfile.yml'
-      - 'drift_schemas/**'
-      - '.forgejo/workflows/ci.yml'
 
 jobs:
   check:
@@ -98,43 +64,3 @@ jobs:
       - name: Cleanup credentials
         if: always()
         run: rm -rf ~/.ssh/dagger_key ~/.ssh/config.dagger
-
-  merge-renovate:
-    name: Auto-merge Renovate PR
-    needs: [check]
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Merge if automerge label is set
-        env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          python3 - << 'PYEOF'
-          import os, json, urllib.request, urllib.error, sys
-          token = os.environ["FORGEJO_TOKEN"]
-          url_base = os.environ.get("GITHUB_SERVER_URL", "").rstrip("/")
-          repo = os.environ.get("GITHUB_REPOSITORY", "")
-          pr_number = os.environ["PR_NUMBER"]
-          api = f"{url_base}/api/v1/repos/{repo}"
-          headers = {"Authorization": f"token {token}", "Content-Type": "application/json"}
-          req = urllib.request.Request(f"{api}/issues/{pr_number}/labels", headers=headers)
-          with urllib.request.urlopen(req) as r:
-              labels = [l["name"] for l in json.loads(r.read())]
-          if "automerge" not in labels:
-              print(f"PR #{pr_number}: no 'automerge' label — major update, skipping")
-              sys.exit(0)
-          body = json.dumps({"Do": "merge"}).encode()
-          req = urllib.request.Request(f"{api}/pulls/{pr_number}/merge", data=body, headers=headers, method="POST")
-          try:
-              with urllib.request.urlopen(req) as r:
-                  print(f"PR #{pr_number} merged successfully")
-          except urllib.error.HTTPError as e:
-              err = e.read().decode()
-              if "already been merged" in err or "has been merged" in err:
-                  print(f"PR #{pr_number} already merged — OK")
-              else:
-                  print(f"Merge failed: {err}")
-                  sys.exit(1)
-          PYEOF
