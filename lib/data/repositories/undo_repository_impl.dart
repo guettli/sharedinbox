@@ -11,7 +11,9 @@ class UndoRepositoryImpl implements UndoRepository {
 
   @override
   Future<void> saveAction(UndoAction action) async {
-    await _db.into(_db.undoActions).insert(
+    await _db
+        .into(_db.undoActions)
+        .insert(
           UndoActionsCompanion.insert(
             id: action.id,
             accountId: action.accountId,
@@ -29,10 +31,11 @@ class UndoRepositoryImpl implements UndoRepository {
 
   @override
   Future<List<UndoAction>> getHistory({int limit = 10}) async {
-    final rows = await (_db.select(_db.undoActions)
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
-          ..limit(limit))
-        .get();
+    final rows =
+        await (_db.select(_db.undoActions)
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+              ..limit(limit))
+            .get();
     return rows.map((row) {
       return UndoAction.fromJson(
         jsonDecode(row.dataJson) as Map<String, dynamic>,

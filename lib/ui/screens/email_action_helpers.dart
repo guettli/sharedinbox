@@ -54,8 +54,9 @@ Future<Mailbox?> resolveMailboxByRole(
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
-            for (final m
-                in mailboxes.where((m) => m.path != currentMailboxPath))
+            for (final m in mailboxes.where(
+              (m) => m.path != currentMailboxPath,
+            ))
               ListTile(
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(m.name),

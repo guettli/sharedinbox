@@ -35,8 +35,9 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
     try {
       final url = Uri.https(domain, '/.well-known/jmap');
       final request = http.Request('GET', url)..followRedirects = false;
-      final streamed =
-          await _client.send(request).timeout(const Duration(seconds: 5));
+      final streamed = await _client
+          .send(request)
+          .timeout(const Duration(seconds: 5));
 
       String sessionUrl;
       if (streamed.statusCode >= 300 && streamed.statusCode < 400) {

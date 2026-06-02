@@ -11,19 +11,21 @@ void _expectLightMode(String html) {
 }
 
 Widget _wrap(Widget child) => MaterialApp(
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
-      home: Scaffold(body: child),
-    );
+  theme: ThemeData(
+    colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+    useMaterial3: true,
+  ),
+  home: Scaffold(body: child),
+);
 
 void main() {
   group('buildEmailHtml', () {
-    test('forces light color-scheme to prevent black-on-black in dark mode',
-        () {
-      _expectLightMode(buildEmailHtml('<p>Hello</p>'));
-    });
+    test(
+      'forces light color-scheme to prevent black-on-black in dark mode',
+      () {
+        _expectLightMode(buildEmailHtml('<p>Hello</p>'));
+      },
+    );
 
     test('includes email body content', () {
       final html = buildEmailHtml('<p>Test body</p>');
@@ -42,10 +44,10 @@ void main() {
       _expectLightMode(html);
     });
 
-    test('prevents horizontal overflow so wide HTML emails are not cut off',
-        () {
-      final html =
-          buildEmailHtml('<table width="600"><tr><td>x</td></tr></table>');
+    test('prevents horizontal overflow so wide HTML emails are not cut off', () {
+      final html = buildEmailHtml(
+        '<table width="600"><tr><td>x</td></tr></table>',
+      );
       // Body clips overflow so fixed-width email tables don't escape the viewport.
       expect(html, contains('overflow-x: hidden'));
       // Tables are forced to full viewport width so fixed pixel widths don't overflow.
@@ -62,11 +64,7 @@ void main() {
   group('SecureEmailWebView (Linux plain-text fallback)', () {
     testWidgets('renders extracted text from HTML', (tester) async {
       await tester.pumpWidget(
-        _wrap(
-          const SecureEmailWebView(
-            htmlBody: '<p>Hello <b>world</b></p>',
-          ),
-        ),
+        _wrap(const SecureEmailWebView(htmlBody: '<p>Hello <b>world</b></p>')),
       );
       expect(find.textContaining('Hello'), findsOneWidget);
       expect(find.textContaining('world'), findsOneWidget);
@@ -92,12 +90,11 @@ void main() {
       expect(find.byType(SelectableText), findsOneWidget);
     });
 
-    testWidgets('toggling loadRemoteImages rebuilds without error',
-        (tester) async {
+    testWidgets('toggling loadRemoteImages rebuilds without error', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-        _wrap(
-          const SecureEmailWebView(htmlBody: '<p>Body</p>'),
-        ),
+        _wrap(const SecureEmailWebView(htmlBody: '<p>Body</p>')),
       );
       await tester.pumpWidget(
         _wrap(
@@ -111,9 +108,7 @@ void main() {
     });
 
     testWidgets('handles empty HTML body', (tester) async {
-      await tester.pumpWidget(
-        _wrap(const SecureEmailWebView(htmlBody: '')),
-      );
+      await tester.pumpWidget(_wrap(const SecureEmailWebView(htmlBody: '')));
       expect(find.byType(SelectableText), findsOneWidget);
     });
   });

@@ -74,10 +74,7 @@ void main() {
           recipientKeyId: material.keyId,
           recipientPublicKeyBytes: material.publicKeyBytes,
           accounts: [
-            AccountPayload(
-              accountJson: account.toJson(),
-              password: 'secret',
-            ),
+            AccountPayload(accountJson: account.toJson(), password: 'secret'),
           ],
         );
 
@@ -99,10 +96,7 @@ void main() {
         await tester.tap(find.text('Import'));
         await tester.pumpAndSettle();
 
-        expect(
-          find.text('Imported 1 account successfully.'),
-          findsOneWidget,
-        );
+        expect(find.text('Imported 1 account successfully.'), findsOneWidget);
       },
     );
 

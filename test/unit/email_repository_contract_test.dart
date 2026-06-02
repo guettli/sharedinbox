@@ -44,10 +44,7 @@ abstract class EmailRepositoryContract {
   void run() {
     test('observeEmails starts empty', () async {
       final repo = await makeRepo();
-      expect(
-        await repo.observeEmails(_account.id, 'INBOX').first,
-        isEmpty,
-      );
+      expect(await repo.observeEmails(_account.id, 'INBOX').first, isEmpty);
     });
 
     test('observeEmails emits inserted email', () async {
@@ -61,10 +58,7 @@ abstract class EmailRepositoryContract {
     test('observeEmails only returns emails for the given mailbox', () async {
       final repo = await makeRepo();
       await insertEmail(repo, id: 'er-acc:1', mailboxPath: 'INBOX');
-      expect(
-        await repo.observeEmails(_account.id, 'Sent').first,
-        isEmpty,
-      );
+      expect(await repo.observeEmails(_account.id, 'Sent').first, isEmpty);
     });
 
     test('observeEmails orders by receivedAt descending', () async {
@@ -116,11 +110,7 @@ abstract class EmailRepositoryContract {
 
     test('setFlag flagged updates isFlagged', () async {
       final repo = await makeRepo();
-      await insertEmail(
-        repo,
-        id: 'er-acc:11',
-        mailboxPath: 'INBOX',
-      );
+      await insertEmail(repo, id: 'er-acc:11', mailboxPath: 'INBOX');
       await repo.setFlag('er-acc:11', flagged: true);
       final email = await repo.getEmail('er-acc:11');
       expect(email!.isFlagged, isTrue);
@@ -157,10 +147,7 @@ abstract class EmailRepositoryContract {
 
     test('observeThreads starts empty', () async {
       final repo = await makeRepo();
-      expect(
-        await repo.observeThreads(_account.id, 'INBOX').first,
-        isEmpty,
-      );
+      expect(await repo.observeThreads(_account.id, 'INBOX').first, isEmpty);
     });
   }
 }
@@ -199,7 +186,9 @@ class _EmailRepositoryImplContract extends EmailRepositoryContract {
     bool isFlagged = false,
     DateTime? receivedAt,
   }) async {
-    await _db.into(_db.emails).insert(
+    await _db
+        .into(_db.emails)
+        .insert(
           EmailsCompanion.insert(
             id: id,
             accountId: _account.id,

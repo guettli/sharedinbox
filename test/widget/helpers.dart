@@ -49,7 +49,7 @@ import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 
 class FakeAccountRepository implements AccountRepository {
   FakeAccountRepository([List<Account>? accounts])
-      : _accounts = List.of(accounts ?? []);
+    : _accounts = List.of(accounts ?? []);
 
   final List<Account> _accounts;
   bool hasPassword = true;
@@ -137,8 +137,7 @@ class FakeDraftRepository implements DraftRepository {
     final matches = _drafts.values.where((d) {
       if (replyToEmailId == null) return d.replyToEmailId == null;
       return d.replyToEmailId == replyToEmailId;
-    }).toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    }).toList()..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return matches.isEmpty ? null : matches.first;
   }
 
@@ -156,7 +155,7 @@ class FakeMailboxRepository implements MailboxRepository {
   final List<Mailbox> _mailboxes;
 
   FakeMailboxRepository([List<Mailbox>? mailboxes])
-      : _mailboxes = mailboxes ?? [];
+    : _mailboxes = mailboxes ?? [];
 
   @override
   Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
@@ -206,52 +205,49 @@ class FakeEmailRepository implements EmailRepository {
     EmailBody? emailBody,
     List<Email>? searchResults,
     String rawRfc822 = '',
-  })  : _emails = emails ?? [],
-        _emailDetail = emailDetail,
-        _searchResults = searchResults ?? [],
-        _rawRfc822 = rawRfc822,
-        _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
+  }) : _emails = emails ?? [],
+       _emailDetail = emailDetail,
+       _searchResults = searchResults ?? [],
+       _rawRfc822 = rawRfc822,
+       _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
 
   @override
   Stream<List<Email>> observeEmails(
     String accountId,
     String mailboxPath, {
     int limit = 50,
-  }) =>
-      Stream.value(List.of(_emails));
+  }) => Stream.value(List.of(_emails));
 
   @override
   Stream<List<EmailThread>> observeThreads(
     String accountId,
     String mailboxPath, {
     int limit = 50,
-  }) =>
-      observeEmails(accountId, mailboxPath).map((emails) {
-        return emails.map((e) {
-          return EmailThread(
-            threadId: e.threadId ?? e.id,
-            subject: e.subject,
-            preview: e.preview,
-            participants: e.from,
-            latestDate: e.sentAt ?? e.receivedAt,
-            messageCount: 1,
-            hasUnread: !e.isSeen,
-            isFlagged: e.isFlagged,
-            latestEmailId: e.id,
-            emailIds: [e.id],
-            accountId: e.accountId,
-            mailboxPath: e.mailboxPath,
-          );
-        }).toList();
-      });
+  }) => observeEmails(accountId, mailboxPath).map((emails) {
+    return emails.map((e) {
+      return EmailThread(
+        threadId: e.threadId ?? e.id,
+        subject: e.subject,
+        preview: e.preview,
+        participants: e.from,
+        latestDate: e.sentAt ?? e.receivedAt,
+        messageCount: 1,
+        hasUnread: !e.isSeen,
+        isFlagged: e.isFlagged,
+        latestEmailId: e.id,
+        emailIds: [e.id],
+        accountId: e.accountId,
+        mailboxPath: e.mailboxPath,
+      );
+    }).toList();
+  });
 
   @override
   Stream<List<Email>> observeEmailsInThread(
     String accountId,
     String mailboxPath,
     String threadId,
-  ) =>
-      Stream.value(_emails.where((e) => e.threadId == threadId).toList());
+  ) => Stream.value(_emails.where((e) => e.threadId == threadId).toList());
 
   @override
   Future<Email?> getEmail(String emailId) async => _emailDetail;
@@ -263,8 +259,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<SyncEmailsResult> syncEmails(
     String accountId,
     String mailboxPath,
-  ) async =>
-      SyncEmailsResult.zero;
+  ) async => SyncEmailsResult.zero;
 
   @override
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
@@ -290,8 +285,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<Email?> findEmailByMessageId(
     String accountId,
     String messageId,
-  ) async =>
-      null;
+  ) async => null;
 
   @override
   Future<String?> deleteEmail(String emailId) async => null;
@@ -309,8 +303,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,
-  ) async =>
-      '/tmp/${attachment.filename}';
+  ) async => '/tmp/${attachment.filename}';
 
   @override
   Future<String> fetchRawRfc822(String emailId) async => _rawRfc822;
@@ -320,30 +313,26 @@ class FakeEmailRepository implements EmailRepository {
     String accountId,
     String mailboxPath,
     String query,
-  ) async =>
-      _searchResults;
+  ) async => _searchResults;
 
   @override
   Future<List<Email>> searchEmailsGlobal(
     String? accountId,
     String query,
-  ) async =>
-      _searchResults;
+  ) async => _searchResults;
 
   @override
   Future<List<Email>> getEmailsByAddress(
     String? accountId,
     String address,
-  ) async =>
-      [];
+  ) async => [];
 
   @override
   Future<List<EmailAddress>> searchAddresses(
     String? accountId,
     String query, {
     int limit = 10,
-  }) async =>
-      [];
+  }) async => [];
 
   @override
   Stream<void> watchJmapPush(String accountId, String password) =>
@@ -353,8 +342,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
+  ) async => ReliabilityResult.healthy;
 
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
@@ -553,28 +541,26 @@ List<Override> baseOverrides({
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
-}) =>
-    [
-      accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
-      ),
-      mailboxRepositoryProvider
-          .overrideWithValue(FakeMailboxRepository(mailboxes)),
-      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-      draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-      accountDiscoveryServiceProvider.overrideWithValue(
-        FakeDiscoveryService(discovery ?? UnknownDiscovery()),
-      ),
-      connectionTestServiceProvider.overrideWithValue(
-        FakeConnectionTestService(error: connectionError),
-      ),
-      shareKeyRepositoryProvider.overrideWithValue(
-        shareKeyRepository ?? FakeShareKeyRepository(),
-      ),
-      // syncHealthProvider is backed by a Drift StreamQuery; override with a
-      // plain stream to avoid "A Timer is still pending" in tests.
-      syncHealthProvider.overrideWith((ref, _) => Stream.value(syncHealth)),
-    ];
+}) => [
+  accountRepositoryProvider.overrideWithValue(
+    FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
+  ),
+  mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository(mailboxes)),
+  emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+  draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+  accountDiscoveryServiceProvider.overrideWithValue(
+    FakeDiscoveryService(discovery ?? UnknownDiscovery()),
+  ),
+  connectionTestServiceProvider.overrideWithValue(
+    FakeConnectionTestService(error: connectionError),
+  ),
+  shareKeyRepositoryProvider.overrideWithValue(
+    shareKeyRepository ?? FakeShareKeyRepository(),
+  ),
+  // syncHealthProvider is backed by a Drift StreamQuery; override with a
+  // plain stream to avoid "A Timer is still pending" in tests.
+  syncHealthProvider.overrideWith((ref, _) => Stream.value(syncHealth)),
+];
 
 // ---------------------------------------------------------------------------
 // Common test fixtures
@@ -604,23 +590,22 @@ Email testEmail({
   bool isFlagged = false,
   bool hasAttachment = false,
   String? listUnsubscribeHeader,
-}) =>
-    Email(
-      id: id,
-      accountId: 'acc-1',
-      mailboxPath: 'INBOX',
-      uid: 42,
-      subject: subject,
-      receivedAt: DateTime(2024, 6),
-      sentAt: DateTime(2024, 6),
-      from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-      to: const [EmailAddress(email: 'alice@example.com')],
-      cc: const [],
-      isSeen: isSeen,
-      isFlagged: isFlagged,
-      hasAttachment: hasAttachment,
-      listUnsubscribeHeader: listUnsubscribeHeader,
-    );
+}) => Email(
+  id: id,
+  accountId: 'acc-1',
+  mailboxPath: 'INBOX',
+  uid: 42,
+  subject: subject,
+  receivedAt: DateTime(2024, 6),
+  sentAt: DateTime(2024, 6),
+  from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+  to: const [EmailAddress(email: 'alice@example.com')],
+  cc: const [],
+  isSeen: isSeen,
+  isFlagged: isFlagged,
+  hasAttachment: hasAttachment,
+  listUnsubscribeHeader: listUnsubscribeHeader,
+);
 
 class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
@@ -635,12 +620,12 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
 
   @override
   Stream<UserPreferences> observePreferences() => Stream.value(
-        UserPreferences(
-          menuPosition: menuPosition,
-          mailViewButtonPosition: mailViewButtonPosition,
-          afterMailViewAction: afterMailViewAction,
-        ),
-      );
+    UserPreferences(
+      menuPosition: menuPosition,
+      mailViewButtonPosition: mailViewButtonPosition,
+      afterMailViewAction: afterMailViewAction,
+    ),
+  );
 
   @override
   Future<void> updateMenuPosition(MenuPosition position) async {

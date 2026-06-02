@@ -16,91 +16,94 @@ Future<imap.ImapClient> _fakeImapConnect(
   Account account,
   String username,
   String password,
-) async =>
-    throw const SocketException('fake — no real IMAP server in tests');
+) async => throw const SocketException('fake — no real IMAP server in tests');
 
 void main() {
-  test('AccountSyncManager schedules IMAP sync for multiple accounts',
-      () async {
-    final accounts = _FakeAccounts('pw');
-    final mailboxes = _FakeMailboxes();
-    final emails = _FakeEmails();
-    final logs = _FakeLogs();
+  test(
+    'AccountSyncManager schedules IMAP sync for multiple accounts',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
 
-    final manager = AccountSyncManager(
-      accounts,
-      mailboxes,
-      emails,
-      syncLog: logs,
-      imapConnect: _fakeImapConnect,
-    );
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+        imapConnect: _fakeImapConnect,
+      );
 
-    final a1 = _account('1');
-    final a2 = _account('2');
+      final a1 = _account('1');
+      final a2 = _account('2');
 
-    manager.start();
-    accounts.push([a1, a2]);
+      manager.start();
+      accounts.push([a1, a2]);
 
-    // Allow some time for listeners to fire.
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Allow some time for listeners to fire.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
-    expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
+      expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
+      expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
 
-    manager.dispose();
-  });
+      manager.dispose();
+    },
+  );
 
-  test('AccountSyncManager schedules JMAP sync for multiple accounts',
-      () async {
-    final accounts = _FakeAccounts('pw');
-    final mailboxes = _FakeMailboxes();
-    final emails = _FakeEmails();
-    final logs = _FakeLogs();
+  test(
+    'AccountSyncManager schedules JMAP sync for multiple accounts',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
 
-    final manager = AccountSyncManager(
-      accounts,
-      mailboxes,
-      emails,
-      syncLog: logs,
-    );
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+      );
 
-    final a1 = _jmapAccount('1');
-    final a2 = _jmapAccount('2');
+      final a1 = _jmapAccount('1');
+      final a2 = _jmapAccount('2');
 
-    manager.start();
-    accounts.push([a1, a2]);
+      manager.start();
+      accounts.push([a1, a2]);
 
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
-    expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
+      expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
+      expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
 
-    manager.dispose();
-  });
+      manager.dispose();
+    },
+  );
 }
 
 Account _account(String id) => Account(
-      id: id,
-      displayName: 'Account $id',
-      email: '$id@example.com',
-      imapHost: 'localhost',
-      imapPort: 143,
-      imapSsl: false,
-      smtpHost: 'localhost',
-      smtpPort: 25,
-      smtpSsl: false,
-    );
+  id: id,
+  displayName: 'Account $id',
+  email: '$id@example.com',
+  imapHost: 'localhost',
+  imapPort: 143,
+  imapSsl: false,
+  smtpHost: 'localhost',
+  smtpPort: 25,
+  smtpSsl: false,
+);
 
 Account _jmapAccount(String id) => Account(
-      id: id,
-      displayName: 'Account $id',
-      email: '$id@example.com',
-      type: AccountType.jmap,
-      jmapUrl: 'http://localhost:8080/.well-known/jmap',
-      smtpHost: 'localhost',
-      smtpPort: 25,
-      smtpSsl: false,
-    );
+  id: id,
+  displayName: 'Account $id',
+  email: '$id@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'http://localhost:8080/.well-known/jmap',
+  smtpHost: 'localhost',
+  smtpPort: 25,
+  smtpSsl: false,
+);
 
 class _FakeAccounts implements AccountRepository {
   _FakeAccounts(this.password);
@@ -129,16 +132,16 @@ class _FakeAccounts implements AccountRepository {
 class _FakeMailboxes implements MailboxRepository {
   @override
   Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
-        Mailbox(
-          id: '$accountId:INBOX',
-          accountId: accountId ?? '',
-          path: 'INBOX',
-          name: 'INBOX',
-          unreadCount: 0,
-          totalCount: 0,
-          role: 'inbox',
-        ),
-      ]);
+    Mailbox(
+      id: '$accountId:INBOX',
+      accountId: accountId ?? '',
+      path: 'INBOX',
+      name: 'INBOX',
+      unreadCount: 0,
+      totalCount: 0,
+      role: 'inbox',
+    ),
+  ]);
 
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
@@ -155,27 +158,22 @@ class _FakeMailboxes implements MailboxRepository {
     String accountId,
     String name,
     String role,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
+  ) async => Mailbox(
+    id: '$accountId:$name',
+    accountId: accountId,
+    path: name,
+    name: name,
+    role: role,
+    unreadCount: 0,
+    totalCount: 0,
+  );
 }
 
 class _FakeEmails implements EmailRepository {
   final syncCounts = <String, int>{};
 
   @override
-  Stream<List<Email>> observeEmails(
-    String a,
-    String m, {
-    int limit = 50,
-  }) =>
+  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
       Stream.value([]);
 
   @override
@@ -183,8 +181,7 @@ class _FakeEmails implements EmailRepository {
     String a,
     String m, {
     int limit = 50,
-  }) =>
-      Stream.value([]);
+  }) => Stream.value([]);
 
   @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
@@ -228,8 +225,7 @@ class _FakeEmails implements EmailRepository {
   Future<Email?> findEmailByMessageId(
     String accountId,
     String messageId,
-  ) async =>
-      null;
+  ) async => null;
 
   @override
   Future<String?> deleteEmail(String id) async => null;
@@ -247,8 +243,7 @@ class _FakeEmails implements EmailRepository {
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,
-  ) async =>
-      '/tmp/${attachment.filename}';
+  ) async => '/tmp/${attachment.filename}';
 
   @override
   Future<String> fetchRawRfc822(String emailId) async => '';
@@ -267,8 +262,7 @@ class _FakeEmails implements EmailRepository {
     String? a,
     String q, {
     int limit = 10,
-  }) async =>
-      [];
+  }) async => [];
 
   @override
   Stream<void> watchJmapPush(String accountId, String password) =>
@@ -278,8 +272,7 @@ class _FakeEmails implements EmailRepository {
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
+  ) async => ReliabilityResult.healthy;
 
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>

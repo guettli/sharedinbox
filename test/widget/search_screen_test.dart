@@ -89,9 +89,7 @@ void main() {
       expect(find.text('No results'), findsOneWidget);
     });
 
-    testWidgets('shows email results under "Messages" section', (
-      tester,
-    ) async {
+    testWidgets('shows email results under "Messages" section', (tester) async {
       final email = testEmail(subject: 'Invoice Q3');
       await tester.pumpWidget(
         buildApp(
@@ -122,9 +120,7 @@ void main() {
       expect(find.text('Invoice Q3'), findsOneWidget);
     });
 
-    testWidgets('shows folder results under "Folders" section', (
-      tester,
-    ) async {
+    testWidgets('shows folder results under "Folders" section', (tester) async {
       const archiveMailbox = Mailbox(
         id: 'acc-1:Archive',
         accountId: 'acc-1',

@@ -23,7 +23,9 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
     final keyIdHex = _hex(material.keyId);
     final expiresAt = DateTime.now().toUtc().add(const Duration(minutes: 20));
 
-    await _db.into(_db.shareKeys).insert(
+    await _db
+        .into(_db.shareKeys)
+        .insert(
           ShareKeysCompanion.insert(
             id: keyIdHex,
             publicKey: base64.encode(material.publicKeyBytes),
@@ -40,9 +42,9 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
     await _pruneExpired();
 
     final keyIdHex = _hex(keyId);
-    final row = await (_db.select(_db.shareKeys)
-          ..where((t) => t.id.equals(keyIdHex)))
-        .getSingleOrNull();
+    final row = await (_db.select(
+      _db.shareKeys,
+    )..where((t) => t.id.equals(keyIdHex))).getSingleOrNull();
 
     if (row == null) return null;
     if (row.expiresAt.isBefore(DateTime.now().toUtc())) return null;
@@ -55,10 +57,9 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
   }
 
   Future<void> _pruneExpired() async {
-    await (_db.delete(_db.shareKeys)
-          ..where(
-            (t) => t.expiresAt.isSmallerThanValue(DateTime.now().toUtc()),
-          ))
+    await (_db.delete(
+          _db.shareKeys,
+        )..where((t) => t.expiresAt.isSmallerThanValue(DateTime.now().toUtc())))
         .go();
   }
 

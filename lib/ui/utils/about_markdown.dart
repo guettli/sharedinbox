@@ -26,14 +26,16 @@ String buildAboutMarkdown({
   final osName = _capitalize(Platform.operatingSystem);
   final isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
   final locale = Localizations.localeOf(context).toString();
-  final textScale =
-      MediaQuery.of(context).textScaler.scale(1.0).toStringAsFixed(1);
+  final textScale = MediaQuery.of(
+    context,
+  ).textScaler.scale(1.0).toStringAsFixed(1);
 
   final gitCommitLine = _gitHash.isNotEmpty
       ? '| Git Commit | [$_gitHash](https://codeberg.org/guettli/sharedinbox/commit/$_gitHash) |\n'
       : '';
-  final deviceModelLine =
-      deviceModel != null ? '| Device Model | $deviceModel |\n' : '';
+  final deviceModelLine = deviceModel != null
+      ? '| Device Model | $deviceModel |\n'
+      : '';
 
   return '## [sharedinbox.de](https://sharedinbox.de)\n\n'
       '| Property | Value |\n'

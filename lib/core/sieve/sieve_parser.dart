@@ -421,8 +421,8 @@ class _Scanner {
     if (_isWordChar(ch)) {
       final start = _pos;
       var end = _pos + 1;
-      while (
-          end < _src.length && (_isWordChar(_src[end]) || _src[end] == ':')) {
+      while (end < _src.length &&
+          (_isWordChar(_src[end]) || _src[end] == ':')) {
         // Include trailing colon for "text:" multiline token.
         if (_src[end] == ':') {
           end++;
@@ -466,9 +466,7 @@ class _Scanner {
 
   String readTaggedArg() {
     if (!isAtEnd && _src[_pos] == ':') return readWord();
-    throw SieveParseException(
-      'Expected tagged argument at position $_pos',
-    );
+    throw SieveParseException('Expected tagged argument at position $_pos');
   }
 
   String? peekSizeUnit() {
@@ -480,9 +478,7 @@ class _Scanner {
 
   String readDigits() {
     if (isAtEnd || !_isDigit(_src[_pos])) {
-      throw SieveParseException(
-        'Expected number at position $_pos',
-      );
+      throw SieveParseException('Expected number at position $_pos');
     }
     final start = _pos;
     while (!isAtEnd && _isDigit(_src[_pos])) {
@@ -493,9 +489,7 @@ class _Scanner {
 
   String readQuotedString() {
     if (_src[_pos] != '"') {
-      throw SieveParseException(
-        'Expected " at position $_pos',
-      );
+      throw SieveParseException('Expected " at position $_pos');
     }
     _pos++; // skip opening quote
     final buf = StringBuffer();

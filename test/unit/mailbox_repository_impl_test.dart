@@ -66,17 +66,16 @@ http.Client _mockJmap({required List<Map<String, dynamic>> apiResponses}) {
 Map<String, dynamic> _mailboxGetResponse({
   required String state,
   required List<Map<String, dynamic>> list,
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Mailbox/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '0',
-        ],
-      ],
-    };
+}) => {
+  'sessionState': 'sess1',
+  'methodResponses': [
+    [
+      'Mailbox/get',
+      {'accountId': 'acct1', 'state': state, 'list': list},
+      '0',
+    ],
+  ],
+};
 
 Map<String, dynamic> _mailboxChangesResponse({
   required String oldState,
@@ -84,25 +83,24 @@ Map<String, dynamic> _mailboxChangesResponse({
   List<String> created = const [],
   List<String> updated = const [],
   List<String> destroyed = const [],
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Mailbox/changes',
-          {
-            'accountId': 'acct1',
-            'oldState': oldState,
-            'newState': newState,
-            'hasMoreChanges': false,
-            'created': created,
-            'updated': updated,
-            'destroyed': destroyed,
-          },
-          '0',
-        ],
-      ],
-    };
+}) => {
+  'sessionState': 'sess1',
+  'methodResponses': [
+    [
+      'Mailbox/changes',
+      {
+        'accountId': 'acct1',
+        'oldState': oldState,
+        'newState': newState,
+        'hasMoreChanges': false,
+        'created': created,
+        'updated': updated,
+        'destroyed': destroyed,
+      },
+      '0',
+    ],
+  ],
+};
 
 Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
@@ -111,7 +109,8 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
   AppDatabase db,
   AccountRepositoryImpl accounts,
   MailboxRepositoryImpl mailboxes,
-}) _makeRepos({http.Client? httpClient}) {
+})
+_makeRepos({http.Client? httpClient}) {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
   final mailboxes = MailboxRepositoryImpl(
@@ -145,7 +144,9 @@ void main() {
         ('INBOX', 'Inbox'),
         ('Drafts', 'Drafts'),
       ]) {
-        await r.db.into(r.db.mailboxes).insert(
+        await r.db
+            .into(r.db.mailboxes)
+            .insert(
               MailboxesCompanion.insert(
                 id: 'acc-1:$path',
                 accountId: 'acc-1',
@@ -178,7 +179,9 @@ void main() {
         );
         await r.accounts.addAccount(other, 'pw2');
 
-        await r.db.into(r.db.mailboxes).insert(
+        await r.db
+            .into(r.db.mailboxes)
+            .insert(
               MailboxesCompanion.insert(
                 id: 'acc-1:INBOX',
                 accountId: 'acc-1',
@@ -186,7 +189,9 @@ void main() {
                 name: 'Inbox',
               ),
             );
-        await r.db.into(r.db.mailboxes).insert(
+        await r.db
+            .into(r.db.mailboxes)
+            .insert(
               MailboxesCompanion.insert(
                 id: 'acc-2:INBOX',
                 accountId: 'acc-2',
@@ -205,7 +210,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      await r.db.into(r.db.mailboxes).insert(
+      await r.db
+          .into(r.db.mailboxes)
+          .insert(
             MailboxesCompanion.insert(
               id: 'acc-1:INBOX',
               accountId: 'acc-1',
@@ -305,7 +312,9 @@ void main() {
         await r.accounts.addAccount(_jmapAccount, 'pw');
 
         // Pre-populate DB with existing mailboxes and state
-        await r.db.into(r.db.mailboxes).insertOnConflictUpdate(
+        await r.db
+            .into(r.db.mailboxes)
+            .insertOnConflictUpdate(
               MailboxesCompanion.insert(
                 id: 'jmap-1:mbx1',
                 accountId: 'jmap-1',
@@ -315,7 +324,9 @@ void main() {
                 totalCount: const Value(10),
               ),
             );
-        await r.db.into(r.db.mailboxes).insertOnConflictUpdate(
+        await r.db
+            .into(r.db.mailboxes)
+            .insertOnConflictUpdate(
               MailboxesCompanion.insert(
                 id: 'jmap-1:mbx2',
                 accountId: 'jmap-1',
@@ -323,7 +334,9 @@ void main() {
                 name: 'Sent',
               ),
             );
-        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+        await r.db
+            .into(r.db.syncStates)
+            .insertOnConflictUpdate(
               SyncStatesCompanion.insert(
                 accountId: 'jmap-1',
                 resourceType: 'Mailbox',
@@ -351,7 +364,9 @@ void main() {
           ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
-        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+        await r.db
+            .into(r.db.syncStates)
+            .insertOnConflictUpdate(
               SyncStatesCompanion.insert(
                 accountId: 'jmap-1',
                 resourceType: 'Mailbox',
@@ -419,7 +434,9 @@ void main() {
     test('findMailboxByRole returns matching mailbox', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.mailboxes).insert(
+      await r.db
+          .into(r.db.mailboxes)
+          .insert(
             MailboxesCompanion.insert(
               id: 'jmap-1:mbx-inbox',
               accountId: 'jmap-1',
@@ -486,8 +503,11 @@ void main() {
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
 
-        final result = await r.mailboxes
-            .createMailboxWithRole('jmap-1', 'Archive', 'archive');
+        final result = await r.mailboxes.createMailboxWithRole(
+          'jmap-1',
+          'Archive',
+          'archive',
+        );
 
         expect(result.name, 'Archive');
         expect(result.role, 'archive');
@@ -498,81 +518,82 @@ void main() {
         expect(found!.name, 'Archive');
       });
 
-      test(
-        'JMAP: throws when server returns no created ID',
-        () async {
-          final r = _makeRepos(
-            httpClient: _mockJmap(
-              apiResponses: [
-                {
-                  'sessionState': 'sess1',
-                  'methodResponses': [
-                    [
-                      'Mailbox/set',
-                      {
-                        'accountId': 'acct1',
-                        'created': null,
-                        'notCreated': {
-                          'new-mailbox': {'type': 'serverFail'},
-                        },
+      test('JMAP: throws when server returns no created ID', () async {
+        final r = _makeRepos(
+          httpClient: _mockJmap(
+            apiResponses: [
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Mailbox/set',
+                    {
+                      'accountId': 'acct1',
+                      'created': null,
+                      'notCreated': {
+                        'new-mailbox': {'type': 'serverFail'},
                       },
-                      '0',
-                    ],
+                    },
+                    '0',
                   ],
-                },
-              ],
-            ),
-          );
-          await r.accounts.addAccount(_jmapAccount, 'pw');
+                ],
+              },
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
 
-          await expectLater(
-            r.mailboxes.createMailboxWithRole('jmap-1', 'Archive', 'archive'),
-            throwsA(isA<Exception>()),
-          );
-        },
-      );
+        await expectLater(
+          r.mailboxes.createMailboxWithRole('jmap-1', 'Archive', 'archive'),
+          throwsA(isA<Exception>()),
+        );
+      });
     });
 
     group('syncMailboxes IMAP preserves manually-set role', () {
-      test('existing role is kept when server returns no special-use flag',
-          () async {
-        final spy = SnoozeSpyImapClient();
-        // Make listMailboxes return a plain folder without \Archive.
-        final db = openTestDatabase();
-        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+      test(
+        'existing role is kept when server returns no special-use flag',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          // Make listMailboxes return a plain folder without \Archive.
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
 
-        // Override listMailboxes to return one plain folder.
-        final fakeClient = _PlainArchiveImapClient();
-        final mailboxes = MailboxRepositoryImpl(
-          db,
-          accounts,
-          imapConnect: (_, __, ___) async => fakeClient,
-        );
-        await accounts.addAccount(_account, 'pw');
+          // Override listMailboxes to return one plain folder.
+          final fakeClient = _PlainArchiveImapClient();
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => fakeClient,
+          );
+          await accounts.addAccount(_account, 'pw');
 
-        // Pre-seed the DB with role='archive' (as if user created the folder).
-        await db.into(db.mailboxes).insert(
-              MailboxesCompanion.insert(
-                id: 'acc-1:Archive',
-                accountId: 'acc-1',
-                path: 'Archive',
-                name: 'Archive',
-                role: const Value('archive'),
-              ),
-            );
+          // Pre-seed the DB with role='archive' (as if user created the folder).
+          await db
+              .into(db.mailboxes)
+              .insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Archive',
+                  accountId: 'acc-1',
+                  path: 'Archive',
+                  name: 'Archive',
+                  role: const Value('archive'),
+                ),
+              );
 
-        await mailboxes.syncMailboxes('acc-1');
+          await mailboxes.syncMailboxes('acc-1');
 
-        final found = await mailboxes.findMailboxByRole('acc-1', 'archive');
-        expect(
-          found,
-          isNotNull,
-          reason: 'Manually-set role should be preserved after sync',
-        );
-        expect(found!.path, 'Archive');
-        // Suppress unused warning on spy.
-        expect(spy, isNotNull);
-      });
+          final found = await mailboxes.findMailboxByRole('acc-1', 'archive');
+          expect(
+            found,
+            isNotNull,
+            reason: 'Manually-set role should be preserved after sync',
+          );
+          expect(found!.path, 'Archive');
+          // Suppress unused warning on spy.
+          expect(spy, isNotNull);
+        },
+      );
     });
   });
 }
@@ -587,22 +608,20 @@ class _PlainArchiveImapClient extends SnoozeSpyImapClient {
     List<String>? mailboxPatterns,
     List<String>? selectionOptions,
     List<imap.ReturnOption>? returnOptions,
-  }) async =>
-      [
-        imap.Mailbox(
-          encodedName: 'Archive',
-          encodedPath: 'Archive',
-          pathSeparator: '/',
-          flags: [], // No \Archive special-use flag
-        ),
-      ];
+  }) async => [
+    imap.Mailbox(
+      encodedName: 'Archive',
+      encodedPath: 'Archive',
+      pathSeparator: '/',
+      flags: [], // No \Archive special-use flag
+    ),
+  ];
 
   @override
   Future<imap.Mailbox> statusMailbox(
     imap.Mailbox mailbox,
     List<imap.StatusFlags> flags,
-  ) async =>
-      mailbox;
+  ) async => mailbox;
 
   @override
   Future<dynamic> logout() async {}

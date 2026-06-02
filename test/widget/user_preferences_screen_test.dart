@@ -35,10 +35,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('Single mail view button position'),
-        findsOneWidget,
-      );
+      expect(find.text('Single mail view button position'), findsOneWidget);
     });
 
     testWidgets('menu position bottom option is selected by default', (
@@ -53,8 +50,9 @@ void main() {
       await tester.pumpAndSettle();
 
       final radioGroups = find.byType(RadioGroup<MenuPosition>);
-      final menuGroup =
-          tester.widget<RadioGroup<MenuPosition>>(radioGroups.first);
+      final menuGroup = tester.widget<RadioGroup<MenuPosition>>(
+        radioGroups.first,
+      );
       expect(menuGroup.groupValue, MenuPosition.bottom);
     });
 
@@ -70,8 +68,9 @@ void main() {
       await tester.pumpAndSettle();
 
       final radioGroups = find.byType(RadioGroup<MenuPosition>);
-      final mailViewGroup =
-          tester.widget<RadioGroup<MenuPosition>>(radioGroups.last);
+      final mailViewGroup = tester.widget<RadioGroup<MenuPosition>>(
+        radioGroups.last,
+      );
       expect(mailViewGroup.groupValue, MenuPosition.bottom);
     });
 
@@ -89,36 +88,38 @@ void main() {
       await tester.tap(find.text('Top').first);
       await tester.pumpAndSettle();
 
-      final repo = ProviderScope.containerOf(
-        tester.element(find.byType(UserPreferencesScreen)),
-      ).read(userPreferencesRepositoryProvider)
-          as FakeUserPreferencesRepository;
+      final repo =
+          ProviderScope.containerOf(
+                tester.element(find.byType(UserPreferencesScreen)),
+              ).read(userPreferencesRepositoryProvider)
+              as FakeUserPreferencesRepository;
 
       expect(repo.menuPosition, MenuPosition.top);
     });
 
     testWidgets(
-        'tapping Top in mail view button position section updates the repo', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/preferences',
-          overrides: baseOverrides(),
-        ),
-      );
-      await tester.pumpAndSettle();
+      'tapping Top in mail view button position section updates the repo',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/preferences',
+            overrides: baseOverrides(),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Top').last);
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Top').last);
+        await tester.pumpAndSettle();
 
-      final repo = ProviderScope.containerOf(
-        tester.element(find.byType(UserPreferencesScreen)),
-      ).read(userPreferencesRepositoryProvider)
-          as FakeUserPreferencesRepository;
+        final repo =
+            ProviderScope.containerOf(
+                  tester.element(find.byType(UserPreferencesScreen)),
+                ).read(userPreferencesRepositoryProvider)
+                as FakeUserPreferencesRepository;
 
-      expect(repo.mailViewButtonPosition, MenuPosition.top);
-    });
+        expect(repo.mailViewButtonPosition, MenuPosition.top);
+      },
+    );
 
     testWidgets('shows after mail action section', (tester) async {
       await tester.pumpWidget(
@@ -153,14 +154,13 @@ void main() {
       await tester.pumpAndSettle();
 
       final radioGroups = find.byType(RadioGroup<AfterMailViewAction>);
-      final group =
-          tester.widget<RadioGroup<AfterMailViewAction>>(radioGroups.first);
+      final group = tester.widget<RadioGroup<AfterMailViewAction>>(
+        radioGroups.first,
+      );
       expect(group.groupValue, AfterMailViewAction.nextMessage);
     });
 
-    testWidgets('tapping Return to mailbox updates the repo', (
-      tester,
-    ) async {
+    testWidgets('tapping Return to mailbox updates the repo', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/preferences',
@@ -175,10 +175,11 @@ void main() {
       await tester.tap(find.text('Return to mailbox'));
       await tester.pumpAndSettle();
 
-      final repo = ProviderScope.containerOf(
-        tester.element(find.byType(UserPreferencesScreen)),
-      ).read(userPreferencesRepositoryProvider)
-          as FakeUserPreferencesRepository;
+      final repo =
+          ProviderScope.containerOf(
+                tester.element(find.byType(UserPreferencesScreen)),
+              ).read(userPreferencesRepositoryProvider)
+              as FakeUserPreferencesRepository;
 
       expect(repo.afterMailViewAction, AfterMailViewAction.showMailbox);
     });

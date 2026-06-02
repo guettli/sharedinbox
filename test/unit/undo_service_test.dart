@@ -122,70 +122,74 @@ void main() {
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
   });
 
-  test('undo pushes inverse action into log when destinationMailboxPath is set',
-      () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
+  test(
+    'undo pushes inverse action into log when destinationMailboxPath is set',
+    () async {
+      final action = UndoAction(
+        id: 'del1',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Trash',
+      );
 
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
+      when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+      when(
+        mockEmailRepo.cancelPendingChange(any, any),
+      ).thenAnswer((_) async => false);
 
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
-    await notifier.undo(actionId: 'del1');
+      final notifier = container.read(undoServiceProvider.notifier);
+      await notifier.init();
+      await notifier.pushAction(action);
+      await notifier.undo(actionId: 'del1');
 
-    // Original entry stays; inverse is added.
-    final log = container.read(undoServiceProvider);
-    expect(log.length, 2);
-    expect(log[0].id, 'del1');
-    final inv = log[1];
-    expect(inv.id, 'del1-inv');
-    expect(inv.type, UndoType.move);
-    expect(inv.emailIds, ['e1']);
-    expect(inv.sourceMailboxPath, 'Trash');
-    expect(inv.destinationMailboxPath, 'INBOX');
-    verify(
-      mockUndoRepo.saveAction(
-        argThat(predicate<UndoAction>((a) => a.id == 'del1-inv')),
-      ),
-    ).called(1);
-  });
+      // Original entry stays; inverse is added.
+      final log = container.read(undoServiceProvider);
+      expect(log.length, 2);
+      expect(log[0].id, 'del1');
+      final inv = log[1];
+      expect(inv.id, 'del1-inv');
+      expect(inv.type, UndoType.move);
+      expect(inv.emailIds, ['e1']);
+      expect(inv.sourceMailboxPath, 'Trash');
+      expect(inv.destinationMailboxPath, 'INBOX');
+      verify(
+        mockUndoRepo.saveAction(
+          argThat(predicate<UndoAction>((a) => a.id == 'del1-inv')),
+        ),
+      ).called(1);
+    },
+  );
 
-  test('undo without destinationMailboxPath does not push inverse action',
-      () async {
-    final action = UndoAction(
-      id: 'mv1',
-      accountId: 'acc1',
-      type: UndoType.move,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      // no destinationMailboxPath
-    );
+  test(
+    'undo without destinationMailboxPath does not push inverse action',
+    () async {
+      final action = UndoAction(
+        id: 'mv1',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'INBOX',
+        // no destinationMailboxPath
+      );
 
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
+      when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+      when(
+        mockEmailRepo.cancelPendingChange(any, any),
+      ).thenAnswer((_) async => false);
 
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
-    await notifier.undo(actionId: 'mv1');
+      final notifier = container.read(undoServiceProvider.notifier);
+      await notifier.init();
+      await notifier.pushAction(action);
+      await notifier.undo(actionId: 'mv1');
 
-    // Original entry stays; no inverse since no destinationMailboxPath.
-    final log = container.read(undoServiceProvider);
-    expect(log.length, 1);
-    expect(log.first.id, 'mv1');
-  });
+      // Original entry stays; no inverse since no destinationMailboxPath.
+      final log = container.read(undoServiceProvider);
+      expect(log.length, 1);
+      expect(log.first.id, 'mv1');
+    },
+  );
 
   test('undo with actionId removes and undos specific action', () async {
     // action1 has no destination → no inverse action
@@ -350,13 +354,9 @@ void main() {
     );
 
     // Simulate slow DB load
-    when(
-      mockUndoRepo.getHistory(limit: anyNamed('limit')),
-    ).thenAnswer(
-      (_) => Future.delayed(
-        const Duration(milliseconds: 10),
-        () => [persisted],
-      ),
+    when(mockUndoRepo.getHistory(limit: anyNamed('limit'))).thenAnswer(
+      (_) =>
+          Future.delayed(const Duration(milliseconds: 10), () => [persisted]),
     );
 
     final notifier = container.read(undoServiceProvider.notifier);

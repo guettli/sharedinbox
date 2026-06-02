@@ -23,7 +23,8 @@ const _jmapAccount = Account(
   jmapUrl: 'https://example.com/jmap/session',
 );
 
-const _jmapSessionJson = '{'
+const _jmapSessionJson =
+    '{'
     '"capabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{}},'
     '"accounts":{},"primaryAccounts":{},"username":"alice@example.com",'
     '"apiUrl":"https://example.com/jmap/","downloadUrl":"","uploadUrl":"","state":"0"'
@@ -116,14 +117,15 @@ void main() {
         MockClient((_) async => http.Response('', 200)),
         imapConnect: (_, __, ___) async => FakeImapClient(),
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
-        manageSieveConnect: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async {
-          sieveCalled = true;
-          throw Exception('should not be called');
-        },
+        manageSieveConnect:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async {
+              sieveCalled = true;
+              throw Exception('should not be called');
+            },
       );
       await svc.testConnection(_imapAccount, 'pw');
       expect(sieveCalled, false);
@@ -142,12 +144,12 @@ void main() {
         MockClient((_) async => http.Response('', 200)),
         imapConnect: (_, __, ___) async => FakeImapClient(),
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
-        manageSieveConnect: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async =>
-            throw Exception('sieve boom'),
+        manageSieveConnect:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async => throw Exception('sieve boom'),
       );
       expect(
         () => svc.testConnection(accountWithSieve, 'pw'),

@@ -56,7 +56,8 @@ void main() {
     });
 
     test('real-world HTML email snippet', () {
-      const html = '<p>Hello <b>Alice</b>,</p>'
+      const html =
+          '<p>Hello <b>Alice</b>,</p>'
           '<p>Please find the invoice attached.</p>'
           '<p>Best regards,<br/>Bob</p>';
       final result = htmlToPlain(html);

@@ -56,11 +56,11 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen> {
     try {
       final content = widget.isLocal
           ? await ref
-              .read(localSieveRepositoryProvider)
-              .getScriptContent(widget.accountId, widget.script!.blobId)
+                .read(localSieveRepositoryProvider)
+                .getScriptContent(widget.accountId, widget.script!.blobId)
           : await ref
-              .read(sieveRepositoryProvider)
-              .getScriptContent(widget.accountId, widget.script!.blobId);
+                .read(sieveRepositoryProvider)
+                .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
         setState(() => _loadingContent = false);
@@ -87,14 +87,18 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen> {
     });
     try {
       if (widget.isLocal) {
-        await ref.read(localSieveRepositoryProvider).saveScript(
+        await ref
+            .read(localSieveRepositoryProvider)
+            .saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
               content: _contentController.text,
             );
       } else {
-        await ref.read(sieveRepositoryProvider).saveScript(
+        await ref
+            .read(sieveRepositoryProvider)
+            .saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,

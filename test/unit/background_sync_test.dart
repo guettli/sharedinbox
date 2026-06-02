@@ -9,12 +9,13 @@ void main() {
   // startup, throwing PlatformException(channel-error, ...).
   // registerBackgroundSync() must absorb the failure and let the app continue.
   test(
-      'registerBackgroundSync completes without throwing when plugin is unavailable',
-      () async {
-    // In the unit-test environment the native WorkManager plugin is not
-    // registered, so Workmanager().initialize() throws a PlatformException or
-    // MissingPluginException.  The fix catches it.  This test fails before the
-    // fix (exception propagates) and passes after it (exception is swallowed).
-    await expectLater(registerBackgroundSync(), completes);
-  });
+    'registerBackgroundSync completes without throwing when plugin is unavailable',
+    () async {
+      // In the unit-test environment the native WorkManager plugin is not
+      // registered, so Workmanager().initialize() throws a PlatformException or
+      // MissingPluginException.  The fix catches it.  This test fails before the
+      // fix (exception propagates) and passes after it (exception is swallowed).
+      await expectLater(registerBackgroundSync(), completes);
+    },
+  );
 }

@@ -162,8 +162,9 @@ void main() {
       final allTriggers = await db
           .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
           .get();
-      final triggerNames =
-          allTriggers.map((r) => r.read<String>('name')).toSet();
+      final triggerNames = allTriggers
+          .map((r) => r.read<String>('name'))
+          .toSet();
       expect(
         triggerNames,
         containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
@@ -178,17 +179,17 @@ void main() {
 
       // v28: mime_tree_json column on email_bodies.
       await db
-          .customSelect(
-            'SELECT mime_tree_json FROM email_bodies LIMIT 0',
-          )
+          .customSelect('SELECT mime_tree_json FROM email_bodies LIMIT 0')
           .get();
 
       // v29: local_sieve_scripts table.
       await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
 
       // v30: duration_ms column on sync_log_mailboxes.
-      final syncLogMailboxColumns =
-          await _tableColumns(db, 'sync_log_mailboxes');
+      final syncLogMailboxColumns = await _tableColumns(
+        db,
+        'sync_log_mailboxes',
+      );
       expect(syncLogMailboxColumns, contains('duration_ms'));
 
       // v32: local_sieve_applied table.
@@ -214,14 +215,14 @@ void main() {
     });
 
     test(
-        'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
-        () async {
-      final dbFile = File('test_migration_v22.db');
-      if (dbFile.existsSync()) dbFile.deleteSync();
+      'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
+      () async {
+        final dbFile = File('test_migration_v22.db');
+        if (dbFile.existsSync()) dbFile.deleteSync();
 
-      // Build a v22 database schema directly with raw SQL.
-      final rawDb = sqlite.sqlite3.open(dbFile.path);
-      rawDb.execute('''
+        // Build a v22 database schema directly with raw SQL.
+        final rawDb = sqlite.sqlite3.open(dbFile.path);
+        rawDb.execute('''
         CREATE TABLE accounts (
           id TEXT NOT NULL PRIMARY KEY,
           display_name TEXT NOT NULL,
@@ -242,7 +243,7 @@ void main() {
           verbose INTEGER NOT NULL DEFAULT 0 CHECK ("verbose" IN (0, 1))
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE drafts (
           id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
           account_id TEXT NULL,
@@ -254,7 +255,7 @@ void main() {
           updated_at INTEGER NOT NULL
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE mailboxes (
           id TEXT NOT NULL PRIMARY KEY,
           account_id TEXT NOT NULL,
@@ -265,7 +266,7 @@ void main() {
           role TEXT NULL
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE emails (
           id TEXT NOT NULL PRIMARY KEY,
           account_id TEXT NOT NULL,
@@ -289,7 +290,7 @@ void main() {
           snoozed_from_mailbox_path TEXT NULL
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE threads (
           account_id TEXT NOT NULL,
           mailbox_path TEXT NOT NULL,
@@ -306,7 +307,7 @@ void main() {
           PRIMARY KEY (account_id, mailbox_path, id)
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE email_bodies (
           email_id TEXT NOT NULL PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
           text_body TEXT NULL,
@@ -316,7 +317,7 @@ void main() {
           headers_json TEXT NULL
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE sync_logs (
           id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
           account_id TEXT NOT NULL,
@@ -333,7 +334,7 @@ void main() {
           protocol_log TEXT NULL
         );
       ''');
-      rawDb.execute('''
+        rawDb.execute('''
         CREATE TABLE sync_log_mailboxes (
           id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
           sync_log_id INTEGER NOT NULL REFERENCES sync_logs (id) ON DELETE CASCADE,
@@ -343,77 +344,81 @@ void main() {
           bytes_transferred INTEGER NOT NULL DEFAULT 0
         );
       ''');
-      rawDb.execute('PRAGMA user_version = 22;');
-      rawDb.close();
+        rawDb.execute('PRAGMA user_version = 22;');
+        rawDb.close();
 
-      final db = AppDatabase(NativeDatabase(dbFile));
-      // Trigger migration.
-      await db.select(db.accounts).get();
+        final db = AppDatabase(NativeDatabase(dbFile));
+        // Trigger migration.
+        await db.select(db.accounts).get();
 
-      final emailColumns = await _tableColumns(db, 'emails');
-      expect(emailColumns, contains('list_unsubscribe_header'));
+        final emailColumns = await _tableColumns(db, 'emails');
+        expect(emailColumns, contains('list_unsubscribe_header'));
 
-      final draftColumns = await _tableColumns(db, 'drafts');
-      expect(draftColumns, contains('imap_server_id'));
+        final draftColumns = await _tableColumns(db, 'drafts');
+        expect(draftColumns, contains('imap_server_id'));
 
-      // v25: new indexes on mailboxes and threads.
-      final allIndexes = await db
-          .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
-          .get();
-      final indexNames = allIndexes.map((r) => r.read<String>('name')).toSet();
-      expect(indexNames, contains('mailboxes_account_id'));
-      expect(indexNames, contains('threads_latest_date'));
+        // v25: new indexes on mailboxes and threads.
+        final allIndexes = await db
+            .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
+            .get();
+        final indexNames = allIndexes
+            .map((r) => r.read<String>('name'))
+            .toSet();
+        expect(indexNames, contains('mailboxes_account_id'));
+        expect(indexNames, contains('threads_latest_date'));
 
-      // v26: FTS5 virtual table and triggers.
-      final allTriggers = await db
-          .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
-          .get();
-      final triggerNames =
-          allTriggers.map((r) => r.read<String>('name')).toSet();
-      expect(
-        triggerNames,
-        containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
-      );
-      await db.customSelect('SELECT count(*) FROM email_fts').get();
+        // v26: FTS5 virtual table and triggers.
+        final allTriggers = await db
+            .customSelect("SELECT name FROM sqlite_master WHERE type='trigger'")
+            .get();
+        final triggerNames = allTriggers
+            .map((r) => r.read<String>('name'))
+            .toSet();
+        expect(
+          triggerNames,
+          containsAll(['email_fts_ai', 'email_fts_au', 'email_fts_ad']),
+        );
+        await db.customSelect('SELECT count(*) FROM email_fts').get();
 
-      // v27: search_history_entries table.
-      await db
-          .customSelect('SELECT count(*) FROM search_history_entries')
-          .get();
+        // v27: search_history_entries table.
+        await db
+            .customSelect('SELECT count(*) FROM search_history_entries')
+            .get();
 
-      // v28: mime_tree_json column on email_bodies.
-      await db
-          .customSelect(
-            'SELECT mime_tree_json FROM email_bodies LIMIT 0',
-          )
-          .get();
+        // v28: mime_tree_json column on email_bodies.
+        await db
+            .customSelect('SELECT mime_tree_json FROM email_bodies LIMIT 0')
+            .get();
 
-      // v29: local_sieve_scripts table.
-      await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
+        // v29: local_sieve_scripts table.
+        await db.customSelect('SELECT count(*) FROM local_sieve_scripts').get();
 
-      // v30: duration_ms column on sync_log_mailboxes.
-      final syncLogMailboxColumns =
-          await _tableColumns(db, 'sync_log_mailboxes');
-      expect(syncLogMailboxColumns, contains('duration_ms'));
+        // v30: duration_ms column on sync_log_mailboxes.
+        final syncLogMailboxColumns = await _tableColumns(
+          db,
+          'sync_log_mailboxes',
+        );
+        expect(syncLogMailboxColumns, contains('duration_ms'));
 
-      // v33: error_stack_trace and is_permanent columns on sync_logs.
-      final syncLogColumns = await _tableColumns(db, 'sync_logs');
-      expect(syncLogColumns, contains('error_stack_trace'));
-      expect(syncLogColumns, contains('is_permanent'));
+        // v33: error_stack_trace and is_permanent columns on sync_logs.
+        final syncLogColumns = await _tableColumns(db, 'sync_logs');
+        expect(syncLogColumns, contains('error_stack_trace'));
+        expect(syncLogColumns, contains('is_permanent'));
 
-      // v34: user_preferences table.
-      await db.customSelect('SELECT count(*) FROM user_preferences').get();
+        // v34: user_preferences table.
+        await db.customSelect('SELECT count(*) FROM user_preferences').get();
 
-      // v35: mail_view_button_position column on user_preferences.
-      final userPrefsColumns = await _tableColumns(db, 'user_preferences');
-      expect(userPrefsColumns, contains('mail_view_button_position'));
+        // v35: mail_view_button_position column on user_preferences.
+        final userPrefsColumns = await _tableColumns(db, 'user_preferences');
+        expect(userPrefsColumns, contains('mail_view_button_position'));
 
-      // v36: after_mail_view_action column on user_preferences.
-      expect(userPrefsColumns, contains('after_mail_view_action'));
+        // v36: after_mail_view_action column on user_preferences.
+        expect(userPrefsColumns, contains('after_mail_view_action'));
 
-      await db.close();
-      if (dbFile.existsSync()) dbFile.deleteSync();
-    });
+        await db.close();
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      },
+    );
 
     test('fresh install creates all tables at schemaVersion 36', () async {
       final db = AppDatabase(NativeDatabase.memory());
@@ -453,8 +458,10 @@ void main() {
       expect(draftColumns, contains('imap_server_id'));
 
       // v30: duration_ms column on sync_log_mailboxes.
-      final syncLogMailboxColumns =
-          await _tableColumns(db, 'sync_log_mailboxes');
+      final syncLogMailboxColumns = await _tableColumns(
+        db,
+        'sync_log_mailboxes',
+      );
       expect(syncLogMailboxColumns, contains('duration_ms'));
 
       // v33: error_stack_trace and is_permanent columns on sync_logs.

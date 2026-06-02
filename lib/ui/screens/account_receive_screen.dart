@@ -209,28 +209,24 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
         _Step.showingPubKey => _buildPubKeyView(context),
         _Step.scanning => _buildScannerView(context),
         _Step.importing => const Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Importing accounts…'),
-              ],
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Importing accounts…'),
+            ],
           ),
+        ),
         _Step.done => const Center(
-            child: Icon(
-              Icons.check_circle,
-              size: 64,
-              color: Colors.green,
-            ),
-          ),
+          child: Icon(Icons.check_circle, size: 64, color: Colors.green),
+        ),
         _Step.error => Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('Error: $_errorMessage'),
-            ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('Error: $_errorMessage'),
           ),
+        ),
       },
     );
   }

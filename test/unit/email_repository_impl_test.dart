@@ -68,26 +68,25 @@ Map<String, dynamic> _emailGetResponse({
   required String state,
   required List<Map<String, dynamic>> list,
   int? total,
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Email/query',
-          {
-            'accountId': 'acct1',
-            'ids': list.map((e) => e['id']).toList(),
-            'total': total ?? list.length,
-          },
-          '0',
-        ],
-        [
-          'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '1',
-        ],
-      ],
-    };
+}) => {
+  'sessionState': 'sess1',
+  'methodResponses': [
+    [
+      'Email/query',
+      {
+        'accountId': 'acct1',
+        'ids': list.map((e) => e['id']).toList(),
+        'total': total ?? list.length,
+      },
+      '0',
+    ],
+    [
+      'Email/get',
+      {'accountId': 'acct1', 'state': state, 'list': list},
+      '1',
+    ],
+  ],
+};
 
 Map<String, dynamic> _emailChangesResponse({
   required String oldState,
@@ -95,40 +94,38 @@ Map<String, dynamic> _emailChangesResponse({
   List<String> created = const [],
   List<String> updated = const [],
   List<String> destroyed = const [],
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Email/changes',
-          {
-            'accountId': 'acct1',
-            'oldState': oldState,
-            'newState': newState,
-            'hasMoreChanges': false,
-            'created': created,
-            'updated': updated,
-            'destroyed': destroyed,
-          },
-          '0',
-        ],
-      ],
-    };
+}) => {
+  'sessionState': 'sess1',
+  'methodResponses': [
+    [
+      'Email/changes',
+      {
+        'accountId': 'acct1',
+        'oldState': oldState,
+        'newState': newState,
+        'hasMoreChanges': false,
+        'created': created,
+        'updated': updated,
+        'destroyed': destroyed,
+      },
+      '0',
+    ],
+  ],
+};
 
 Map<String, dynamic> _emailGetOnly({
   required String state,
   required List<Map<String, dynamic>> list,
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '1',
-        ],
-      ],
-    };
+}) => {
+  'sessionState': 'sess1',
+  'methodResponses': [
+    [
+      'Email/get',
+      {'accountId': 'acct1', 'state': state, 'list': list},
+      '1',
+    ],
+  ],
+};
 
 Map<String, dynamic> _jmapEmail({
   required String id,
@@ -136,25 +133,24 @@ Map<String, dynamic> _jmapEmail({
   String subject = 'Hello',
   bool seen = false,
   String? threadId,
-}) =>
-    {
-      'id': id,
-      'mailboxIds': {mailboxId: true},
-      'subject': subject,
-      'sentAt': '2024-01-01T10:00:00Z',
-      'receivedAt': '2024-01-01T10:00:01Z',
-      'from': [
-        {'name': 'Sender', 'email': 'sender@example.com'},
-      ],
-      'to': [
-        {'name': 'Alice', 'email': 'alice@example.com'},
-      ],
-      'cc': [],
-      'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
-      'hasAttachment': false,
-      'preview': 'Hello world',
-      'threadId': threadId,
-    };
+}) => {
+  'id': id,
+  'mailboxIds': {mailboxId: true},
+  'subject': subject,
+  'sentAt': '2024-01-01T10:00:00Z',
+  'receivedAt': '2024-01-01T10:00:01Z',
+  'from': [
+    {'name': 'Sender', 'email': 'sender@example.com'},
+  ],
+  'to': [
+    {'name': 'Alice', 'email': 'alice@example.com'},
+  ],
+  'cc': [],
+  'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
+  'hasAttachment': false,
+  'preview': 'Hello world',
+  'threadId': threadId,
+};
 
 Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
@@ -163,7 +159,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
 ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-    _makeRepos({
+_makeRepos({
   http.Client? httpClient,
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
@@ -203,7 +199,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:42',
               accountId: 'acc-1',
@@ -223,7 +221,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:7',
               accountId: 'acc-1',
@@ -247,7 +247,9 @@ void main() {
         (3, DateTime(2024, 3)),
         (2, DateTime(2024, 2)),
       ]) {
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:$uid',
                 accountId: 'acc-1',
@@ -274,7 +276,9 @@ void main() {
     test('getEmailBody propagates IMAP error when not cached', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -292,7 +296,9 @@ void main() {
     test('getEmailBody returns cached body without IMAP call', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -301,7 +307,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emailBodies).insert(
+      await r.db
+          .into(r.db.emailBodies)
+          .insert(
             EmailBodiesCompanion.insert(
               emailId: 'acc-1:1',
               textBody: const Value('Hello'),
@@ -322,7 +330,9 @@ void main() {
       await r.accounts.addAccount(_account, 'pw');
 
       final now = DateTime.now();
-      await r.db.into(r.db.threads).insert(
+      await r.db
+          .into(r.db.threads)
+          .insert(
             ThreadsCompanion.insert(
               id: 'tid1',
               accountId: 'acc-1',
@@ -349,7 +359,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -359,7 +371,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:2',
               accountId: 'acc-1',
@@ -370,8 +384,9 @@ void main() {
             ),
           );
 
-      final emails =
-          await r.emails.observeEmailsInThread('acc-1', 'INBOX', 'tid1').first;
+      final emails = await r.emails
+          .observeEmailsInThread('acc-1', 'INBOX', 'tid1')
+          .first;
       expect(emails, hasLength(2));
       expect(emails.map((e) => e.id).toSet(), {'acc-1:1', 'acc-1:2'});
     });
@@ -386,7 +401,9 @@ void main() {
         'pw',
       );
 
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -396,7 +413,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-2:1',
               accountId: 'acc-2',
@@ -425,7 +444,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -435,7 +456,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:2',
               accountId: 'acc-1',
@@ -453,47 +476,53 @@ void main() {
       expect(results.first.subject, 'foobar baz');
     });
 
-    test('searchAddresses returns results sorted by most recently used',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'searchAddresses returns results sorted by most recently used',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
 
-      final older = DateTime(2024);
-      final newer = DateTime(2024, 6);
+        final older = DateTime(2024);
+        final newer = DateTime(2024, 6);
 
-      // Two emails — older one has alice@, newer one has bob@.
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:old',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 1,
-              receivedAt: older,
-              toAddresses: const Value(
-                '[{"name":"Alice","email":"alice@example.com"}]',
+        // Two emails — older one has alice@, newer one has bob@.
+        await r.db
+            .into(r.db.emails)
+            .insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:old',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: older,
+                toAddresses: const Value(
+                  '[{"name":"Alice","email":"alice@example.com"}]',
+                ),
               ),
-            ),
-          );
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:new',
-              accountId: 'acc-1',
-              mailboxPath: 'Sent',
-              uid: 2,
-              receivedAt: newer,
-              toAddresses: const Value(
-                '[{"name":"Bob","email":"bob@example.com"}]',
+            );
+        await r.db
+            .into(r.db.emails)
+            .insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:new',
+                accountId: 'acc-1',
+                mailboxPath: 'Sent',
+                uid: 2,
+                receivedAt: newer,
+                toAddresses: const Value(
+                  '[{"name":"Bob","email":"bob@example.com"}]',
+                ),
               ),
-            ),
-          );
+            );
 
-      // Query matching both; newer (bob) should come first.
-      final results = await r.emails.searchAddresses(null, 'example');
-      expect(
-        results.map((a) => a.email).toList(),
-        ['bob@example.com', 'alice@example.com'],
-      );
-    });
+        // Query matching both; newer (bob) should come first.
+        final results = await r.emails.searchAddresses(null, 'example');
+        expect(results.map((a) => a.email).toList(), [
+          'bob@example.com',
+          'alice@example.com',
+        ]);
+      },
+    );
 
     // ── IMAP method tests ────────────────────────────────────────────────────
 
@@ -502,7 +531,9 @@ void main() {
       () async {
         final r = _makeRepos();
         await r.accounts.addAccount(_account, 'pw');
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:5',
                 accountId: 'acc-1',
@@ -528,7 +559,9 @@ void main() {
       () async {
         final r = _makeRepos();
         await r.accounts.addAccount(_account, 'pw');
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:5',
                 accountId: 'acc-1',
@@ -552,7 +585,9 @@ void main() {
     test('setFlag flagged=true enqueues flag_flagged change', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:5',
               accountId: 'acc-1',
@@ -575,7 +610,9 @@ void main() {
       () async {
         final r = _makeRepos();
         await r.accounts.addAccount(_account, 'pw');
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:5',
                 accountId: 'acc-1',
@@ -599,7 +636,9 @@ void main() {
       () async {
         final r = _makeRepos();
         await r.accounts.addAccount(_account, 'pw');
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:5',
                 accountId: 'acc-1',
@@ -626,7 +665,9 @@ void main() {
       () async {
         final r = _makeRepos();
         await r.accounts.addAccount(_account, 'pw');
-        await r.db.into(r.db.emails).insert(
+        await r.db
+            .into(r.db.emails)
+            .insert(
               EmailsCompanion.insert(
                 id: 'acc-1:5',
                 accountId: 'acc-1',
@@ -650,7 +691,9 @@ void main() {
       final r = _makeRepos();
       // _makeRepos uses _noImapConnect which throws UnsupportedError
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'Email',
@@ -671,7 +714,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       // Pre-seed a flag_seen at attempts=4
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: _account.id,
               resourceType: 'Email',
@@ -697,54 +742,60 @@ void main() {
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     });
 
-    test('snooze flush selects src mailbox and moves email to Snoozed',
-        () async {
-      final spy = SnoozeSpyImapClient();
-      final r = _makeRepos(
-        imapConnect: (_, __, ___) async => spy,
-      );
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'Snoozed',
-              uid: 5,
-              receivedAt: DateTime(2024),
-            ),
-          );
-      await r.db.into(r.db.pendingChanges).insert(
-            PendingChangesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'Email',
-              resourceId: 'acc-1:5',
-              changeType: 'snooze',
-              payload: jsonEncode({
-                'uid': 5,
-                'src': 'INBOX',
-                'dest': 'Snoozed',
-                'until': '2026-05-10T15:00:00.000',
-              }),
-              createdAt: DateTime.now(),
-            ),
-          );
+    test(
+      'snooze flush selects src mailbox and moves email to Snoozed',
+      () async {
+        final spy = SnoozeSpyImapClient();
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db
+            .into(r.db.emails)
+            .insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'Snoozed',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db
+            .into(r.db.pendingChanges)
+            .insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: 'acc-1:5',
+                changeType: 'snooze',
+                payload: jsonEncode({
+                  'uid': 5,
+                  'src': 'INBOX',
+                  'dest': 'Snoozed',
+                  'until': '2026-05-10T15:00:00.000',
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
 
-      await r.emails.flushPendingChanges('acc-1', 'pw');
+        await r.emails.flushPendingChanges('acc-1', 'pw');
 
-      // Change successfully applied — removed from queue.
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-      // Source mailbox extracted from 'src', not 'mailboxPath'.
-      expect(spy.selectedMailbox, 'INBOX');
-      expect(spy.createdMailbox, 'Snoozed');
-      expect(spy.movedToMailbox, 'Snoozed');
-    });
+        // Change successfully applied — removed from queue.
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // Source mailbox extracted from 'src', not 'mailboxPath'.
+        expect(spy.selectedMailbox, 'INBOX');
+        expect(spy.createdMailbox, 'Snoozed');
+        expect(spy.movedToMailbox, 'Snoozed');
+      },
+    );
   });
 
   group('Snooze', () {
     test('snoozeEmail enqueues snooze change and updates local DB', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:5',
               accountId: 'acc-1',
@@ -772,7 +823,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       // Seed Inbox mailbox
-      await r.db.into(r.db.mailboxes).insert(
+      await r.db
+          .into(r.db.mailboxes)
+          .insert(
             MailboxesCompanion.insert(
               id: 'acc-1:INBOX',
               accountId: 'acc-1',
@@ -783,7 +836,9 @@ void main() {
           );
 
       final past = DateTime.now().subtract(const Duration(hours: 1));
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:5',
               accountId: 'acc-1',
@@ -812,64 +867,65 @@ void main() {
     http.Client mockBodyClient({
       String text = 'Hello from JMAP',
       String html = '<p>Hello from JMAP</p>',
-    }) =>
-        MockClient((req) async {
-          if (req.url.path.contains('well-known')) {
-            return http.Response(
-              jsonEncode({
-                'apiUrl': 'https://jmap.example.com/api/',
-                'accounts': {
-                  'acct1': {'name': 'alice@example.com', 'isPersonal': true},
-                },
-                'primaryAccounts': {
-                  'urn:ietf:params:jmap:core': 'acct1',
-                  'urn:ietf:params:jmap:mail': 'acct1',
-                },
-                'capabilities': {},
-                'username': 'alice@example.com',
-                'state': 'sess1',
-              }),
-              200,
-            );
-          }
-          return http.Response(
-            jsonEncode({
-              'sessionState': 'sess1',
-              'methodResponses': [
-                [
-                  'Email/get',
+    }) => MockClient((req) async {
+      if (req.url.path.contains('well-known')) {
+        return http.Response(
+          jsonEncode({
+            'apiUrl': 'https://jmap.example.com/api/',
+            'accounts': {
+              'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+            },
+            'primaryAccounts': {
+              'urn:ietf:params:jmap:core': 'acct1',
+              'urn:ietf:params:jmap:mail': 'acct1',
+            },
+            'capabilities': {},
+            'username': 'alice@example.com',
+            'state': 'sess1',
+          }),
+          200,
+        );
+      }
+      return http.Response(
+        jsonEncode({
+          'sessionState': 'sess1',
+          'methodResponses': [
+            [
+              'Email/get',
+              {
+                'accountId': 'acct1',
+                'state': 'es1',
+                'list': [
                   {
-                    'accountId': 'acct1',
-                    'state': 'es1',
-                    'list': [
-                      {
-                        'id': 'e1',
-                        'textBody': [
-                          {'partId': '1', 'type': 'text/plain'},
-                        ],
-                        'htmlBody': [
-                          {'partId': '2', 'type': 'text/html'},
-                        ],
-                        'bodyValues': {
-                          '1': {'value': text, 'isTruncated': false},
-                          '2': {'value': html, 'isTruncated': false},
-                        },
-                        'attachments': [],
-                      },
+                    'id': 'e1',
+                    'textBody': [
+                      {'partId': '1', 'type': 'text/plain'},
                     ],
+                    'htmlBody': [
+                      {'partId': '2', 'type': 'text/html'},
+                    ],
+                    'bodyValues': {
+                      '1': {'value': text, 'isTruncated': false},
+                      '2': {'value': html, 'isTruncated': false},
+                    },
+                    'attachments': [],
                   },
-                  '0',
                 ],
-              ],
-            }),
-            200,
-          );
-        });
+              },
+              '0',
+            ],
+          ],
+        }),
+        200,
+      );
+    });
 
     test('fetches body via JMAP Email/get and caches it', () async {
       final r = _makeRepos(httpClient: mockBodyClient());
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -938,7 +994,9 @@ void main() {
         }),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -1017,7 +1075,9 @@ void main() {
         }),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -1047,7 +1107,9 @@ void main() {
     test('mimeTree is null when bodyStructure is absent', () async {
       final r = _makeRepos(httpClient: mockBodyClient());
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -1126,7 +1188,9 @@ void main() {
       await r.accounts.addAccount(_jmapAccount, 'pw');
 
       // Pre-populate
-      await r.db.into(r.db.emails).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.emails)
+          .insertOnConflictUpdate(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -1136,7 +1200,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emails).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.emails)
+          .insertOnConflictUpdate(
             EmailsCompanion.insert(
               id: 'jmap-1:e2',
               accountId: 'jmap-1',
@@ -1146,7 +1212,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.syncStates)
+          .insertOnConflictUpdate(
             SyncStatesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1173,7 +1241,9 @@ void main() {
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.syncStates)
+          .insertOnConflictUpdate(
             SyncStatesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1228,7 +1298,9 @@ void main() {
       AccountRepositoryImpl accounts,
     ) async {
       await accounts.addAccount(_jmapAccount, 'pw');
-      await db.into(db.emails).insert(
+      await db
+          .into(db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'jmap-1:e1',
               accountId: 'jmap-1',
@@ -1344,7 +1416,9 @@ void main() {
       String payload = '{"seen":true}',
     }) async {
       await accounts.addAccount(_jmapAccount, 'pw');
-      await db.into(db.pendingChanges).insert(
+      await db
+          .into(db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1458,7 +1532,9 @@ void main() {
 
       final r = _makeRepos(httpClient: client);
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.syncStates)
+          .insertOnConflictUpdate(
             SyncStatesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1466,7 +1542,9 @@ void main() {
               syncedAt: DateTime.now(),
             ),
           );
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1527,7 +1605,9 @@ void main() {
 
         final r = _makeRepos(httpClient: client);
         await r.accounts.addAccount(_jmapAccount, 'pw');
-        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+        await r.db
+            .into(r.db.syncStates)
+            .insertOnConflictUpdate(
               SyncStatesCompanion.insert(
                 accountId: 'jmap-1',
                 resourceType: 'Email',
@@ -1535,7 +1615,9 @@ void main() {
                 syncedAt: DateTime.now(),
               ),
             );
-        await r.db.into(r.db.pendingChanges).insert(
+        await r.db
+            .into(r.db.pendingChanges)
+            .insert(
               PendingChangesCompanion.insert(
                 accountId: 'jmap-1',
                 resourceType: 'Email',
@@ -1600,7 +1682,9 @@ void main() {
 
         final r = _makeRepos(httpClient: client);
         await r.accounts.addAccount(_jmapAccount, 'pw');
-        await r.db.into(r.db.pendingChanges).insert(
+        await r.db
+            .into(r.db.pendingChanges)
+            .insert(
               PendingChangesCompanion.insert(
                 accountId: 'jmap-1',
                 resourceType: 'Email',
@@ -1622,7 +1706,9 @@ void main() {
       final r = _makeRepos(httpClient: mockFlush(500));
       await r.accounts.addAccount(_jmapAccount, 'pw');
       // Seed a change already at attempts=4 (one below the eviction threshold)
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'jmap-1',
               resourceType: 'Email',
@@ -1640,119 +1726,125 @@ void main() {
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     });
 
-    test('snooze creates Snoozed folder via Mailbox/set when dest is Snoozed',
-        () async {
-      final List<Map<String, dynamic>> capturedBodies = [];
-      final client = MockClient((req) async {
-        if (req.url.path.contains('well-known')) {
-          return http.Response(
-            jsonEncode({
-              'apiUrl': 'https://jmap.example.com/api/',
-              'accounts': {
-                'acct1': {'name': 'alice@example.com', 'isPersonal': true},
-              },
-              'primaryAccounts': {
-                'urn:ietf:params:jmap:core': 'acct1',
-                'urn:ietf:params:jmap:mail': 'acct1',
-              },
-              'capabilities': {},
-              'username': 'alice@example.com',
-              'state': 'sess1',
-            }),
-            200,
-          );
-        }
-        final body = jsonDecode(req.body) as Map<String, dynamic>;
-        capturedBodies.add(body);
-        final calls = body['methodCalls'] as List;
-        final methodName = (calls.first as List)[0] as String;
-        if (methodName == 'Mailbox/set') {
+    test(
+      'snooze creates Snoozed folder via Mailbox/set when dest is Snoozed',
+      () async {
+        final List<Map<String, dynamic>> capturedBodies = [];
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          final body = jsonDecode(req.body) as Map<String, dynamic>;
+          capturedBodies.add(body);
+          final calls = body['methodCalls'] as List;
+          final methodName = (calls.first as List)[0] as String;
+          if (methodName == 'Mailbox/set') {
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Mailbox/set',
+                    {
+                      'accountId': 'acct1',
+                      'created': {
+                        'new-snoozed': {'id': 'mbx-snoozed'},
+                      },
+                    },
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
           return http.Response(
             jsonEncode({
               'sessionState': 's1',
               'methodResponses': [
                 [
-                  'Mailbox/set',
-                  {
-                    'accountId': 'acct1',
-                    'created': {
-                      'new-snoozed': {'id': 'mbx-snoozed'},
-                    },
-                  },
+                  'Email/set',
+                  {'accountId': 'acct1', 'updated': {}},
                   '0',
                 ],
               ],
             }),
             200,
           );
-        }
-        return http.Response(
-          jsonEncode({
-            'sessionState': 's1',
-            'methodResponses': [
-              [
-                'Email/set',
-                {'accountId': 'acct1', 'updated': {}},
-                '0',
-              ],
-            ],
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await seedChange(
+          r.db,
+          r.accounts,
+          changeType: 'snooze',
+          payload: jsonEncode({
+            'uid': 0,
+            'src': 'mbx-inbox',
+            'dest': 'Snoozed',
+            'until': '2026-05-10T15:00:00.000',
           }),
-          200,
         );
-      });
 
-      final r = _makeRepos(httpClient: client);
-      await seedChange(
-        r.db,
-        r.accounts,
-        changeType: 'snooze',
-        payload: jsonEncode({
-          'uid': 0,
-          'src': 'mbx-inbox',
-          'dest': 'Snoozed',
-          'until': '2026-05-10T15:00:00.000',
-        }),
-      );
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-      await r.emails.flushPendingChanges('jmap-1', 'pw');
+        // Change successfully applied — removed from queue.
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
-      // Change successfully applied — removed from queue.
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // First API call should be Mailbox/set to create the Snoozed folder.
+        expect(capturedBodies, hasLength(2));
+        final firstCall =
+            ((capturedBodies.first['methodCalls'] as List).first as List)[0];
+        expect(firstCall, 'Mailbox/set');
 
-      // First API call should be Mailbox/set to create the Snoozed folder.
-      expect(capturedBodies, hasLength(2));
-      final firstCall =
-          ((capturedBodies.first['methodCalls'] as List).first as List)[0];
-      expect(firstCall, 'Mailbox/set');
+        // Second call should be Email/set using the newly created mailbox ID.
+        final secondCallArgs =
+            ((capturedBodies[1]['methodCalls'] as List).first as List)[1]
+                as Map<String, dynamic>;
+        final update =
+            (secondCallArgs['update'] as Map<String, dynamic>)['e1']
+                as Map<String, dynamic>;
+        expect(update['mailboxIds/mbx-snoozed'], true);
+      },
+    );
 
-      // Second call should be Email/set using the newly created mailbox ID.
-      final secondCallArgs = ((capturedBodies[1]['methodCalls'] as List).first
-          as List)[1] as Map<String, dynamic>;
-      final update = (secondCallArgs['update'] as Map<String, dynamic>)['e1']
-          as Map<String, dynamic>;
-      expect(update['mailboxIds/mbx-snoozed'], true);
-    });
+    test(
+      'snooze uses existing mailbox ID when dest is already a JMAP ID',
+      () async {
+        final r = _makeRepos(httpClient: mockFlush(200));
+        await seedChange(
+          r.db,
+          r.accounts,
+          changeType: 'snooze',
+          payload: jsonEncode({
+            'uid': 0,
+            'src': 'mbx-inbox',
+            'dest': 'mbx-snoozed',
+            'until': '2026-05-10T15:00:00.000',
+          }),
+        );
 
-    test('snooze uses existing mailbox ID when dest is already a JMAP ID',
-        () async {
-      final r = _makeRepos(httpClient: mockFlush(200));
-      await seedChange(
-        r.db,
-        r.accounts,
-        changeType: 'snooze',
-        payload: jsonEncode({
-          'uid': 0,
-          'src': 'mbx-inbox',
-          'dest': 'mbx-snoozed',
-          'until': '2026-05-10T15:00:00.000',
-        }),
-      );
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-      await r.emails.flushPendingChanges('jmap-1', 'pw');
-
-      // Change applied without needing Mailbox/set (dest was already a valid ID).
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-    });
+        // Change applied without needing Mailbox/set (dest was already a valid ID).
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      },
+    );
   });
 
   group('JMAP syncEmails body caching', () {
@@ -1761,31 +1853,30 @@ void main() {
       required String mailboxId,
       String? textContent,
       String? htmlContent,
-    }) =>
-        {
-          ..._jmapEmail(id: id, mailboxId: mailboxId),
-          'textBody': [
-            if (textContent != null) {'partId': 'text1', 'type': 'text/plain'},
-          ],
-          'htmlBody': [
-            if (htmlContent != null) {'partId': 'html1', 'type': 'text/html'},
-          ],
-          'bodyValues': {
-            if (textContent != null)
-              'text1': {
-                'value': textContent,
-                'isEncodingProblem': false,
-                'isTruncated': false,
-              },
-            if (htmlContent != null)
-              'html1': {
-                'value': htmlContent,
-                'isEncodingProblem': false,
-                'isTruncated': false,
-              },
+    }) => {
+      ..._jmapEmail(id: id, mailboxId: mailboxId),
+      'textBody': [
+        if (textContent != null) {'partId': 'text1', 'type': 'text/plain'},
+      ],
+      'htmlBody': [
+        if (htmlContent != null) {'partId': 'html1', 'type': 'text/html'},
+      ],
+      'bodyValues': {
+        if (textContent != null)
+          'text1': {
+            'value': textContent,
+            'isEncodingProblem': false,
+            'isTruncated': false,
           },
-          'attachments': [],
-        };
+        if (htmlContent != null)
+          'html1': {
+            'value': htmlContent,
+            'isEncodingProblem': false,
+            'isTruncated': false,
+          },
+      },
+      'attachments': [],
+    };
 
     test('full sync caches bodies when bodyValues are present', () async {
       final r = _makeRepos(
@@ -2073,7 +2164,9 @@ void main() {
       final r = _makeRepos(httpClient: client);
       await r.accounts.addAccount(_jmapAccount, 'pw');
       // Seed a Sent mailbox with role='sent'
-      await r.db.into(r.db.mailboxes).insert(
+      await r.db
+          .into(r.db.mailboxes)
+          .insert(
             MailboxesCompanion.insert(
               id: 'jmap-1:sentMbx',
               accountId: 'jmap-1',
@@ -2174,7 +2267,9 @@ void main() {
       // no IMAP connection was made.
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -2183,7 +2278,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.emailBodies)
+          .insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: 'acc-1:1',
               textBody: const Value('cached text'),
@@ -2203,7 +2300,9 @@ void main() {
     test('observeFailedMutations emits only rows with lastError set', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'email',
@@ -2214,7 +2313,9 @@ void main() {
               lastError: const Value('network error'),
             ),
           );
-      await r.db.into(r.db.pendingChanges).insert(
+      await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'email',
@@ -2237,7 +2338,9 @@ void main() {
     test('discardMutation removes the row', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      final rowId = await r.db.into(r.db.pendingChanges).insert(
+      final rowId = await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'email',
@@ -2259,7 +2362,9 @@ void main() {
     test('retryMutation resets attempts and clears lastError', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
-      final rowId = await r.db.into(r.db.pendingChanges).insert(
+      final rowId = await r.db
+          .into(r.db.pendingChanges)
+          .insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'email',
@@ -2282,41 +2387,45 @@ void main() {
 
   group('concurrent moves', () {
     test(
-        'two simultaneous moves enqueue two changes and leave email in last destination',
-        () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:5',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 5,
-              receivedAt: DateTime(2024),
-            ),
-          );
+      'two simultaneous moves enqueue two changes and leave email in last destination',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db
+            .into(r.db.emails)
+            .insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
 
-      // Fire both moves without awaiting to exercise concurrent enqueue logic.
-      final f1 = r.emails.moveEmail('acc-1:5', 'Archive');
-      final f2 = r.emails.moveEmail('acc-1:5', 'Trash');
-      await Future.wait([f1, f2]);
+        // Fire both moves without awaiting to exercise concurrent enqueue logic.
+        final f1 = r.emails.moveEmail('acc-1:5', 'Archive');
+        final f2 = r.emails.moveEmail('acc-1:5', 'Trash');
+        await Future.wait([f1, f2]);
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes, hasLength(2));
-      expect(changes.map((c) => c.changeType), everyElement('move'));
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes, hasLength(2));
+        expect(changes.map((c) => c.changeType), everyElement('move'));
 
-      final destinations =
-          changes.map((c) => (jsonDecode(c.payload) as Map)['dest']).toSet();
-      expect(destinations, containsAll(['Archive', 'Trash']));
+        final destinations = changes
+            .map((c) => (jsonDecode(c.payload) as Map)['dest'])
+            .toSet();
+        expect(destinations, containsAll(['Archive', 'Trash']));
 
-      final email = await r.emails.getEmail('acc-1:5');
-      expect(
-        email!.mailboxPath,
-        anyOf('Archive', 'Trash'),
-        reason:
-            'email must be optimistically moved to one of the two destinations',
-      );
-    });
+        final email = await r.emails.getEmail('acc-1:5');
+        expect(
+          email!.mailboxPath,
+          anyOf('Archive', 'Trash'),
+          reason:
+              'email must be optimistically moved to one of the two destinations',
+        );
+      },
+    );
   });
 
   group('IMAP SMTP auth failure', () {
@@ -2358,7 +2467,9 @@ void main() {
       await r.accounts.addAccount(_account, 'pw');
 
       // Pre-seed two emails from the old server epoch (uidValidity=123).
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:1',
               accountId: 'acc-1',
@@ -2367,7 +2478,9 @@ void main() {
               receivedAt: DateTime(2024),
             ),
           );
-      await r.db.into(r.db.emails).insert(
+      await r.db
+          .into(r.db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc-1:2',
               accountId: 'acc-1',
@@ -2379,7 +2492,9 @@ void main() {
 
       // Seed an IMAP checkpoint with the old uidValidity so the code detects
       // a mismatch and triggers a full re-sync.
-      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.syncStates)
+          .insertOnConflictUpdate(
             SyncStatesCompanion.insert(
               accountId: 'acc-1',
               resourceType: 'IMAP:INBOX',
@@ -2395,13 +2510,13 @@ void main() {
       expect(remaining, isEmpty);
 
       // Checkpoint must be updated to the new uidValidity.
-      final stateRow = await (r.db.select(r.db.syncStates)
-            ..where(
-              (t) =>
-                  t.accountId.equals('acc-1') &
-                  t.resourceType.equals('IMAP:INBOX'),
-            ))
-          .getSingleOrNull();
+      final stateRow =
+          await (r.db.select(r.db.syncStates)..where(
+                (t) =>
+                    t.accountId.equals('acc-1') &
+                    t.resourceType.equals('IMAP:INBOX'),
+              ))
+              .getSingleOrNull();
       expect(stateRow, isNotNull);
       final state = jsonDecode(stateRow!.state) as Map<String, dynamic>;
       expect(state['uidValidity'], 456);
@@ -2420,22 +2535,20 @@ class _FakeImapClientUidValidity extends FakeImapClient {
     String path, {
     bool enableCondStore = false,
     imap.QResyncParameters? qresync,
-  }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        flags: [],
-        pathSeparator: '/',
-        uidValidity: _uidValidity,
-      );
+  }) async => imap.Mailbox(
+    encodedName: path,
+    encodedPath: path,
+    flags: [],
+    pathSeparator: '/',
+    uidValidity: _uidValidity,
+  );
 
   @override
   Future<imap.SearchImapResult> uidSearchMessages({
     String searchCriteria = 'ALL',
     List<imap.ReturnOption>? returnOptions,
     Duration? responseTimeout,
-  }) async =>
-      imap.SearchImapResult();
+  }) async => imap.SearchImapResult();
 }
 
 // ── SSE test helper ──────────────────────────────────────────────────────────

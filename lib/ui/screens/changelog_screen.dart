@@ -12,8 +12,9 @@ class ChangeLogScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('ChangeLog')),
       body: FutureBuilder<String>(
-        future:
-            DefaultAssetBundle.of(context).loadString('assets/changelog.txt'),
+        future: DefaultAssetBundle.of(
+          context,
+        ).loadString('assets/changelog.txt'),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());

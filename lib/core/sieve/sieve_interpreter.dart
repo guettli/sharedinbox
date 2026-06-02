@@ -64,8 +64,9 @@ class SieveInterpreter {
     return switch (rule.joinType) {
       'allof' => rule.conditions.every((c) => _evalCondition(c, email)),
       'anyof' => rule.conditions.any((c) => _evalCondition(c, email)),
-      _ => rule.conditions.length == 1 &&
-          _evalCondition(rule.conditions.first, email),
+      _ =>
+        rule.conditions.length == 1 &&
+            _evalCondition(rule.conditions.first, email),
     };
   }
 
@@ -108,8 +109,9 @@ class SieveInterpreter {
   }
 
   bool _globMatch(String value, String pattern) {
-    final regexStr =
-        RegExp.escape(pattern).replaceAll(r'\*', '.*').replaceAll(r'\?', '.');
+    final regexStr = RegExp.escape(
+      pattern,
+    ).replaceAll(r'\*', '.*').replaceAll(r'\?', '.');
     return RegExp('^$regexStr\$').hasMatch(value);
   }
 

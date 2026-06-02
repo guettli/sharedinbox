@@ -25,7 +25,7 @@ class UndoLogScreen extends ConsumerWidget {
             onPressed: history.isEmpty
                 ? null
                 : () =>
-                    unawaited(ref.read(undoServiceProvider.notifier).clear()),
+                      unawaited(ref.read(undoServiceProvider.notifier).clear()),
           ),
         ],
       ),
@@ -59,13 +59,13 @@ class _UndoActionTile extends ConsumerWidget {
         action.type == UndoType.delete
             ? Icons.delete_outline
             : (action.type == UndoType.snooze
-                ? Icons.access_time
-                : Icons.move_to_inbox),
+                  ? Icons.access_time
+                  : Icons.move_to_inbox),
         color: action.type == UndoType.delete
             ? Colors.redAccent
             : (action.type == UndoType.snooze
-                ? Colors.orangeAccent
-                : Colors.blueAccent),
+                  ? Colors.orangeAccent
+                  : Colors.blueAccent),
       ),
       title: Text('$subject$extraCount'),
       subtitle: Column(
@@ -84,9 +84,7 @@ class _UndoActionTile extends ConsumerWidget {
               .read(undoServiceProvider.notifier)
               .undo(actionId: action.id);
           if (context.mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(
+            ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 duration: Duration(seconds: 5),
                 content: Text('Action undone.'),

@@ -1,108 +1,83 @@
 #!/usr/bin/env bash
-# Establishes a secure tunnel to a remote Dagger Engine via stunnel.
+# Establishes a secure tunnel to a remote Dagger Engine via SSH using SOPS secrets.
 set -euo pipefail
 
-if [ -z "${DAGGER_STUNNEL_URL:-}" ]; then
-    echo "Error: DAGGER_STUNNEL_URL must be set."
+# 0. Check for old environment variables
+if [ -n "${DAGGER_STUNNEL_URL:-}" ] || [ -n "${DAGGER_CA_CERT:-}" ] || [ -n "${DAGGER_SSH_KEY:-}" ]; then
+    echo "ERROR: Old environment variables (DAGGER_STUNNEL_URL, DAGGER_CA_CERT, or DAGGER_SSH_KEY) are present in the environment."
+    echo "Only SOPS_AGE_KEY should be set in Codeberg secrets."
     exit 1
 fi
 
-# Parse host and port (e.g., example.com:8774 or just example.com)
-host=$(echo "$DAGGER_STUNNEL_URL" | cut -d: -f1)
-port=$(echo "$DAGGER_STUNNEL_URL" | cut -d: -f2)
-if [ "$host" == "$port" ]; then
-    port="8774"
-fi
-
-MAX_PROBE_ATTEMPTS=5
-PROBE_DELAY=30
-for attempt in $(seq 1 $MAX_PROBE_ATTEMPTS); do
-    echo "Probing $host:$port (attempt $attempt/$MAX_PROBE_ATTEMPTS)..."
-    if nc -zw 5 "$host" "$port" 2>/dev/null; then
-        echo "Found active server on $host:$port"
-        break
-    fi
-    if [ "$attempt" -eq "$MAX_PROBE_ATTEMPTS" ]; then
-        echo "Warning: No Dagger server responded on $host:$port after $MAX_PROBE_ATTEMPTS attempts"
-        if ! timeout 30 docker info >/dev/null 2>&1; then
-            echo "Error: Remote Dagger engine is unavailable AND local Docker daemon is not running."
-            echo "Cannot proceed. Ensure either the remote server at $host:$port is accessible"
-            echo "or that Docker is running locally (check: sudo systemctl start docker)."
-            exit 1
-        fi
-        echo "Remote engine unavailable — CI will use the local Dagger engine."
-        exit 0
-    fi
-    echo "Dagger server not responding, waiting ${PROBE_DELAY}s before retry..."
-    sleep $PROBE_DELAY
-done
-
-# 2a. Try plain TCP connection first (works when server is a plain TCP proxy, no TLS)
-echo "Trying plain TCP Dagger connection at tcp://$host:$port..."
-if _DAGGER_RUNNER_HOST="tcp://$host:$port" \
-   _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://$host:$port" \
-   timeout 8 dagger version >/dev/null 2>&1; then
-    echo "Plain TCP Dagger connection succeeded — no TLS stunnel needed."
-    if [ -n "${GITHUB_ENV:-}" ]; then
-        echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://$host:$port" >> "$GITHUB_ENV"
-        echo "_DAGGER_RUNNER_HOST=tcp://$host:$port" >> "$GITHUB_ENV"
-    else
-        export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://$host:$port"
-        export _DAGGER_RUNNER_HOST="tcp://$host:$port"
-        echo "Dagger configured at tcp://$host:$port (plain TCP)"
-    fi
-    exit 0
-fi
-echo "Plain TCP connection not available; trying TLS stunnel..."
-
-# 2b. Setup TLS credentials (passed as env vars from secrets)
-mkdir -p /tmp/dagger-tls
-echo "$DAGGER_CA_CERT" > /tmp/dagger-tls/ca.crt
-echo "$DAGGER_CLIENT_CERT" > /tmp/dagger-tls/client.crt
-echo "$DAGGER_CLIENT_KEY" > /tmp/dagger-tls/client.key
-chmod 600 /tmp/dagger-tls/client.key
-
-# 3. Configure and start stunnel
-STUNNEL_CONF="/tmp/stunnel-dagger.conf"
-cat << EOF > "$STUNNEL_CONF"
-client = yes
-foreground = yes
-pid = /tmp/stunnel.pid
-debug = warning
-; TCP keepalive on the remote side to prevent NAT/firewall from resetting the connection
-socket = r:SO_KEEPALIVE=1
-socket = r:TCP_KEEPIDLE=10
-socket = r:TCP_KEEPINTVL=5
-socket = r:TCP_KEEPCNT=3
-
-[dagger]
-accept = 127.0.0.1:1774
-connect = $host:$port
-CAfile = /tmp/dagger-tls/ca.crt
-cert = /tmp/dagger-tls/client.crt
-key = /tmp/dagger-tls/client.key
-verifyChain = yes
-EOF
-
-# Start stunnel in the background
-stunnel "$STUNNEL_CONF" &
-TUNNEL_PID=$!
-
-# Give it a moment to establish
-sleep 2
-
-if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-    echo "Error: stunnel failed to start"
+if [ -z "${SOPS_AGE_KEY:-}" ]; then
+    echo "Error: SOPS_AGE_KEY must be set."
     exit 1
+fi
+
+# 1. Decrypt secrets using SOPS
+# We assume sops is available in the nix environment
+echo "Decrypting secrets with SOPS..."
+# Exporting for SOPS
+export SOPS_AGE_KEY="$SOPS_AGE_KEY"
+
+# Create a temporary file to store decrypted secrets
+SECRETS_JSON=$(mktemp)
+trap "rm -f $SECRETS_JSON" EXIT
+
+# Decrypt the SOPS file (must be in the repo root)
+sops --decrypt secrets.enc.yaml > "$SECRETS_JSON"
+
+DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
+DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
+
+if [ "$DAGGER_SSH_KEY" == "null" ] || [ -z "$DAGGER_SSH_KEY" ]; then
+    echo "Error: DAGGER_SSH_KEY not found in secrets.enc.yaml"
+    exit 1
+fi
+
+if [ "$DAGGER_ENGINE_HOST" == "null" ] || [ -z "$DAGGER_ENGINE_HOST" ]; then
+    echo "Error: DAGGER_ENGINE_HOST not found in secrets.enc.yaml"
+    exit 1
+fi
+
+# 2. Setup SSH key
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
+chmod 600 ~/.ssh/dagger_key
+
+# 3. Configure SSH for Dagger
+cat << SSHEOF > ~/.ssh/config.dagger
+Host dagger-engine
+    HostName $DAGGER_ENGINE_HOST
+    User dagger
+    IdentityFile ~/.ssh/dagger_key
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    ControlMaster auto
+    ControlPath ~/.ssh/dagger-%r@%h:%p
+    ControlPersist 10m
+SSHEOF
+
+# Append to main ssh config if not already there
+if ! grep -q "config.dagger" ~/.ssh/config 2>/dev/null; then
+    echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
 fi
 
 # 4. Export environment for subsequent CI steps
+export DAGGER_HOST="ssh://dagger-engine"
+
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:1774" >> "$GITHUB_ENV"
-    echo "_DAGGER_RUNNER_HOST=tcp://127.0.0.1:1774" >> "$GITHUB_ENV"
-    echo "Tunnel established. Dagger is configured to use the remote engine."
+    echo "DAGGER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
+    echo "Tunnel established via SSH. Dagger is configured to use the remote engine at $DAGGER_ENGINE_HOST"
 else
-    export _EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:1774
-    export _DAGGER_RUNNER_HOST=tcp://127.0.0.1:1774
-    echo "Tunnel established. Run: export _DAGGER_RUNNER_HOST=tcp://127.0.0.1:1774"
+    echo "Dagger configured at ssh://dagger-engine"
 fi
+
+# 5. Verify connection
+echo "Verifying Dagger connection..."
+if ! timeout 30 dagger query '{ version }' >/dev/null 2>&1; then
+    echo "Error: Dagger engine is unreachable via SSH at $DAGGER_ENGINE_HOST"
+    exit 1
+fi
+echo "Dagger connection verified."

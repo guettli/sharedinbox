@@ -92,8 +92,9 @@ class ShareEncryptionService {
   ) {
     if (!s.startsWith(_pubKeyPrefix)) return null;
     try {
-      final data =
-          Uint8List.fromList(base64.decode(s.substring(_pubKeyPrefix.length)));
+      final data = Uint8List.fromList(
+        base64.decode(s.substring(_pubKeyPrefix.length)),
+      );
       if (data.length != _keyIdLen + _pubKeyLen) return null;
       return (
         keyId: data.sublist(0, _keyIdLen),
@@ -165,17 +166,18 @@ class ShareEncryptionService {
     final cipherBytes = Uint8List.fromList(box.cipherText);
     final macBytes = Uint8List.fromList(box.mac.bytes);
 
-    final out = Uint8List(
-      _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length + _macLen,
-    )
-      ..setAll(0, recipientKeyId)
-      ..setAll(_keyIdLen, ephPubBytes)
-      ..setAll(_keyIdLen + _pubKeyLen, nonce)
-      ..setAll(_keyIdLen + _pubKeyLen + _nonceLen, cipherBytes)
-      ..setAll(
-        _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length,
-        macBytes,
-      );
+    final out =
+        Uint8List(
+            _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length + _macLen,
+          )
+          ..setAll(0, recipientKeyId)
+          ..setAll(_keyIdLen, ephPubBytes)
+          ..setAll(_keyIdLen + _pubKeyLen, nonce)
+          ..setAll(_keyIdLen + _pubKeyLen + _nonceLen, cipherBytes)
+          ..setAll(
+            _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length,
+            macBytes,
+          );
 
     return '$_encAccountsPrefix${base64.encode(out)}';
   }

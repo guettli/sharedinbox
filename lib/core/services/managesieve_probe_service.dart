@@ -4,11 +4,12 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/managesieve_client.dart';
 
 /// Returns true if the endpoint accepts a ManageSieve handshake.
-typedef ManageSieveProbeFn = Future<bool> Function({
-  required String host,
-  required int port,
-  required bool useTls,
-});
+typedef ManageSieveProbeFn =
+    Future<bool> Function({
+      required String host,
+      required int port,
+      required bool useTls,
+    });
 
 Future<bool> _defaultManageSieveProbe({
   required String host,
@@ -65,22 +66,22 @@ class ManageSieveProbeService {
   }
 
   Account _withAvailability(Account a, bool available) => Account(
-        id: a.id,
-        displayName: a.displayName,
-        email: a.email,
-        username: a.username,
-        type: a.type,
-        imapHost: a.imapHost,
-        imapPort: a.imapPort,
-        imapSsl: a.imapSsl,
-        smtpHost: a.smtpHost,
-        smtpPort: a.smtpPort,
-        smtpSsl: a.smtpSsl,
-        manageSieveHost: a.manageSieveHost,
-        manageSievePort: a.manageSievePort,
-        manageSieveSsl: a.manageSieveSsl,
-        manageSieveAvailable: available,
-        jmapUrl: a.jmapUrl,
-        verbose: a.verbose,
-      );
+    id: a.id,
+    displayName: a.displayName,
+    email: a.email,
+    username: a.username,
+    type: a.type,
+    imapHost: a.imapHost,
+    imapPort: a.imapPort,
+    imapSsl: a.imapSsl,
+    smtpHost: a.smtpHost,
+    smtpPort: a.smtpPort,
+    smtpSsl: a.smtpSsl,
+    manageSieveHost: a.manageSieveHost,
+    manageSievePort: a.manageSievePort,
+    manageSieveSsl: a.manageSieveSsl,
+    manageSieveAvailable: available,
+    jmapUrl: a.jmapUrl,
+    verbose: a.verbose,
+  );
 }

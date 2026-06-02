@@ -261,8 +261,9 @@ if exists "X-Spam-Flag" {
 
   group('SieveParser — rule model', () {
     test('simple if produces one rule with branchGroupId', () {
-      final rules =
-          parser.parse('if header :contains "Subject" "x" { discard; }');
+      final rules = parser.parse(
+        'if header :contains "Subject" "x" { discard; }',
+      );
       expect(rules, hasLength(1));
       expect(rules.first.branchGroupId, isNotNull);
       expect(rules.first.conditions, hasLength(1));

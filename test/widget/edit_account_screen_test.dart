@@ -106,62 +106,62 @@ void main() {
     });
 
     testWidgets(
-        'try connection button is disabled when no password stored or entered',
-        (
-      tester,
-    ) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+      'try connection button is disabled when no password stored or entered',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            hasStoredPassword: false,
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/edit',
+            overrides: baseOverrides(
+              accounts: [kTestAccount],
+              hasStoredPassword: false,
+            ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpAndSettle();
 
-      final button = tester.widget<OutlinedButton>(
-        find.byKey(const Key('editTryConnectionButton')),
-      );
-      expect(button.onPressed, isNull);
-    });
+        final button = tester.widget<OutlinedButton>(
+          find.byKey(const Key('editTryConnectionButton')),
+        );
+        expect(button.onPressed, isNull);
+      },
+    );
 
     testWidgets(
-        'try connection button is enabled after typing password with no stored password',
-        (tester) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+      'try connection button is enabled after typing password with no stored password',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            hasStoredPassword: false,
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/edit',
+            overrides: baseOverrides(
+              accounts: [kTestAccount],
+              hasStoredPassword: false,
+            ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('editPasswordField')),
-        'mypassword',
-      );
-      await tester.pump();
+        await tester.enterText(
+          find.byKey(const Key('editPasswordField')),
+          'mypassword',
+        );
+        await tester.pump();
 
-      final button = tester.widget<OutlinedButton>(
-        find.byKey(const Key('editTryConnectionButton')),
-      );
-      expect(button.onPressed, isNotNull);
-    });
+        final button = tester.widget<OutlinedButton>(
+          find.byKey(const Key('editTryConnectionButton')),
+        );
+        expect(button.onPressed, isNotNull);
+      },
+    );
 
     testWidgets('save button is disabled when no password stored or entered', (
       tester,
@@ -182,8 +182,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final button = tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'));
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Save'),
+      );
       expect(button.onPressed, isNull);
     });
 

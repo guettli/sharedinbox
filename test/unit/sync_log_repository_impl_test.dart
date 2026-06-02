@@ -11,7 +11,9 @@ void main() {
   late final db = openTestDatabase();
 
   setUpAll(() async {
-    await db.into(db.accounts).insert(
+    await db
+        .into(db.accounts)
+        .insert(
           AccountsCompanion.insert(
             id: 'acc1',
             displayName: 'Test',
@@ -120,40 +122,41 @@ void main() {
 
     final rows = await (db.select(
       db.syncLogs,
-    )..where((r) => r.result.equals('error')))
-        .get();
+    )..where((r) => r.result.equals('error'))).get();
     expect(rows, hasLength(1));
     expect(rows.first.result, 'error');
     expect(rows.first.errorMessage, 'Connection refused');
   });
 
-  test('stores and retrieves stackTrace and isPermanent on error entries',
-      () async {
-    final repo = SyncLogRepositoryImpl(db);
-    final start = DateTime(2024, 3, 1, 9);
-    final end = DateTime(2024, 3, 1, 9, 0, 1);
-    const fakeTrace = '#0 main (file:///app/lib/main.dart:10:5)';
+  test(
+    'stores and retrieves stackTrace and isPermanent on error entries',
+    () async {
+      final repo = SyncLogRepositoryImpl(db);
+      final start = DateTime(2024, 3, 1, 9);
+      final end = DateTime(2024, 3, 1, 9, 0, 1);
+      const fakeTrace = '#0 main (file:///app/lib/main.dart:10:5)';
 
-    await repo.log(
-      accountId: 'acc1',
-      success: false,
-      errorMessage: 'MissingPluginException',
-      stackTrace: fakeTrace,
-      isPermanent: true,
-      protocol: 'imap',
-      emailsFetched: 0,
-      emailsSkipped: 0,
-      mailboxesSynced: 0,
-      pendingFlushed: 0,
-      bytesTransferred: 0,
-      startedAt: start,
-      finishedAt: end,
-    );
+      await repo.log(
+        accountId: 'acc1',
+        success: false,
+        errorMessage: 'MissingPluginException',
+        stackTrace: fakeTrace,
+        isPermanent: true,
+        protocol: 'imap',
+        emailsFetched: 0,
+        emailsSkipped: 0,
+        mailboxesSynced: 0,
+        pendingFlushed: 0,
+        bytesTransferred: 0,
+        startedAt: start,
+        finishedAt: end,
+      );
 
-    final entries = await repo.observeSyncLogs('acc1').first;
-    final entry = entries.firstWhere((e) => e.startedAt == start);
-    expect(entry.stackTrace, fakeTrace);
-    expect(entry.isPermanent, true);
-    expect(entry.errorMessage, 'MissingPluginException');
-  });
+      final entries = await repo.observeSyncLogs('acc1').first;
+      final entry = entries.firstWhere((e) => e.startedAt == start);
+      expect(entry.stackTrace, fakeTrace);
+      expect(entry.isPermanent, true);
+      expect(entry.errorMessage, 'MissingPluginException');
+    },
+  );
 }

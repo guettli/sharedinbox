@@ -138,7 +138,7 @@ void main() {
   }
 
   ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-      makeRepo() {
+  makeRepo() {
     final db = openTestDatabase();
     final storage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, storage);
@@ -346,7 +346,9 @@ void main() {
       final emailId = emails.first.id;
 
       // Simulate a legacy row with no cachedAt.
-      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.emailBodies)
+          .insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
               textBody: const Value('stale text'),
@@ -372,7 +374,9 @@ void main() {
       final emailId = emails.first.id;
 
       // Simulate a row cached 8 days ago.
-      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+      await r.db
+          .into(r.db.emailBodies)
+          .insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
               textBody: const Value('old text'),
@@ -566,59 +570,61 @@ void main() {
     expect(pending.first.changeType, 'delete');
   });
 
-  test('downloadAttachment fetches binary attachment bytes from IMAP',
-      () async {
-    final attachmentBytes = Uint8List.fromList(
-      List.generate(32, (i) => i + 1),
-    );
-    const attachmentName = 'hello.bin';
-    const attachmentMime = 'application/octet-stream';
-
-    // Build a multipart email with a binary attachment and append it.
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
-    try {
-      final builder = MessageBuilder()
-        ..from = [MailAddress('Alice', userEmail)]
-        ..to = [MailAddress('Alice', userEmail)]
-        ..subject = 'attach-${DateTime.now().millisecondsSinceEpoch}'
-        ..text = 'See attachment.';
-      builder.addBinary(
-        attachmentBytes,
-        MediaType.fromText(attachmentMime),
-        filename: attachmentName,
+  test(
+    'downloadAttachment fetches binary attachment bytes from IMAP',
+    () async {
+      final attachmentBytes = Uint8List.fromList(
+        List.generate(32, (i) => i + 1),
       );
-      await client.appendMessage(
-        builder.buildMimeMessage(),
-        targetMailboxPath: 'INBOX',
+      const attachmentName = 'hello.bin';
+      const attachmentMime = 'application/octet-stream';
+
+      // Build a multipart email with a binary attachment and append it.
+      final client = await _imapConnect(
+        host: imapHost,
+        port: imapPort,
+        user: userEmail,
+        pass: userPass,
       );
-    } finally {
-      await client.logout();
-    }
+      try {
+        final builder = MessageBuilder()
+          ..from = [MailAddress('Alice', userEmail)]
+          ..to = [MailAddress('Alice', userEmail)]
+          ..subject = 'attach-${DateTime.now().millisecondsSinceEpoch}'
+          ..text = 'See attachment.';
+        builder.addBinary(
+          attachmentBytes,
+          MediaType.fromText(attachmentMime),
+          filename: attachmentName,
+        );
+        await client.appendMessage(
+          builder.buildMimeMessage(),
+          targetMailboxPath: 'INBOX',
+        );
+      } finally {
+        await client.logout();
+      }
 
-    final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
-    await r.emails.syncEmails('test', 'INBOX');
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
 
-    final emails = await r.emails.observeEmails('test', 'INBOX').first;
-    expect(emails, hasLength(1));
-    expect(emails.first.hasAttachment, isTrue);
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      expect(emails, hasLength(1));
+      expect(emails.first.hasAttachment, isTrue);
 
-    final body = await r.emails.getEmailBody(emails.first.id);
-    expect(body.attachments, hasLength(1));
-    expect(body.attachments.first.filename, attachmentName);
-    expect(body.attachments.first.contentType, attachmentMime);
-    expect(body.attachments.first.fetchPartId, isNotEmpty);
+      final body = await r.emails.getEmailBody(emails.first.id);
+      expect(body.attachments, hasLength(1));
+      expect(body.attachments.first.filename, attachmentName);
+      expect(body.attachments.first.contentType, attachmentMime);
+      expect(body.attachments.first.fetchPartId, isNotEmpty);
 
-    final path = await r.emails.downloadAttachment(
-      emails.first.id,
-      body.attachments.first,
-    );
-    final downloaded = await File(path).readAsBytes();
-    expect(downloaded, equals(attachmentBytes));
-  });
+      final path = await r.emails.downloadAttachment(
+        emails.first.id,
+        body.attachments.first,
+      );
+      final downloaded = await File(path).readAsBytes();
+      expect(downloaded, equals(attachmentBytes));
+    },
+  );
 }

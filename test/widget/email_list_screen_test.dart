@@ -27,8 +27,7 @@ class _MutableFakeEmailRepository extends FakeEmailRepository {
     String accountId,
     String mailboxPath,
     String query,
-  ) async =>
-      _results;
+  ) async => _results;
 }
 
 final _kDate = DateTime(2024, 6);
@@ -430,63 +429,62 @@ void main() {
       expect(find.text('Result email'), findsWidgets);
     });
 
-    testWidgets(
-      'deleting all search results pops back to previous screen',
-      (tester) async {
-        final email = testEmail(subject: 'Needle');
+    testWidgets('deleting all search results pops back to previous screen', (
+      tester,
+    ) async {
+      final email = testEmail(subject: 'Needle');
 
-        // Start at the mailbox list so the email list is pushed on top of it,
-        // making context.canPop() == true inside EmailListScreen.
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/mailboxes',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository([kTestMailbox]),
-              ),
-              emailRepositoryProvider.overrideWithValue(
-                FakeEmailRepository(searchResults: [email]),
-              ),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
+      // Start at the mailbox list so the email list is pushed on top of it,
+      // making context.canPop() == true inside EmailListScreen.
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(searchResults: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        expect(find.byType(MailboxListScreen), findsOneWidget);
+      expect(find.byType(MailboxListScreen), findsOneWidget);
 
-        // Navigate into INBOX (pushes EmailListScreen onto the stack).
-        await tester.tap(find.text('INBOX'));
-        await tester.pumpAndSettle();
+      // Navigate into INBOX (pushes EmailListScreen onto the stack).
+      await tester.tap(find.text('INBOX'));
+      await tester.pumpAndSettle();
 
-        expect(find.byType(EmailListScreen), findsOneWidget);
+      expect(find.byType(EmailListScreen), findsOneWidget);
 
-        // Search for the email.
-        await tester.enterText(find.byType(TextField), 'Needle');
-        await tester.testTextInput.receiveAction(TextInputAction.search);
-        await tester.pumpAndSettle();
+      // Search for the email.
+      await tester.enterText(find.byType(TextField), 'Needle');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
 
-        // 'Needle' also appears in the SearchBar input, so match at least one.
-        expect(find.text('Needle'), findsAtLeastNWidgets(1));
+      // 'Needle' also appears in the SearchBar input, so match at least one.
+      expect(find.text('Needle'), findsAtLeastNWidgets(1));
 
-        // Long-press the sender name (unique to the email tile) to enter
-        // selection mode.
-        await tester.longPress(find.text('Bob'));
-        await tester.pumpAndSettle();
+      // Long-press the sender name (unique to the email tile) to enter
+      // selection mode.
+      await tester.longPress(find.text('Bob'));
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.byIcon(Icons.select_all));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.select_all));
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.byIcon(Icons.delete));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
 
-        // Should have popped back to the mailbox list.
-        expect(find.byType(EmailListScreen), findsNothing);
-        expect(find.byType(MailboxListScreen), findsOneWidget);
-      },
-    );
+      // Should have popped back to the mailbox list.
+      expect(find.byType(EmailListScreen), findsNothing);
+      expect(find.byType(MailboxListScreen), findsOneWidget);
+    });
 
     testWidgets(
       'deleting some search results updates the list without popping',

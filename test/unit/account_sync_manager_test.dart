@@ -37,52 +37,48 @@ void main() {
   // MissingPluginException (channel unavailable on the device), the IMAP sync
   // loop must stop permanently instead of retrying indefinitely with backoff.
   test(
-      'MissingPluginException from secure storage stops IMAP sync loop permanently',
-      () async {
-    final syncLog = FakeSyncLogRepository();
+    'MissingPluginException from secure storage stops IMAP sync loop permanently',
+    () async {
+      final syncLog = FakeSyncLogRepository();
 
-    final m = AccountSyncManager(
-      _AccountRepositoryWithMissingPlugin(),
-      FakeMailboxRepositoryWithInbox(),
-      FakeEmailRepository(),
-      syncLog: syncLog,
-    );
+      final m = AccountSyncManager(
+        _AccountRepositoryWithMissingPlugin(),
+        FakeMailboxRepositoryWithInbox(),
+        FakeEmailRepository(),
+        syncLog: syncLog,
+      );
 
-    m.start();
+      m.start();
 
-    // Allow the first sync cycle to run and fail.
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Allow the first sync cycle to run and fail.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    expect(syncLog.logs, hasLength(1));
-    expect(syncLog.logs.first.success, isFalse);
+      expect(syncLog.logs, hasLength(1));
+      expect(syncLog.logs.first.success, isFalse);
 
-    // Kicking the loop should have no effect once it has stopped permanently.
-    m.syncNow('1');
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Kicking the loop should have no effect once it has stopped permanently.
+      m.syncNow('1');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    // Before the fix: kick triggers a retry → 2 log entries.
-    // After the fix: loop is permanently stopped → still exactly 1 entry.
-    expect(syncLog.logs, hasLength(1));
+      // Before the fix: kick triggers a retry → 2 log entries.
+      // After the fix: loop is permanently stopped → still exactly 1 entry.
+      expect(syncLog.logs, hasLength(1));
 
-    m.dispose();
-  });
+      m.dispose();
+    },
+  );
 }
 
 class FakeEmailRepository implements EmailRepository {
   @override
-  Stream<List<Email>> observeEmails(
-    String a,
-    String m, {
-    int limit = 50,
-  }) =>
+  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
       Stream.value([]);
   @override
   Stream<List<EmailThread>> observeThreads(
     String a,
     String m, {
     int limit = 50,
-  }) =>
-      Stream.value([]);
+  }) => Stream.value([]);
   @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
       Stream.value([]);
@@ -117,8 +113,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<Email?> findEmailByMessageId(
     String accountId,
     String messageId,
-  ) async =>
-      null;
+  ) async => null;
 
   @override
   Future<String?> deleteEmail(String id) async => null;
@@ -143,8 +138,7 @@ class FakeEmailRepository implements EmailRepository {
     String? a,
     String q, {
     int limit = 10,
-  }) async =>
-      [];
+  }) async => [];
   @override
   Stream<void> watchJmapPush(String a, String p) => const Stream.empty();
   @override
@@ -159,8 +153,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
+  ) async => ReliabilityResult.healthy;
 
   @override
   Future<void> clearForResync(String accountId) async {}
@@ -208,16 +201,16 @@ class FakeSyncLogRepository implements SyncLogRepository {
 class FakeMailboxRepositoryWithInbox implements MailboxRepository {
   @override
   Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
-        const Mailbox(
-          id: '1:INBOX',
-          accountId: '1',
-          path: 'INBOX',
-          name: 'INBOX',
-          unreadCount: 0,
-          totalCount: 0,
-          role: 'inbox',
-        ),
-      ]);
+    const Mailbox(
+      id: '1:INBOX',
+      accountId: '1',
+      path: 'INBOX',
+      name: 'INBOX',
+      unreadCount: 0,
+      totalCount: 0,
+      role: 'inbox',
+    ),
+  ]);
   @override
   Future<int> syncMailboxes(String id) async => 1;
   @override
@@ -229,16 +222,15 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
     String accountId,
     String name,
     String role,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
+  ) async => Mailbox(
+    id: '$accountId:$name',
+    accountId: accountId,
+    path: name,
+    name: name,
+    role: role,
+    unreadCount: 0,
+    totalCount: 0,
+  );
 }
 
 class _AccountRepositoryWithMissingPlugin implements AccountRepository {
@@ -256,11 +248,11 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 
   @override
   Future<String> getPassword(String accountId) => Future.error(
-        MissingPluginException(
-          'No implementation found for method read on channel '
-          'plugins.it.nomads.com/flutter_secure_storage',
-        ),
-      );
+    MissingPluginException(
+      'No implementation found for method read on channel '
+      'plugins.it.nomads.com/flutter_secure_storage',
+    ),
+  );
 
   @override
   Future<void> addAccount(Account account, String password) async {}

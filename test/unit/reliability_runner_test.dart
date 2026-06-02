@@ -13,11 +13,11 @@ import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 Account _account({String id = 'a1'}) => Account(
-      id: id,
-      displayName: 'Test',
-      email: 'test@example.com',
-      imapHost: 'localhost',
-    );
+  id: id,
+  displayName: 'Test',
+  email: 'test@example.com',
+  imapHost: 'localhost',
+);
 
 class _FakeAccounts implements AccountRepository {
   final List<Account> accounts;
@@ -26,11 +26,9 @@ class _FakeAccounts implements AccountRepository {
   @override
   Stream<List<Account>> observeAccounts() => Stream.value(accounts);
   @override
-  Future<Account?> getAccount(String id) async =>
-      accounts.cast<Account?>().firstWhere(
-            (a) => a?.id == id,
-            orElse: () => null,
-          );
+  Future<Account?> getAccount(String id) async => accounts
+      .cast<Account?>()
+      .firstWhere((a) => a?.id == id, orElse: () => null);
   @override
   Future<void> addAccount(Account account, String password) async {}
   @override
@@ -59,16 +57,15 @@ class _FakeMailboxes implements MailboxRepository {
     String accountId,
     String name,
     String role,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
+  ) async => Mailbox(
+    id: '$accountId:$name',
+    accountId: accountId,
+    path: name,
+    name: name,
+    role: role,
+    unreadCount: 0,
+    totalCount: 0,
+  );
 }
 
 class _CountingEmails implements EmailRepository {
@@ -94,19 +91,14 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<int> flushPendingChanges(String accountId, String password) async => 0;
   @override
-  Stream<List<Email>> observeEmails(
-    String a,
-    String m, {
-    int limit = 50,
-  }) =>
+  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
       Stream.value([]);
   @override
   Stream<List<EmailThread>> observeThreads(
     String a,
     String m, {
     int limit = 50,
-  }) =>
-      Stream.value([]);
+  }) => Stream.value([]);
   @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
       Stream.value([]);
@@ -140,8 +132,7 @@ class _CountingEmails implements EmailRepository {
     String? a,
     String q, {
     int limit = 10,
-  }) async =>
-      [];
+  }) async => [];
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String a) =>
       Stream.value([]);
@@ -159,8 +150,7 @@ class _CountingEmails implements EmailRepository {
   Future<Email?> findEmailByMessageId(
     String accountId,
     String messageId,
-  ) async =>
-      null;
+  ) async => null;
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
   @override
@@ -170,8 +160,7 @@ class _CountingEmails implements EmailRepository {
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
+  ) async => ReliabilityResult.healthy;
   @override
   Future<void> clearForResync(String accountId) async {}
   @override
@@ -383,7 +372,7 @@ void main() {
 
 class _OverrideEmails extends _CountingEmails {
   _OverrideEmails({required Future<SyncEmailsResult> Function(String) onSync})
-      : _onSync = onSync;
+    : _onSync = onSync;
 
   final Future<SyncEmailsResult> Function(String) _onSync;
 

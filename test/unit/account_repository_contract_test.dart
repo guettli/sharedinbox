@@ -73,13 +73,15 @@ abstract class AccountRepositoryContract {
       expect(await repo.getPassword(_a.id), 'new');
     });
 
-    test('removeAccount makes account disappear from observeAccounts',
-        () async {
-      final repo = makeRepo();
-      await repo.addAccount(_a, 'pw');
-      await repo.removeAccount(_a.id);
-      expect(await repo.observeAccounts().first, isEmpty);
-    });
+    test(
+      'removeAccount makes account disappear from observeAccounts',
+      () async {
+        final repo = makeRepo();
+        await repo.addAccount(_a, 'pw');
+        await repo.removeAccount(_a.id);
+        expect(await repo.observeAccounts().first, isEmpty);
+      },
+    );
 
     test('getAccount returns null after removeAccount', () async {
       final repo = makeRepo();

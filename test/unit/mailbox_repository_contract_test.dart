@@ -61,10 +61,7 @@ abstract class MailboxRepositoryContract {
 
     test('findMailboxByRole returns null when no match', () async {
       final repo = await makeRepo();
-      expect(
-        await repo.findMailboxByRole(_account.id, 'archive'),
-        isNull,
-      );
+      expect(await repo.findMailboxByRole(_account.id, 'archive'), isNull);
     });
 
     test('findMailboxByRole returns the matching mailbox', () async {
@@ -114,7 +111,9 @@ class _MailboxRepositoryImplContract extends MailboxRepositoryContract {
     int unread = 0,
     int total = 0,
   }) async {
-    await _db.into(_db.mailboxes).insert(
+    await _db
+        .into(_db.mailboxes)
+        .insert(
           MailboxesCompanion.insert(
             id: id,
             accountId: _account.id,

@@ -227,54 +227,52 @@ void main() {
       expect(find.textContaining('Healthy'), findsOneWidget);
     });
 
-    testWidgets(
-      'shows discrepancy details when sync health has discrepancies',
-      (tester) async {
-        const summary =
-            '{"INBOX":{"missingLocally":3,"missingOnServer":0,"flagMismatches":1}}';
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts',
-            overrides: baseOverrides(
-              accounts: [kTestAccount],
-              syncHealth: SyncHealthRow(
-                accountId: kTestAccount.id,
-                lastVerifiedAt: DateTime(2024, 6),
-                isHealthy: false,
-                discrepancySummary: summary,
-              ),
+    testWidgets('shows discrepancy details when sync health has discrepancies', (
+      tester,
+    ) async {
+      const summary =
+          '{"INBOX":{"missingLocally":3,"missingOnServer":0,"flagMismatches":1}}';
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            syncHealth: SyncHealthRow(
+              accountId: kTestAccount.id,
+              lastVerifiedAt: DateTime(2024, 6),
+              isHealthy: false,
+              discrepancySummary: summary,
             ),
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        expect(find.textContaining('missing locally: 3'), findsOneWidget);
-        expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
-      },
-    );
+      expect(find.textContaining('missing locally: 3'), findsOneWidget);
+      expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
+    });
 
-    testWidgets(
-      'sync health row is positioned below the account name row',
-      (tester) async {
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts',
-            overrides: baseOverrides(
-              accounts: [kTestAccount],
-              syncHealth: SyncHealthRow(
-                accountId: kTestAccount.id,
-                lastVerifiedAt: DateTime(2024, 6),
-                isHealthy: true,
-              ),
+    testWidgets('sync health row is positioned below the account name row', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            syncHealth: SyncHealthRow(
+              accountId: kTestAccount.id,
+              lastVerifiedAt: DateTime(2024, 6),
+              isHealthy: true,
             ),
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        final namePos = tester.getTopLeft(find.text('Alice')).dy;
-        final healthPos = tester.getTopLeft(find.textContaining('Healthy')).dy;
-        expect(healthPos, greaterThan(namePos));
-      },
-    );
+      final namePos = tester.getTopLeft(find.text('Alice')).dy;
+      final healthPos = tester.getTopLeft(find.textContaining('Healthy')).dy;
+      expect(healthPos, greaterThan(namePos));
+    });
   });
 }

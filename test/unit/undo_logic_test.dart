@@ -48,7 +48,9 @@ void main() {
     await accounts.addAccount(account, 'password');
 
     // Setup Inbox and Trash mailboxes
-    await db.into(db.mailboxes).insert(
+    await db
+        .into(db.mailboxes)
+        .insert(
           MailboxesCompanion.insert(
             id: 'acc1:INBOX',
             accountId: 'acc1',
@@ -56,7 +58,9 @@ void main() {
             name: 'Inbox',
           ),
         );
-    await db.into(db.mailboxes).insert(
+    await db
+        .into(db.mailboxes)
+        .insert(
           MailboxesCompanion.insert(
             id: 'acc1:Trash',
             accountId: 'acc1',
@@ -67,7 +71,9 @@ void main() {
         );
 
     // Setup an email in Inbox
-    await db.into(db.emails).insert(
+    await db
+        .into(db.emails)
+        .insert(
           EmailsCompanion.insert(
             id: 'acc1:101',
             accountId: 'acc1',
@@ -94,10 +100,11 @@ void main() {
     await repo.deleteEmail(emailId);
 
     // Verify it moved from INBOX (locally deleted for IMAP move)
-    final inInbox = await (db.select(db.emails)
-          ..where((t) => t.id.equals(emailId))
-          ..where((t) => t.mailboxPath.equals('INBOX')))
-        .get();
+    final inInbox =
+        await (db.select(db.emails)
+              ..where((t) => t.id.equals(emailId))
+              ..where((t) => t.mailboxPath.equals('INBOX')))
+            .get();
     expect(inInbox, isEmpty, reason: 'Email should be gone from Inbox');
 
     // 2. Push undo action and undo
@@ -113,10 +120,11 @@ void main() {
     await container.read(undoServiceProvider.notifier).undo();
 
     // 3. Verify it is back in Inbox
-    final restored = await (db.select(db.emails)
-          ..where((t) => t.id.equals(emailId))
-          ..where((t) => t.mailboxPath.equals('INBOX')))
-        .get();
+    final restored =
+        await (db.select(db.emails)
+              ..where((t) => t.id.equals(emailId))
+              ..where((t) => t.mailboxPath.equals('INBOX')))
+            .get();
 
     expect(
       restored,
@@ -141,7 +149,9 @@ void main() {
     await accounts.addAccount(jmapAccount, 'password');
 
     // Setup Inbox and Trash mailboxes for JMAP
-    await db.into(db.mailboxes).insert(
+    await db
+        .into(db.mailboxes)
+        .insert(
           MailboxesCompanion.insert(
             id: 'jmap1:INBOX',
             accountId: 'jmap1',
@@ -150,7 +160,9 @@ void main() {
             role: const Value('inbox'),
           ),
         );
-    await db.into(db.mailboxes).insert(
+    await db
+        .into(db.mailboxes)
+        .insert(
           MailboxesCompanion.insert(
             id: 'jmap1:Trash',
             accountId: 'jmap1',
@@ -161,7 +173,9 @@ void main() {
         );
 
     // Setup an email in JMAP Inbox
-    await db.into(db.emails).insert(
+    await db
+        .into(db.emails)
+        .insert(
           EmailsCompanion.insert(
             id: emailId,
             accountId: 'jmap1',
@@ -176,10 +190,11 @@ void main() {
     await repo.deleteEmail(emailId);
 
     // Verify it moved to Trash locally (JMAP moveEmail updates mailboxPath)
-    final inTrash = await (db.select(db.emails)
-          ..where((t) => t.id.equals(emailId))
-          ..where((t) => t.mailboxPath.equals('Trash')))
-        .get();
+    final inTrash =
+        await (db.select(db.emails)
+              ..where((t) => t.id.equals(emailId))
+              ..where((t) => t.mailboxPath.equals('Trash')))
+            .get();
     expect(inTrash, isNotEmpty, reason: 'Email should be in Trash');
 
     // 2. Push undo action and undo
@@ -194,10 +209,11 @@ void main() {
     await container.read(undoServiceProvider.notifier).undo();
 
     // 3. Verify it is back in Inbox
-    final restored = await (db.select(db.emails)
-          ..where((t) => t.id.equals(emailId))
-          ..where((t) => t.mailboxPath.equals('INBOX')))
-        .get();
+    final restored =
+        await (db.select(db.emails)
+              ..where((t) => t.id.equals(emailId))
+              ..where((t) => t.mailboxPath.equals('INBOX')))
+            .get();
     expect(
       restored,
       isNotEmpty,
@@ -234,10 +250,11 @@ void main() {
       await container.read(undoServiceProvider.notifier).undo();
 
       // 4. Verify local state
-      final restored = await (db.select(db.emails)
-            ..where((t) => t.id.equals(emailId))
-            ..where((t) => t.mailboxPath.equals('INBOX')))
-          .get();
+      final restored =
+          await (db.select(db.emails)
+                ..where((t) => t.id.equals(emailId))
+                ..where((t) => t.mailboxPath.equals('INBOX')))
+              .get();
       expect(restored, isNotEmpty);
 
       // 5. Verify a NEW pending change was enqueued (Trash -> INBOX)
@@ -260,8 +277,9 @@ void main() {
       expect(original!.messageId, isNull); // set a messageId so lookup works
 
       // Seed a messageId so undo can find the email after UID change.
-      await (db.update(db.emails)..where((t) => t.id.equals(oldEmailId)))
-          .write(const EmailsCompanion(messageId: Value('msg-101@test')));
+      await (db.update(db.emails)..where((t) => t.id.equals(oldEmailId))).write(
+        const EmailsCompanion(messageId: Value('msg-101@test')),
+      );
 
       final originalWithMsgId = await repo.getEmail(oldEmailId);
 
@@ -272,7 +290,9 @@ void main() {
       // 2. Simulate IMAP sync: the server assigned a new UID (205) in Trash.
       // The old row (acc1:101) is removed and a new row (acc1:205) is inserted.
       await (db.delete(db.emails)..where((t) => t.id.equals(oldEmailId))).go();
-      await db.into(db.emails).insert(
+      await db
+          .into(db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'acc1:205',
               accountId: 'acc1',
@@ -303,9 +323,9 @@ void main() {
       await container.read(undoServiceProvider.notifier).undo();
 
       // 4. Verify the current email row is now in INBOX.
-      final inInbox = await (db.select(db.emails)
-            ..where((t) => t.mailboxPath.equals('INBOX')))
-          .get();
+      final inInbox = await (db.select(
+        db.emails,
+      )..where((t) => t.mailboxPath.equals('INBOX'))).get();
       expect(
         inInbox,
         isNotEmpty,

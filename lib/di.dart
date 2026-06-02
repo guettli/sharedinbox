@@ -101,8 +101,9 @@ final undoRepositoryProvider = Provider<UndoRepository>((ref) {
   return UndoRepositoryImpl(ref.watch(dbProvider));
 });
 
-final searchHistoryRepositoryProvider =
-    Provider<SearchHistoryRepository>((ref) {
+final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((
+  ref,
+) {
   return SearchHistoryRepositoryImpl(ref.watch(dbProvider));
 });
 
@@ -110,10 +111,10 @@ final syncLogRepositoryProvider = Provider<SyncLogRepository>((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
 });
 
-final syncLastErrorProvider =
-    StreamProvider.autoDispose.family<String?, String>((ref, accountId) {
-  return ref.watch(syncLogRepositoryProvider).observeLastError(accountId);
-});
+final syncLastErrorProvider = StreamProvider.autoDispose
+    .family<String?, String>((ref, accountId) {
+      return ref.watch(syncLogRepositoryProvider).observeLastError(accountId);
+    });
 
 final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
   final runner = ReliabilityRunner(
@@ -126,17 +127,18 @@ final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
   return runner;
 });
 
-final syncHealthProvider =
-    StreamProvider.autoDispose.family<SyncHealthRow?, String>((ref, accountId) {
-  final db = ref.watch(dbProvider);
-  return (db.select(
-    db.syncHealth,
-  )..where((t) => t.accountId.equals(accountId)))
-      .watchSingleOrNull();
-});
+final syncHealthProvider = StreamProvider.autoDispose
+    .family<SyncHealthRow?, String>((ref, accountId) {
+      final db = ref.watch(dbProvider);
+      return (db.select(
+        db.syncHealth,
+      )..where((t) => t.accountId.equals(accountId))).watchSingleOrNull();
+    });
 
-final isSyncingProvider =
-    StreamProvider.autoDispose.family<bool, String>((ref, accountId) {
+final isSyncingProvider = StreamProvider.autoDispose.family<bool, String>((
+  ref,
+  accountId,
+) {
   return ref.watch(syncManagerProvider).watchSyncing(accountId);
 });
 
@@ -185,15 +187,16 @@ final manageSieveProbeServiceProvider = Provider<ManageSieveProbeService>((
   return ManageSieveProbeService(ref.watch(accountRepositoryProvider));
 });
 
-final undoServiceProvider =
-    NotifierProvider<UndoService, List<UndoAction>>(UndoService.new);
+final undoServiceProvider = NotifierProvider<UndoService, List<UndoAction>>(
+  UndoService.new,
+);
 
 /// Loads email header + body and marks the email as seen.
 /// Owned by [EmailDetailScreen]; decouples data loading from the widget tree.
 final emailDetailProvider = AsyncNotifierProvider.autoDispose
     .family<EmailDetailNotifier, (Email?, EmailBody), String>(
-  EmailDetailNotifier.new,
-);
+      EmailDetailNotifier.new,
+    );
 
 class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   EmailDetailNotifier(this._emailId);
@@ -211,33 +214,38 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   }
 }
 
-final accountByIdProvider =
-    StreamProvider.autoDispose.family<model.Account?, String>((ref, accountId) {
-  return ref.watch(accountRepositoryProvider).observeAccounts().map(
-        (accounts) => accounts.cast<model.Account?>().firstWhere(
+final accountByIdProvider = StreamProvider.autoDispose
+    .family<model.Account?, String>((ref, accountId) {
+      return ref
+          .watch(accountRepositoryProvider)
+          .observeAccounts()
+          .map(
+            (accounts) => accounts.cast<model.Account?>().firstWhere(
               (a) => a?.id == accountId,
               orElse: () => null,
             ),
-      );
-});
+          );
+    });
 
-final accountConnectionStatusProvider =
-    FutureProvider.autoDispose.family<void, String>((ref, accountId) async {
-  final repo = ref.read(accountRepositoryProvider);
-  final account = await repo.getAccount(accountId);
-  if (account == null) throw Exception('Account not found');
-  final password = await repo.getPassword(accountId);
-  await ref
-      .read(connectionTestServiceProvider)
-      .testConnection(account, password);
-});
+final accountConnectionStatusProvider = FutureProvider.autoDispose
+    .family<void, String>((ref, accountId) async {
+      final repo = ref.read(accountRepositoryProvider);
+      final account = await repo.getAccount(accountId);
+      if (account == null) throw Exception('Account not found');
+      final password = await repo.getPassword(accountId);
+      await ref
+          .read(connectionTestServiceProvider)
+          .testConnection(account, password);
+    });
 
-final userPreferencesRepositoryProvider =
-    Provider<UserPreferencesRepository>((ref) {
+final userPreferencesRepositoryProvider = Provider<UserPreferencesRepository>((
+  ref,
+) {
   return UserPreferencesRepositoryImpl(ref.watch(dbProvider));
 });
 
-final userPreferencesProvider =
-    StreamProvider.autoDispose<UserPreferences>((ref) {
+final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
+  ref,
+) {
   return ref.watch(userPreferencesRepositoryProvider).observePreferences();
 });

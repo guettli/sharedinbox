@@ -47,9 +47,7 @@ void main() {
     test('parsePublicKeyQr returns null for invalid input', () {
       expect(ShareEncryptionService.parsePublicKeyQr('not-valid'), isNull);
       expect(
-        ShareEncryptionService.parsePublicKeyQr(
-          'sharedinbox.de:pubkey:v1:!!!',
-        ),
+        ShareEncryptionService.parsePublicKeyQr('sharedinbox.de:pubkey:v1:!!!'),
         isNull,
       );
       expect(

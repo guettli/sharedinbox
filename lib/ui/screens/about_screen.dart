@@ -72,8 +72,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
 
   Future<void> _launchUrl(BuildContext context, Uri url) async {
     try {
-      final launched =
-          await launchUrl(url, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(
+        url,
+        mode: LaunchMode.externalApplication,
+      );
       if (!launched && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -121,8 +123,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       'https://codeberg.org/guettli/sharedinbox/issues/new?body=$body',
     );
     try {
-      final launched =
-          await launchUrl(url, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(
+        url,
+        mode: LaunchMode.externalApplication,
+      );
       if (!launched && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -149,10 +153,12 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       stream: _accountsStream,
       builder: (context, accountSnapshot) {
         final accounts = accountSnapshot.data ?? [];
-        final imapCount =
-            accounts.where((a) => a.type == AccountType.imap).length;
-        final jmapCount =
-            accounts.where((a) => a.type == AccountType.jmap).length;
+        final imapCount = accounts
+            .where((a) => a.type == AccountType.imap)
+            .length;
+        final jmapCount = accounts
+            .where((a) => a.type == AccountType.jmap)
+            .length;
 
         return Scaffold(
           appBar: AppBar(title: const Text('About')),
@@ -176,9 +182,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                       selectable: true,
                       onTapLink: (text, href, title) {
                         if (href != null) {
-                          unawaited(
-                            _launchUrl(context, Uri.parse(href)),
-                          );
+                          unawaited(_launchUrl(context, Uri.parse(href)));
                         }
                       },
                     );

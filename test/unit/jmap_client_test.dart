@@ -11,23 +11,23 @@ const _apiUrl = 'https://jmap.example.com/api/';
 const _accountId = 'u1';
 
 Map<String, dynamic> _sessionBody({String? apiUrl, String? accountId}) => {
-      'apiUrl': apiUrl ?? _apiUrl,
-      'accounts': {
-        accountId ?? _accountId: {
-          'name': 'alice@example.com',
-          'isPersonal': true,
-          'isReadOnly': false,
-          'accountCapabilities': {},
-        },
-      },
-      'primaryAccounts': {
-        'urn:ietf:params:jmap:core': accountId ?? _accountId,
-        'urn:ietf:params:jmap:mail': accountId ?? _accountId,
-      },
-      'capabilities': {},
-      'username': 'alice@example.com',
-      'state': 'st1',
-    };
+  'apiUrl': apiUrl ?? _apiUrl,
+  'accounts': {
+    accountId ?? _accountId: {
+      'name': 'alice@example.com',
+      'isPersonal': true,
+      'isReadOnly': false,
+      'accountCapabilities': {},
+    },
+  },
+  'primaryAccounts': {
+    'urn:ietf:params:jmap:core': accountId ?? _accountId,
+    'urn:ietf:params:jmap:mail': accountId ?? _accountId,
+  },
+  'capabilities': {},
+  'username': 'alice@example.com',
+  'state': 'st1',
+};
 
 http.Client _sessionClient({
   int sessionStatus = 200,

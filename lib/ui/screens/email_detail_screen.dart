@@ -55,7 +55,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final header = detail.value?.$1;
     final body = detail.value?.$2;
 
-    final isMobile = defaultTargetPlatform == TargetPlatform.android ||
+    final isMobile =
+        defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
     return Scaffold(
@@ -72,9 +73,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             onPressed: header == null
                 ? null
                 : () {
-                    unawaited(
-                      _replyWithRecipientDialog(context, header, body),
-                    );
+                    unawaited(_replyWithRecipientDialog(context, header, body));
                   },
           ),
           IconButton(
@@ -95,7 +94,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
               if (header != null) {
                 unawaited(
-                  ref.read(undoServiceProvider.notifier).pushAction(
+                  ref
+                      .read(undoServiceProvider.notifier)
+                      .pushAction(
                         UndoAction(
                           id: DateTime.now().toIso8601String(),
                           accountId: header.accountId,
@@ -126,22 +127,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
-              const PopupMenuItem(
-                value: 'forward',
-                child: Text('Forward'),
-              ),
-              const PopupMenuItem(
-                value: 'move',
-                child: Text('Move to folder'),
-              ),
-              const PopupMenuItem(
-                value: 'snooze',
-                child: Text('Snooze'),
-              ),
-              const PopupMenuItem(
-                value: 'spam',
-                child: Text('Mark as spam'),
-              ),
+              const PopupMenuItem(value: 'forward', child: Text('Forward')),
+              const PopupMenuItem(value: 'move', child: Text('Move to folder')),
+              const PopupMenuItem(value: 'snooze', child: Text('Snooze')),
+              const PopupMenuItem(value: 'spam', child: Text('Mark as spam')),
               const PopupMenuItem(
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
@@ -155,10 +144,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 value: 'structure',
                 child: Text('Show Mail Structure'),
               ),
-              const PopupMenuItem(
-                value: 'rfc',
-                child: Text('Show Raw Email'),
-              ),
+              const PopupMenuItem(value: 'rfc', child: Text('Show Raw Email')),
             ],
             onSelected: (value) async {
               if (value == 'forward' && header != null) {
@@ -264,8 +250,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         .observeThreads(header.accountId, header.mailboxPath)
         .first;
 
-    final currentIndex =
-        threads.indexWhere((t) => t.emailIds.contains(widget.emailId));
+    final currentIndex = threads.indexWhere(
+      (t) => t.emailIds.contains(widget.emailId),
+    );
     if (currentIndex >= 0 && currentIndex + 1 < threads.length) {
       return threads[currentIndex + 1].latestEmailId;
     }
@@ -337,8 +324,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<String> _quotedBody(Email header, EmailBody? body) async {
     final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
-    final from =
-        header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
+    final from = header.from.isNotEmpty
+        ? header.from.first.toString()
+        : '(unknown)';
     final rawText = body?.textBody;
     final text = (rawText != null && rawText.isNotEmpty)
         ? rawText
@@ -352,8 +340,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     Email header,
     EmailBody? body,
   ) async {
-    final account =
-        await ref.read(accountRepositoryProvider).getAccount(header.accountId);
+    final account = await ref
+        .read(accountRepositoryProvider)
+        .getAccount(header.accountId);
     final ownEmail = account?.email.toLowerCase() ?? '';
 
     final seen = <String>{};
@@ -456,7 +445,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         .moveEmail(widget.emailId, mailbox.path);
 
     unawaited(
-      ref.read(undoServiceProvider.notifier).pushAction(
+      ref
+          .read(undoServiceProvider.notifier)
+          .pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -492,7 +483,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         .moveEmail(widget.emailId, mailbox.path);
 
     unawaited(
-      ref.read(undoServiceProvider.notifier).pushAction(
+      ref
+          .read(undoServiceProvider.notifier)
+          .pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -520,10 +513,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     unawaited(
       context.push(
         '/compose',
-        extra: {
-          'prefillSubject': subject,
-          'prefillBody': quoted,
-        },
+        extra: {'prefillSubject': subject, 'prefillBody': quoted},
       ),
     );
   }
@@ -532,12 +522,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final nextEmailId = await _getNextEmailIdIfNeeded(header);
 
     final mailboxRepo = ref.read(mailboxRepositoryProvider);
-    final mailboxes =
-        await mailboxRepo.observeMailboxes(header.accountId).first;
+    final mailboxes = await mailboxRepo
+        .observeMailboxes(header.accountId)
+        .first;
 
     // Remove the current mailbox from the list.
-    final destinations =
-        mailboxes.where((m) => m.path != header.mailboxPath).toList();
+    final destinations = mailboxes
+        .where((m) => m.path != header.mailboxPath)
+        .toList();
 
     if (!context.mounted) return;
 
@@ -567,7 +559,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
 
     unawaited(
-      ref.read(undoServiceProvider.notifier).pushAction(
+      ref
+          .read(undoServiceProvider.notifier)
+          .pushAction(
             UndoAction(
               id: DateTime.now().toIso8601String(),
               accountId: header.accountId,
@@ -625,9 +619,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .fetchRawRfc822(widget.emailId);
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to fetch raw email: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to fetch raw email: $e')));
       return;
     }
 
@@ -647,8 +641,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 Text(
                   fmtSize(raw.length),
                   style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(ctx).colorScheme.outline,
-                      ),
+                    color: Theme.of(ctx).colorScheme.outline,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Flexible(
@@ -792,9 +786,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           duration: Duration(seconds: 5),
-          content: Text(
-            'Structure not available. Try re-syncing the email.',
-          ),
+          content: Text('Structure not available. Try re-syncing the email.'),
         ),
       );
       return;
@@ -830,8 +822,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                         child: Text(
                           row.label,
                           style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                                fontFamily: 'monospace',
-                              ),
+                            fontFamily: 'monospace',
+                          ),
                         ),
                       ),
                     ],
@@ -903,14 +895,8 @@ class _ReplyAllDialogState extends State<_ReplyAllDialog> {
                     SegmentedButton<_Placement>(
                       showSelectedIcon: false,
                       segments: const [
-                        ButtonSegment(
-                          value: _Placement.to,
-                          label: Text('To'),
-                        ),
-                        ButtonSegment(
-                          value: _Placement.cc,
-                          label: Text('Cc'),
-                        ),
+                        ButtonSegment(value: _Placement.to, label: Text('To')),
+                        ButtonSegment(value: _Placement.cc, label: Text('Cc')),
                         ButtonSegment(
                           value: _Placement.skip,
                           label: Text('Skip'),

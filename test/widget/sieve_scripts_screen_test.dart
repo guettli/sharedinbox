@@ -27,13 +27,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          sieveRepositoryProvider.overrideWith(
-            (ref) => _FakeSieveRepository(),
-          ),
+          sieveRepositoryProvider.overrideWith((ref) => _FakeSieveRepository()),
         ],
-        child: const MaterialApp(
-          home: SieveScriptsScreen(accountId: 'acc-1'),
-        ),
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
       ),
     );
     await tester.pumpAndSettle();

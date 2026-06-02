@@ -90,9 +90,7 @@ class UserPreferencesScreen extends ConsumerWidget {
                   ),
                   RadioListTile<MenuPosition>(
                     title: Text('Top'),
-                    subtitle: Text(
-                      'Show the back button in the top bar.',
-                    ),
+                    subtitle: Text('Show the back button in the top bar.'),
                     value: MenuPosition.top,
                   ),
                 ],
@@ -122,16 +120,12 @@ class UserPreferencesScreen extends ConsumerWidget {
                 children: [
                   RadioListTile<AfterMailViewAction>(
                     title: Text('Next message (default)'),
-                    subtitle: Text(
-                      'Show the next message in the mailbox.',
-                    ),
+                    subtitle: Text('Show the next message in the mailbox.'),
                     value: AfterMailViewAction.nextMessage,
                   ),
                   RadioListTile<AfterMailViewAction>(
                     title: Text('Return to mailbox'),
-                    subtitle: Text(
-                      'Return to the message list.',
-                    ),
+                    subtitle: Text('Return to the message list.'),
                     value: AfterMailViewAction.showMailbox,
                   ),
                 ],

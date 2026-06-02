@@ -346,10 +346,10 @@ class SyncEmailsResult {
   );
 
   SyncEmailsResult operator +(SyncEmailsResult other) => SyncEmailsResult(
-        fetched: fetched + other.fetched,
-        skipped: skipped + other.skipped,
-        bytesTransferred: bytesTransferred + other.bytesTransferred,
-      );
+    fetched: fetched + other.fetched,
+    skipped: skipped + other.skipped,
+    bytesTransferred: bytesTransferred + other.bytesTransferred,
+  );
 }
 
 class ReliabilityResult {

@@ -40,7 +40,9 @@ Future<String> _insertInboxEmail(
   String from = 'sender@example.com',
   String mailboxPath = 'INBOX',
 }) async {
-  await db.into(db.emails).insert(
+  await db
+      .into(db.emails)
+      .insert(
         EmailsCompanion.insert(
           id: id,
           accountId: _account.id,
@@ -57,7 +59,9 @@ Future<String> _insertInboxEmail(
         ),
       );
   // Insert a thread row so _updateThread does not throw.
-  await db.into(db.threads).insertOnConflictUpdate(
+  await db
+      .into(db.threads)
+      .insertOnConflictUpdate(
         ThreadsCompanion.insert(
           id: id,
           accountId: _account.id,
@@ -71,7 +75,9 @@ Future<String> _insertInboxEmail(
 
 /// Creates an active Sieve script for the test account.
 Future<void> _insertSieveScript(AppDatabase db, String content) async {
-  await db.into(db.localSieveScripts).insert(
+  await db
+      .into(db.localSieveScripts)
+      .insert(
         LocalSieveScriptsCompanion.insert(
           accountId: _account.id,
           name: 'test-script',
@@ -218,7 +224,9 @@ if header :contains "subject" ["SPAM"] {
 }
 ''');
       // Insert without messageId.
-      await db.into(db.emails).insert(
+      await db
+          .into(db.emails)
+          .insert(
             EmailsCompanion.insert(
               id: 'sieve-acc:2',
               accountId: _account.id,
@@ -228,7 +236,9 @@ if header :contains "subject" ["SPAM"] {
               receivedAt: DateTime.now(),
             ),
           );
-      await db.into(db.threads).insertOnConflictUpdate(
+      await db
+          .into(db.threads)
+          .insertOnConflictUpdate(
             ThreadsCompanion.insert(
               id: 'sieve-acc:2',
               accountId: _account.id,

@@ -20,9 +20,9 @@ void main({List<Override> overrides = const []}) async {
 
         // Catch errors during build (e.g. layout exceptions) and show CrashScreen.
         ErrorWidget.builder = (details) => CrashScreen(
-              exception: details.exception,
-              stackTrace: details.stack,
-            );
+          exception: details.exception,
+          stackTrace: details.stack,
+        );
 
         // Catch framework-level errors (e.g. from gestures, timers).
         FlutterError.onError = (details) {

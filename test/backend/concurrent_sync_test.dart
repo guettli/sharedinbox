@@ -246,8 +246,9 @@ void main() {
       );
 
       // Alice and bob each received at least msgCount messages.
-      final aliceEmails =
-          allEmails.where((e) => e.accountId == 'alice').toList();
+      final aliceEmails = allEmails
+          .where((e) => e.accountId == 'alice')
+          .toList();
       final bobEmails = allEmails.where((e) => e.accountId == 'bob').toList();
       expect(
         aliceEmails.length,

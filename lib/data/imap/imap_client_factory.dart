@@ -6,11 +6,12 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/tls_error.dart';
 
-typedef ImapConnectFn = Future<ImapClient> Function(
-  Account account,
-  String username,
-  String password,
-);
+typedef ImapConnectFn =
+    Future<ImapClient> Function(
+      Account account,
+      String username,
+      String password,
+    );
 
 /// Zone value key signalling that a [StringBuffer] for protocol logging is
 /// active. When this key is non-null in the current zone, [connectImap]
@@ -64,8 +65,9 @@ Future<SmtpClient> connectSmtp(
   // clientDomain is the sending domain advertised in EHLO — use the host part
   // of the sender email, falling back to the SMTP host.
   final atIndex = account.email.lastIndexOf('@');
-  final clientDomain =
-      atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
+  final clientDomain = atIndex != -1
+      ? account.email.substring(atIndex + 1)
+      : account.smtpHost;
 
   if (!account.smtpSsl && !isLocalhost(account.smtpHost)) {
     throw Exception(

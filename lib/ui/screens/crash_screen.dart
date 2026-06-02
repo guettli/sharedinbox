@@ -81,9 +81,9 @@ class CrashScreen extends StatelessWidget {
                   builder: (context, snapshot) => Text(
                     'v${snapshot.data ?? '…'}  •  $_buildMode  •  '
                     '${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[600],
-                        ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
                     textAlign: TextAlign.center,
                   ),
                 ),

@@ -11,23 +11,22 @@ Email _threadEmail({
   String id = 'acc-1:10',
   bool isFlagged = false,
   bool isSeen = true,
-}) =>
-    Email(
-      id: id,
-      accountId: 'acc-1',
-      mailboxPath: 'INBOX',
-      uid: 10,
-      threadId: 'thread-1',
-      subject: 'Project update',
-      receivedAt: DateTime(2024, 6),
-      sentAt: DateTime(2024, 6, 1, 9),
-      from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-      to: const [EmailAddress(email: 'alice@example.com')],
-      cc: const [],
-      isSeen: isSeen,
-      isFlagged: isFlagged,
-      hasAttachment: false,
-    );
+}) => Email(
+  id: id,
+  accountId: 'acc-1',
+  mailboxPath: 'INBOX',
+  uid: 10,
+  threadId: 'thread-1',
+  subject: 'Project update',
+  receivedAt: DateTime(2024, 6),
+  sentAt: DateTime(2024, 6, 1, 9),
+  from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+  to: const [EmailAddress(email: 'alice@example.com')],
+  cc: const [],
+  isSeen: isSeen,
+  isFlagged: isFlagged,
+  hasAttachment: false,
+);
 
 void main() {
   group('ThreadDetailScreen', () {

@@ -59,7 +59,8 @@ void main() {
 
     test('leaves HTML unchanged when there are no inline parts', () {
       // A plain text-only message.
-      const plainMime = 'MIME-Version: 1.0\r\n'
+      const plainMime =
+          'MIME-Version: 1.0\r\n'
           'Content-Type: text/plain\r\n'
           '\r\n'
           'Hello';
@@ -86,8 +87,9 @@ void main() {
       final result = injectInlineImages(html, msg);
 
       // Extract base64 payload from the data URI.
-      final match =
-          RegExp(r'data:image/png;base64,([A-Za-z0-9+/=]+)').firstMatch(result);
+      final match = RegExp(
+        r'data:image/png;base64,([A-Za-z0-9+/=]+)',
+      ).firstMatch(result);
       expect(match, isNotNull);
       final decoded = base64.decode(match!.group(1)!);
       expect(decoded.length, greaterThan(0));

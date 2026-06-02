@@ -38,8 +38,9 @@ void main() {
         sourceMailboxPath: 'INBOX',
         timestamp: DateTime.now().subtract(const Duration(hours: 1)),
       );
-      when(mockUndoRepo.getHistory(limit: anyNamed('limit')))
-          .thenAnswer((_) async => [staleAction]);
+      when(
+        mockUndoRepo.getHistory(limit: anyNamed('limit')),
+      ).thenAnswer((_) async => [staleAction]);
 
       await tester.pumpWidget(buildShell(mockUndoRepo));
       await tester.pumpAndSettle();
@@ -48,10 +49,12 @@ void main() {
     },
   );
 
-  testWidgets('shows snackbar for fresh action pushed in current session',
-      (tester) async {
-    when(mockUndoRepo.getHistory(limit: anyNamed('limit')))
-        .thenAnswer((_) async => []);
+  testWidgets('shows snackbar for fresh action pushed in current session', (
+    tester,
+  ) async {
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
 
     await tester.pumpWidget(buildShell(mockUndoRepo));
     await tester.pumpAndSettle();
@@ -64,18 +67,20 @@ void main() {
       emailIds: ['e1'],
       sourceMailboxPath: 'INBOX',
     );
-    await ProviderScope.containerOf(context)
-        .read(undoServiceProvider.notifier)
-        .pushAction(freshAction);
+    await ProviderScope.containerOf(
+      context,
+    ).read(undoServiceProvider.notifier).pushAction(freshAction);
     await tester.pumpAndSettle();
 
     expect(find.text('1 email(s) moved'), findsOneWidget);
   });
 
-  testWidgets('shows correct text for delete action (moved to Trash)',
-      (tester) async {
-    when(mockUndoRepo.getHistory(limit: anyNamed('limit')))
-        .thenAnswer((_) async => []);
+  testWidgets('shows correct text for delete action (moved to Trash)', (
+    tester,
+  ) async {
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
 
     await tester.pumpWidget(buildShell(mockUndoRepo));
     await tester.pumpAndSettle();
@@ -88,9 +93,9 @@ void main() {
       emailIds: ['e1', 'e2'],
       sourceMailboxPath: 'INBOX',
     );
-    await ProviderScope.containerOf(context)
-        .read(undoServiceProvider.notifier)
-        .pushAction(deleteAction);
+    await ProviderScope.containerOf(
+      context,
+    ).read(undoServiceProvider.notifier).pushAction(deleteAction);
     await tester.pumpAndSettle();
 
     expect(find.text('2 email(s) moved to Trash'), findsOneWidget);

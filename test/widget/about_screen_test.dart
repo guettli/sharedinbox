@@ -37,7 +37,8 @@ class ThrowingUrlLauncher extends Mock
   Future<bool> launchUrl(String? url, LaunchOptions? options) async {
     throw PlatformException(
       code: 'channel-error',
-      message: 'Unable to establish connection on channel: '
+      message:
+          'Unable to establish connection on channel: '
           '"dev.flutter.pigeon.url_launcher_android.UrlLauncherApi.launchUrl".',
     );
   }
@@ -46,8 +47,9 @@ class ThrowingUrlLauncher extends Mock
 Widget _buildScreen({List<Account> accounts = const []}) {
   return ProviderScope(
     overrides: [
-      accountRepositoryProvider
-          .overrideWithValue(FakeAccountRepository(accounts)),
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository(accounts),
+      ),
     ],
     child: const MaterialApp(home: AboutScreen()),
   );
@@ -151,8 +153,10 @@ void main() {
       },
     );
     addTearDown(
-      () => tester.binding.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null),
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
     );
 
     await tester.pumpWidget(_buildScreen());
@@ -173,10 +177,7 @@ void main() {
     expect(clipboardText, contains('Locale'));
     expect(clipboardText, contains('Text Scale'));
     expect(clipboardText, contains('DB Schema Version'));
-    expect(
-      clipboardText,
-      contains('[sharedinbox.de](https://sharedinbox.de)'),
-    );
+    expect(clipboardText, contains('[sharedinbox.de](https://sharedinbox.de)'));
   });
 
   testWidgets('AboutScreen create-issue button opens Codeberg URL', (

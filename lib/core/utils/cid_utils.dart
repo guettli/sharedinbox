@@ -35,10 +35,7 @@ String injectInlineImages(String html, imap.MimeMessage msg) {
         .replaceAll('src="cid:$bareCid"', 'src="$dataUri"')
         .replaceAll("src='cid:$bareCid'", "src='$dataUri'")
         .replaceAll('src="cid:${bareCid.toLowerCase()}"', 'src="$dataUri"')
-        .replaceAll(
-          "src='cid:${bareCid.toLowerCase()}'",
-          "src='$dataUri'",
-        );
+        .replaceAll("src='cid:${bareCid.toLowerCase()}'", "src='$dataUri'");
   }
   return result;
 }

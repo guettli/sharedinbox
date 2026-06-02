@@ -26,14 +26,14 @@ class JmapClient {
     String? uploadUrl,
     String? downloadUrl,
     String? eventSourceUrl,
-  })  : _httpClient = httpClient,
-        _credentials = credentials,
-        _apiUrl = apiUrl,
-        _accountId = accountId,
-        _capabilities = capabilities,
-        _uploadUrl = uploadUrl,
-        _downloadUrl = downloadUrl,
-        _eventSourceUrl = eventSourceUrl;
+  }) : _httpClient = httpClient,
+       _credentials = credentials,
+       _apiUrl = apiUrl,
+       _accountId = accountId,
+       _capabilities = capabilities,
+       _uploadUrl = uploadUrl,
+       _downloadUrl = downloadUrl,
+       _eventSourceUrl = eventSourceUrl;
 
   final http.Client _httpClient;
   final String _credentials;
@@ -67,12 +67,9 @@ class JmapClient {
     http.Response resp;
     var attempt = 0;
     while (true) {
-      resp = await httpClient.get(
-        jmapUrl,
-        headers: {
-          'Authorization': 'Basic $credentials',
-        },
-      ).timeout(const Duration(seconds: 10));
+      resp = await httpClient
+          .get(jmapUrl, headers: {'Authorization': 'Basic $credentials'})
+          .timeout(const Duration(seconds: 10));
       if (resp.statusCode != 429 || attempt >= 4) {
         break;
       }
@@ -218,12 +215,9 @@ class JmapClient {
           .replaceAll('{name}', Uri.encodeComponent(name))
           .replaceAll('{type}', Uri.encodeComponent(type)),
     );
-    final resp = await _httpClient.get(
-      url,
-      headers: {
-        'Authorization': 'Basic $_credentials',
-      },
-    ).timeout(const Duration(seconds: 30));
+    final resp = await _httpClient
+        .get(url, headers: {'Authorization': 'Basic $_credentials'})
+        .timeout(const Duration(seconds: 30));
     if (resp.statusCode != 200) {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
     }
@@ -246,7 +240,8 @@ class JmapClient {
 
   static String _extractAccountId(Map<String, dynamic> session) {
     final primaryAccounts = session['primaryAccounts'] as Map<String, dynamic>?;
-    final id = primaryAccounts?['urn:ietf:params:jmap:mail'] as String? ??
+    final id =
+        primaryAccounts?['urn:ietf:params:jmap:mail'] as String? ??
         primaryAccounts?['urn:ietf:params:jmap:core'] as String?;
     if (id != null) return id;
 

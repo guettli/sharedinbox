@@ -41,23 +41,19 @@ class _FakeFile extends Fake implements File {
     FileMode mode = FileMode.write,
     Encoding encoding = utf8,
     bool flush = false,
-  }) async =>
-      this;
+  }) async => this;
 }
 
 // Shared overrides for email detail tests.
 List<Override> _overrides({required EmailBody body, Email? email}) => [
-      accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository([kTestAccount]),
-      ),
-      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-      emailRepositoryProvider.overrideWithValue(
-        FakeEmailRepository(
-          emailDetail: email ?? testEmail(),
-          emailBody: body,
-        ),
-      ),
-    ];
+  accountRepositoryProvider.overrideWithValue(
+    FakeAccountRepository([kTestAccount]),
+  ),
+  mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+  emailRepositoryProvider.overrideWithValue(
+    FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
+  ),
+];
 
 void main() {
   group('EmailDetailScreen', () {
@@ -191,45 +187,45 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Reply all',
-        ),
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply all'),
         findsNothing,
       );
     });
 
-    testWidgets('Reply on single-recipient email navigates directly to compose',
-        (tester) async {
-      // testEmail has from=[bob], to=[alice]. After removing alice (own),
-      // only bob remains → no dialog, navigate straight to compose.
-      final email = testEmail();
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-          overrides: [
-            ..._overrides(
-              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
-              email: email,
-            ),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+    testWidgets(
+      'Reply on single-recipient email navigates directly to compose',
+      (tester) async {
+        // testEmail has from=[bob], to=[alice]. After removing alice (own),
+        // only bob remains → no dialog, navigate straight to compose.
+        final email = testEmail();
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+                email: email,
+              ),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Reply',
-        ),
-      );
-      await tester.pumpAndSettle();
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+        );
+        await tester.pumpAndSettle();
 
-      // No dialog shown — straight navigation to compose.
-      expect(find.text('Reply All'), findsNothing);
-    });
+        // No dialog shown — straight navigation to compose.
+        expect(find.text('Reply All'), findsNothing);
+      },
+    );
 
-    testWidgets('Reply on multi-recipient email shows Reply All dialog',
-        (tester) async {
+    testWidgets('Reply on multi-recipient email shows Reply All dialog', (
+      tester,
+    ) async {
       // Email with an extra Cc recipient so the dialog is triggered.
       final email = Email(
         id: 'acc-1:42',
@@ -258,9 +254,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Reply',
-        ),
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
       );
       await tester.pumpAndSettle();
 
@@ -271,8 +265,9 @@ void main() {
       expect(find.textContaining('carol@example.com'), findsAtLeastNWidgets(1));
     });
 
-    testWidgets('Mark as spam is in popup menu, not a standalone button',
-        (tester) async {
+    testWidgets('Mark as spam is in popup menu, not a standalone button', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -298,8 +293,9 @@ void main() {
       expect(find.text('Mark as spam'), findsOneWidget);
     });
 
-    testWidgets('Mark as spam shows dialog when no junk folder',
-        (tester) async {
+    testWidgets('Mark as spam shows dialog when no junk folder', (
+      tester,
+    ) async {
       // FakeMailboxRepository has no mailboxes by default → findMailboxByRole
       // returns null → dialog shown.
       await tester.pumpWidget(
@@ -334,9 +330,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Archive',
-        ),
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Archive'),
         findsOneWidget,
       );
     });
@@ -355,17 +349,16 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(
-        find.byWidgetPredicate(
-          (w) => w is Tooltip && w.message == 'Archive',
-        ),
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Archive'),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('No archive folder found'), findsOneWidget);
     });
 
-    testWidgets('Mark as unread is in popup menu, not a standalone button',
-        (tester) async {
+    testWidgets('Mark as unread is in popup menu, not a standalone button', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -401,13 +394,16 @@ void main() {
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([kTestAccount]),
             ),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(
                 emailDetail: testEmail(),
-                emailBody:
-                    const EmailBody(emailId: 'acc-1:42', attachments: []),
+                emailBody: const EmailBody(
+                  emailId: 'acc-1:42',
+                  attachments: [],
+                ),
                 rawRfc822: rawContent,
               ),
             ),
@@ -436,13 +432,16 @@ void main() {
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([kTestAccount]),
             ),
-            mailboxRepositoryProvider
-                .overrideWithValue(FakeMailboxRepository()),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(
                 emailDetail: testEmail(),
-                emailBody:
-                    const EmailBody(emailId: 'acc-1:42', attachments: []),
+                emailBody: const EmailBody(
+                  emailId: 'acc-1:42',
+                  attachments: [],
+                ),
                 rawRfc822: 'Subject: test\r\n\r\nBody',
               ),
             ),
@@ -483,43 +482,37 @@ void main() {
       expect(find.text('Share'), findsOneWidget);
     });
 
-    testWidgets(
-      'long-press on unsubscribe chip shows URL tooltip',
-      (tester) async {
-        final email = testEmail(
-          listUnsubscribeHeader: '<https://example.com/unsubscribe>',
-        );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation:
-                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-            overrides: _overrides(
-              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
-              email: email,
-            ),
+    testWidgets('long-press on unsubscribe chip shows URL tooltip', (
+      tester,
+    ) async {
+      final email = testEmail(
+        listUnsubscribeHeader: '<https://example.com/unsubscribe>',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+            email: email,
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        expect(find.text('Unsubscribe'), findsOneWidget);
+      expect(find.text('Unsubscribe'), findsOneWidget);
 
-        expect(
-          find.byWidgetPredicate(
-            (w) =>
-                w is Tooltip && w.message == 'https://example.com/unsubscribe',
-          ),
-          findsOneWidget,
-        );
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'https://example.com/unsubscribe',
+        ),
+        findsOneWidget,
+      );
 
-        await tester.longPress(find.text('Unsubscribe'));
-        await tester.pumpAndSettle();
+      await tester.longPress(find.text('Unsubscribe'));
+      await tester.pumpAndSettle();
 
-        expect(
-          find.text('https://example.com/unsubscribe'),
-          findsOneWidget,
-        );
-      },
-    );
+      expect(find.text('https://example.com/unsubscribe'), findsOneWidget);
+    });
 
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
       tester,
@@ -563,36 +556,31 @@ void main() {
       expect(find.textContaining('application/pdf'), findsOneWidget);
     });
 
-    testWidgets(
-      'Show Mail Structure shows snackbar when mimeTree is absent',
-      (tester) async {
-        const body = EmailBody(
-          emailId: 'acc-1:42',
-          textBody: 'Hello',
-          attachments: [],
-          // mimeTree is null — not yet cached or not available.
-        );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation:
-                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-            overrides: _overrides(body: body),
-          ),
-        );
-        await tester.pumpAndSettle();
+    testWidgets('Show Mail Structure shows snackbar when mimeTree is absent', (
+      tester,
+    ) async {
+      const body = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'Hello',
+        attachments: [],
+        // mimeTree is null — not yet cached or not available.
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(body: body),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.byType(PopupMenuButton<String>));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.text('Show Mail Structure'));
-        await tester.pumpAndSettle();
+      await tester.tap(find.text('Show Mail Structure'));
+      await tester.pumpAndSettle();
 
-        expect(
-          find.textContaining('Structure not available'),
-          findsOneWidget,
-        );
-      },
-    );
+      expect(find.textContaining('Structure not available'), findsOneWidget);
+    });
   });
 }
 

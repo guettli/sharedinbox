@@ -94,12 +94,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           _jmapApiUrlCtrl.text = sessionUrl;
           setState(() => _step = _Step.jmapForm);
         case ImapSmtpDiscovery(
-            :final imapHost,
-            :final imapPort,
-            :final smtpHost,
-            :final smtpPort,
-            :final smtpSsl,
-          ):
+          :final imapHost,
+          :final imapPort,
+          :final smtpHost,
+          :final smtpPort,
+          :final smtpSsl,
+        ):
           _imapHostCtrl.text = imapHost;
           _imapPortCtrl.text = imapPort.toString();
           _smtpHostCtrl.text = smtpHost;
@@ -116,13 +116,13 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   }
 
   Account _buildJmapAccount() => Account(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        displayName: _displayNameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
-        username: _usernameCtrl.text.trim(),
-        type: AccountType.jmap,
-        jmapUrl: _jmapApiUrlCtrl.text.trim(),
-      );
+    id: DateTime.now().millisecondsSinceEpoch.toString(),
+    displayName: _displayNameCtrl.text.trim(),
+    email: _emailCtrl.text.trim(),
+    username: _usernameCtrl.text.trim(),
+    type: AccountType.jmap,
+    jmapUrl: _jmapApiUrlCtrl.text.trim(),
+  );
 
   Account _buildImapAccount() {
     final imapHost = _imapHostCtrl.text.trim();
@@ -494,7 +494,8 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           labelText: label,
           border: const OutlineInputBorder(),
         ),
-        validator: validator ??
+        validator:
+            validator ??
             (required
                 ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
                 : null),

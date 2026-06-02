@@ -96,8 +96,10 @@ void main() {
         },
       );
       addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null),
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
       );
 
       const exception = 'TestException: clipboard test';
@@ -126,79 +128,77 @@ void main() {
     },
   );
 
-  testWidgets(
-    'CrashScreen shows git hash as clickable link above stacktrace',
-    (tester) async {
-      tester.view.physicalSize = const Size(800, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(() => tester.view.resetPhysicalSize());
+  testWidgets('CrashScreen shows git hash as clickable link above stacktrace', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
 
-      final mock = MockUrlLauncher();
-      UrlLauncherPlatform.instance = mock;
+    final mock = MockUrlLauncher();
+    UrlLauncherPlatform.instance = mock;
 
-      const exception = 'TestException: git hash test';
-      final stackTrace = StackTrace.current;
-      const testHash = 'abc1234';
+    const exception = 'TestException: git hash test';
+    final stackTrace = StackTrace.current;
+    const testHash = 'abc1234';
 
-      await tester.pumpWidget(
-        CrashScreen(
-          exception: exception,
-          stackTrace: stackTrace,
-          gitHash: testHash,
-        ),
-      );
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      CrashScreen(
+        exception: exception,
+        stackTrace: stackTrace,
+        gitHash: testHash,
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      // Git hash link should be present
-      final gitLinkFinder = find.textContaining('Git Commit: abc1234');
-      expect(gitLinkFinder, findsOneWidget);
+    // Git hash link should be present
+    final gitLinkFinder = find.textContaining('Git Commit: abc1234');
+    expect(gitLinkFinder, findsOneWidget);
 
-      // Link must appear above the stack trace
-      final stackTraceFinder = find.text('Stack Trace:');
-      expect(
-        tester.getTopLeft(gitLinkFinder).dy,
-        lessThan(tester.getTopLeft(stackTraceFinder).dy),
-      );
+    // Link must appear above the stack trace
+    final stackTraceFinder = find.text('Stack Trace:');
+    expect(
+      tester.getTopLeft(gitLinkFinder).dy,
+      lessThan(tester.getTopLeft(stackTraceFinder).dy),
+    );
 
-      // Tapping the link should open the Codeberg commit URL
-      await tester.tap(gitLinkFinder);
-      await tester.pumpAndSettle();
+    // Tapping the link should open the Codeberg commit URL
+    await tester.tap(gitLinkFinder);
+    await tester.pumpAndSettle();
 
-      expect(
-        mock.launchedUrl,
-        equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
-      );
-    },
-  );
+    expect(
+      mock.launchedUrl,
+      equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+    );
+  });
 
-  testWidgets(
-    'CrashScreen shows version, build mode, and platform in the UI',
-    (tester) async {
-      tester.view.physicalSize = const Size(800, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(() => tester.view.resetPhysicalSize());
+  testWidgets('CrashScreen shows version, build mode, and platform in the UI', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
 
-      const exception = 'TestException: info row test';
-      final stackTrace = StackTrace.current;
+    const exception = 'TestException: info row test';
+    final stackTrace = StackTrace.current;
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: CrashScreen(exception: exception, stackTrace: stackTrace),
-        ),
-      );
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CrashScreen(exception: exception, stackTrace: stackTrace),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      // Info row shows app version (from mock), build mode, and platform OS.
-      expect(find.textContaining('1.0.0+42'), findsWidgets);
-      // In test builds kDebugMode is true.
-      expect(find.textContaining('debug'), findsOneWidget);
-      // Platform OS is always present (linux in CI, android/ios on device).
-      expect(
-        find.textContaining(RegExp(r'linux|android|ios|windows|macos')),
-        findsWidgets,
-      );
-    },
-  );
+    // Info row shows app version (from mock), build mode, and platform OS.
+    expect(find.textContaining('1.0.0+42'), findsWidgets);
+    // In test builds kDebugMode is true.
+    expect(find.textContaining('debug'), findsOneWidget);
+    // Platform OS is always present (linux in CI, android/ios on device).
+    expect(
+      find.textContaining(RegExp(r'linux|android|ios|windows|macos')),
+      findsWidgets,
+    );
+  });
 
   testWidgets(
     'CrashScreen shows app version as clickable link when git hash is set',
@@ -264,8 +264,10 @@ void main() {
         },
       );
       addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null),
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
       );
 
       const exception = 'TestException: version link clipboard test';

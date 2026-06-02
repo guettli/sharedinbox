@@ -73,11 +73,7 @@ void main() {
         SieveRule(
           joinType: 'single',
           conditions: [
-            HeaderCondition(
-              ['from', 'reply-to'],
-              ':is',
-              ['boss@work.com'],
-            ),
+            HeaderCondition(['from', 'reply-to'], ':is', ['boss@work.com']),
           ],
           actions: [
             FlagAction([r'\Important']),
@@ -121,8 +117,10 @@ void main() {
         ),
       ];
 
-      final ctx =
-          interp.execute(rules, _email(subject: 'Weekly Newsletter Issue'));
+      final ctx = interp.execute(
+        rules,
+        _email(subject: 'Weekly Newsletter Issue'),
+      );
       expect(ctx.targetFolders, contains('Bulk'));
     });
   });

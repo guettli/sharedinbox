@@ -27,12 +27,12 @@ class _RecordingRepo implements AccountRepository {
 ManageSieveProbeService _service(_RecordingRepo repo, {required bool result}) {
   return ManageSieveProbeService(
     repo,
-    probeFn: ({
-      required String host,
-      required int port,
-      required bool useTls,
-    }) async =>
-        result,
+    probeFn:
+        ({
+          required String host,
+          required int port,
+          required bool useTls,
+        }) async => result,
   );
 }
 
@@ -71,14 +71,15 @@ void main() {
       var probeCalled = false;
       final svc = ManageSieveProbeService(
         repo,
-        probeFn: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async {
-          probeCalled = true;
-          return true;
-        },
+        probeFn:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async {
+              probeCalled = true;
+              return true;
+            },
       );
       const jmap = Account(
         id: 'acc-2',
@@ -97,14 +98,15 @@ void main() {
       var probeCalled = false;
       final svc = ManageSieveProbeService(
         repo,
-        probeFn: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async {
-          probeCalled = true;
-          return true;
-        },
+        probeFn:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async {
+              probeCalled = true;
+              return true;
+            },
       );
       const blank = Account(
         id: 'acc-3',
@@ -123,16 +125,17 @@ void main() {
       bool? probedTls;
       final svc = ManageSieveProbeService(
         repo,
-        probeFn: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async {
-          probedHost = host;
-          probedPort = port;
-          probedTls = useTls;
-          return true;
-        },
+        probeFn:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async {
+              probedHost = host;
+              probedPort = port;
+              probedTls = useTls;
+              return true;
+            },
       );
       const account = Account(
         id: 'acc-1',
@@ -155,14 +158,15 @@ void main() {
       String? probedHost;
       final svc = ManageSieveProbeService(
         repo,
-        probeFn: ({
-          required String host,
-          required int port,
-          required bool useTls,
-        }) async {
-          probedHost = host;
-          return true;
-        },
+        probeFn:
+            ({
+              required String host,
+              required int port,
+              required bool useTls,
+            }) async {
+              probedHost = host;
+              return true;
+            },
       );
       await svc.probe(_imapAccount);
       expect(probedHost, 'imap.example.com');

@@ -21,8 +21,8 @@ final updateInfoProvider = FutureProvider<UpdateInfo?>((ref) async {
   final platformKey = Platform.isLinux
       ? 'linux'
       : Platform.isWindows
-          ? 'windows'
-          : null;
+      ? 'windows'
+      : null;
   if (platformKey == null || _kAppVersion.isEmpty) return null;
 
   try {

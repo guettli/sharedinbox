@@ -43,11 +43,9 @@ class FolderDrawer extends ConsumerWidget {
                     Text(
                       account?.displayName ?? '',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onPrimaryContainer,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     Text(
                       account?.email ?? '',

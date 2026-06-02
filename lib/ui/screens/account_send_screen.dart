@@ -117,8 +117,10 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     }
 
     // Load all available accounts.
-    final accounts =
-        await ref.read(accountRepositoryProvider).observeAccounts().first;
+    final accounts = await ref
+        .read(accountRepositoryProvider)
+        .observeAccounts()
+        .first;
 
     if (!mounted) return;
 
@@ -158,10 +160,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     for (final account in selected) {
       final password = await repo.getPassword(account.id);
       payloads.add(
-        AccountPayload(
-          accountJson: account.toJson(),
-          password: password,
-        ),
+        AccountPayload(accountJson: account.toJson(), password: password),
       );
     }
 
@@ -198,11 +197,11 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         _Step.selectAccounts => _buildSelectStep(context),
         _Step.showEncrypted => _buildEncryptedQrStep(context),
         _Step.error => Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('Error: $_errorMessage'),
-            ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('Error: $_errorMessage'),
           ),
+        ),
       },
     );
   }
@@ -361,9 +360,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
               unawaited(Clipboard.setData(ClipboardData(text: _encryptedQr!)));
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text(
-                    'Encrypted code copied to clipboard',
-                  ),
+                  content: Text('Encrypted code copied to clipboard'),
                 ),
               );
             },
