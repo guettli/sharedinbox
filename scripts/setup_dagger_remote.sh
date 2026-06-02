@@ -15,17 +15,14 @@ if [ -z "${SOPS_AGE_KEY:-}" ]; then
 fi
 
 # 1. Decrypt secrets using SOPS
-# We assume sops is available in the nix environment
 echo "Decrypting secrets with SOPS..."
-# Exporting for SOPS
 export SOPS_AGE_KEY="$SOPS_AGE_KEY"
 
-# Create a temporary file to store decrypted secrets
 SECRETS_JSON=$(mktemp)
 trap "rm -f $SECRETS_JSON" EXIT
 
-# Decrypt the SOPS file (must be in the repo root)
-sops --decrypt secrets.enc.yaml > "$SECRETS_JSON"
+# Decrypt the SOPS file to JSON
+sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
 DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
 DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
@@ -76,7 +73,8 @@ fi
 
 # 5. Verify connection
 echo "Verifying Dagger connection..."
-if ! timeout 30 dagger query '{ version }' >/dev/null 2>&1; then
+# We need to make sure we use the same environment in the probe
+if ! DAGGER_HOST=ssh://dagger-engine timeout 30 dagger query '{ version }' >/dev/null 2>&1; then
     echo "Error: Dagger engine is unreachable via SSH at $DAGGER_ENGINE_HOST"
     exit 1
 fi
