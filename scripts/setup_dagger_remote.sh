@@ -36,27 +36,18 @@ if ! grep -q "Include ~/.ssh/config.dagger" ~/.ssh/config 2>/dev/null; then
     echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
 fi
 
-# Use absolute path for dagger on the remote side to avoid PATH issues in non-interactive SSH
-cat << 'WRAPPER' > /usr/local/bin/dagger-remote
-#!/bin/bash
-ssh -F ~/.ssh/config.dagger dagger-engine /usr/local/bin/dagger "$@"
-WRAPPER
-chmod +x /usr/local/bin/dagger-remote
+# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST for redirection
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger-engine"
+if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
+fi
 
 # Verify
-echo "Verifying connection via dagger-remote wrapper..."
-if ! dagger-remote query '{ version }' >/dev/null 2>&1; then
-    echo "Error: Dagger engine unreachable via dagger-remote wrapper (tried /usr/local/bin/dagger)"
-    # Debug: try to just run id
+echo "Verifying connection to remote Dagger engine..."
+if ! timeout 30 dagger query '{ version }' >/dev/null ; then
+    echo "Error: Dagger engine unreachable via SSH at $DAGGER_ENGINE_HOST"
+    # Debug: try to just run id over ssh
     ssh -F ~/.ssh/config.dagger dagger-engine "id"
     exit 1
 fi
-
-# Path management
-mkdir -p ~/bin
-ln -sf /usr/local/bin/dagger-remote ~/bin/dagger
-if [ -n "${GITHUB_PATH:-}" ]; then
-    echo "$HOME/bin" >> "$GITHUB_PATH"
-fi
-
-echo "Dagger remote configured successfully."
+echo "Dagger connection verified."
