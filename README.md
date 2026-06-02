@@ -216,3 +216,4 @@ test/
 - **Settings** — list and remove accounts
 - **Search** — IMAP server-side search (subject + body); results shown inline, no navigation change
 - **Offline-first** — all reads come from local Drift/SQLite DB; network only for sync and send
+# CI Trigger
