@@ -3,8 +3,8 @@
 set -euo pipefail
 
 # 0. Check for old environment variables
-if [ -n "${DAGGER_STUNNEL_URL:-}" ] || [ -n "${DAGGER_CA_CERT:-}" ] || [ -n "${DAGGER_SSH_KEY:-}" ]; then
-    echo "ERROR: Old environment variables (DAGGER_STUNNEL_URL, DAGGER_CA_CERT, or DAGGER_SSH_KEY) are present in the environment."
+if [ -n "${DAGGER_STUNNEL_URL:-}" ] || [ -n "${DAGGER_CA_CERT:-}" ]; then
+    echo "ERROR: Old environment variables (DAGGER_STUNNEL_URL or DAGGER_CA_CERT) are present."
     echo "Only SOPS_AGE_KEY should be set in Codeberg secrets."
     exit 1
 fi
@@ -48,24 +48,18 @@ if ! grep -q "Include ~/.ssh/config.dagger" ~/.ssh/config 2>/dev/null; then
     echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
 fi
 
-# 4. Debug SSH
-echo "Testing SSH connection to $DAGGER_ENGINE_HOST..."
-if ! ssh -F ~/.ssh/config.dagger dagger-engine "id && dagger version" ; then
-    echo "Error: Basic SSH connection to dagger-engine failed."
-    exit 1
-fi
+# 4. Export environment
+# We use _EXPERIMENTAL_DAGGER_RUNNER_HOST for Dagger v0.20.x SSH redirection
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger-engine"
 
-# 5. Export environment
-export DAGGER_HOST="ssh://dagger-engine"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "DAGGER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger-engine" >> "$GITHUB_ENV"
 fi
 
-# 6. Verify connection
-echo "Verifying Dagger connection..."
-if ! dagger query '{ version }' >/dev/null ; then
+# 5. Verify connection
+echo "Verifying Dagger connection to $DAGGER_ENGINE_HOST..."
+if ! timeout 30 dagger query '{ version }' >/dev/null 2>&1; then
     echo "Error: Dagger engine is unreachable via SSH at $DAGGER_ENGINE_HOST"
-    # Try one more thing: explicit socket if we suspect something
     exit 1
 fi
 echo "Dagger connection verified."
