@@ -22,27 +22,23 @@ chmod 700 ~/.ssh
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Append config directly to avoid 'Include' issues in some Go-based SSH clients
-cat << SSHEOF >> ~/.ssh/config
-Host dagger-engine
-    HostName $DAGGER_ENGINE_HOST
-    User dagger
-    IdentityFile ~/.ssh/dagger_key
-    IdentitiesOnly yes
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-SSHEOF
+# Use ssh-agent to manage the key for Dagger's internal SSH client
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/dagger_key
 
 # Export _EXPERIMENTAL_DAGGER_RUNNER_HOST for redirection
-# Use the full SSH URL format to ensure Dagger has everything it needs
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger@$DAGGER_ENGINE_HOST?identityFile=~/.ssh/dagger_key&strictHostKeyChecking=no"
+# Dagger's Go SSH client will now use the agent to find the key
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="ssh://dagger@$DAGGER_ENGINE_HOST"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger@$DAGGER_ENGINE_HOST?identityFile=~/.ssh/dagger_key&strictHostKeyChecking=no" >> "$GITHUB_ENV"
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=ssh://dagger@$DAGGER_ENGINE_HOST" >> "$GITHUB_ENV"
+    # Also pass the agent socket if needed, though Dagger usually handles this if exported
+    echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+    echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 fi
 
 # Verify
 echo "Verifying connection to remote Dagger engine..."
-# Use --progress=plain to see what's happening if it hangs/fails
+# Ensure remote dagger knows which socket to use
 if ! timeout 45 dagger query --progress=plain '{ version }' ; then
     echo "Error: Dagger engine unreachable via SSH at $DAGGER_ENGINE_HOST"
     # Debug: try to just run id over ssh
