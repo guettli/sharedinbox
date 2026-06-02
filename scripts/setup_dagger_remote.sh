@@ -36,17 +36,19 @@ if ! grep -q "Include ~/.ssh/config.dagger" ~/.ssh/config 2>/dev/null; then
     echo "Include ~/.ssh/config.dagger" >> ~/.ssh/config
 fi
 
-# Wrapper for remote dagger execution
+# Use absolute path for dagger on the remote side to avoid PATH issues in non-interactive SSH
 cat << 'WRAPPER' > /usr/local/bin/dagger-remote
 #!/bin/bash
-ssh -F ~/.ssh/config.dagger dagger-engine dagger "$@"
+ssh -F ~/.ssh/config.dagger dagger-engine /usr/local/bin/dagger "$@"
 WRAPPER
 chmod +x /usr/local/bin/dagger-remote
 
 # Verify
 echo "Verifying connection via dagger-remote wrapper..."
 if ! dagger-remote query '{ version }' >/dev/null 2>&1; then
-    echo "Error: Dagger engine unreachable via dagger-remote wrapper"
+    echo "Error: Dagger engine unreachable via dagger-remote wrapper (tried /usr/local/bin/dagger)"
+    # Debug: try to just run id
+    ssh -F ~/.ssh/config.dagger dagger-engine "id"
     exit 1
 fi
 
