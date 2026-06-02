@@ -218,3 +218,4 @@ test/
 - **Offline-first** — all reads come from local Drift/SQLite DB; network only for sync and send
 # CI Trigger
 # CI Trigger 2
+# Dummy commit to verify CI fixes
