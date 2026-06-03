@@ -480,11 +480,18 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
-	if _, err := m.CheckHygiene(ctx); err != nil {
-		return "Hygiene check failed", err
-	}
-	if _, err := m.CheckLayers(ctx); err != nil {
-		return "Layer check failed", err
+	// Run cheap structural checks in parallel for faster fail detection.
+	var fastEg errgroup.Group
+	fastEg.Go(func() error {
+		_, err := m.CheckHygiene(ctx)
+		return err
+	})
+	fastEg.Go(func() error {
+		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	if err := fastEg.Wait(); err != nil {
+		return "", err
 	}
 
 	checkSetup := m.setup(m.checkSrc())
@@ -508,16 +515,19 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return coverage, err
 	}
 
+	// Use errgroup.Group (not WithContext) so a failing test does not cancel its
+	// sibling via context — which would surface as "context canceled" in dagger
+	// output and trigger spurious retries in check-dagger.
 	var testBackend, testIntegration string
-	eg, egCtx := errgroup.WithContext(ctx)
+	var eg errgroup.Group
 	eg.Go(func() error {
 		var e error
-		testBackend, e = m.TestBackend(egCtx)
+		testBackend, e = m.TestBackend(ctx)
 		return e
 	})
 	eg.Go(func() error {
 		var e error
-		testIntegration, e = m.TestIntegration(egCtx)
+		testIntegration, e = m.TestIntegration(ctx)
 		return e
 	})
 	if err := eg.Wait(); err != nil {
