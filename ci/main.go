@@ -569,6 +569,8 @@ func (m *Ci) BuildWebsite(
 	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
+	// +optional
+	commitHash string,
 ) *dagger.Directory {
 	buildHistory := m.GenerateBuildHistory(ctx, sshKey, knownHosts, sshUser, sshHost)
 
@@ -576,9 +578,13 @@ func (m *Ci) BuildWebsite(
 		Include: []string{"website/"},
 	}).WithDirectory("website/content/builds", buildHistory)
 
-	return m.Hugo().
+	hugo := m.Hugo().
 		WithDirectory("/src", websiteSource).
-		WithWorkdir("/src/website").
+		WithWorkdir("/src/website")
+	if commitHash != "" {
+		hugo = hugo.WithEnvVariable("HUGO_PARAMS_GITVERSION", commitHash)
+	}
+	return hugo.
 		WithExec([]string{"hugo", "--minify"}).
 		Directory("public")
 }
@@ -590,8 +596,10 @@ func (m *Ci) PublishWebsite(
 	knownHosts *dagger.Secret,
 	sshUser string,
 	sshHost string,
+	// +optional
+	commitHash string,
 ) (string, error) {
-	public := m.BuildWebsite(ctx, sshKey, knownHosts, sshUser, sshHost)
+	public := m.BuildWebsite(ctx, sshKey, knownHosts, sshUser, sshHost, commitHash)
 
 	return m.Deployer(sshKey, knownHosts).
 		WithDirectory("/public", public).
