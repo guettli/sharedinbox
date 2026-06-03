@@ -2963,6 +2963,20 @@ class EmailRepositoryImpl implements EmailRepository {
   }) async {
     if (query.length < 2) return [];
     final pattern = '%${query.toLowerCase()}%';
+
+    // Addresses we deliberately wrote to (sent folder) should appear before
+    // addresses that happened to email us (inbox/other folders).
+    final sentMailboxes = await (_db.select(_db.mailboxes)
+          ..where((t) {
+            Expression<bool> cond = t.role.equals('sent');
+            if (accountId != null) {
+              cond = t.accountId.equals(accountId) & cond;
+            }
+            return cond;
+          }))
+        .get();
+    final sentPaths = {for (final m in sentMailboxes) m.path};
+
     final rows = await (_db.select(_db.emails)
           ..where((t) {
             Expression<bool> cond = const Constant(true);
@@ -2977,11 +2991,22 @@ class EmailRepositoryImpl implements EmailRepository {
           ..limit(100))
         .get();
 
+    // Two passes: sent-folder rows first (prioritise recipients we chose),
+    // then other rows (senders who contacted us).
+    final sortedRows = [
+      ...rows.where((r) => sentPaths.contains(r.mailboxPath)),
+      ...rows.where((r) => !sentPaths.contains(r.mailboxPath)),
+    ];
+
     final seen = <String>{};
     final results = <model.EmailAddress>[];
     final lowerQuery = query.toLowerCase();
-    for (final row in rows) {
-      for (final jsonStr in [row.fromJson, row.toAddresses, row.ccJson]) {
+    for (final row in sortedRows) {
+      final isSent = sentPaths.contains(row.mailboxPath);
+      final fields = isSent
+          ? [row.toAddresses, row.ccJson, row.fromJson]
+          : [row.fromJson, row.toAddresses, row.ccJson];
+      for (final jsonStr in fields) {
         final list = jsonDecode(jsonStr) as List<dynamic>;
         for (final e in list) {
           final map = e as Map<String, dynamic>;

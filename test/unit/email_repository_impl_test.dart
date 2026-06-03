@@ -497,6 +497,60 @@ void main() {
       },
     );
 
+    test(
+      'searchAddresses prioritises sent-folder addresses over newer received',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // Register the Sent mailbox so searchAddresses knows its role.
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Sent',
+                accountId: 'acc-1',
+                path: 'Sent',
+                name: 'Sent',
+                role: const Value('sent'),
+              ),
+            );
+
+        // Older sent email: user deliberately wrote to info@foo.de.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:sent-1',
+                accountId: 'acc-1',
+                mailboxPath: 'Sent',
+                uid: 1,
+                receivedAt: DateTime(2025),
+                toAddresses: const Value(
+                  '[{"name":"Foo","email":"info@foo.de"}]',
+                ),
+              ),
+            );
+
+        // Newer received email: spam arrived today from info@spam.de.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:inbox-1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                receivedAt: DateTime(2026),
+                fromJson: const Value(
+                  '[{"name":"Spam","email":"info@spam.de"}]',
+                ),
+              ),
+            );
+
+        // Even though spam is newer, the sent-folder address should win.
+        final results = await r.emails.searchAddresses(null, 'info');
+        expect(results.map((a) => a.email).toList(), [
+          'info@foo.de',
+          'info@spam.de',
+        ]);
+      },
+    );
+
     // ── IMAP method tests ────────────────────────────────────────────────────
 
     test(
