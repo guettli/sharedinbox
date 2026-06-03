@@ -11,6 +11,11 @@
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
       "addLabels": ["automerge"]
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["ci/**"],
+      "enabled": false
     }
   ],
   "customManagers": [
