@@ -211,7 +211,31 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
       repo.getEmailBody(_emailId),
     ]);
     unawaited(repo.setFlag(_emailId, seen: true));
+    final header = results[0] as Email?;
+    if (header != null) {
+      unawaited(_prefetchNextEmailBody(repo, header));
+    }
     return (results[0] as Email?, results[1] as EmailBody);
+  }
+
+  Future<void> _prefetchNextEmailBody(
+    EmailRepository repo,
+    Email header,
+  ) async {
+    final prefs = ref.read(userPreferencesProvider).value;
+    final action =
+        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
+    if (action != AfterMailViewAction.nextMessage) return;
+
+    final threads =
+        await repo.observeThreads(header.accountId, header.mailboxPath).first;
+    final currentIndex = threads.indexWhere(
+      (t) => t.emailIds.contains(_emailId),
+    );
+    if (currentIndex < 0 || currentIndex + 1 >= threads.length) return;
+
+    final nextId = threads[currentIndex + 1].latestEmailId;
+    await repo.getEmailBody(nextId);
   }
 }
 
