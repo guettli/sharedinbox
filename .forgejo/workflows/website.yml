@@ -33,17 +33,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Build & Update Website
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
           DAGGER_NO_NAG: "1"
         run: task publish-website
 
       - name: Verify Website
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
         env:
-          SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
+          SSH_HOST: ${{ env.WEBSITE_SSH_HOST }}
         run: scripts/website-verify.sh

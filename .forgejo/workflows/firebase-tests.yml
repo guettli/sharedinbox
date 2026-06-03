@@ -65,9 +65,7 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Run Android Tests on Firebase Test Lab
-        if: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY != '' }}
         env:
-          FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY }}
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
           DAGGER_NO_NAG: "1"
         run: task test-android-firebase

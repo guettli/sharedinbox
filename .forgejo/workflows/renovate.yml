@@ -27,5 +27,4 @@ jobs:
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
-          RENOVATE_FORGEJO_TOKEN: ${{ secrets.RENOVATE_FORGEJO_TOKEN }}
         run: task renovate
