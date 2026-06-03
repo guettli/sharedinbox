@@ -18,6 +18,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -722,47 +723,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     unawaited(
       showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Mail Headers'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: body.headers.length,
-              itemBuilder: (ctx, i) {
-                final header = body.headers[i];
-                return Container(
-                  color: i.isEven
-                      ? Theme.of(ctx).colorScheme.surfaceContainerHighest
-                      : Theme.of(ctx).colorScheme.surface,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 4,
-                    horizontal: 8,
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: SelectableText(
-                          header.name,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(flex: 2, child: SelectableText(header.value)),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
+        builder: (ctx) => EmailHeadersDialog(headers: body.headers),
       ),
     );
   }
@@ -785,12 +746,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     unawaited(
       showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Mail Structure'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
+        builder: (ctx) => Dialog.fullscreen(
+          child: Scaffold(
+            appBar: AppBar(
+              title: const Text('Mail Structure'),
+              leading: const CloseButton(),
+            ),
+            body: ListView.builder(
               itemCount: rows.length,
               itemBuilder: (ctx, i) {
                 final row = rows[i];
@@ -819,12 +781,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               },
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-          ],
         ),
       ),
     );

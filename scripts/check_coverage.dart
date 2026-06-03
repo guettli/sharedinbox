@@ -62,6 +62,7 @@ const _excluded = {
   'lib/ui/screens/about_screen.dart',
   'lib/ui/screens/email_action_helpers.dart',
   'lib/ui/utils/about_markdown.dart',
+  'lib/ui/widgets/email_headers_dialog.dart',
   'lib/ui/widgets/email_tile.dart',
   'lib/core/sync/account_sync_manager.dart',
   'lib/core/sync/background_sync.dart',
