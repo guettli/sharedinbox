@@ -23,10 +23,13 @@ export_secret() {
     local value
     value=$(jq -r --arg k "$name" '.[$k] // empty' "$SECRETS_JSON")
     if [ -n "${GITHUB_ENV:-}" ]; then
-        # Use heredoc syntax for multiline-safe export
+        # Use heredoc syntax for multiline-safe export.
+        # Avoid adding a second trailing newline for values that already end with one
+        # (e.g. SSH private keys), which can corrupt PEM parsing.
         {
             printf '%s<<__EOF__\n' "$name"
-            printf '%s\n' "$value"
+            printf '%s' "$value"
+            [ "${value%$'\n'}" = "$value" ] && printf '\n'
             printf '__EOF__\n'
         } >> "$GITHUB_ENV"
     fi

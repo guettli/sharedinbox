@@ -338,7 +338,12 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
-		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		// Mount at a raw path so we can normalise before use: strip any CRLF line
+		// endings that appear when the key is stored or exported on Windows, which
+		// cause "error in libcrypto" in Alpine's LibreSSL-backed openssh.
+		WithMountedSecret("/root/.ssh/id_ed25519.raw", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		WithExec([]string{"sh", "-c",
+			"tr -d '\\r' < /root/.ssh/id_ed25519.raw > /root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519"}).
 		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
 		WithEnvVariable("RSYNC_RSH", "ssh -i /root/.ssh/id_ed25519")
 }

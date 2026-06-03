@@ -162,8 +162,9 @@ jobs:
 
       - name: Verify Play Store deployment
         run: |
-          pip install google-auth requests --quiet 2>&1 | grep -v "already satisfied" || true
-          python3 scripts/verify_playstore_deploy.py
+          python3 -m venv /tmp/playstore-venv
+          /tmp/playstore-venv/bin/pip install google-auth requests --quiet
+          /tmp/playstore-venv/bin/python3 scripts/verify_playstore_deploy.py
 
 
   deploy-apk:
