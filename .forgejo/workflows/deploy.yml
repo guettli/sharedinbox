@@ -58,9 +58,10 @@ jobs:
           )
 
           if [ -n "$LAST_DEPLOYED_SHA" ] && [ "$HEAD_SHA" = "$LAST_DEPLOYED_SHA" ]; then
-            echo "HEAD $HEAD_SHA already successfully deployed — skipping"
+            echo "HEAD $HEAD_SHA already successfully deployed — skipping all deploy jobs"
             echo "android=false" >> "$GITHUB_OUTPUT"
             echo "linux=false"   >> "$GITHUB_OUTPUT"
+            echo "skip_reason=commit $HEAD_SHA was already successfully deployed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -82,13 +83,21 @@ jobs:
           android_re='^(android/|integration_test/|lib/|pubspec\.yaml|pubspec\.lock|drift_schemas/|scripts/deploy_playstore\.py)'
           linux_re='^(linux/|lib/|pubspec\.yaml|pubspec\.lock)'
 
-          echo "$CHANGED" | grep -qE "$android_re" \
-            && echo "android=true" >> "$GITHUB_OUTPUT" \
-            || echo "android=false" >> "$GITHUB_OUTPUT"
+          if echo "$CHANGED" | grep -qE "$android_re"; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "Android deploy: TRIGGERED (android-relevant files changed)"
+          else
+            echo "android=false" >> "$GITHUB_OUTPUT"
+            echo "Android deploy: SKIPPED (no android-relevant files changed)"
+          fi
 
-          echo "$CHANGED" | grep -qE "$linux_re" \
-            && echo "linux=true"   >> "$GITHUB_OUTPUT" \
-            || echo "linux=false"  >> "$GITHUB_OUTPUT"
+          if echo "$CHANGED" | grep -qE "$linux_re"; then
+            echo "linux=true" >> "$GITHUB_OUTPUT"
+            echo "Linux deploy: TRIGGERED (linux-relevant files changed)"
+          else
+            echo "linux=false" >> "$GITHUB_OUTPUT"
+            echo "Linux deploy: SKIPPED (no linux-relevant files changed)"
+          fi
 
   deploy-playstore:
     name: Build & Deploy to Play Store
