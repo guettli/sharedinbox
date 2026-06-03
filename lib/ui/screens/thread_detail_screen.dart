@@ -113,6 +113,14 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
 
   @override
   Widget build(BuildContext context) {
+    final trustedSenders =
+        ref.watch(trustedImageSendersProvider).value ?? const <String>[];
+    final senderEmail = widget.email.from.isNotEmpty
+        ? widget.email.from.first.email.toLowerCase()
+        : null;
+    final isTrusted =
+        senderEmail != null && trustedSenders.contains(senderEmail);
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -147,13 +155,13 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
               ],
             ),
           ),
-          if (_expanded) _buildExpandedBody(),
+          if (_expanded) _buildExpandedBody(isTrusted, senderEmail),
         ],
       ),
     );
   }
 
-  Widget _buildExpandedBody() {
+  Widget _buildExpandedBody(bool isTrusted, String? senderEmail) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: Column(
@@ -184,21 +192,48 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
               }
               final body = snapshot.data!;
               final hasHtml = (body.htmlBody ?? '').trim().isNotEmpty;
+              final effectiveLoadImages = _loadRemoteImages || isTrusted;
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (hasHtml) ...[
-                    if (!_loadRemoteImages)
+                    if (!effectiveLoadImages)
                       TextButton.icon(
                         icon: const Icon(Icons.image_outlined, size: 16),
                         label: const Text('Load remote images'),
-                        onPressed: () =>
-                            setState(() => _loadRemoteImages = true),
+                        onPressed: () {
+                          setState(() => _loadRemoteImages = true);
+                          if (senderEmail != null) {
+                            unawaited(
+                              ref
+                                  .read(userPreferencesRepositoryProvider)
+                                  .addTrustedImageSender(senderEmail),
+                            );
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                duration: const Duration(seconds: 3),
+                                content: const Text(
+                                  'Images will be loaded automatically for this sender.',
+                                ),
+                                action: SnackBarAction(
+                                  label: 'Settings',
+                                  onPressed: () {
+                                    if (mounted) {
+                                      unawaited(
+                                        context.push('/accounts/preferences'),
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          }
+                        },
                       ),
                     SecureEmailWebView(
                       htmlBody: body.htmlBody!,
-                      loadRemoteImages: _loadRemoteImages,
+                      loadRemoteImages: effectiveLoadImages,
                     ),
                   ] else
                     SelectableText(

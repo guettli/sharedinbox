@@ -307,6 +307,17 @@ class LocalSieveApplied extends Table {
   Set<Column> get primaryKey => {accountId, messageId};
 }
 
+/// Senders for whom remote images are loaded automatically.
+/// Per-device/per-user — not tied to any email account.
+@DataClassName('ImageTrustedSenderRow')
+class ImageTrustedSenders extends Table {
+  TextColumn get senderEmail => text()();
+  DateTimeColumn get addedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {senderEmail};
+}
+
 /// App-wide user preferences, stored as a singleton row (id always 1).
 @DataClassName('UserPreferencesRow')
 class UserPreferences extends Table {
@@ -345,6 +356,7 @@ class UserPreferences extends Table {
     LocalSieveApplied,
     ShareKeys,
     UserPreferences,
+    ImageTrustedSenders,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -610,6 +622,9 @@ class AppDatabase extends _$AppDatabase {
               userPreferences,
               userPreferences.afterMailViewAction,
             );
+          }
+          if (from < 37) {
+            await m.createTable(imageTrustedSenders);
           }
         },
       );

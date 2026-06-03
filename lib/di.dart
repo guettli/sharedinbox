@@ -247,3 +247,10 @@ final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
 ) {
   return ref.watch(userPreferencesRepositoryProvider).observePreferences();
 });
+
+final trustedImageSendersProvider =
+    StreamProvider.autoDispose<List<String>>((ref) {
+  return ref
+      .watch(userPreferencesRepositoryProvider)
+      .observeTrustedImageSenders();
+});

@@ -12,6 +12,7 @@ class UserPreferencesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final prefsAsync = ref.watch(userPreferencesProvider);
+    final trustedSendersAsync = ref.watch(trustedImageSendersProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Preferences')),
@@ -130,6 +131,45 @@ class UserPreferencesScreen extends ConsumerWidget {
                   ),
                 ],
               ),
+            ),
+            const Divider(),
+            ListTile(
+              title: Text(
+                'Trusted image senders',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'Remote images are loaded automatically for these senders.',
+              ),
+            ),
+            ...trustedSendersAsync.when(
+              loading: () => const [],
+              error: (_, __) => const [],
+              data: (senders) => senders.isEmpty
+                  ? [
+                      const Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: Text('No trusted senders yet.'),
+                      ),
+                    ]
+                  : [
+                      for (final sender in senders)
+                        ListTile(
+                          title: Text(sender),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Remove',
+                            onPressed: () {
+                              unawaited(
+                                ref
+                                    .read(userPreferencesRepositoryProvider)
+                                    .removeTrustedImageSender(sender),
+                              );
+                            },
+                          ),
+                        ),
+                    ],
             ),
           ],
         ),

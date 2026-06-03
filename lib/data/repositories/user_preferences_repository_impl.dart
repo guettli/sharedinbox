@@ -50,6 +50,31 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
         );
   }
 
+  @override
+  Stream<List<String>> observeTrustedImageSenders() {
+    return (_db.select(_db.imageTrustedSenders)
+          ..orderBy([(t) => OrderingTerm.desc(t.addedAt)]))
+        .watch()
+        .map((rows) => rows.map((r) => r.senderEmail).toList());
+  }
+
+  @override
+  Future<void> addTrustedImageSender(String senderEmail) async {
+    await _db.into(_db.imageTrustedSenders).insertOnConflictUpdate(
+          ImageTrustedSendersCompanion(
+            senderEmail: Value(senderEmail.toLowerCase()),
+            addedAt: Value(DateTime.now()),
+          ),
+        );
+  }
+
+  @override
+  Future<void> removeTrustedImageSender(String senderEmail) async {
+    await (_db.delete(_db.imageTrustedSenders)
+          ..where((t) => t.senderEmail.equals(senderEmail.toLowerCase())))
+        .go();
+  }
+
   static pref.UserPreferences _rowToModel(UserPreferencesRow? row) {
     if (row == null) return const pref.UserPreferences();
     return pref.UserPreferences(

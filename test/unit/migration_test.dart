@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 36);
+      expect(db.schemaVersion, 37);
       await db.close();
     });
 
@@ -208,6 +208,9 @@ void main() {
 
       // v36: after_mail_view_action column on user_preferences.
       expect(userPrefsColumns, contains('after_mail_view_action'));
+
+      // v37: image_trusted_senders table.
+      await db.customSelect('SELECT count(*) FROM image_trusted_senders').get();
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
@@ -412,12 +415,17 @@ void main() {
         // v36: after_mail_view_action column on user_preferences.
         expect(userPrefsColumns, contains('after_mail_view_action'));
 
+        // v37: image_trusted_senders table.
+        await db
+            .customSelect('SELECT count(*) FROM image_trusted_senders')
+            .get();
+
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();
       },
     );
 
-    test('fresh install creates all tables at schemaVersion 36', () async {
+    test('fresh install creates all tables at schemaVersion 37', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -445,6 +453,7 @@ void main() {
           'share_keys', // v31
           'local_sieve_applied', // v32
           'user_preferences', // v34
+          'image_trusted_senders', // v37
         ]),
       );
 
@@ -472,6 +481,9 @@ void main() {
 
       // v36: after_mail_view_action column on user_preferences.
       expect(userPrefsColumns, contains('after_mail_view_action'));
+
+      // v37: image_trusted_senders table.
+      await db.customSelect('SELECT count(*) FROM image_trusted_senders').get();
 
       await db.close();
     });

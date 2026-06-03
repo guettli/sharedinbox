@@ -627,11 +627,13 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
     this.menuPosition = MenuPosition.bottom,
     this.mailViewButtonPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
-  });
+    List<String>? trustedImageSenders,
+  }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
   MenuPosition mailViewButtonPosition;
   AfterMailViewAction afterMailViewAction;
+  final List<String> _trustedImageSenders;
 
   @override
   Stream<UserPreferences> observePreferences() => Stream.value(
@@ -655,6 +657,23 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   @override
   Future<void> updateAfterMailViewAction(AfterMailViewAction action) async {
     afterMailViewAction = action;
+  }
+
+  @override
+  Stream<List<String>> observeTrustedImageSenders() =>
+      Stream.value(List.of(_trustedImageSenders));
+
+  @override
+  Future<void> addTrustedImageSender(String senderEmail) async {
+    final normalized = senderEmail.toLowerCase();
+    if (!_trustedImageSenders.contains(normalized)) {
+      _trustedImageSenders.add(normalized);
+    }
+  }
+
+  @override
+  Future<void> removeTrustedImageSender(String senderEmail) async {
+    _trustedImageSenders.remove(senderEmail.toLowerCase());
   }
 }
 

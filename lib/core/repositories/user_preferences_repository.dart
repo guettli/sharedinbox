@@ -5,4 +5,8 @@ abstract class UserPreferencesRepository {
   Future<void> updateMenuPosition(MenuPosition position);
   Future<void> updateMailViewButtonPosition(MenuPosition position);
   Future<void> updateAfterMailViewAction(AfterMailViewAction action);
+
+  Stream<List<String>> observeTrustedImageSenders();
+  Future<void> addTrustedImageSender(String senderEmail);
+  Future<void> removeTrustedImageSender(String senderEmail);
 }
