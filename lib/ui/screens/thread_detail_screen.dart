@@ -297,47 +297,27 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
   }
 
   Future<void> _delete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete email'),
-        content: const Text('Move this email to Trash?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+    final repo = ref.read(emailRepositoryProvider);
+    // Fetch data first for IMAP undo support
+    final original = await repo.getEmail(widget.email.id);
+
+    final destPath = await repo.deleteEmail(widget.email.id);
+
     if (!mounted) return;
-    if (confirmed == true) {
-      final repo = ref.read(emailRepositoryProvider);
-      // Fetch data first for IMAP undo support
-      final original = await repo.getEmail(widget.email.id);
-
-      final destPath = await repo.deleteEmail(widget.email.id);
-
-      if (!mounted) return;
-      if (original != null) {
-        unawaited(
-          ref.read(undoServiceProvider.notifier).pushAction(
-                UndoAction(
-                  id: DateTime.now().toIso8601String(),
-                  accountId: widget.email.accountId,
-                  type: UndoType.delete,
-                  emailIds: [widget.email.id],
-                  sourceMailboxPath: widget.email.mailboxPath,
-                  destinationMailboxPath: destPath,
-                  originalEmails: [original],
-                ),
+    if (original != null) {
+      unawaited(
+        ref.read(undoServiceProvider.notifier).pushAction(
+              UndoAction(
+                id: DateTime.now().toIso8601String(),
+                accountId: widget.email.accountId,
+                type: UndoType.delete,
+                emailIds: [widget.email.id],
+                sourceMailboxPath: widget.email.mailboxPath,
+                destinationMailboxPath: destPath,
+                originalEmails: [original],
               ),
-        );
-      }
+            ),
+      );
     }
   }
 }
