@@ -586,6 +586,8 @@ void main() {
         // Delete the email from the detail screen.
         await tester.tap(find.byIcon(Icons.delete));
         await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pumpAndSettle();
 
         // Should have popped all the way back to the mailbox list.
         expect(find.byType(EmailDetailScreen), findsNothing);

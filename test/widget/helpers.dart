@@ -4,6 +4,7 @@
 // as the real app) inside a ProviderScope whose repository providers are
 // replaced with lightweight in-memory fakes.  No database or network is used.
 
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -27,7 +28,7 @@ import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
-import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
+import 'package:sharedinbox/data/db/database.dart' show AppDatabase, SyncHealthRow;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
@@ -524,6 +525,11 @@ Widget buildApp({
     // is still pending". Replacing it with a synchronous stream avoids this.
     // syncHealthProvider has the same issue and is overridden in baseOverrides.
     overrides: [
+      dbProvider.overrideWith((ref) {
+        final db = AppDatabase(NativeDatabase.memory());
+        ref.onDispose(db.close);
+        return db;
+      }),
       syncLogRepositoryProvider.overrideWithValue(
         const NoOpSyncLogRepository(),
       ),
