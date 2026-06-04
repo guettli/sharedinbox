@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" shape-rendering="geometricPrecision">
+  <!-- White Background -->
+  <rect width="512" height="512" fill="white"/>
+
+  <!-- 6 Concentric Rainbow Rings (Tunnel Vision Geometry) -->
+  <g fill-rule="evenodd" stroke="black" stroke-width="2.5">
+    <!-- Red -->
+    <path fill="#FF0000" d="M256,256 m-242,0 a242,242 0 1,0 484,0 a242,242 0 1,0 -484,0 Z M256,256 m-190,0 a190,190 0 1,0 380,0 a190,190 0 1,0 -380,0 Z" />
+
+    <!-- Orange -->
+    <path fill="#FF8C00" d="M256,256 m-170,0 a170,170 0 1,0 340,0 a170,170 0 1,0 -340,0 Z M256,256 m-131,0 a131,131 0 1,0 262,0 a131,131 0 1,0 -262,0 Z" />
+
+    <!-- Yellow -->
+    <path fill="#FFD700" d="M256,256 m-115,0 a115,115 0 1,0 230,0 a115,115 0 1,0 -230,0 Z M256,256 m-85,0 a85,85 0 1,0 170,0 a85,85 0 1,0 -170,0 Z" />
+
+    <!-- Green -->
+    <path fill="#22AA00" d="M256,256 m-73,0 a73,73 0 1,0 146,0 a73,73 0 1,0 -146,0 Z M256,256 m-51,0 a51,51 0 1,0 102,0 a51,51 0 1,0 -102,0 Z" />
+
+    <!-- Blue -->
+    <path fill="#0055FF" d="M256,256 m-41,0 a41,41 0 1,0 82,0 a41,41 0 1,0 -82,0 Z M256,256 m-24,0 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0 Z" />
+
+    <!-- Purple -->
+    <path fill="#8B00FF" d="M256,256 m-16,0 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0 Z M256,256 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" />
+  </g>
+</svg>
