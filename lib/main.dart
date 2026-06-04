@@ -13,7 +13,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 
-void main({List<Override> overrides = const []}) async {
+void main({List<Override> overrides = const []}) {
   unawaited(
     runZonedGuarded(
       () async {
@@ -46,10 +46,11 @@ void main({List<Override> overrides = const []}) async {
           ProviderScope(overrides: overrides, child: const SharedInboxApp()),
         );
       },
-      (error, stack) {
-        // Catch unhandled async errors.
-        runApp(CrashScreen(exception: error, stackTrace: stack));
-      },
+      // This handler runs in the parent zone — runApp cannot be called here.
+      // Framework errors are already handled by FlutterError.onError above.
+      (error, stack) => FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      ),
     ),
   );
 }
