@@ -51,10 +51,12 @@ class MailboxListScreen extends ConsumerWidget {
           ? BottomAppBar(
               child: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.menu),
-                    tooltip: 'Open folders',
-                    onPressed: () => Scaffold.of(context).openDrawer(),
+                  Builder(
+                    builder: (ctx) => IconButton(
+                      icon: const Icon(Icons.menu),
+                      tooltip: 'Open folders',
+                      onPressed: () => Scaffold.of(ctx).openDrawer(),
+                    ),
                   ),
                 ],
               ),
