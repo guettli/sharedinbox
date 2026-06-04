@@ -99,6 +99,7 @@
               httplib2
             ]))  # used by stalwart-dev/start and deploy_playstore.py
             fgj      # Codeberg/Forgejo CLI (like gh for GitHub)
+            skopeo   # inspect OCI image manifests without pulling layers (used by check-ci-images)
           ]);
 
           shellHook = ''

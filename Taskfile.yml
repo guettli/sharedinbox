@@ -700,6 +700,11 @@ tasks:
         fi
         echo "Hygiene check passed."
 
+  check-ci-images:
+    desc: Verify that all container images referenced in ci/main.go are reachable
+    cmds:
+      - scripts/check_ci_images.sh
+
   _integrations:
     internal: true
     run: once

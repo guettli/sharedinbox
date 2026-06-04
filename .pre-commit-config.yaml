@@ -42,3 +42,9 @@ repos:
         entry: "bash -c 'git --no-pager grep \"dagger call\" -- \":!.pre-commit-config.yaml\" | grep -v \"\\-\\-progress=plain\" && echo \"ERROR: All dagger calls must include --progress=plain\" && exit 1 || exit 0'"
         pass_filenames: false
         always_run: true
+      - id: ci-image-exists
+        name: verify container images in ci/main.go are reachable
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command task check-ci-images'
+        pass_filenames: false
+        files: ^ci/main\.go$
