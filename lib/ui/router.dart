@@ -8,6 +8,7 @@ import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
+import 'package:sharedinbox/ui/screens/bug_report_screen.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
 import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -168,6 +169,12 @@ final router = GoRouter(
               prefillBody: extra?['prefillBody'] as String?,
             );
           },
+        ),
+        GoRoute(
+          path: '/bug-report',
+          builder: (ctx, state) => BugReportScreen(
+            emailId: state.uri.queryParameters['emailId'],
+          ),
         ),
       ],
     ),

@@ -41,6 +41,7 @@ const _excluded = {
   'lib/ui/screens/account_send_screen.dart',
   'lib/ui/screens/add_account_screen.dart',
   'lib/ui/screens/address_emails_screen.dart',
+  'lib/ui/screens/bug_report_screen.dart',
   'lib/ui/screens/changelog_screen.dart',
   'lib/ui/screens/combined_inbox_screen.dart',
   'lib/ui/screens/compose_screen.dart',

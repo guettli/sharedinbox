@@ -141,6 +141,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Show Mail Structure'),
               ),
               const PopupMenuItem(value: 'rfc', child: Text('Show Raw Email')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'bug_report',
+                child: Text('Report a Bug'),
+              ),
             ],
             onSelected: (value) async {
               if (value == 'forward' && header != null) {
@@ -161,6 +166,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 _showStructure(context, body);
               } else if (value == 'rfc') {
                 unawaited(_showRaw(context, header));
+              } else if (value == 'bug_report') {
+                unawaited(
+                  context.push('/bug-report?emailId=${widget.emailId}'),
+                );
               }
             },
           ),

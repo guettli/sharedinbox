@@ -86,9 +86,11 @@ void main() {
     expect(find.textContaining('DB Schema Version'), findsWidgets);
     // Buttons are in the body, not in the AppBar actions
     expect(find.byIcon(Icons.copy), findsOneWidget);
-    expect(find.byIcon(Icons.bug_report), findsOneWidget);
-    expect(find.text('Copy to clipboard'), findsOneWidget);
-    expect(find.text('Create issue'), findsOneWidget);
+    expect(find.byIcon(Icons.bug_report_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.feedback_outlined), findsOneWidget);
+    expect(find.text('Copy info'), findsOneWidget);
+    expect(find.text('Public issue'), findsOneWidget);
+    expect(find.text('Report bug'), findsOneWidget);
   });
 
   testWidgets('AboutScreen shows correct IMAP and JMAP account counts', (
@@ -193,7 +195,7 @@ void main() {
     await tester.pumpWidget(_buildScreen());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.bug_report));
+    await tester.tap(find.byIcon(Icons.bug_report_outlined));
     await tester.pumpAndSettle();
 
     expect(
