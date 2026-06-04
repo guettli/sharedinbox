@@ -23,12 +23,12 @@ import 'widget/helpers.dart';
 // Device configurations
 // ---------------------------------------------------------------------------
 
-typedef _Device = ({String name, double width, double height});
+typedef _Device = ({String name, double width, double height, double dpr});
 
 const _devices = <_Device>[
-  (name: 'phone', width: 1080.0, height: 1920.0),
-  (name: 'tablet_7in', width: 1200.0, height: 1920.0),
-  (name: 'tablet_10in', width: 1600.0, height: 2560.0),
+  (name: 'phone', width: 1080.0, height: 1920.0, dpr: 3.0),
+  (name: 'tablet_7in', width: 1200.0, height: 1920.0, dpr: 2.0),
+  (name: 'tablet_10in', width: 1600.0, height: 2560.0, dpr: 2.0),
 ];
 
 // ---------------------------------------------------------------------------
@@ -311,11 +311,12 @@ void main() {
       // Golden files are stored relative to this test file (test/).
       // The ../  prefix places them at repo root under screenshots/.
       final dir = '../screenshots/${device.name}/$themeName';
+      final prefix = '${device.name}_$themeName';
 
       group('${device.name}/$themeName', () {
         void setDevice(WidgetTester tester) {
           tester.view.physicalSize = Size(device.width, device.height);
-          tester.view.devicePixelRatio = 1.0;
+          tester.view.devicePixelRatio = device.dpr;
           addTearDown(tester.view.reset);
         }
 
@@ -331,7 +332,7 @@ void main() {
           await tester.pumpAndSettle();
           await expectLater(
             find.byType(MaterialApp),
-            matchesGoldenFile('$dir/inbox_list.png'),
+            matchesGoldenFile('$dir/${prefix}_inbox_list.png'),
           );
         });
 
@@ -349,7 +350,7 @@ void main() {
           await tester.pumpAndSettle();
           await expectLater(
             find.byType(MaterialApp),
-            matchesGoldenFile('$dir/email_detail.png'),
+            matchesGoldenFile('$dir/${prefix}_email_detail.png'),
           );
         });
 
@@ -378,7 +379,7 @@ void main() {
           await tester.pumpAndSettle();
           await expectLater(
             find.byType(MaterialApp),
-            matchesGoldenFile('$dir/compose.png'),
+            matchesGoldenFile('$dir/${prefix}_compose.png'),
           );
         });
 
@@ -394,7 +395,7 @@ void main() {
           await tester.pumpAndSettle();
           await expectLater(
             find.byType(MaterialApp),
-            matchesGoldenFile('$dir/mailbox_list.png'),
+            matchesGoldenFile('$dir/${prefix}_mailbox_list.png'),
           );
         });
 
@@ -413,7 +414,7 @@ void main() {
           await tester.pumpAndSettle();
           await expectLater(
             find.byType(MaterialApp),
-            matchesGoldenFile('$dir/search_results.png'),
+            matchesGoldenFile('$dir/${prefix}_search_results.png'),
           );
         });
       });
