@@ -1,5 +1,6 @@
 # --- Flutter/Dart ---
 coverage/
+screenshots/
 .dart_tool/
 .dart-tool/
 .packages

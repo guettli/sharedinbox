@@ -712,6 +712,12 @@ tasks:
     cmds:
       - scripts/ci_logs.sh "{{.RUN}}" "{{.JOB}}"
 
+  screenshots:
+    desc: Generate Play Store promotional screenshots (30 golden files — 3 devices × 2 themes × 5 scenes)
+    deps: [_preflight, _codegen]
+    cmds:
+      - fvm flutter test test/screenshot_automation_test.dart --update-goldens
+
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate
     deps: [analyze, build-linux, test]
