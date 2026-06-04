@@ -324,6 +324,7 @@ void main() {
           setDevice(tester);
           await tester.pumpWidget(
             buildApp(
+              debugShowCheckedModeBanner: false,
               initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
               overrides: _inboxOverrides(),
               themeMode: themeMode,
@@ -360,6 +361,7 @@ void main() {
           // so GoRouter can pass them to ComposeScreen via state.extra.
           await tester.pumpWidget(
             buildApp(
+              debugShowCheckedModeBanner: false,
               initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
               overrides: _composeOverrides(),
               themeMode: themeMode,
@@ -387,6 +389,7 @@ void main() {
           setDevice(tester);
           await tester.pumpWidget(
             buildApp(
+              debugShowCheckedModeBanner: false,
               initialLocation: '/accounts/acc-1/mailboxes',
               overrides: _mailboxOverrides(),
               themeMode: themeMode,
@@ -403,6 +406,7 @@ void main() {
           setDevice(tester);
           await tester.pumpWidget(
             buildApp(
+              debugShowCheckedModeBanner: false,
               initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
               overrides: _searchOverrides(),
               themeMode: themeMode,

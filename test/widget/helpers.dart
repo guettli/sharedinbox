@@ -422,6 +422,7 @@ Widget buildApp({
   required List<Override> overrides,
   UserPreferencesRepository? userPreferences,
   ThemeMode themeMode = ThemeMode.light,
+  bool debugShowCheckedModeBanner = true,
 }) {
   final testRouter = GoRouter(
     initialLocation: initialLocation,
@@ -546,6 +547,7 @@ Widget buildApp({
     child: MaterialApp.router(
       routerConfig: testRouter,
       themeMode: themeMode,
+      debugShowCheckedModeBanner: debugShowCheckedModeBanner,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
