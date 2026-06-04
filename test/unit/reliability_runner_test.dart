@@ -102,6 +102,9 @@ class _CountingEmails implements EmailRepository {
   }) =>
       Stream.value([]);
   @override
+  Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
+      Stream.value([]);
+  @override
   Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
       Stream.value([]);
   @override

@@ -9,6 +9,7 @@ import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
+import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
@@ -24,11 +25,15 @@ import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 
 final router = GoRouter(
-  initialLocation: '/accounts',
+  initialLocation: '/inbox',
   routes: [
     ShellRoute(
       builder: (ctx, state, child) => UndoShell(child: child),
       routes: [
+        GoRoute(
+          path: '/inbox',
+          builder: (ctx, state) => const CombinedInboxScreen(),
+        ),
         GoRoute(
           path: '/accounts',
           builder: (ctx, state) => const AccountListScreen(),

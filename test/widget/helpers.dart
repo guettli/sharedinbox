@@ -246,6 +246,10 @@ class FakeEmailRepository implements EmailRepository {
       });
 
   @override
+  Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
+      Stream.value([]);
+
+  @override
   Stream<List<Email>> observeEmailsInThread(
     String accountId,
     String mailboxPath,

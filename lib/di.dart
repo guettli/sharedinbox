@@ -239,6 +239,10 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   }
 }
 
+final allAccountsProvider = StreamProvider<List<model.Account>>((ref) {
+  return ref.watch(accountRepositoryProvider).observeAccounts();
+});
+
 final accountByIdProvider =
     StreamProvider.autoDispose.family<model.Account?, String>((ref, accountId) {
   return ref.watch(accountRepositoryProvider).observeAccounts().map(

@@ -15,6 +15,10 @@ abstract class EmailRepository {
     int limit = 50,
   });
 
+  /// Returns threads from the INBOX mailbox of every account, sorted by latest
+  /// message date descending. Inbox mailboxes are identified by role = 'inbox'.
+  Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50});
+
   /// Returns all emails belonging to [threadId] in [mailboxPath].
   Stream<List<Email>> observeEmailsInThread(
     String accountId,

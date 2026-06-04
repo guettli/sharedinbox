@@ -95,6 +95,26 @@ class EmailRepositoryImpl implements EmailRepository {
         .map((rows) => rows.map(_threadRowToModel).toList());
   }
 
+  @override
+  Stream<List<model.EmailThread>> observeAllInboxThreads({int limit = 50}) {
+    final query = _db.select(_db.threads).join([
+      innerJoin(
+        _db.mailboxes,
+        _db.mailboxes.accountId.equalsExp(_db.threads.accountId) &
+            _db.mailboxes.path.equalsExp(_db.threads.mailboxPath),
+      ),
+    ]);
+    query
+      ..where(_db.mailboxes.role.equals('inbox'))
+      ..orderBy([OrderingTerm.desc(_db.threads.latestDate)])
+      ..limit(limit);
+    return query.watch().map(
+          (rows) => rows
+              .map((row) => _threadRowToModel(row.readTable(_db.threads)))
+              .toList(),
+        );
+  }
+
   model.EmailThread _threadRowToModel(ThreadRow row) {
     List<model.EmailAddress> parseAddresses(String json) {
       final list = jsonDecode(json) as List<dynamic>;
