@@ -28,7 +28,8 @@ import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
-import 'package:sharedinbox/data/db/database.dart' show AppDatabase, SyncHealthRow;
+import 'package:sharedinbox/data/db/database.dart'
+    show AppDatabase, SyncHealthRow;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';

@@ -422,11 +422,11 @@ func (m *Ci) Format(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// CheckMocks verifies that generated mocks are up to date.
-// It snapshots the committed source (including any stale *.mocks.dart) before
+// CheckGenerated verifies that all generated files (*.g.dart, *.mocks.dart) are up to date.
+// It snapshots the committed source (including any stale generated files) before
 // running build_runner, so git diff detects real staleness instead of always
 // comparing two freshly-generated outputs.
-func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
+func (m *Ci) CheckGenerated(ctx context.Context) (string, error) {
 	return m.pubGetLayer().
 		WithDirectory("/src", m.checkSrc(), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
@@ -439,7 +439,7 @@ func (m *Ci) CheckMocks(ctx context.Context) (string, error) {
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -vE '^\[.*s\] \|' "$tmp" || true`}).
-		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . -name '*.mocks.dart' | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Mocks are out of date\"; exit 1; fi; echo \"Mocks are up to date.\""}).
+		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . \\( -name '*.g.dart' -o -name '*.mocks.dart' \\) | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Generated files are out of date — run: dart run build_runner build\"; exit 1; fi; echo \"Generated files are up to date.\""}).
 		Stdout(ctx)
 }
 
@@ -515,7 +515,7 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return analyze, err
 	}
 
-	mocks, err := m.CheckMocks(ctx)
+	mocks, err := m.CheckGenerated(ctx)
 	if err != nil {
 		return mocks, err
 	}
@@ -917,7 +917,7 @@ flowchart TD
 
         pubGet --> hygiene["CheckHygiene"]
         pubGet --> layers["CheckLayers"]
-        pubGet --> mocks["CheckMocks\n(own build_runner run)"]
+        pubGet --> mocks["CheckGenerated\n(own build_runner run)"]
 
         codegen --> fmt["Format"]
         codegen --> analyze["Analyze"]

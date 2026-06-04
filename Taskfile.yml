@@ -569,7 +569,7 @@ tasks:
 
   run:
     desc: Run the app on Linux desktop
-    deps: [_preflight, _linux-deps-check, _pub-get]
+    deps: [_preflight, _linux-deps-check, _pub-get, _codegen]
     cmds:
       - fvm flutter run -d linux --no-pub
 
