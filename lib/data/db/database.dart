@@ -330,6 +330,12 @@ class UserPreferences extends Table {
   // Added in schema v36: 'nextMessage' (default) | 'showMailbox'
   TextColumn get afterMailViewAction =>
       text().withDefault(const Constant('nextMessage'))();
+  // Added in schema v38: 'disabled' | 'wifiOnly' (default) | 'always'
+  TextColumn get prefetchMode =>
+      text().withDefault(const Constant('wifiOnly'))();
+  // Added in schema v38: max cache size for offline email bodies, in megabytes.
+  IntColumn get bodyCacheLimitMb =>
+      integer().withDefault(const Constant(100))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -625,6 +631,13 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 37) {
             await m.createTable(imageTrustedSenders);
+          }
+          if (from >= 34 && from < 38) {
+            await m.addColumn(userPreferences, userPreferences.prefetchMode);
+            await m.addColumn(
+              userPreferences,
+              userPreferences.bodyCacheLimitMb,
+            );
           }
         },
       );

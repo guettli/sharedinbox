@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/di.dart';
 
 class UserPreferencesScreen extends ConsumerWidget {
@@ -135,6 +136,83 @@ class UserPreferencesScreen extends ConsumerWidget {
             const Divider(),
             ListTile(
               title: Text(
+                'Offline email cache',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'Pre-fetch email bodies in the background so they are available offline.',
+              ),
+            ),
+            RadioGroup<PrefetchMode>(
+              groupValue: prefs.prefetchMode,
+              onChanged: (value) {
+                if (value == null) return;
+                unawaited(
+                  ref
+                      .read(userPreferencesRepositoryProvider)
+                      .updatePrefetchMode(value),
+                );
+                unawaited(registerBodyPrefetchTask(value));
+              },
+              child: const Column(
+                children: [
+                  RadioListTile<PrefetchMode>(
+                    title: Text('Wi-Fi only (default)'),
+                    subtitle: Text(
+                      'Pre-fetch bodies in the background when connected to Wi-Fi.',
+                    ),
+                    value: PrefetchMode.wifiOnly,
+                  ),
+                  RadioListTile<PrefetchMode>(
+                    title: Text('Any network'),
+                    subtitle: Text(
+                      'Pre-fetch bodies on Wi-Fi and mobile data.',
+                    ),
+                    value: PrefetchMode.always,
+                  ),
+                  RadioListTile<PrefetchMode>(
+                    title: Text('Disabled'),
+                    subtitle: Text(
+                      'Do not pre-fetch email bodies in the background.',
+                    ),
+                    value: PrefetchMode.disabled,
+                  ),
+                ],
+              ),
+            ),
+            if (prefs.prefetchMode != PrefetchMode.disabled) ...[
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const Text('Cache size limit:'),
+                    const SizedBox(width: 16),
+                    DropdownButton<int>(
+                      value: _nearestCacheOption(prefs.bodyCacheLimitMb),
+                      items: const [
+                        DropdownMenuItem(value: 50, child: Text('50 MB')),
+                        DropdownMenuItem(value: 100, child: Text('100 MB')),
+                        DropdownMenuItem(value: 200, child: Text('200 MB')),
+                        DropdownMenuItem(value: 500, child: Text('500 MB')),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        unawaited(
+                          ref
+                              .read(userPreferencesRepositoryProvider)
+                              .updateBodyCacheLimitMb(value),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            const Divider(),
+            ListTile(
+              title: Text(
                 'Trusted image senders',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
@@ -174,6 +252,13 @@ class UserPreferencesScreen extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+
+  int _nearestCacheOption(int mb) {
+    const options = [50, 100, 200, 500];
+    return options.reduce(
+      (a, b) => (a - mb).abs() <= (b - mb).abs() ? a : b,
     );
   }
 }

@@ -51,6 +51,26 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   }
 
   @override
+  Future<void> updatePrefetchMode(pref.PrefetchMode mode) async {
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
+          UserPreferencesCompanion(
+            id: const Value(_rowId),
+            prefetchMode: Value(mode.name),
+          ),
+        );
+  }
+
+  @override
+  Future<void> updateBodyCacheLimitMb(int mb) async {
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
+          UserPreferencesCompanion(
+            id: const Value(_rowId),
+            bodyCacheLimitMb: Value(mb),
+          ),
+        );
+  }
+
+  @override
   Stream<List<String>> observeTrustedImageSenders() {
     return (_db.select(_db.imageTrustedSenders)
           ..orderBy([(t) => OrderingTerm.desc(t.addedAt)]))
@@ -90,6 +110,8 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
         (e) => e.name == row.afterMailViewAction,
         orElse: () => pref.AfterMailViewAction.nextMessage,
       ),
+      prefetchMode: pref.PrefetchMode.fromString(row.prefetchMode),
+      bodyCacheLimitMb: row.bodyCacheLimitMb,
     );
   }
 }

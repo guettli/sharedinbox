@@ -664,6 +664,12 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   }
 
   @override
+  Future<void> updatePrefetchMode(PrefetchMode mode) async {}
+
+  @override
+  Future<void> updateBodyCacheLimitMb(int mb) async {}
+
+  @override
   Stream<List<String>> observeTrustedImageSenders() =>
       Stream.value(List.of(_trustedImageSenders));
 

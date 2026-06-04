@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -39,6 +40,7 @@ void main({List<Override> overrides = const []}) async {
         if (Platform.isAndroid) {
           await initNotifications();
           await registerBackgroundSync();
+          await _registerPrefetchTaskFromStoredPrefs();
         }
         runApp(
           ProviderScope(overrides: overrides, child: const SharedInboxApp()),
@@ -50,6 +52,20 @@ void main({List<Override> overrides = const []}) async {
       },
     ),
   );
+}
+
+/// Reads the stored prefetch preference and registers the WorkManager task
+/// with the correct network constraint for it. Opens and immediately closes
+/// a temporary DB connection; safe because initDatabasePath() has already run.
+Future<void> _registerPrefetchTaskFromStoredPrefs() async {
+  final db = AppDatabase();
+  try {
+    final row = await db.select(db.userPreferences).getSingleOrNull();
+    final mode = PrefetchMode.fromString(row?.prefetchMode);
+    await registerBodyPrefetchTask(mode);
+  } finally {
+    await db.close();
+  }
 }
 
 class SharedInboxApp extends ConsumerStatefulWidget {

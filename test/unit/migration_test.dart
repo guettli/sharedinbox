@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 37);
+      expect(db.schemaVersion, 38);
       await db.close();
     });
 
@@ -420,12 +420,16 @@ void main() {
             .customSelect('SELECT count(*) FROM image_trusted_senders')
             .get();
 
+        // v38: prefetch_mode and body_cache_limit_mb columns on user_preferences.
+        expect(userPrefsColumns, contains('prefetch_mode'));
+        expect(userPrefsColumns, contains('body_cache_limit_mb'));
+
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();
       },
     );
 
-    test('fresh install creates all tables at schemaVersion 37', () async {
+    test('fresh install creates all tables at schemaVersion 38', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -484,6 +488,10 @@ void main() {
 
       // v37: image_trusted_senders table.
       await db.customSelect('SELECT count(*) FROM image_trusted_senders').get();
+
+      // v38: prefetch_mode and body_cache_limit_mb columns on user_preferences.
+      expect(userPrefsColumns, contains('prefetch_mode'));
+      expect(userPrefsColumns, contains('body_cache_limit_mb'));
 
       await db.close();
     });

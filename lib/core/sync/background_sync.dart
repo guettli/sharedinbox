@@ -11,7 +11,9 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/services/body_cache_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -21,6 +23,7 @@ import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:workmanager/workmanager.dart';
 
 const _kTaskName = 'si_bg_sync';
+const _kPrefetchTaskName = 'si_bg_prefetch';
 const _kResourceType = 'background_check';
 
 @pragma('vm:entry-point')
@@ -28,9 +31,13 @@ void callbackDispatcher() {
   // Required so that path_provider and other plugins are available in this
   // background isolate (issue #192).
   WidgetsFlutterBinding.ensureInitialized();
-  Workmanager().executeTask((_, __) async {
+  Workmanager().executeTask((taskName, __) async {
     try {
-      await _doBackgroundSync();
+      if (taskName == _kPrefetchTaskName) {
+        await _doBodyPrefetch();
+      } else {
+        await _doBackgroundSync();
+      }
     } catch (_) {}
     return true;
   });
@@ -55,6 +62,31 @@ Future<void> registerBackgroundSync() async {
   }
 }
 
+/// Registers (or cancels) the body-prefetch WorkManager task based on [mode].
+/// Call on app startup and whenever the user changes the prefetch preference.
+Future<void> registerBodyPrefetchTask(PrefetchMode mode) async {
+  try {
+    if (mode == PrefetchMode.disabled) {
+      await Workmanager().cancelByUniqueName(_kPrefetchTaskName);
+      return;
+    }
+    final networkType = mode == PrefetchMode.wifiOnly
+        ? NetworkType.unmetered
+        : NetworkType.connected;
+    await Workmanager().registerPeriodicTask(
+      _kPrefetchTaskName,
+      _kPrefetchTaskName,
+      frequency: const Duration(hours: 1),
+      constraints: Constraints(networkType: networkType),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+    );
+  } on PlatformException {
+    // Ignore — WorkManager unavailable.
+  } on MissingPluginException {
+    // Ignore — plugin not registered.
+  } catch (_) {}
+}
+
 Future<void> _doBackgroundSync() async {
   final dir = await getApplicationSupportDirectory();
   final db = AppDatabase(
@@ -71,6 +103,22 @@ Future<void> _doBackgroundSync() async {
       if (account.type != model.AccountType.imap) continue;
       await _checkAccount(db, accountRepo, account);
     }
+  } finally {
+    await db.close();
+  }
+}
+
+Future<void> _doBodyPrefetch() async {
+  final dir = await getApplicationSupportDirectory();
+  final db = AppDatabase(
+    NativeDatabase(File(p.join(dir.path, 'sharedinbox.db'))),
+  );
+  try {
+    final accountRepo = AccountRepositoryImpl(
+      db,
+      const FlutterSecureStorageImpl(),
+    );
+    await BodyCacheService(db, accountRepo).run();
   } finally {
     await db.close();
   }

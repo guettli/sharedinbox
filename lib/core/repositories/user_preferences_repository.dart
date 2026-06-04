@@ -5,6 +5,8 @@ abstract class UserPreferencesRepository {
   Future<void> updateMenuPosition(MenuPosition position);
   Future<void> updateMailViewButtonPosition(MenuPosition position);
   Future<void> updateAfterMailViewAction(AfterMailViewAction action);
+  Future<void> updatePrefetchMode(PrefetchMode mode);
+  Future<void> updateBodyCacheLimitMb(int mb);
 
   Stream<List<String>> observeTrustedImageSenders();
   Future<void> addTrustedImageSender(String senderEmail);
