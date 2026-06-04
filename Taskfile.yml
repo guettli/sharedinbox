@@ -218,7 +218,7 @@ tasks:
       - sh: test -n "$SSH_KNOWN_HOSTS"
         msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && scripts/silent_on_success.sh dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   build-android-bundle:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
@@ -247,7 +247,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && scripts/silent_on_success.sh dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
@@ -261,7 +261,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
+      - HASH=$(git rev-parse --short HEAD) && scripts/silent_on_success.sh dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
 
   publish-website:
     desc: Build and publish website via Dagger
