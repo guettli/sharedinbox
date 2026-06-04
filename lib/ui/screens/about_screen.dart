@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
@@ -197,20 +198,28 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.copy),
-                        label: const Text('Copy to clipboard'),
+                        label: const Text('Copy info'),
                         onPressed: () => unawaited(
                           _copyToClipboard(context, imapCount, jmapCount),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
                     Expanded(
-                      child: FilledButton.icon(
-                        icon: const Icon(Icons.bug_report),
-                        label: const Text('Create issue'),
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.bug_report_outlined),
+                        label: const Text('Public issue'),
                         onPressed: () => unawaited(
                           _createIssue(context, imapCount, jmapCount),
                         ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.feedback_outlined),
+                        label: const Text('Report bug'),
+                        onPressed: () => context.push('/bug-report'),
                       ),
                     ),
                   ],
