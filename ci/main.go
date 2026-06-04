@@ -461,12 +461,12 @@ func (m *Ci) CheckGenerated(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// Coverage runs unit tests with coverage gate.
+// Coverage runs unit and widget tests with coverage gate.
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`flutter test test/unit --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`flutter test test/unit test/widget --exclude-tags golden --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
