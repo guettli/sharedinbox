@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"dagger/ci/internal/dagger"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -148,16 +149,33 @@ if __name__ == "__main__":
 `
 
 type Ci struct {
-	Source *dagger.Directory
+	Source         *dagger.Directory
+	FlutterVersion string
 }
 
 func New(
+	ctx context.Context,
 	// +defaultPath=".."
 	source *dagger.Directory,
-) *Ci {
+) (*Ci, error) {
+	fvmrcContents, err := source.File(".fvmrc").Contents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read .fvmrc: %w", err)
+	}
+	var fvmrc struct {
+		Flutter string `json:"flutter"`
+	}
+	if err := json.Unmarshal([]byte(fvmrcContents), &fvmrc); err != nil {
+		return nil, fmt.Errorf("failed to parse .fvmrc: %w", err)
+	}
+	if fvmrc.Flutter == "" {
+		return nil, fmt.Errorf(".fvmrc is missing the 'flutter' field")
+	}
 	return &Ci{
+		FlutterVersion: fvmrc.Flutter,
 		Source: source.Filter(dagger.DirectoryFilterOpts{
 			Include: []string{
+				".fvmrc",
 				"lib/",
 				"test/",
 				"assets/",
@@ -173,7 +191,7 @@ func New(
 				"website/",
 			},
 		}),
-	}
+	}, nil
 }
 
 // toolchain returns the Flutter+Android toolchain without any mutable cache mounts.
@@ -181,7 +199,7 @@ func New(
 // Used as the base for pubGetLayer so flutter pub get is execution-cached between runs.
 func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/cirruslabs/flutter:3.44.0").
+		From("ghcr.io/cirruslabs/flutter:"+m.FlutterVersion).
 		WithExec([]string{"apt-get", "-qq", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
@@ -902,12 +920,12 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 //
 //	dagger call --progress=plain -q -m ci --source=. graph
 func (m *Ci) Graph() string {
-	return `# CI Pipeline Graph
+	return fmt.Sprintf(`# CI Pipeline Graph
 
-` + "```" + `mermaid
+`+"```"+`mermaid
 flowchart TD
     subgraph dagger ["Dagger · Check pipeline"]
-        toolchain["toolchain\nflutter:3.41.6 + NDK + apt + precache"]
+        toolchain["toolchain\nflutter:%s + NDK + apt + precache"]`, m.FlutterVersion) + `
         pubGet["pubGetLayer\nflutter pub get"]
         codegen["codegenBase\nbuild_runner build\n(shared cache)"]
         stalwart(["Stalwart service\nIMAP · JMAP · SMTP · Sieve"])
