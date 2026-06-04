@@ -12,12 +12,22 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
+import 'package:stack_trace/stack_trace.dart' as stack_trace;
 
 void main({List<Override> overrides = const []}) {
   unawaited(
     runZonedGuarded(
       () async {
         WidgetsFlutterBinding.ensureInitialized();
+
+        // Dart's async machinery propagates stack traces in chain format
+        // (with '===== asynchronous gap =====' separators). Flutter's
+        // StackFrame parser asserts on those lines, so strip them first.
+        FlutterError.demangleStackTrace = (StackTrace s) {
+          if (s is stack_trace.Chain) return s.toTrace().vmTrace;
+          if (s is stack_trace.Trace) return s.vmTrace;
+          return s;
+        };
 
         // Catch errors during build (e.g. layout exceptions) and show CrashScreen.
         ErrorWidget.builder = (details) => CrashScreen(
