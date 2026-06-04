@@ -338,12 +338,17 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
-		// Mount at a raw path so we can normalise before use: strip any CRLF line
-		// endings that appear when the key is stored or exported on Windows, which
-		// cause "error in libcrypto" in Alpine's LibreSSL-backed openssh.
-		WithMountedSecret("/root/.ssh/id_ed25519.raw", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
-		WithExec([]string{"sh", "-c",
-			"tr -d '\\r' < /root/.ssh/id_ed25519.raw > /root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519"}).
+		// Create .ssh with strict permissions before Dagger mounts anything there,
+		// so the directory is 700 (not Dagger's default 755).
+		WithExec([]string{"sh", "-c", "mkdir -p /root/.ssh && chmod 700 /root/.ssh"}).
+		// Mount the raw key outside .ssh so Dagger cannot override the directory
+		// permissions we just set above.
+		WithMountedSecret("/tmp/id_ed25519.raw", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		// Normalise with Python3: strip CRLF/bare-CR, ensure trailing newline.
+		// Using Python3 (not tr) changes the Dagger cache key so stale cached
+		// results from the old tr-based step are not reused.
+		WithExec([]string{"python3", "-c",
+			"import os; raw=open('/tmp/id_ed25519.raw','rb').read(); key=raw.replace(b'\\r\\n',b'\\n').replace(b'\\r',b'\\n'); key=key if key.endswith(b'\\n') else key+b'\\n'; open('/root/.ssh/id_ed25519','wb').write(key); os.chmod('/root/.ssh/id_ed25519',0o600)"}).
 		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
 		WithEnvVariable("RSYNC_RSH", "ssh -i /root/.ssh/id_ed25519")
 }
