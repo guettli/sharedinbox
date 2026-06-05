@@ -192,6 +192,22 @@ class EmailThread {
     required this.accountId,
     required this.mailboxPath,
   });
+
+  /// Wraps a single [Email] as a one-message thread for uniform rendering.
+  factory EmailThread.fromEmail(Email e) => EmailThread(
+        threadId: e.threadId ?? e.id,
+        subject: e.subject,
+        participants: e.from,
+        latestDate: e.sentAt ?? e.receivedAt,
+        messageCount: 1,
+        hasUnread: !e.isSeen,
+        isFlagged: e.isFlagged,
+        latestEmailId: e.id,
+        preview: e.preview,
+        emailIds: [e.id],
+        accountId: e.accountId,
+        mailboxPath: e.mailboxPath,
+      );
 }
 
 class EmailAddress {

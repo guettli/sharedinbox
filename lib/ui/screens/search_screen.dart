@@ -8,7 +8,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/widgets/email_tile.dart';
+import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
   ref,
@@ -189,9 +189,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         if (r.emails.isNotEmpty) ...[
           const _SectionHeader('Messages'),
           for (final e in r.emails)
-            EmailTile(
-              email: e,
-              showLocation: true,
+            ThreadTile(
+              thread: EmailThread.fromEmail(e),
+              locationLabel: '${e.accountId} • ${e.mailboxPath}',
               onTap: () => context.push(
                 '/accounts/${e.accountId}/mailboxes'
                 '/${Uri.encodeComponent(e.mailboxPath)}'

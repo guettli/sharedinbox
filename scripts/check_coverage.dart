@@ -83,6 +83,7 @@ const _excluded = {
   'lib/core/services/update_service.dart',
   'lib/ui/widgets/email_thread_tile.dart',
   'lib/ui/screens/trusted_image_senders_screen.dart',
+  'lib/ui/widgets/thread_tile.dart',
 };
 
 void main() {

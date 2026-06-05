@@ -13,9 +13,9 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_tile.dart';
-import 'package:sharedinbox/ui/widgets/email_tile.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
+import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -762,9 +762,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       itemCount: emails.length,
       itemBuilder: (ctx, i) {
         final e = emails[i];
+        final t = EmailThread.fromEmail(e);
         final isSelected = _selectedSearchIds.contains(e.id);
-        return EmailTile(
-          email: e,
+        return ThreadTile(
+          thread: t,
           selected: isSelected,
           leading: SizedBox(
             width: 40,
