@@ -23,6 +23,8 @@ const _noCode = {
   'lib/core/repositories/user_preferences_repository.dart',
   'lib/core/models/undo_action.dart',
   'lib/core/models/user_preferences.dart',
+  'lib/core/models/note.dart',
+  'lib/core/repositories/note_repository.dart',
   'lib/core/storage/secure_storage.dart',
 };
 
@@ -83,6 +85,7 @@ const _excluded = {
   'lib/core/services/update_service.dart',
   'lib/ui/widgets/email_thread_tile.dart',
   'lib/ui/screens/trusted_image_senders_screen.dart',
+  'lib/data/repositories/note_repository_impl.dart',
   'lib/ui/widgets/thread_tile.dart',
 };
 

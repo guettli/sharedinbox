@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
@@ -37,6 +38,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _isFlagged = false;
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
+  bool _notesSynced = false;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +51,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         final email = next.value?.$1;
         if (email != null && mounted) {
           setState(() => _isFlagged = email.isFlagged);
+        }
+        if (!_notesSynced && email?.messageId != null) {
+          _notesSynced = true;
+          unawaited(
+            ref.read(noteRepositoryProvider).syncNotes(
+                  email!.accountId,
+                  email.messageId!,
+                ),
+          );
         }
       },
     );
@@ -257,6 +268,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             body.textBody ?? '',
             style: Theme.of(ctx).textTheme.bodyMedium,
           ),
+        if (header?.messageId != null) _buildNotesSection(ctx, header!),
         if (body.attachments.isNotEmpty) ...[
           const Divider(),
           Padding(
@@ -338,6 +350,114 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } finally {
       if (mounted) setState(() => _downloading.remove(att.filename));
     }
+  }
+
+  Widget _buildNotesSection(BuildContext ctx, Email header) {
+    final messageId = header.messageId!;
+    final notes = ref.watch(notesProvider((header.accountId, messageId)));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(),
+        Row(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                'Notes',
+                style: Theme.of(ctx).textTheme.titleSmall,
+              ),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add'),
+              onPressed: () => unawaited(_addNoteDialog(ctx, header)),
+            ),
+          ],
+        ),
+        notes.when(
+          loading: () => const SizedBox.shrink(),
+          error: (e, _) => Text('Error loading notes: $e'),
+          data: (list) {
+            if (list.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Text(
+                  'No notes yet.',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              );
+            }
+            return Column(
+              children: [
+                for (final note in list) _buildNoteRow(ctx, note),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNoteRow(BuildContext ctx, EmailNote note) {
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: Text(note.noteText),
+      subtitle: Text(
+        DateFormat('MMM d, HH:mm').format(note.createdAt),
+        style: Theme.of(ctx).textTheme.bodySmall,
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline, size: 20),
+        tooltip: 'Delete note',
+        onPressed: () {
+          unawaited(ref.read(noteRepositoryProvider).deleteNote(note.id));
+        },
+      ),
+    );
+  }
+
+  Future<void> _addNoteDialog(BuildContext context, Email header) async {
+    final messageId = header.messageId;
+    if (messageId == null) return;
+
+    final ctrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add note'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 4,
+          decoration: const InputDecoration(hintText: 'Type a note…'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    final text = ctrl.text.trim();
+    ctrl.dispose();
+    if (confirmed != true || text.isEmpty) return;
+    if (!context.mounted) return;
+
+    await ref.read(noteRepositoryProvider).addNote(
+          header.accountId,
+          messageId,
+          text,
+        );
   }
 
   Widget _buildHeader(BuildContext ctx, Email email) {

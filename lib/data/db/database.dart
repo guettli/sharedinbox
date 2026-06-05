@@ -318,6 +318,26 @@ class ImageTrustedSenders extends Table {
   Set<Column> get primaryKey => {senderEmail};
 }
 
+/// Per-email notes stored server-side (IMAP Notes folder / JMAP Notes mailbox).
+/// Keyed by the RFC 2822 Message-ID header so notes survive folder moves.
+// Added in schema v39.
+@DataClassName('EmailNoteRow')
+class EmailNotes extends Table {
+  // UUID matching the X-SharedInbox-Note-Id custom header on the server.
+  TextColumn get id => text()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // X-SharedInbox-Note-For value — stable across IMAP folder moves.
+  TextColumn get messageId => text()();
+  TextColumn get noteText => text()();
+  // IMAP UID (as string) or JMAP email ID of the note message on the server.
+  TextColumn get serverId => text()();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 /// App-wide user preferences, stored as a singleton row (id always 1).
 @DataClassName('UserPreferencesRow')
 class UserPreferences extends Table {
@@ -363,6 +383,7 @@ class UserPreferences extends Table {
     ShareKeys,
     UserPreferences,
     ImageTrustedSenders,
+    EmailNotes,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -638,6 +659,9 @@ class AppDatabase extends _$AppDatabase {
               userPreferences,
               userPreferences.bodyCacheLimitMb,
             );
+          }
+          if (from < 39) {
+            await m.createTable(emailNotes);
           }
         },
       );

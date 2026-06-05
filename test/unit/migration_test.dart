@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 38);
+      expect(db.schemaVersion, 39);
       await db.close();
     });
 
@@ -424,12 +424,15 @@ void main() {
         expect(userPrefsColumns, contains('prefetch_mode'));
         expect(userPrefsColumns, contains('body_cache_limit_mb'));
 
+        // v39: email_notes table.
+        await db.customSelect('SELECT count(*) FROM email_notes').get();
+
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();
       },
     );
 
-    test('fresh install creates all tables at schemaVersion 38', () async {
+    test('fresh install creates all tables at schemaVersion 39', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -458,6 +461,7 @@ void main() {
           'local_sieve_applied', // v32
           'user_preferences', // v34
           'image_trusted_senders', // v37
+          'email_notes', // v39
         ]),
       );
 
@@ -492,6 +496,9 @@ void main() {
       // v38: prefetch_mode and body_cache_limit_mb columns on user_preferences.
       expect(userPrefsColumns, contains('prefetch_mode'));
       expect(userPrefsColumns, contains('body_cache_limit_mb'));
+
+      // v39: email_notes table.
+      await db.customSelect('SELECT count(*) FROM email_notes').get();
 
       await db.close();
     });

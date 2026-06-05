@@ -4,12 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -32,6 +34,7 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
@@ -282,3 +285,18 @@ final trustedImageSendersProvider =
       .watch(userPreferencesRepositoryProvider)
       .observeTrustedImageSenders();
 });
+
+final noteRepositoryProvider = Provider<NoteRepository>((ref) {
+  return NoteRepositoryImpl(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+  );
+});
+
+/// Stream of notes for a specific email, identified by (accountId, messageId).
+final notesProvider =
+    StreamProvider.autoDispose.family<List<EmailNote>, (String, String)>(
+  (ref, params) =>
+      ref.watch(noteRepositoryProvider).observeNotes(params.$1, params.$2),
+);
