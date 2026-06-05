@@ -22,13 +22,17 @@ android {
         }
     }
 
-    signingConfigs {
-        create("release") {
-            keyAlias = "upload"
-            val pass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-            storePassword = pass
-            keyPassword = pass
-            storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: error("ANDROID_KEYSTORE_PATH is not set"))
+    val ksPath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
+
+    if (ksPath != null) {
+        signingConfigs {
+            create("release") {
+                keyAlias = "upload"
+                val pass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+                storePassword = pass
+                keyPassword = pass
+                storeFile = file(ksPath)
+            }
         }
     }
 
@@ -44,7 +48,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (ksPath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             isShrinkResources = false
             ndk {
