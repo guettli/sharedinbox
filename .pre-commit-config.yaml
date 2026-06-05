@@ -11,9 +11,9 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/guettli/sync-branch
-    rev: v0.0.10
+    rev: v0.0.11
     hooks:
-      - id: branch-up-to-date
+      - id: sync-branch
 
   - repo: local
     hooks:
