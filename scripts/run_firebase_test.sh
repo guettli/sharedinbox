@@ -34,7 +34,7 @@ _filter_noise() {
 _run() {
     : > "$OUT" ; : > "$RC_FILE"
     {
-        dagger call --progress=plain -q -m ci --source=. test-android-firebase \
+        timeout --kill-after=10 2400 dagger call --progress=plain -q -m ci --source=. test-android-firebase \
             --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY \
             --project-id "$FIREBASE_PROJECT_ID"
         echo $? > "$RC_FILE"
@@ -44,6 +44,10 @@ _run() {
 for attempt in 1 2 3; do
     _run && break
     RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
+    if [ "$RC" -eq 124 ]; then
+        echo "::warning::[firebase] attempt $attempt/3 timed out after 2400s" >&2
+        exit 124
+    fi
     if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|No Dagger server responded" "$OUT"; then
         echo "[firebase] dagger connectivity error on attempt $attempt/3, retrying..." >&2
     else

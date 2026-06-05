@@ -54,12 +54,22 @@ echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
 # Add remote host to known_hosts
-ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+_t0=$SECONDS
+timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+_elapsed=$(( SECONDS - _t0 ))
+if [ "$_elapsed" -gt 10 ]; then
+    echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
+fi
 
 # Create a background SSH tunnel to the Dagger engine.
 # We map local port 8080 to remote port 1774 (where our socat bridge is listening).
 echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
-ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:localhost:1774 "dagger@$DAGGER_ENGINE_HOST"
+_t0=$SECONDS
+timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:localhost:1774 "dagger@$DAGGER_ENGINE_HOST"
+_elapsed=$(( SECONDS - _t0 ))
+if [ "$_elapsed" -gt 10 ]; then
+    echo "::warning::SSH tunnel setup took ${_elapsed}s"
+fi
 
 # Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
 export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://localhost:8080"
