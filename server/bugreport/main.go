@@ -2,8 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -21,12 +18,10 @@ import (
 // BugReport represents the data stored in report.json
 type BugReport struct {
 	Description string    `json:"description"`
-	Email       string    `json:"email"`
 	AboutInfo   string    `json:"about_info"`
 	EmailData   string    `json:"email_data,omitempty"`
 	SyncLog     string    `json:"sync_log,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
-	HashedIP    string    `json:"hashed_ip"`
 }
 
 var (
@@ -73,12 +68,6 @@ func generateUUID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40 // Version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // Variant is 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
-}
-
-func hashIP(ip string) string {
-	h := sha256.New()
-	h.Write([]byte(ip))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func bugReportHandler(storageDir string) http.HandlerFunc {
@@ -143,20 +132,6 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		emailData := r.FormValue("email_data")
 		syncLog := r.FormValue("sync_log")
 
-		// Get IP address
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		// Check X-Forwarded-For if behind a proxy
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			if len(parts) > 0 {
-				ip = strings.TrimSpace(parts[0])
-			}
-		}
-		hashedIP := hashIP(ip)
-
 		uuidVal, err := generateUUID()
 		if err != nil {
 			log.Printf("Failed to generate UUID: %v", err)
@@ -179,12 +154,10 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		// Write report.json
 		report := BugReport{
 			Description: description,
-			Email:       email,
 			AboutInfo:   aboutInfo,
 			EmailData:   emailData,
 			SyncLog:     syncLog,
 			Timestamp:   now,
-			HashedIP:    hashedIP,
 		}
 
 		reportJSONPath := filepath.Join(reportDir, "report.json")
@@ -203,6 +176,17 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 			log.Printf("Failed to write report.json: %v", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
+		}
+
+		// Write contact email to mail.eml (kept separate from report.json to isolate PII)
+		if email != "" {
+			mailEmlPath := filepath.Join(reportDir, "mail.eml")
+			err = os.WriteFile(mailEmlPath, []byte(email), 0600)
+			if err != nil {
+				log.Printf("Failed to write mail.eml: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
 		}
 
 		// Save attachments
