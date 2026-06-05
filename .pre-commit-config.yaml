@@ -10,8 +10,8 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
-  - repo: https://github.com/guettli/pre-commit-branch-up-to-date
-    rev: v0.0.4
+  - repo: https://github.com/guettli/sync-branch
+    rev: v0.0.10
     hooks:
       - id: branch-up-to-date
 
