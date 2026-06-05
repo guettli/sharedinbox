@@ -217,11 +217,14 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                                   'Images will be loaded automatically for this sender.',
                                 ),
                                 action: SnackBarAction(
-                                  label: 'Settings',
+                                  label: 'View',
                                   onPressed: () {
                                     if (mounted) {
                                       unawaited(
-                                        context.push('/accounts/preferences'),
+                                        context.push(
+                                          '/accounts/trusted-senders',
+                                          extra: senderEmail,
+                                        ),
                                       );
                                     }
                                   },

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
@@ -14,6 +15,7 @@ class UserPreferencesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final prefsAsync = ref.watch(userPreferencesProvider);
     final trustedSendersAsync = ref.watch(trustedImageSendersProvider);
+    final trustedCount = trustedSendersAsync.value?.length ?? 0;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Preferences')),
@@ -213,41 +215,16 @@ class UserPreferencesScreen extends ConsumerWidget {
             const Divider(),
             ListTile(
               title: Text(
-                'Trusted image senders',
+                'Allowed addresses for images',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
-              subtitle: const Text(
-                'Remote images are loaded automatically for these senders.',
+              subtitle: Text(
+                trustedCount == 0
+                    ? 'No addresses added yet.'
+                    : '$trustedCount address${trustedCount == 1 ? '' : 'es'}',
               ),
-            ),
-            ...trustedSendersAsync.when(
-              loading: () => const [],
-              error: (_, __) => const [],
-              data: (senders) => senders.isEmpty
-                  ? [
-                      const Padding(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: Text('No trusted senders yet.'),
-                      ),
-                    ]
-                  : [
-                      for (final sender in senders)
-                        ListTile(
-                          title: Text(sender),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: 'Remove',
-                            onPressed: () {
-                              unawaited(
-                                ref
-                                    .read(userPreferencesRepositoryProvider)
-                                    .removeTrustedImageSender(sender),
-                              );
-                            },
-                          ),
-                        ),
-                    ],
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/accounts/trusted-senders'),
             ),
           ],
         ),

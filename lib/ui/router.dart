@@ -21,6 +21,7 @@ import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
 import 'package:sharedinbox/ui/screens/undo_log_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
@@ -66,6 +67,12 @@ final router = GoRouter(
             GoRoute(
               path: 'preferences',
               builder: (ctx, state) => const UserPreferencesScreen(),
+            ),
+            GoRoute(
+              path: 'trusted-senders',
+              builder: (ctx, state) => TrustedImageSendersScreen(
+                highlightedSender: state.extra as String?,
+              ),
             ),
             GoRoute(
               path: ':accountId/edit',
