@@ -544,15 +544,14 @@ tasks:
   deploy-android-bundle:
     desc: Build release AAB and upload to Play Store internal track (local/fvm)
     deps: [build-android-bundle-local]
-    preconditions:
-      - sh: test -n "$PLAY_STORE_CONFIG_JSON"
-        msg: "PLAY_STORE_CONFIG_JSON is not set"
+    dotenv: [".env"]
     cmds:
-      - python3 scripts/deploy_playstore.py
+      - sops exec-env secrets.enc.yaml 'python3 scripts/deploy_playstore.py'
 
   build-android-bundle-local:
     desc: Build a release App Bundle (AAB) locally via fvm (not Dagger)
     deps: [_preflight, _android-sdk-check, _codegen, generate-changelog]
+    dotenv: [".env"]
     method: timestamp
     sources:
       - lib/**/*.dart
@@ -561,7 +560,7 @@ tasks:
     generates:
       - build/app/outputs/bundle/release/app-release.aab
     cmds:
-      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build appbundle --release --no-pub --build-number $(date +%s) --build-name $(date +%y%m%d-%H%M) --dart-define=GIT_HASH=$(git rev-parse --short HEAD) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
+      - sops exec-env secrets.enc.yaml 'bash scripts/build_android_bundle_local.sh'
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH

@@ -7,7 +7,7 @@ ROOT=$(git rev-parse --show-toplevel)
 FILE="$ROOT/ci/main.go"
 
 # Static images from From("...") literals in ci/main.go
-static_images=$(grep -oP 'From\("\K[^"]+' "$FILE" | sort -u)
+static_images=$(grep -oP 'From\("\K[^"]+' "$FILE" | grep -v ':$' | sort -u)
 
 # Dynamic Flutter image derived from .fvmrc (not a literal in main.go)
 FVMRC="$ROOT/.fvmrc"

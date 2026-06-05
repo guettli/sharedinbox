@@ -24,13 +24,11 @@ android {
 
     signingConfigs {
         create("release") {
-            // Hardcoded alias matching t.sh
             keyAlias = "upload"
-            // Use the same password for both key and keystore
             val pass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
             storePassword = pass
             keyPassword = pass
-            storeFile = file("upload-keystore.jks")
+            storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: error("ANDROID_KEYSTORE_PATH is not set"))
         }
     }
 
@@ -46,14 +44,7 @@ android {
 
     buildTypes {
         release {
-            // Use the signing config defined above for release builds.
-            // If the keystore file exists (e.g. in CI or manually placed), sign it.
-            signingConfig = if (signingConfigs.getByName("release").storeFile?.exists() == true) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
-
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
             ndk {

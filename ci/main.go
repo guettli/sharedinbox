@@ -687,7 +687,8 @@ func (m *Ci) setupKeystore(keystoreBase64 *dagger.Secret, keystorePassword *dagg
 	return m.androidBase().
 		WithSecretVariable("ANDROID_KEYSTORE_BASE64", keystoreBase64).
 		WithSecretVariable("ANDROID_KEYSTORE_PASSWORD", keystorePassword).
-		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks`})
+		WithExec([]string{"/bin/sh", "-c", `echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/upload-keystore.jks`}).
+		WithEnvVariable("ANDROID_KEYSTORE_PATH", "/tmp/upload-keystore.jks")
 }
 
 // BuildAndroidApk builds a release APK signed with the upload key.
