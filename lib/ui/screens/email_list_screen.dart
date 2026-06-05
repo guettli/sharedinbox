@@ -12,19 +12,10 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_tile.dart';
 import 'package:sharedinbox/ui/widgets/email_tile.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
-
-final _dateFmt = DateFormat('MMM d');
-// Cache formatted dates by local calendar day so DateFormat.format is called
-// at most once per unique date rather than once per list item per rebuild.
-final _formattedDates = <int, String>{};
-
-int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
-
-String _fmtDate(DateTime dt) =>
-    _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -688,166 +679,81 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           );
         }
         final t = threads[i];
-        final isSelected = _selectedThreadIds.contains(t.threadId);
-        final senderNames =
-            t.participants.map((a) => a.name ?? a.email).take(3).join(', ');
-
-        final tile = ListTile(
-          leading: SizedBox(
-            width: 40,
-            child: _selecting
-                ? Checkbox(
-                    value: isSelected,
-                    onChanged: (_) => _toggleThreadSelection(t),
-                  )
-                : Icon(
-                    t.hasUnread ? Icons.mail : Icons.mail_outline,
-                    color:
-                        t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
-                  ),
-          ),
-          title: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  senderNames.isEmpty ? '(unknown)' : senderNames,
-                  style: t.hasUnread
-                      ? const TextStyle(fontWeight: FontWeight.bold)
-                      : null,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (t.messageCount > 1)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Text(
-                    '[${t.messageCount}]',
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                ),
-            ],
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                t.subject ?? '(no subject)',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: t.hasUnread
-                    ? const TextStyle(fontWeight: FontWeight.bold)
-                    : null,
-              ),
-              if (t.preview != null && t.preview!.isNotEmpty)
-                Text(
-                  t.preview!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
-            ],
-          ),
-          selected: isSelected,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (t.isFlagged)
-                const Icon(Icons.star, color: Colors.amber, size: 16),
-              const SizedBox(width: 4),
-              Text(
-                _fmtDate(t.latestDate),
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ],
-          ),
+        return EmailThreadTile(
+          thread: t,
+          isSelected: _selectedThreadIds.contains(t.threadId),
+          isSelecting: _selecting,
           onTap: _selecting
               ? () => _toggleThreadSelection(t)
               : t.messageCount > 1
                   ? () => context.push(
-                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/threads/${Uri.encodeComponent(t.threadId)}',
+                        '/accounts/${widget.accountId}/mailboxes'
+                        '/${Uri.encodeComponent(widget.mailboxPath)}'
+                        '/threads/${Uri.encodeComponent(t.threadId)}',
                       )
                   : () => context.push(
-                        '/accounts/${widget.accountId}/mailboxes/${Uri.encodeComponent(widget.mailboxPath)}/emails/${Uri.encodeComponent(t.latestEmailId)}',
+                        '/accounts/${widget.accountId}/mailboxes'
+                        '/${Uri.encodeComponent(widget.mailboxPath)}'
+                        '/emails/${Uri.encodeComponent(t.latestEmailId)}',
                       ),
           onLongPress: () => _toggleThreadSelection(t),
-        );
-
-        // For swipe actions on threads, operate on the latest email only
-        // (single-email threads) or the whole thread.
-        return Dismissible(
-          key: ValueKey(t.threadId),
-          direction:
-              _selecting ? DismissDirection.none : DismissDirection.horizontal,
-          background: _swipeBackground(
-            alignment: Alignment.centerLeft,
-            color: Colors.green,
-            icon: Icons.archive,
-            label: 'Archive',
-          ),
-          secondaryBackground: _swipeBackground(
-            alignment: Alignment.centerRight,
-            color: Colors.red,
-            icon: Icons.delete,
-            label: 'Delete',
-          ),
-          onDismissed: (direction) async {
-            final repo = ref.read(emailRepositoryProvider);
-            final type = direction == DismissDirection.startToEnd
-                ? UndoType.move
-                : UndoType.delete;
-
-            // Fetch full email data before moving/deleting.
-            final originalEmails = (await Future.wait(
-              t.emailIds.map((id) => repo.getEmail(id)),
-            ))
-                .whereType<Email>()
-                .toList();
-
-            if (direction == DismissDirection.startToEnd) {
-              final archive = await ref
-                  .read(mailboxRepositoryProvider)
-                  .findMailboxByRole(widget.accountId, 'archive');
-              if (!mounted || archive == null) return;
-              for (final id in t.emailIds) {
-                await repo.moveEmail(id, archive.path);
-              }
-
-              final action = UndoAction(
-                id: DateTime.now().toIso8601String(),
-                accountId: widget.accountId,
-                type: type,
-                emailIds: t.emailIds,
-                sourceMailboxPath: widget.mailboxPath,
-                destinationMailboxPath: archive.path,
-                originalEmails: originalEmails,
-              );
-              unawaited(
-                ref.read(undoServiceProvider.notifier).pushAction(action),
-              );
-            } else {
-              String? lastDestPath;
-              for (final id in t.emailIds) {
-                lastDestPath = await repo.deleteEmail(id);
-              }
-
-              final action = UndoAction(
-                id: DateTime.now().toIso8601String(),
-                accountId: widget.accountId,
-                type: type,
-                emailIds: t.emailIds,
-                sourceMailboxPath: widget.mailboxPath,
-                destinationMailboxPath: lastDestPath,
-                originalEmails: originalEmails,
-              );
-              unawaited(
-                ref.read(undoServiceProvider.notifier).pushAction(action),
-              );
-            }
-          },
-          child: tile,
+          onDismissed: (direction) => _onSwipeDismissed(t, direction),
         );
       },
     );
+  }
+
+  Future<void> _onSwipeDismissed(
+    EmailThread t,
+    DismissDirection direction,
+  ) async {
+    final repo = ref.read(emailRepositoryProvider);
+    final type = direction == DismissDirection.startToEnd
+        ? UndoType.move
+        : UndoType.delete;
+
+    // Fetch full email data before moving/deleting.
+    final originalEmails = (await Future.wait(
+      t.emailIds.map((id) => repo.getEmail(id)),
+    ))
+        .whereType<Email>()
+        .toList();
+
+    if (direction == DismissDirection.startToEnd) {
+      final archive = await ref
+          .read(mailboxRepositoryProvider)
+          .findMailboxByRole(widget.accountId, 'archive');
+      if (!mounted || archive == null) return;
+      for (final id in t.emailIds) {
+        await repo.moveEmail(id, archive.path);
+      }
+      final action = UndoAction(
+        id: DateTime.now().toIso8601String(),
+        accountId: widget.accountId,
+        type: type,
+        emailIds: t.emailIds,
+        sourceMailboxPath: widget.mailboxPath,
+        destinationMailboxPath: archive.path,
+        originalEmails: originalEmails,
+      );
+      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+      return;
+    }
+
+    String? lastDestPath;
+    for (final id in t.emailIds) {
+      lastDestPath = await repo.deleteEmail(id);
+    }
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: widget.accountId,
+      type: type,
+      emailIds: t.emailIds,
+      sourceMailboxPath: widget.mailboxPath,
+      destinationMailboxPath: lastDestPath,
+      originalEmails: originalEmails,
+    );
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
   // Used for search results, which are individual emails.
@@ -875,27 +781,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           onLongPress: () => _toggleSearchSelection(e.id),
         );
       },
-    );
-  }
-
-  Widget _swipeBackground({
-    required AlignmentGeometry alignment,
-    required Color color,
-    required IconData icon,
-    required String label,
-  }) {
-    return Container(
-      color: color,
-      alignment: alignment,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white),
-          const SizedBox(width: 8),
-          Text(label, style: const TextStyle(color: Colors.white)),
-        ],
-      ),
     );
   }
 }

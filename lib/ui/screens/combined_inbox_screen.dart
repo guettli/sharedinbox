@@ -3,20 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
-
-final _dateFmt = DateFormat('MMM d');
-final _formattedDates = <int, String>{};
-
-int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
-
-String _fmtDate(DateTime dt) =>
-    _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
+import 'package:sharedinbox/ui/widgets/email_thread_tile.dart';
 
 class CombinedInboxScreen extends ConsumerStatefulWidget {
   const CombinedInboxScreen({super.key});
@@ -29,6 +21,31 @@ class CombinedInboxScreen extends ConsumerStatefulWidget {
 class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
   static const _pageSize = 50;
   int _limit = _pageSize;
+
+  // Thread-level selection (key = threadId).
+  final Set<String> _selectedThreadIds = {};
+  // Last-emitted thread list, used to resolve emailIds for batch operations.
+  List<EmailThread> _currentThreads = [];
+
+  bool get _selecting => _selectedThreadIds.isNotEmpty;
+
+  void _toggleThreadSelection(EmailThread thread) {
+    setState(() {
+      if (_selectedThreadIds.contains(thread.threadId)) {
+        _selectedThreadIds.remove(thread.threadId);
+      } else {
+        _selectedThreadIds.add(thread.threadId);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(() => _selectedThreadIds.clear());
+
+  void _selectAll() {
+    setState(
+      () => _selectedThreadIds.addAll(_currentThreads.map((t) => t.threadId)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,18 +75,38 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
 
         return Scaffold(
           appBar: _buildAppBar(accounts),
-          drawer: _buildDrawer(context, accounts),
+          drawer: _selecting ? null : _buildDrawer(context, accounts),
+          bottomNavigationBar: _selecting ? _selectionBottomBar() : null,
           body: _buildBody(accountNames, showAccount),
-          floatingActionButton: FloatingActionButton(
-            onPressed: () => context.push('/compose'),
-            child: const Icon(Icons.edit),
-          ),
+          floatingActionButton: _selecting
+              ? null
+              : FloatingActionButton(
+                  onPressed: () => context.push('/compose'),
+                  child: const Icon(Icons.edit),
+                ),
         );
       },
     );
   }
 
   PreferredSizeWidget _buildAppBar(List<Account> accounts) {
+    if (_selecting) {
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: _clearSelection,
+        ),
+        title: Text('${_selectedThreadIds.length} selected'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.select_all),
+            tooltip: 'Select all',
+            onPressed: _selectAll,
+          ),
+        ],
+      );
+    }
+
     return AppBar(
       title: const Text('Combined Inbox'),
       actions: [
@@ -88,6 +125,26 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
           },
         ),
       ],
+    );
+  }
+
+  Widget _selectionBottomBar() {
+    return BottomAppBar(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.archive),
+            tooltip: 'Archive',
+            onPressed: _batchArchive,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'Delete',
+            onPressed: _batchDelete,
+          ),
+        ],
+      ),
     );
   }
 
@@ -176,6 +233,7 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           final threads = snap.data!;
+          _currentThreads = threads;
           if (threads.isEmpty) {
             return ListView(
               children: const [
@@ -207,116 +265,30 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
             child: const Text('Load more'),
           );
         }
-        return _buildThreadTile(ctx, threads[i], accountNames, showAccount);
+        final t = threads[i];
+        return EmailThreadTile(
+          thread: t,
+          isSelected: _selectedThreadIds.contains(t.threadId),
+          isSelecting: _selecting,
+          showAccount: showAccount,
+          accountName: accountNames[t.accountId],
+          onTap: _selecting
+              ? () => _toggleThreadSelection(t)
+              : t.messageCount > 1
+                  ? () => context.push(
+                        '/accounts/${t.accountId}/mailboxes'
+                        '/${Uri.encodeComponent(t.mailboxPath)}'
+                        '/threads/${Uri.encodeComponent(t.threadId)}',
+                      )
+                  : () => context.push(
+                        '/accounts/${t.accountId}/mailboxes'
+                        '/${Uri.encodeComponent(t.mailboxPath)}'
+                        '/emails/${Uri.encodeComponent(t.latestEmailId)}',
+                      ),
+          onLongPress: () => _toggleThreadSelection(t),
+          onDismissed: (direction) => _onSwipeDismissed(t, direction),
+        );
       },
-    );
-  }
-
-  Widget _buildThreadTile(
-    BuildContext ctx,
-    EmailThread t,
-    Map<String, String> accountNames,
-    bool showAccount,
-  ) {
-    final senderNames =
-        t.participants.map((a) => a.name ?? a.email).take(3).join(', ');
-
-    final tile = ListTile(
-      leading: Icon(
-        t.hasUnread ? Icons.mail : Icons.mail_outline,
-        color: t.hasUnread ? Theme.of(ctx).colorScheme.primary : null,
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              senderNames.isEmpty ? '(unknown)' : senderNames,
-              style: t.hasUnread
-                  ? const TextStyle(fontWeight: FontWeight.bold)
-                  : null,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (t.messageCount > 1)
-            Padding(
-              padding: const EdgeInsets.only(left: 4),
-              child: Text(
-                '[${t.messageCount}]',
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ),
-        ],
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            t.subject ?? '(no subject)',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: t.hasUnread
-                ? const TextStyle(fontWeight: FontWeight.bold)
-                : null,
-          ),
-          if (t.preview != null && t.preview!.isNotEmpty)
-            Text(
-              t.preview!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(ctx).textTheme.bodySmall,
-            ),
-          if (showAccount)
-            Text(
-              accountNames[t.accountId] ?? t.accountId,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(ctx).colorScheme.primary,
-                  ),
-            ),
-        ],
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (t.isFlagged)
-            const Icon(Icons.star, color: Colors.amber, size: 16),
-          const SizedBox(width: 4),
-          Text(
-            _fmtDate(t.latestDate),
-            style: Theme.of(ctx).textTheme.bodySmall,
-          ),
-        ],
-      ),
-      onTap: t.messageCount > 1
-          ? () => context.push(
-                '/accounts/${t.accountId}/mailboxes'
-                '/${Uri.encodeComponent(t.mailboxPath)}'
-                '/threads/${Uri.encodeComponent(t.threadId)}',
-              )
-          : () => context.push(
-                '/accounts/${t.accountId}/mailboxes'
-                '/${Uri.encodeComponent(t.mailboxPath)}'
-                '/emails/${Uri.encodeComponent(t.latestEmailId)}',
-              ),
-    );
-
-    return Dismissible(
-      key: ValueKey('${t.accountId}:${t.threadId}'),
-      background: _swipeBackground(
-        alignment: Alignment.centerLeft,
-        color: Colors.green,
-        icon: Icons.archive,
-        label: 'Archive',
-      ),
-      secondaryBackground: _swipeBackground(
-        alignment: Alignment.centerRight,
-        color: Colors.red,
-        icon: Icons.delete,
-        label: 'Delete',
-      ),
-      onDismissed: (direction) => unawaited(_onSwipeDismissed(t, direction)),
-      child: tile,
     );
   }
 
@@ -370,24 +342,81 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 
-  Widget _swipeBackground({
-    required AlignmentGeometry alignment,
-    required Color color,
-    required IconData icon,
-    required String label,
-  }) {
-    return Container(
-      color: color,
-      alignment: alignment,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white),
-          const SizedBox(width: 8),
-          Text(label, style: const TextStyle(color: Colors.white)),
-        ],
-      ),
-    );
+  Future<void> _batchArchive() async {
+    final repo = ref.read(emailRepositoryProvider);
+    final mailboxRepo = ref.read(mailboxRepositoryProvider);
+
+    // Group selected threads by accountId so we look up each account's archive once.
+    final byAccount = <String, List<EmailThread>>{};
+    for (final t in _currentThreads) {
+      if (!_selectedThreadIds.contains(t.threadId)) continue;
+      (byAccount[t.accountId] ??= []).add(t);
+    }
+
+    _clearSelection();
+
+    for (final entry in byAccount.entries) {
+      final accountId = entry.key;
+      final threads = entry.value;
+      final archive = await mailboxRepo.findMailboxByRole(accountId, 'archive');
+      if (!mounted || archive == null) continue;
+
+      for (final t in threads) {
+        final originalEmails = (await Future.wait(
+          t.emailIds.map((id) => repo.getEmail(id)),
+        ))
+            .whereType<Email>()
+            .toList();
+
+        for (final id in t.emailIds) {
+          await repo.moveEmail(id, archive.path);
+        }
+
+        final action = UndoAction(
+          id: DateTime.now().toIso8601String(),
+          accountId: accountId,
+          type: UndoType.move,
+          emailIds: t.emailIds,
+          sourceMailboxPath: t.mailboxPath,
+          destinationMailboxPath: archive.path,
+          originalEmails: originalEmails,
+        );
+        unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+      }
+    }
+  }
+
+  Future<void> _batchDelete() async {
+    final repo = ref.read(emailRepositoryProvider);
+
+    final selectedThreads = _currentThreads
+        .where((t) => _selectedThreadIds.contains(t.threadId))
+        .toList();
+
+    _clearSelection();
+
+    for (final t in selectedThreads) {
+      final originalEmails = (await Future.wait(
+        t.emailIds.map((id) => repo.getEmail(id)),
+      ))
+          .whereType<Email>()
+          .toList();
+
+      String? lastDestPath;
+      for (final id in t.emailIds) {
+        lastDestPath = await repo.deleteEmail(id);
+      }
+
+      final action = UndoAction(
+        id: DateTime.now().toIso8601String(),
+        accountId: t.accountId,
+        type: UndoType.delete,
+        emailIds: t.emailIds,
+        sourceMailboxPath: t.mailboxPath,
+        destinationMailboxPath: lastDestPath,
+        originalEmails: originalEmails,
+      );
+      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+    }
   }
 }
