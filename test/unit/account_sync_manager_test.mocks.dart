@@ -235,6 +235,31 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
           ),
         )),
       ) as _i5.Future<_i2.Mailbox>);
+
+  @override
+  _i5.Future<_i2.Mailbox> createMailbox(
+    String? accountId,
+    String? name,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #createMailbox,
+          [
+            accountId,
+            name,
+          ],
+        ),
+        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+          this,
+          Invocation.method(
+            #createMailbox,
+            [
+              accountId,
+              name,
+            ],
+          ),
+        )),
+      ) as _i5.Future<_i2.Mailbox>);
 }
 
 /// A class which mocks [EmailRepository].

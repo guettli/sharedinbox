@@ -343,11 +343,23 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
   }
 
+  @override
+  Future<model.Mailbox> createMailbox(String accountId, String name) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        return _createMailboxWithRoleImap(account, password, name, null);
+      case account_model.AccountType.jmap:
+        return _createMailboxWithRoleJmap(account, password, name, null);
+    }
+  }
+
   Future<model.Mailbox> _createMailboxWithRoleImap(
     account_model.Account account,
     String password,
     String name,
-    String role,
+    String? role,
   ) async {
     final client = await _imapConnect(
       account,
@@ -380,7 +392,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     account_model.Account account,
     String password,
     String name,
-    String role,
+    String? role,
   ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
@@ -398,7 +410,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
         {
           'accountId': jmap.accountId,
           'create': {
-            'new-mailbox': {'name': name, 'role': role},
+            'new-mailbox': {
+              'name': name,
+              if (role != null) 'role': role,
+            },
           },
         },
         '0',

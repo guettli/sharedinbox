@@ -67,6 +67,15 @@ class _FakeMailboxes implements MailboxRepository {
         unreadCount: 0,
         totalCount: 0,
       );
+  @override
+  Future<Mailbox> createMailbox(String accountId, String name) async => Mailbox(
+        id: '$accountId:$name',
+        accountId: accountId,
+        path: name,
+        name: name,
+        unreadCount: 0,
+        totalCount: 0,
+      );
 }
 
 class _CountingEmails implements EmailRepository {

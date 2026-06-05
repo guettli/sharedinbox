@@ -20,4 +20,8 @@ abstract class MailboxRepository {
     String name,
     String role,
   );
+
+  /// Creates a new mailbox named [name] for [accountId] without a special role.
+  /// Returns the newly created [Mailbox].
+  Future<Mailbox> createMailbox(String accountId, String name);
 }

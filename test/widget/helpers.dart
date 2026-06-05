@@ -192,6 +192,20 @@ class FakeMailboxRepository implements MailboxRepository {
     _mailboxes.add(mailbox);
     return mailbox;
   }
+
+  @override
+  Future<Mailbox> createMailbox(String accountId, String name) async {
+    final mailbox = Mailbox(
+      id: '$accountId:$name',
+      accountId: accountId,
+      path: name,
+      name: name,
+      unreadCount: 0,
+      totalCount: 0,
+    );
+    _mailboxes.add(mailbox);
+    return mailbox;
+  }
 }
 
 class FakeEmailRepository implements EmailRepository {

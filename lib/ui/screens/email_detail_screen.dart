@@ -563,6 +563,42 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  Future<String?> _promptNewFolderName(BuildContext context) async {
+    final controller = TextEditingController();
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Create new folder'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'Folder name'),
+            textCapitalization: TextCapitalization.words,
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) Navigator.pop(ctx, value.trim());
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = controller.text.trim();
+                if (name.isNotEmpty) Navigator.pop(ctx, name);
+              },
+              child: const Text('Create'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> _moveTo(BuildContext context, Email header) async {
     final nextEmailId = await _getNextEmailIdIfNeeded(header);
 
@@ -575,6 +611,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         mailboxes.where((m) => m.path != header.mailboxPath).toList();
 
     if (!context.mounted) return;
+
+    const createNewSentinel = '__create_new__';
 
     final chosen = await showModalBottomSheet<String>(
       context: context,
@@ -593,13 +631,28 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               title: Text(m.name),
               onTap: () => Navigator.pop(ctx, m.path),
             ),
+          ListTile(
+            leading: const Icon(Icons.create_new_folder_outlined),
+            title: const Text('Create new folder…'),
+            onTap: () => Navigator.pop(ctx, createNewSentinel),
+          ),
         ],
       ),
     );
 
     if (chosen == null || !context.mounted) return;
 
-    await ref.read(emailRepositoryProvider).moveEmail(widget.emailId, chosen);
+    String destination = chosen;
+    if (chosen == createNewSentinel) {
+      final name = await _promptNewFolderName(context);
+      if (name == null || !context.mounted) return;
+      final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
+      destination = mailbox.path;
+    }
+
+    await ref
+        .read(emailRepositoryProvider)
+        .moveEmail(widget.emailId, destination);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -609,7 +662,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               type: UndoType.move,
               emailIds: [widget.emailId],
               sourceMailboxPath: header.mailboxPath,
-              destinationMailboxPath: chosen,
+              destinationMailboxPath: destination,
             ),
           ),
     );
