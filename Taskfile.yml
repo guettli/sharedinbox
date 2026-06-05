@@ -408,7 +408,7 @@ tasks:
         echo "Uploaded $TARBALL and updated latest.json"
 
   deploy-bugreport:
-    desc: Build and deploy the Go bugreport server to the webserver
+    desc: Deploy the Go bugreport server by restarting the systemd service (it pulls latest code from Codeberg)
     preconditions:
       - sh: test -n "$SSH_USER"
         msg: "SSH_USER is not set"
@@ -417,14 +417,11 @@ tasks:
       - sh: test -n "$SSH_KNOWN_HOSTS"
         msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - cd server/bugreport && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../build/bugreport-server .
       - |
         mkdir -p ~/.ssh
         printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-        ssh "$SSH_USER@$SSH_HOST" "mkdir -p bugreport/reports"
-        scp build/bugreport-server "$SSH_USER@$SSH_HOST:bugreport/bugreport-server"
-        ssh "root@$SSH_HOST" "systemctl daemon-reload && systemctl restart bugreport"
-        echo "Uploaded bugreport-server to $SSH_HOST and restarted service"
+        ssh "root@$SSH_HOST" "systemctl restart bugreport"
+        echo "Restarted bugreport service on $SSH_HOST to pull latest code from Codeberg"
 
   build-windows-release:
     desc: Build the Windows desktop app (release) — must run on a Windows machine with MSVC

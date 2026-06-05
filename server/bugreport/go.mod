@@ -1,3 +1,3 @@
-module sharedinbox.de/bugreport
+module codeberg.org/guettli/sharedinbox/server/bugreport
 
 go 1.21
