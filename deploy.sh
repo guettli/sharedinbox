@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+[ "$(id -u)" != "0" ] || { echo "ERROR: Do not run as root. See DEVELOPMENT.md."; exit 1; }
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Load .env into environment

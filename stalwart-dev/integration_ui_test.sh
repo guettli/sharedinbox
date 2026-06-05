@@ -5,6 +5,7 @@
 #
 # Run inside nix develop: stalwart-dev/integration_ui_test.sh
 set -Eeuo pipefail
+[ "$(id -u)" != "0" ] || { echo "ERROR: Do not run as root. See DEVELOPMENT.md."; exit 1; }
 
 # Timing helper: prints elapsed seconds since script start with a label.
 _SCRIPT_START=$(date +%s%3N)

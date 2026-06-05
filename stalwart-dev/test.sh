@@ -2,6 +2,7 @@
 # Starts Stalwart in the background on fresh random ports, runs Flutter
 # integration tests, then stops it.
 set -Eeuo pipefail
+[ "$(id -u)" != "0" ] || { echo "ERROR: Do not run as root. See DEVELOPMENT.md."; exit 1; }
 trap 'echo "Warning: A command failed ($0:$LINENO)"; exit 3' ERR
 
 export STALWART_USER_B="${STALWART_USER_B:-alice@example.com}"

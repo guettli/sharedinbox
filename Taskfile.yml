@@ -37,6 +37,8 @@ tasks:
     run: once
     deps: [_nix-check]
     preconditions:
+      - sh: '[ "$(id -u)" != "0" ]'
+        msg: "Do not run as root. Use the dedicated dev user (see DEVELOPMENT.md)."
       - sh: test -n "${IN_NIX_SHELL}"
         msg: "Not in nix dev shell. Run: nix develop"
     cmds:

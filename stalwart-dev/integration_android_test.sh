@@ -7,6 +7,7 @@
 # Run inside nix develop:
 #   stalwart-dev/integration_android_test.sh
 set -Eeuo pipefail
+[ "$(id -u)" != "0" ] || { echo "ERROR: Do not run as root. See DEVELOPMENT.md."; exit 1; }
 
 _SCRIPT_START=$(date +%s%3N)
 ts() { echo "[$(( $(date +%s%3N) - _SCRIPT_START ))ms] $*"; }

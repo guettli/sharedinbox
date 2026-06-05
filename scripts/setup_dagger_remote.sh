@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+[ "${CI:-}" = "true" ] || [ "$(id -u)" != "0" ] || { echo "ERROR: Do not run as root. See DEVELOPMENT.md."; exit 1; }
 
 if [ -z "${SOPS_AGE_KEY:-}" ]; then
     echo "Error: SOPS_AGE_KEY must be set."
@@ -50,6 +51,7 @@ export_secret "RENOVATE_FORGEJO_TOKEN"
 # Setup SSH directory and keys
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
+rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
