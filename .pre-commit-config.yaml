@@ -32,7 +32,7 @@ repos:
       - id: dart-check
         name: dart format (autofix) + check-fast (parallel)
         language: system
-        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command scripts/pre_commit_check.sh'
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command dagger call --progress=plain -q -m ci --source=. check-fast'
         pass_filenames: false
         always_run: true
       - id: ci-no-direct-dagger

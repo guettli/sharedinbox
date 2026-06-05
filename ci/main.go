@@ -440,6 +440,68 @@ func (m *Ci) Format(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// FormatWrite formats Dart files and exports the modified /src directory.
+func (m *Ci) FormatWrite() *dagger.Directory {
+	return m.setup(m.checkSrc()).
+		WithExec([]string{"dart", "format", "lib", "test"}).
+		Directory("/src")
+}
+
+// Analyze runs static analysis with dart analyze --fatal-infos.
+func (m *Ci) Analyze(ctx context.Context) (string, error) {
+	return m.setup(m.checkSrc()).
+		WithExec([]string{"dart", "analyze", "--fatal-infos"}).
+		Stdout(ctx)
+}
+
+// Codegen runs build_runner and exports the modified /src directory.
+func (m *Ci) Codegen() *dagger.Directory {
+	return m.codegenBase().Directory("/src")
+}
+
+// AnalyzeFix runs dart fix --apply and exports the modified /src directory.
+func (m *Ci) AnalyzeFix() *dagger.Directory {
+	return m.setup(m.checkSrc()).
+		WithExec([]string{"dart", "fix", "--apply"}).
+		Directory("/src")
+}
+
+// CheckFast runs fast checks (hygiene, layers, format, analyze, mocks, coverage) in parallel.
+func (m *Ci) CheckFast(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		_, err := m.CheckHygiene(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.Format(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.Analyze(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.CheckGenerated(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.Coverage(ctx)
+		return err
+	})
+	if err := eg.Wait(); err != nil {
+		return "", err
+	}
+	return "All fast checks passed!", nil
+}
+
 // CheckGenerated verifies that all generated files (*.g.dart, *.mocks.dart) are up to date.
 // It snapshots the committed source (including any stale generated files) before
 // running build_runner, so git diff detects real staleness instead of always

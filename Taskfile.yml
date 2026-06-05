@@ -96,34 +96,19 @@ tasks:
       - scripts/silent_on_success.sh fvm flutter pub run build_runner build --delete-conflicting-outputs
 
   codegen:
-    desc: Generate Drift DB code (run after any schema change)
-    deps: [_preflight, _pub-get]
-    sources:
-      - lib/**/*.dart
-      - pubspec.yaml
-    generates:
-      - lib/**/*.g.dart
+    desc: Generate Drift DB code via Dagger (exports generated files back to host)
     cmds:
-      - fvm flutter pub run build_runner build --delete-conflicting-outputs
+      - dagger call --progress=plain -q -m ci --source=. codegen -o .
 
   analyze:
-    desc: Static analysis (flutter analyze)
-    deps: [_preflight, _codegen]
-    sources:
-      - lib/**/*.dart
-      - test/**/*.dart
-      - pubspec.yaml
-      - analysis_options.yaml
+    desc: Static analysis via Dagger (dart analyze --fatal-infos)
     cmds:
-      - scripts/run_analyze.sh
+      - dagger call --progress=plain -q -m ci --source=. analyze
 
   format:
-    desc: Format all Dart source files
-    deps: [_preflight]
-    sources:
-      - "**/*.dart"
+    desc: Format all Dart source files via Dagger (writes back to host)
     cmds:
-      - fvm dart format lib test
+      - dagger call --progress=plain -q -m ci --source=. format-write -o .
 
   check-mocks:
     desc: Fail if any *.mocks.dart file is out of date (re-runs build_runner)
@@ -136,13 +121,9 @@ tasks:
       - scripts/check_mocks_fresh.sh
 
   analyze-fix:
-    desc: Auto-fix lint issues with dart fix --apply
-    deps: [_preflight]
-    sources:
-      - lib/**/*.dart
-      - test/**/*.dart
+    desc: Auto-fix lint issues via Dagger (dart fix --apply, writes back to host)
     cmds:
-      - fvm dart fix --apply
+      - dagger call --progress=plain -q -m ci --source=. analyze-fix -o .
 
   test:
     desc: Unit tests + coverage gate (fails if any non-excluded lib/ file is missing)
@@ -690,8 +671,9 @@ tasks:
           ${SSH_USER}@${SSH_HOST}:public_html/
 
   check-fast:
-    desc: Pre-commit checks — analyze + unit+widget tests + coverage gate (no build, no integration)
-    deps: [analyze, check-coverage, check-hygiene, check-layers, check-mocks]
+    desc: Pre-commit checks via Dagger (format, analyze, mocks, coverage — no integration or backend)
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. check-fast
 
   check-layers:
     desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed)
