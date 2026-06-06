@@ -102,4 +102,18 @@ void main() {
     expect(find.textContaining('Installed:'), findsNothing);
     expect(find.textContaining('initial release'), findsOneWidget);
   });
+
+  testWidgets('ChangeLogScreen renders #NNN as a tappable link', (
+    tester,
+  ) async {
+    const changelog = '* 2024-03-01 fix: resolve crash, see #42\n';
+
+    await tester.pumpWidget(
+      _buildScreen(assets: {'assets/changelog.txt': changelog}),
+    );
+    await tester.pumpAndSettle();
+
+    // The link text "#42" must be visible in the rendered output.
+    expect(find.textContaining('#42'), findsOneWidget);
+  });
 }

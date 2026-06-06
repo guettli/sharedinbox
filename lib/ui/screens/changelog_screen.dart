@@ -31,6 +31,17 @@ class ChangeLogScreen extends ConsumerWidget {
     return '$h:$m, ${dt.day} $month ${dt.year}';
   }
 
+  static const _repoUrl = 'https://codeberg.org/guettli/sharedinbox';
+
+  static final _issueRefPattern = RegExp(r'#(\d+)');
+
+  static String _linkifyIssueRefs(String text) {
+    return text.replaceAllMapped(
+      _issueRefPattern,
+      (m) => '[#${m[1]}]($_repoUrl/issues/${m[1]})',
+    );
+  }
+
   // Changelog lines have the form:
   //   * 2026-06-05 [abc1234](https://...): subject
   // This pattern captures the short hash inside the markdown link.
@@ -82,7 +93,8 @@ class ChangeLogScreen extends ConsumerWidget {
               child: Text('Error loading changelog: ${snapshot.error}'),
             );
           }
-          final content = snapshot.data ?? 'No changelog entries found.';
+          final raw = snapshot.data ?? 'No changelog entries found.';
+          final content = _linkifyIssueRefs(raw);
           final versions = installedVersions.value ?? {};
           final annotated = _injectInstallMarkers(content, versions);
           return Markdown(
