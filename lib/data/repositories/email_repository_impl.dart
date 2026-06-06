@@ -2934,6 +2934,60 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailRows = await Future.wait(
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
+
+    final noteRows = await _searchEmailsByNotes(accountId, null, query);
+
+    final seen = <String>{};
+    final merged = <model.Email>[];
+    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+      if (seen.add(e.id)) merged.add(e);
+    }
+    return merged;
+  }
+
+  /// Returns emails whose associated notes contain all words from [query].
+  /// Optionally filtered by [accountId] and [mailboxPath].
+  Future<List<model.Email>> _searchEmailsByNotes(
+    String? accountId,
+    String? mailboxPath,
+    String query,
+  ) async {
+    final words = query
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    if (words.isEmpty) return [];
+
+    final noteConditions = words.map((_) => 'n.note_text LIKE ?').join(' AND ');
+    final likeVars =
+        words.map((w) => Variable<String>('%$w%')).toList();
+
+    final extraConditions = StringBuffer();
+    final extraVars = <Variable<String>>[];
+    if (accountId != null) {
+      extraConditions.write(' AND e.account_id = ?');
+      extraVars.add(Variable<String>(accountId));
+    }
+    if (mailboxPath != null) {
+      extraConditions.write(' AND e.mailbox_path = ?');
+      extraVars.add(Variable<String>(mailboxPath));
+    }
+
+    final sql = 'SELECT DISTINCT e.* FROM emails e'
+        ' JOIN email_notes n ON n.message_id = e.message_id'
+        ' AND n.account_id = e.account_id'
+        ' WHERE $noteConditions$extraConditions'
+        ' ORDER BY e.received_at DESC LIMIT 50';
+
+    final rows = await _db
+        .customSelect(
+          sql,
+          variables: [...likeVars, ...extraVars],
+          readsFrom: {_db.emails, _db.emailNotes},
+        )
+        .get();
+    final emailRows = await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();
   }
 
@@ -3069,7 +3123,16 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailRows = await Future.wait(
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
-    return emailRows.map(_toModel).toList();
+
+    final noteRows =
+        await _searchEmailsByNotes(accountId, mailboxPath, query);
+
+    final seen = <String>{};
+    final merged = <model.Email>[];
+    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+      if (seen.add(e.id)) merged.add(e);
+    }
+    return merged;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

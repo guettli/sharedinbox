@@ -486,6 +486,96 @@ void main() {
       expect(results.first.mailboxPath, 'INBOX');
     });
 
+    test('searchEmailsGlobal includes emails matched by note text', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Email whose subject does NOT match — but its note does.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              messageId: const Value('<msg1@example.com>'),
+              subject: const Value('Weekly report'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      // Add a note referencing the email's messageId.
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-1',
+              accountId: 'acc-1',
+              messageId: '<msg1@example.com>',
+              noteText: 'Urgent follow-up needed',
+              serverId: '42',
+              createdAt: DateTime(2024),
+            ),
+          );
+
+      final results =
+          await r.emails.searchEmailsGlobal(null, 'urgent');
+      expect(results, hasLength(1));
+      expect(results.first.subject, 'Weekly report');
+    });
+
+    test('searchEmails includes emails matched by note text in mailbox',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              messageId: const Value('<msg1@example.com>'),
+              subject: const Value('Project update'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      // Email in a different mailbox — its note must not appear in INBOX search.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 2,
+              messageId: const Value('<msg2@example.com>'),
+              subject: const Value('Other email'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-1',
+              accountId: 'acc-1',
+              messageId: '<msg1@example.com>',
+              noteText: 'remember to call client',
+              serverId: '42',
+              createdAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-2',
+              accountId: 'acc-1',
+              messageId: '<msg2@example.com>',
+              noteText: 'remember to call client',
+              serverId: '43',
+              createdAt: DateTime(2024),
+            ),
+          );
+
+      final results =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'client');
+      expect(results, hasLength(1));
+      expect(results.first.subject, 'Project update');
+      expect(results.first.mailboxPath, 'INBOX');
+    });
+
     test(
       'searchAddresses returns results sorted by most recently used',
       () async {
