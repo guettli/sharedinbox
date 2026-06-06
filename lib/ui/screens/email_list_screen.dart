@@ -55,6 +55,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // generation has advanced (prevents out-of-order IMAP responses from
   // overwriting fresh results with results for an older query).
   int _searchGeneration = 0;
+  // The query whose results are currently settled in _searchResults.
+  // Used to skip redundant re-runs when the user presses Enter on an
+  // already-settled search (issue #473).
+  String? _lastSettledQuery;
   bool get _selecting =>
       _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
@@ -66,6 +70,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         setState(() {
           _searchResults = null;
           _searchLoading = false;
+          _lastSettledQuery = null;
         });
       }
     });
@@ -122,8 +127,17 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Future<void> _runSearch(String query) async {
-    if (query.trim().isEmpty) {
-      setState(() => _searchResults = null);
+    final q = query.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _searchResults = null;
+        _lastSettledQuery = null;
+      });
+      return;
+    }
+    // Skip if results are already settled for this exact query — prevents the
+    // Enter key from re-triggering an IMAP search that already completed.
+    if (_searchResults != null && !_searchLoading && q == _lastSettledQuery) {
       return;
     }
     final generation = ++_searchGeneration;
@@ -131,9 +145,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     try {
       final results = await ref
           .read(emailRepositoryProvider)
-          .searchEmails(widget.accountId, widget.mailboxPath, query.trim());
+          .searchEmails(widget.accountId, widget.mailboxPath, q);
       if (mounted && generation == _searchGeneration) {
-        setState(() => _searchResults = results);
+        setState(() {
+          _searchResults = results;
+          _lastSettledQuery = q;
+        });
       }
     } finally {
       if (mounted && generation == _searchGeneration) {

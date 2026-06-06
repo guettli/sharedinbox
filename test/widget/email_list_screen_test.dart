@@ -554,6 +554,69 @@ void main() {
       },
     );
 
+    testWidgets(
+      'pressing Enter on already-settled search does not re-run search (issue #473)',
+      (tester) async {
+        final email1 = testEmail(id: 'acc-1:1', subject: 'Alpha Match');
+        final email2 = testEmail(id: 'acc-1:2', subject: 'Beta Match');
+
+        var searchCallCount = 0;
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  onSearch: (_) async {
+                    searchCallCount++;
+                    return [email1, email2];
+                  },
+                  emailBody: const EmailBody(emailId: '', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Run the initial search.
+        await tester.enterText(find.byType(TextField), 'Match');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Alpha Match'), findsOneWidget);
+        expect(find.text('Beta Match'), findsOneWidget);
+
+        final countAfterFirstSearch = searchCallCount;
+
+        // Re-focus the search bar (simulates user tapping back into the field
+        // with the keyboard still visible) and press Enter again on the same,
+        // already-settled query.
+        await tester.tap(find.byType(TextField));
+        await tester.pump();
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        // The search must NOT re-run; call count must not increase.
+        expect(
+          searchCallCount,
+          countAfterFirstSearch,
+          reason:
+              'Enter on settled results must not re-run the search (issue #473)',
+        );
+        // Results must still be visible — no loading spinner.
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(find.text('Alpha Match'), findsOneWidget);
+      },
+    );
+
     testWidgets('deleting all search results pops back to previous screen', (
       tester,
     ) async {
