@@ -294,6 +294,10 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
   );
 });
 
+final installedVersionsProvider = FutureProvider<Map<String, DateTime>>((ref) {
+  return ref.watch(dbProvider).loadInstalledVersions();
+});
+
 /// Stream of notes for a specific email, identified by (accountId, messageId).
 final notesProvider =
     StreamProvider.autoDispose.family<List<EmailNote>, (String, String)>(

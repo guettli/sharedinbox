@@ -86,6 +86,8 @@ class SharedInboxApp extends ConsumerStatefulWidget {
   ConsumerState<SharedInboxApp> createState() => _SharedInboxAppState();
 }
 
+const _kGitHash = String.fromEnvironment('GIT_HASH');
+
 class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
   @override
   void initState() {
@@ -93,6 +95,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
     ref.read(reliabilityRunnerProvider).start();
+    if (_kGitHash.isNotEmpty) {
+      unawaited(
+        ref.read(dbProvider).recordInstalledVersionIfNew(_kGitHash),
+      );
+    }
   }
 
   @override

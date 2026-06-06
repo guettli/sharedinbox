@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 39);
+      expect(db.schemaVersion, 40);
       await db.close();
     });
 
@@ -427,12 +427,15 @@ void main() {
         // v39: email_notes table.
         await db.customSelect('SELECT count(*) FROM email_notes').get();
 
+        // v40: installed_versions table.
+        await db.customSelect('SELECT count(*) FROM installed_versions').get();
+
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();
       },
     );
 
-    test('fresh install creates all tables at schemaVersion 39', () async {
+    test('fresh install creates all tables at schemaVersion 40', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -462,6 +465,7 @@ void main() {
           'user_preferences', // v34
           'image_trusted_senders', // v37
           'email_notes', // v39
+          'installed_versions', // v40
         ]),
       );
 
@@ -499,6 +503,9 @@ void main() {
 
       // v39: email_notes table.
       await db.customSelect('SELECT count(*) FROM email_notes').get();
+
+      // v40: installed_versions table.
+      await db.customSelect('SELECT count(*) FROM installed_versions').get();
 
       await db.close();
     });

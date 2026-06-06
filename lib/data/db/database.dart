@@ -338,6 +338,17 @@ class EmailNotes extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Records the first time the user ran each app version (identified by GIT_HASH).
+/// Added in schema v40.
+@DataClassName('InstalledVersionRow')
+class InstalledVersions extends Table {
+  TextColumn get gitHash => text()();
+  DateTimeColumn get installedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {gitHash};
+}
+
 /// App-wide user preferences, stored as a singleton row (id always 1).
 @DataClassName('UserPreferencesRow')
 class UserPreferences extends Table {
@@ -384,6 +395,7 @@ class UserPreferences extends Table {
     UserPreferences,
     ImageTrustedSenders,
     EmailNotes,
+    InstalledVersions,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -663,8 +675,30 @@ class AppDatabase extends _$AppDatabase {
           if (from < 39) {
             await m.createTable(emailNotes);
           }
+          if (from < 40) {
+            await m.createTable(installedVersions);
+          }
         },
       );
+
+  /// Inserts a row for [gitHash] the first time that version is seen.
+  /// Subsequent calls for the same hash are silently ignored so the original
+  /// install timestamp is preserved.
+  Future<void> recordInstalledVersionIfNew(String gitHash) async {
+    if (gitHash.isEmpty) return;
+    await into(installedVersions).insert(
+      InstalledVersionsCompanion.insert(
+        gitHash: gitHash,
+        installedAt: DateTime.now(),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
+  }
+
+  Future<Map<String, DateTime>> loadInstalledVersions() async {
+    final rows = await select(installedVersions).get();
+    return {for (final r in rows) r.gitHash: r.installedAt};
+  }
 }
 
 // Resolved once in main() via initDatabasePath() before runApp().
