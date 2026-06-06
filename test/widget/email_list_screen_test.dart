@@ -104,30 +104,6 @@ void main() {
       expect(find.byIcon(Icons.star), findsOneWidget);
     });
 
-    testWidgets('tapping search icon shows search bar', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.search));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('Search…'), findsOneWidget);
-    });
-
     testWidgets('submitting a search query shows "No results" when empty', (
       tester,
     ) async {

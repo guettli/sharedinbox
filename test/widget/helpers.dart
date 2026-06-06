@@ -580,6 +580,7 @@ Widget buildApp({
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
+        splashFactory: NoSplash.splashFactory,
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -587,6 +588,7 @@ Widget buildApp({
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        splashFactory: NoSplash.splashFactory,
       ),
     ),
   );
