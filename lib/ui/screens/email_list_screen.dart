@@ -50,6 +50,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // Pagination: number of threads currently requested from the DB.
   static const _pageSize = 50;
   int _limit = _pageSize;
+
+  // Incremented on every search start; stale completions are ignored when the
+  // generation has advanced (prevents out-of-order IMAP responses from
+  // overwriting fresh results with results for an older query).
+  int _searchGeneration = 0;
   bool get _selecting =>
       _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
@@ -121,14 +126,19 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       setState(() => _searchResults = null);
       return;
     }
+    final generation = ++_searchGeneration;
     setState(() => _searchLoading = true);
     try {
       final results = await ref
           .read(emailRepositoryProvider)
           .searchEmails(widget.accountId, widget.mailboxPath, query.trim());
-      if (mounted) setState(() => _searchResults = results);
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchResults = results);
+      }
     } finally {
-      if (mounted) setState(() => _searchLoading = false);
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchLoading = false);
+      }
     }
   }
 

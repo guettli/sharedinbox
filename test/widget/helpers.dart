@@ -216,12 +216,17 @@ class FakeEmailRepository implements EmailRepository {
 
   final List<Email> _searchResults;
 
+  /// Optional override: when set, [searchEmails] calls this instead of
+  /// returning [_searchResults]. Useful for testing race-condition fixes.
+  final Future<List<Email>> Function(String query)? onSearch;
+
   FakeEmailRepository({
     List<Email>? emails,
     Email? emailDetail,
     EmailBody? emailBody,
     List<Email>? searchResults,
     String rawRfc822 = '',
+    this.onSearch,
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
@@ -274,7 +279,15 @@ class FakeEmailRepository implements EmailRepository {
       Stream.value(_emails.where((e) => e.threadId == threadId).toList());
 
   @override
-  Future<Email?> getEmail(String emailId) async => _emailDetail;
+  Future<Email?> getEmail(String emailId) async {
+    for (final e in _searchResults) {
+      if (e.id == emailId) return e;
+    }
+    for (final e in _emails) {
+      if (e.id == emailId) return e;
+    }
+    return _emailDetail;
+  }
 
   @override
   Future<EmailBody> getEmailBody(String emailId) async => _emailBody;
@@ -340,8 +353,10 @@ class FakeEmailRepository implements EmailRepository {
     String accountId,
     String mailboxPath,
     String query,
-  ) async =>
-      _searchResults;
+  ) async {
+    if (onSearch != null) return onSearch!(query);
+    return _searchResults;
+  }
 
   @override
   Future<List<Email>> searchEmailsGlobal(

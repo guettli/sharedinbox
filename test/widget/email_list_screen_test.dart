@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -429,6 +431,128 @@ void main() {
       // Navigated to email detail (subject appears in the detail body)
       expect(find.text('Result email'), findsWidgets);
     });
+
+    testWidgets(
+      'tapping first of multiple search results opens the first email',
+      (tester) async {
+        final email1 = testEmail(id: 'acc-1:1', subject: 'Alpha Match');
+        final email2 = testEmail(id: 'acc-1:2', subject: 'Beta Match');
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  searchResults: [email1, email2],
+                  emailBody: const EmailBody(emailId: '', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(find.byType(TextField), 'Match');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Alpha Match'), findsOneWidget);
+        expect(find.text('Beta Match'), findsOneWidget);
+
+        // Tap the first result.
+        await tester.tap(find.text('Alpha Match'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        // The detail AppBar title shows the first email's subject.
+        expect(
+          find.descendant(
+            of: find.byType(AppBar),
+            matching: find.text('Alpha Match'),
+          ),
+          findsOneWidget,
+        );
+        // The second email's subject must not appear in the detail view.
+        expect(
+          find.descendant(
+            of: find.byType(EmailDetailScreen),
+            matching: find.text('Beta Match'),
+          ),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'stale search results from a slower concurrent search are discarded',
+      (tester) async {
+        // Reproduces: user types quickly, triggering multiple concurrent IMAP
+        // searches. An older, slower search must not overwrite the results for
+        // the user's current query (issue #467).
+        final staleEmail = testEmail(id: 'acc-1:1', subject: 'Stale Result');
+        final freshEmail = testEmail(id: 'acc-1:2', subject: 'Fresh Result');
+
+        // The first search call is held open by a Completer; all subsequent
+        // calls resolve immediately with freshEmail.
+        final staleCompleter = Completer<List<Email>>();
+        var firstCall = true;
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  onSearch: (_) {
+                    if (firstCall) {
+                      firstCall = false;
+                      return staleCompleter.future;
+                    }
+                    return Future.value([freshEmail]);
+                  },
+                  emailBody: const EmailBody(emailId: '', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger the first (slow) search.
+        await tester.enterText(find.byType(TextField), 'slow');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        // Do not pumpAndSettle yet — the slow search is still in flight.
+
+        // Trigger the second (fast) search by changing the query.
+        await tester.enterText(find.byType(TextField), 'fast');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle(); // fast searches settle immediately
+
+        // The fresh results must be shown.
+        expect(find.text('Fresh Result'), findsOneWidget);
+        expect(find.text('Stale Result'), findsNothing);
+
+        // Now let the stale search complete.
+        staleCompleter.complete([staleEmail]);
+        await tester.pumpAndSettle();
+
+        // The stale results must NOT replace the fresh ones.
+        expect(find.text('Fresh Result'), findsOneWidget);
+        expect(find.text('Stale Result'), findsNothing);
+      },
+    );
 
     testWidgets('deleting all search results pops back to previous screen', (
       tester,
