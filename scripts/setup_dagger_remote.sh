@@ -17,12 +17,25 @@ sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
 DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
 
+# Register inline secrets for log redaction. Multiline values (e.g. SSH keys)
+# must be masked line-by-line because ::add-mask:: covers one line at a time.
+printf '::add-mask::%s\n' "$DAGGER_ENGINE_HOST"
+while IFS= read -r line; do
+    [ -n "$line" ] && printf '::add-mask::%s\n' "$line"
+done <<< "$DAGGER_SSH_KEY"
+
 # Export all CI secrets to the GitHub Actions environment so subsequent steps
 # can use them without referencing Forgejo secrets directly.
 export_secret() {
     local name="$1"
     local value
     value=$(jq -r --arg k "$name" '.[$k] // empty' "$SECRETS_JSON")
+    # Register each non-empty line for log redaction in the Actions runner.
+    if [ -n "$value" ] && [ -n "${GITHUB_ENV:-}" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && printf '::add-mask::%s\n' "$line"
+        done <<< "$value"
+    fi
     if [ -n "${GITHUB_ENV:-}" ]; then
         # Use heredoc syntax for multiline-safe export.
         # Avoid adding a second trailing newline for values that already end with one
