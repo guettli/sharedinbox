@@ -81,7 +81,7 @@ dev_dependencies:
   sqlite3: ^3.1.5  # used directly in test/unit/db_test_helper.dart; 3.x required for Database.close()
   url_launcher_platform_interface: ^2.3.2
   plugin_platform_interface: ^2.1.8
-  flutter_launcher_icons: ^0.13.1
+  flutter_launcher_icons: ^0.14.0
 
 flutter_icons:
   android: "ic_launcher"
