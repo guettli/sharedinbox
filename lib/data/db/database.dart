@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/db_schema_version.dart';
+import 'package:sqlite3/sqlite3.dart' show Database;
 
 part 'database.g.dart';
 
@@ -793,18 +794,34 @@ Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
 void resetDatabasePathForTesting() => _dbPath = null;
 Future<String?> androidFallbackPathForTesting() => _androidFallbackPath();
 
+/// Configures PRAGMAs on a newly opened SQLite connection.
+///
+/// busy_timeout must come first so subsequent statements retry on SQLITE_BUSY
+/// instead of immediately failing.
+///
+/// journal_mode = WAL is wrapped in a try/catch because a concurrent
+/// WorkManager background task may already have the DB open when the app
+/// starts.  SQLITE_BUSY_SNAPSHOT (extended code 261, primary code 5) is
+/// returned in that situation; it only occurs when the DB is already in WAL
+/// mode, so the pragma would be a no-op anyway and it is safe to continue.
+void _setupPragmas(Database db) {
+  db.execute('PRAGMA busy_timeout = 5000;');
+  try {
+    db.execute('PRAGMA journal_mode = WAL;');
+  } on SqliteException catch (e) {
+    // resultCode strips the extended bits: both SQLITE_BUSY (5) and
+    // SQLITE_BUSY_SNAPSHOT (261) reduce to 5.  Re-throw anything else.
+    if (e.resultCode != 5) rethrow;
+  }
+}
+
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final file = File(await _resolveDatabasePath());
-    return NativeDatabase.createInBackground(
-      file,
-      setup: (db) {
-        // WAL lets readers and writers proceed concurrently (different account
-        // sync loops share the same DB).  busy_timeout makes SQLite retry for
-        // up to 5 s instead of immediately returning SQLITE_BUSY.
-        db.execute('PRAGMA journal_mode = WAL;');
-        db.execute('PRAGMA busy_timeout = 5000;');
-      },
-    );
+    return NativeDatabase.createInBackground(file, setup: _setupPragmas);
   });
 }
+
+// Exposed so tests can run the exact production setup logic on a raw
+// sqlite3 connection (same pattern as resolveDatabasePathForTesting).
+void setupPragmasForTesting(Database db) => _setupPragmas(db);

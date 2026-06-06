@@ -510,4 +510,40 @@ void main() {
       await db.close();
     });
   });
+
+  // Regression test for https://codeberg.org/guettli/sharedinbox/issues/508:
+  // _openConnection's setup callback must not crash when PRAGMA journal_mode =
+  // WAL fails with SQLITE_BUSY_SNAPSHOT (extended code 261, primary code 5)
+  // because a WorkManager background task already has the DB open in WAL mode.
+  group('WAL setup (#508)', () {
+    test(
+      'setupPragmasForTesting does not throw when WAL is already active and '
+      'another connection holds an open read transaction',
+      () {
+        final dbFile = File('test_wal_busy_508.db');
+        if (dbFile.existsSync()) dbFile.deleteSync();
+        addTearDown(() {
+          if (dbFile.existsSync()) dbFile.deleteSync();
+        });
+
+        // conn1: enable WAL and keep a read transaction open — simulates a
+        // WorkManager background task that opened the DB before the foreground
+        // app starts.
+        final conn1 = sqlite.sqlite3.open(dbFile.path);
+        conn1.execute('PRAGMA journal_mode = WAL;');
+        conn1.execute('BEGIN;');
+        conn1.select('SELECT 1;');
+
+        // conn2: run the exact production setup through setupPragmasForTesting.
+        // This must not throw even though conn1 holds an open transaction and
+        // the DB is already in WAL mode.
+        final conn2 = sqlite.sqlite3.open(dbFile.path);
+        expect(() => setupPragmasForTesting(conn2), returnsNormally);
+
+        conn1.execute('ROLLBACK;');
+        conn1.dispose();
+        conn2.dispose();
+      },
+    );
+  });
 }
