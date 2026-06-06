@@ -76,11 +76,12 @@ if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
 
-# Create a background SSH tunnel to the Dagger engine.
-# We map local port 8080 to remote port 1774 (where our socat bridge is listening).
+# Create a background SSH tunnel to the Dagger engine Unix socket.
+# Forwards local TCP port 8080 directly to /run/dagger/engine.sock on the remote host,
+# eliminating the need for a socat bridge on the server side.
 echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
 _t0=$SECONDS
-timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:localhost:1774 "dagger@$DAGGER_ENGINE_HOST"
+timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST"
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::SSH tunnel setup took ${_elapsed}s"
