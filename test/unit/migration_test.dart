@@ -541,8 +541,8 @@ void main() {
         expect(() => setupPragmasForTesting(conn2), returnsNormally);
 
         conn1.execute('ROLLBACK;');
-        conn1.dispose();
-        conn2.dispose();
+        conn1.close();
+        conn2.close();
       },
     );
   });
