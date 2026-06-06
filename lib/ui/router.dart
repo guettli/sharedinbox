@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/models/undo_action.dart';
 
 import 'package:sharedinbox/ui/screens/about_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
@@ -22,6 +23,7 @@ import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
+import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/undo_log_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
@@ -55,6 +57,14 @@ final router = GoRouter(
             GoRoute(
               path: 'undo-log',
               builder: (ctx, state) => const UndoLogScreen(),
+              routes: [
+                GoRoute(
+                  path: ':actionId',
+                  builder: (ctx, state) => UndoLogDetailScreen(
+                    action: state.extra as UndoAction,
+                  ),
+                ),
+              ],
             ),
             GoRoute(
               path: 'changelog',

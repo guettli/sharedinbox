@@ -57,6 +57,7 @@ const _excluded = {
   'lib/ui/screens/sieve_scripts_screen.dart',
   'lib/ui/screens/sync_log_screen.dart',
   'lib/ui/screens/thread_detail_screen.dart',
+  'lib/ui/screens/undo_log_detail_screen.dart',
   'lib/ui/screens/undo_log_screen.dart',
   'lib/ui/widgets/folder_drawer.dart',
   'lib/ui/widgets/secure_email_webview.dart',

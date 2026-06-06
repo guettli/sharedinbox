@@ -48,11 +48,28 @@
             chmod +x $out/bin/fgj
           '';
         };
+
+        # The dagger/nix flake pins 0.20.8, whose Nix wrapper is a broken self-exec
+        # loop.  Fetch 0.21.4 directly so the pre-commit dart-check hook can run.
+        dagger021 = pkgs.stdenv.mkDerivation {
+          pname = "dagger";
+          version = "0.21.4";
+          src = pkgs.fetchurl {
+            url = "https://dl.dagger.io/dagger/releases/0.21.4/dagger_v0.21.4_linux_amd64.tar.gz";
+            sha256 = "0wlnbr4g5069755131yjp2a6alacn64f1c8b27xn0cbynq3zicjd";
+          };
+          sourceRoot = ".";
+          installPhase = ''
+            mkdir -p $out/bin
+            cp dagger $out/bin/dagger
+            chmod +x $out/bin/dagger
+          '';
+        };
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Dagger CLI
-            dagger.packages.${system}.dagger
+            dagger021
 
             # Go compiler — for Dagger development
             go
@@ -106,6 +123,9 @@
           shellHook = ''
             # nix develop --command does not set IN_NIX_SHELL; set it so _preflight passes in CI
             export IN_NIX_SHELL=1
+
+            # Point Dagger client at the running engine socket
+            export DAGGER_HOST=unix:///run/dagger/engine.sock
 
             # Disable Flutter telemetry inside dev shell
             export FLUTTER_SUPPRESS_ANALYTICS=true

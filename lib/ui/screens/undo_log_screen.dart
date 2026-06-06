@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
@@ -55,6 +56,10 @@ class _UndoActionTile extends ConsumerWidget {
     final extraCount = count > 1 ? ' (+${count - 1} more)' : '';
 
     return ListTile(
+      onTap: () => context.go(
+        '/accounts/undo-log/${action.id}',
+        extra: action,
+      ),
       leading: Icon(
         action.type == UndoType.delete
             ? Icons.delete_outline
