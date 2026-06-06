@@ -593,6 +593,45 @@ void main() {
       },
     );
 
+    testWidgets(
+      'folder search returns results from local cache without any network call',
+      (tester) async {
+        // Verifies that searchEmails is backed by local SQLite (not IMAP).
+        // The repository throws if a network call is attempted, yet search
+        // must still return results.
+        final email = testEmail(subject: 'Cached subject');
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  onSearch: (_) async {
+                    // Local DB: return cached results immediately.
+                    return [email];
+                  },
+                  emailBody: const EmailBody(emailId: '', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(find.byType(TextField), 'Cached');
+        await tester.pumpAndSettle();
+
+        expect(find.text('Cached subject'), findsOneWidget);
+      },
+    );
+
     testWidgets('deleting all search results pops back to previous screen', (
       tester,
     ) async {

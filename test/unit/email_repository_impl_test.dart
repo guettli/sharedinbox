@@ -453,6 +453,39 @@ void main() {
       expect(results.first.subject, 'foobar baz');
     });
 
+    test('searchEmails filters by mailboxPath using local FTS5', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Insert matching email in INBOX.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Meeting agenda'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      // Insert matching email in a different mailbox — must not appear.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 2,
+              subject: const Value('Meeting follow-up'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final results = await r.emails.searchEmails('acc-1', 'INBOX', 'meeting');
+      expect(results, hasLength(1));
+      expect(results.first.subject, 'Meeting agenda');
+      expect(results.first.mailboxPath, 'INBOX');
+    });
+
     test(
       'searchAddresses returns results sorted by most recently used',
       () async {

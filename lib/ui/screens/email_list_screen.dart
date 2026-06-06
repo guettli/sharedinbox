@@ -136,7 +136,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return;
     }
     // Skip if results are already settled for this exact query — prevents the
-    // Enter key from re-triggering an IMAP search that already completed.
+    // Enter key from re-triggering a search that already completed.
     if (_searchResults != null && !_searchLoading && q == _lastSettledQuery) {
       return;
     }
@@ -568,8 +568,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
     if (wasSearching && mounted) {
       // Filter deleted emails out of the local results immediately.
-      // Calling searchEmails here would hit the IMAP server, which still has
-      // the emails because the delete is only enqueued — not yet applied.
+      // Calling searchEmails here would still return deleted rows because the
+      // delete is only enqueued — not yet applied to the local DB.
       final deletedIds = ids.toSet();
       final remaining = (_searchResults ?? [])
           .where((e) => !deletedIds.contains(e.id))
