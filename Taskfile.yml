@@ -529,12 +529,26 @@ tasks:
     cmds:
       - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub --dart-define=GIT_HASH=$(git rev-parse --short HEAD) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
+  build-android-bundle-local:
+    desc: Build a release App Bundle (AAB) locally via fvm (not Dagger)
+    deps: [_preflight, _android-sdk-check, _codegen, generate-changelog]
+    dotenv: [".env"]
+    method: timestamp
+    sources:
+      - lib/**/*.dart
+      - android/**/*
+      - pubspec.yaml
+    generates:
+      - build/app/outputs/bundle/release/app-release.aab
+    cmds:
+      - sops exec-env secrets.enc.yaml 'bash scripts/build_android_bundle_local.sh'
+
   deploy-android-bundle:
-    desc: Build, sign, and upload AAB to Play Store internal track via Dagger
-    deps: [generate-changelog]
+    desc: Build release AAB and upload to Play Store internal track (local/fvm)
+    deps: [build-android-bundle-local]
     dotenv: [".env"]
     cmds:
-      - sops exec-env secrets.enc.yaml 'HASH=$(git rev-parse --short HEAD) && scripts/silent_on_success.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"'
+      - sops exec-env secrets.enc.yaml 'python3 scripts/deploy_playstore.py'
 
   deploy-android:
     desc: Build release APK and upload via scp to $ANDROID_APK_SCP_USER@$ANDROID_APK_SCP_HOST:$ANDROID_APK_SCP_PATH
