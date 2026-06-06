@@ -100,6 +100,7 @@
             ]))  # used by stalwart-dev/start and deploy_playstore.py
             fgj      # Codeberg/Forgejo CLI (like gh for GitHub)
             skopeo   # inspect OCI image manifests without pulling layers (used by check-ci-images)
+            librsvg  # rsvg-convert — SVG→PNG for generate-icons task
           ]);
 
           shellHook = ''

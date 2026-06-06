@@ -58,6 +58,14 @@ tasks:
     cmds:
       - echo "Setup complete."
 
+  generate-icons:
+    desc: Rasterise icon.svg → icon.png and regenerate all platform launcher icons
+    deps: [_pub-get]
+    cmds:
+      - rsvg-convert -w 1024 -h 1024 icon.svg -o icon.png
+      - rsvg-convert -w 512  -h 512  icon.svg -o playstore/icon.png
+      - fvm flutter pub run flutter_launcher_icons
+
   generate-changelog:
     desc: Generate assets/changelog.txt from git history
     cmds:

@@ -31,6 +31,8 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  gtk_window_set_icon_from_file(window, "sharedinbox.png", nullptr);
+
   // Show AFTER adding FlView so GTK's first layout pass allocates the full
   // window content area (1280×800) to FlView, not the default 1×1.
   gtk_widget_show_all(GTK_WIDGET(window));
