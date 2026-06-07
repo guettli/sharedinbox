@@ -514,8 +514,7 @@ void main() {
             ),
           );
 
-      final results =
-          await r.emails.searchEmailsGlobal(null, 'urgent');
+      final results = await r.emails.searchEmailsGlobal(null, 'urgent');
       expect(results, hasLength(1));
       expect(results.first.subject, 'Weekly report');
     });
@@ -569,8 +568,7 @@ void main() {
             ),
           );
 
-      final results =
-          await r.emails.searchEmails('acc-1', 'INBOX', 'client');
+      final results = await r.emails.searchEmails('acc-1', 'INBOX', 'client');
       expect(results, hasLength(1));
       expect(results.first.subject, 'Project update');
       expect(results.first.mailboxPath, 'INBOX');

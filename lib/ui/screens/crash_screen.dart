@@ -57,6 +57,7 @@ class CrashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      theme: ThemeData(splashFactory: NoSplash.splashFactory),
       home: Scaffold(
         appBar: AppBar(
           title: const Text('Something went wrong'),

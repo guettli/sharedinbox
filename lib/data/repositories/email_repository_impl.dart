@@ -2952,16 +2952,12 @@ class EmailRepositoryImpl implements EmailRepository {
     String? mailboxPath,
     String query,
   ) async {
-    final words = query
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty)
-        .toList();
+    final words =
+        query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     if (words.isEmpty) return [];
 
     final noteConditions = words.map((_) => 'n.note_text LIKE ?').join(' AND ');
-    final likeVars =
-        words.map((w) => Variable<String>('%$w%')).toList();
+    final likeVars = words.map((w) => Variable<String>('%$w%')).toList();
 
     final extraConditions = StringBuffer();
     final extraVars = <Variable<String>>[];
@@ -2980,14 +2976,13 @@ class EmailRepositoryImpl implements EmailRepository {
         ' WHERE $noteConditions$extraConditions'
         ' ORDER BY e.received_at DESC LIMIT 50';
 
-    final rows = await _db
-        .customSelect(
-          sql,
-          variables: [...likeVars, ...extraVars],
-          readsFrom: {_db.emails, _db.emailNotes},
-        )
-        .get();
-    final emailRows = await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
+    final rows = await _db.customSelect(
+      sql,
+      variables: [...likeVars, ...extraVars],
+      readsFrom: {_db.emails, _db.emailNotes},
+    ).get();
+    final emailRows =
+        await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();
   }
 
@@ -2997,9 +2992,7 @@ class EmailRepositoryImpl implements EmailRepository {
   static String _toFtsQuery(String query) {
     final words = query
         .trim()
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty)
-        .map((w) => w.replaceAll(RegExp(r'[^\w]'), ''))
+        .split(RegExp(r'[^\w]+'))
         .where((w) => w.isNotEmpty)
         .toList();
     if (words.isEmpty) return '';
@@ -3126,8 +3119,7 @@ class EmailRepositoryImpl implements EmailRepository {
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
 
-    final noteRows =
-        await _searchEmailsByNotes(accountId, mailboxPath, query);
+    final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
 
     final seen = <String>{};
     final merged = <model.Email>[];

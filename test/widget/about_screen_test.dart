@@ -50,7 +50,10 @@ Widget _buildScreen({List<Account> accounts = const []}) {
         FakeAccountRepository(accounts),
       ),
     ],
-    child: const MaterialApp(home: AboutScreen()),
+    child: MaterialApp(
+      theme: ThemeData(splashFactory: NoSplash.splashFactory),
+      home: const AboutScreen(),
+    ),
   );
 }
 

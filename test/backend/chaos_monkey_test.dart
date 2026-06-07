@@ -10,6 +10,9 @@
 //   CHAOS_ROUNDS  (default: 30) — number of random operations to perform
 //   CHAOS_SEED    (default: current epoch ms) — seed for reproducibility
 
+@Tags(['nightly'])
+library;
+
 import 'dart:io';
 import 'dart:math';
 

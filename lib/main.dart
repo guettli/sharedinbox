@@ -109,6 +109,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
+        splashFactory: NoSplash.splashFactory,
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -116,6 +117,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        splashFactory: NoSplash.splashFactory,
       ),
       routerConfig: router,
     );
