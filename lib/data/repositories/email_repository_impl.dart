@@ -2922,9 +2922,9 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY rank LIMIT 50'
+            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY e.received_at DESC LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? ORDER BY rank LIMIT 50';
+            ' WHERE email_fts MATCH ? ORDER BY e.received_at DESC LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -2942,6 +2942,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
+    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
     return merged;
   }
 
@@ -3106,7 +3107,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY rank LIMIT 50';
+        ' ORDER BY e.received_at DESC LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -3126,6 +3127,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
+    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
     return merged;
   }
 

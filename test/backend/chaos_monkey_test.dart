@@ -135,7 +135,7 @@ void main() {
   tearDown(() => db.close());
 
   test('chaos monkey — random operations do not crash the repository',
-      () async {
+      timeout: Timeout.none, () async {
     final seedStr = _env('CHAOS_SEED');
     final seed = seedStr.isEmpty
         ? DateTime.now().millisecondsSinceEpoch

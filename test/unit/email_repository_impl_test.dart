@@ -574,6 +574,70 @@ void main() {
       expect(results.first.mailboxPath, 'INBOX');
     });
 
+    test('searchEmailsGlobal returns results sorted by receivedAt descending',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Older report'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('Newer report'),
+              receivedAt: DateTime(2024, 6),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'report');
+      expect(results, hasLength(2));
+      expect(results[0].subject, 'Newer report');
+      expect(results[1].subject, 'Older report');
+    });
+
+    test('searchEmails returns results sorted by receivedAt descending',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Older meeting'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('Newer meeting'),
+              receivedAt: DateTime(2024, 6),
+            ),
+          );
+
+      final results = await r.emails.searchEmails('acc-1', 'INBOX', 'meeting');
+      expect(results, hasLength(2));
+      expect(results[0].subject, 'Newer meeting');
+      expect(results[1].subject, 'Older meeting');
+    });
+
     test(
       'searchAddresses returns results sorted by most recently used',
       () async {
