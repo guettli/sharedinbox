@@ -13,23 +13,27 @@ Automation is handled by [agentloop](https://github.com/guettli/agentloop) runni
 | Label | Trigger | Outcome |
 |---|---|---|
 | `loop/plan` | Planning agent reads the issue and writes an implementation plan as a comment | Issue moves to `loop/plan-done` |
-| `loop/code` | Coding agent implements the change, creates a branch + PR | Issue moves to `loop/code-done` |
+| `loop/code` | Coding agent implements the change, creates a branch + PR | Issue routes to `loop/merge` |
+| `loop/merge` | Merge agent rebases, waits for CI, and merges the PR | Issue moves to `loop/merge-done` |
 
 **State machine:**
 
 ```
-loop/plan  →  loop/plan-in-progress  →  loop/plan-done
-                                      ↘  NeedSupervisor  (on failure)
+loop/plan  →  loop/plan-in-process  →  loop/plan-done
+                                     ↘  NeedSupervisor  (on failure)
 
-loop/code  →  loop/code-in-progress  →  loop/code-done
-                                      ↘  NeedSupervisor  (on failure)
+loop/code  →  loop/code-in-process  →  loop/merge (via route)
+                                     ↘  NeedSupervisor  (on failure)
+
+loop/merge →  loop/merge-in-process →  loop/merge-done
+                                     ↘  NeedSupervisor  (on failure)
 ```
 
 **Rules:**
 
 - Only issues authored by allowed users are picked up (guettli, guettlibot, guettlibot2, forgejo-actions).
 - An issue with `NeedSupervisor` needs human attention — investigate, fix, then re-label.
-- The coding agent opens a PR but does NOT close the issue. A human reviews the PR and closes the issue after merging.
+- The merge agent merges the PR automatically once CI is green. A human still reviews the PR before it merges if branch protection requires a review.
 - Planning agents only post a comment — they do NOT write code or open PRs.
 - `loop/*` labels are managed by agentloop — do not set them manually while an agent is active.
 
@@ -39,9 +43,9 @@ loop/code  →  loop/code-in-progress  →  loop/code-done
 1. Create issue
 2. Add label loop/plan   → agent writes plan as comment
 3. Review plan, request changes or approve
-4. Add label loop/code   → agent implements + opens PR
-5. Review PR, merge
-6. Close issue
+4. Add label loop/code   → agent implements + opens PR + hands off to merge
+5. (Optional) Review PR before it merges
+6. Merge agent waits for CI and merges the PR automatically
 ```
 
 ## Code conventions
