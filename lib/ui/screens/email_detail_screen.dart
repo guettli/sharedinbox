@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
@@ -208,8 +209,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final senderEmail = header?.from.isNotEmpty == true
         ? header!.from.first.email.toLowerCase()
         : null;
-    final isTrusted =
-        senderEmail != null && trustedSenders.contains(senderEmail);
+    final isTrusted = senderEmail != null &&
+        trustedSenders.any((p) => globMatch(senderEmail, p));
     final effectiveLoadImages = _loadRemoteImages || isTrusted;
 
     return ListView(

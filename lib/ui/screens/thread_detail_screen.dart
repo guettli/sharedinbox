@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
@@ -118,8 +119,8 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
     final senderEmail = widget.email.from.isNotEmpty
         ? widget.email.from.first.email.toLowerCase()
         : null;
-    final isTrusted =
-        senderEmail != null && trustedSenders.contains(senderEmail);
+    final isTrusted = senderEmail != null &&
+        trustedSenders.any((p) => globMatch(senderEmail, p));
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),

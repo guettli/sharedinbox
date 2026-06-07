@@ -1,6 +1,7 @@
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_conditions.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/utils/glob_match.dart';
 
 /// A lightweight email representation used by [SieveInterpreter].
 /// Header names are lower-cased.
@@ -102,16 +103,9 @@ class SieveInterpreter {
     return switch (matchType) {
       ':contains' => k.isEmpty || v.contains(k),
       ':is' => v == k,
-      ':matches' => _globMatch(v, k),
+      ':matches' => globMatch(v, k),
       _ => false,
     };
-  }
-
-  bool _globMatch(String value, String pattern) {
-    final regexStr = RegExp.escape(
-      pattern,
-    ).replaceAll(r'\*', '.*').replaceAll(r'\?', '.');
-    return RegExp('^$regexStr\$').hasMatch(value);
   }
 
   void _applyActions(List<SieveAction> actions, SieveExecutionContext ctx) {

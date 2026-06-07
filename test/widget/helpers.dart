@@ -43,6 +43,7 @@ import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 
 // ---------------------------------------------------------------------------
@@ -477,6 +478,12 @@ Widget buildApp({
             builder: (ctx, state) => const UserPreferencesScreen(),
           ),
           GoRoute(
+            path: 'trusted-senders',
+            builder: (ctx, state) => TrustedImageSendersScreen(
+              highlightedSender: state.extra as String?,
+            ),
+          ),
+          GoRoute(
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
               accountId: state.pathParameters['accountId']!,
@@ -687,6 +694,9 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   MenuPosition mailViewButtonPosition;
   AfterMailViewAction afterMailViewAction;
   final List<String> _trustedImageSenders;
+
+  List<String> get trustedImageSendersForTest =>
+      List.unmodifiable(_trustedImageSenders);
 
   @override
   Stream<UserPreferences> observePreferences() => Stream.value(
