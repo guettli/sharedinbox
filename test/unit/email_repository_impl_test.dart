@@ -262,6 +262,50 @@ void main() {
       expect(emails.map((e) => e.uid).toList(), [3, 2, 1]);
     });
 
+    test('same UID in different mailboxes yields independent emails', () async {
+      // Regression test for the UID collision bug: IMAP UIDs are mailbox-scoped,
+      // so UID 50 in INBOX and UID 50 in Archive must get distinct local IDs.
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // New ID format: accountId:mailboxPath:uid
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:50',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 50,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Archive:50',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 50,
+              receivedAt: DateTime(2024, 1, 2),
+            ),
+          );
+
+      final inboxEmail = await r.emails.getEmail('acc-1:INBOX:50');
+      expect(inboxEmail, isNotNull);
+      expect(inboxEmail!.mailboxPath, 'INBOX');
+
+      final archiveEmail = await r.emails.getEmail('acc-1:Archive:50');
+      expect(archiveEmail, isNotNull);
+      expect(archiveEmail!.mailboxPath, 'Archive');
+
+      final inboxEmails = await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(inboxEmails, hasLength(1));
+      expect(inboxEmails.first.id, 'acc-1:INBOX:50');
+
+      final archiveEmails =
+          await r.emails.observeEmails('acc-1', 'Archive').first;
+      expect(archiveEmails, hasLength(1));
+      expect(archiveEmails.first.id, 'acc-1:Archive:50');
+    });
+
     test('syncEmails propagates IMAP error', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');

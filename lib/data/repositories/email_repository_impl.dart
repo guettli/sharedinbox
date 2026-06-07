@@ -561,7 +561,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final msg in result.messages) {
       final uid = msg.uid;
       if (uid == null) continue;
-      final emailId = '${account.id}:$uid';
+      final emailId = '${account.id}:$mailboxPath:$uid';
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
         EmailsCompanion(
           isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
@@ -616,7 +616,7 @@ class EmailRepositoryImpl implements EmailRepository {
           continue;
         }
         bytes += msg.size ?? 0;
-        final emailId = '${account.id}:$uid';
+        final emailId = '${account.id}:$mailboxPath:$uid';
         final msgId = envelope.messageId?.trim();
         final inReplyTo = envelope.inReplyTo?.trim();
         final refs = msg.getHeaderValue('References')?.trim();

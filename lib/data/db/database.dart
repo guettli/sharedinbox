@@ -679,6 +679,116 @@ class AppDatabase extends _$AppDatabase {
           if (from < 40) {
             await m.createTable(installedVersions);
           }
+          if (from < 41) {
+            // Fix IMAP email IDs to include mailboxPath, preventing UID
+            // collisions across mailboxes (IMAP UIDs are mailbox-scoped).
+            // New format: "accountId:mailboxPath:uid" (was "accountId:uid").
+            //
+            // defer_foreign_keys defers the email_bodies→emails FK check
+            // to COMMIT so the two tables can be updated sequentially inside
+            // the migration transaction without a transient FK violation.
+            await customStatement('PRAGMA defer_foreign_keys = ON');
+
+            // 1. Remap email_bodies.email_id before emails.id changes.
+            await customStatement('''
+              UPDATE email_bodies
+              SET email_id = (
+                SELECT e.account_id || ':' || e.mailbox_path || ':' || CAST(e.uid AS TEXT)
+                FROM emails e
+                JOIN accounts a ON a.id = e.account_id
+                WHERE e.id = email_bodies.email_id
+                  AND a.account_type = 'imap'
+              )
+              WHERE EXISTS (
+                SELECT 1 FROM emails e
+                JOIN accounts a ON a.id = e.account_id
+                WHERE e.id = email_bodies.email_id
+                  AND a.account_type = 'imap'
+              )
+            ''');
+
+            // 2. Update emails.thread_id where it was set to the email's own
+            //    id (fallback for messages with no Message-ID header).
+            await customStatement('''
+              UPDATE emails
+              SET thread_id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
+              WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+                AND thread_id = id
+            ''');
+
+            // 3. Update the primary key on emails.
+            await customStatement('''
+              UPDATE emails
+              SET id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
+              WHERE account_id IN (
+                SELECT id FROM accounts WHERE account_type = 'imap'
+              )
+            ''');
+
+            // 5. Rebuild threads for IMAP accounts from the updated email rows.
+            //    The threads table stores denormalised data (latest_email_id,
+            //    email_ids_json) that references email IDs, so it is simpler to
+            //    delete and reconstruct than to patch the JSON in SQL.
+            await customStatement('''
+              DELETE FROM threads
+              WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+            ''');
+
+            final imapAccounts = await (select(accounts)
+                  ..where((t) => t.accountType.equals('imap')))
+                .get();
+            for (final acct in imapAccounts) {
+              final emailRows = await (select(emails)
+                    ..where((t) => t.accountId.equals(acct.id)))
+                  .get();
+
+              final groups = <String, List<Email>>{};
+              for (final row in emailRows) {
+                final key = '${row.mailboxPath}:${row.threadId ?? row.id}';
+                groups.putIfAbsent(key, () => []).add(row);
+              }
+
+              for (final threadEmails in groups.values) {
+                threadEmails.sort((a, b) {
+                  final da = a.sentAt ?? a.receivedAt;
+                  final db = b.sentAt ?? b.receivedAt;
+                  return da.compareTo(db);
+                });
+                final latest = threadEmails.last;
+
+                final seen = <String>{};
+                final participants = <Map<String, dynamic>>[];
+                for (final e in threadEmails) {
+                  final from = jsonDecode(e.fromJson) as List<dynamic>;
+                  for (final a in from.cast<Map<String, dynamic>>()) {
+                    final email = a['email'] as String;
+                    if (seen.add(email)) {
+                      participants.add({'name': a['name'], 'email': email});
+                    }
+                  }
+                }
+
+                await into(threads).insert(
+                  ThreadsCompanion.insert(
+                    id: latest.threadId ?? latest.id,
+                    accountId: latest.accountId,
+                    mailboxPath: latest.mailboxPath,
+                    subject: Value(latest.subject),
+                    latestDate: latest.sentAt ?? latest.receivedAt,
+                    messageCount: Value(threadEmails.length),
+                    hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
+                    isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+                    participantsJson: Value(jsonEncode(participants)),
+                    preview: Value(latest.preview),
+                    latestEmailId: latest.id,
+                    emailIdsJson: Value(
+                      jsonEncode(threadEmails.map((e) => e.id).toList()),
+                    ),
+                  ),
+                );
+              }
+            }
+          }
         },
       );
 

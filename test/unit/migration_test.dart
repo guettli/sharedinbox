@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 41);
       await db.close();
     });
 
@@ -435,7 +435,184 @@ void main() {
       },
     );
 
-    test('fresh install creates all tables at schemaVersion 40', () async {
+    test('v40→v41: IMAP email IDs gain mailboxPath segment', () async {
+      final dbFile = File('test_migration_v40.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        CREATE TABLE accounts (
+          id TEXT NOT NULL PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          imap_host TEXT NOT NULL DEFAULT '',
+          imap_port INTEGER NOT NULL DEFAULT 993,
+          imap_ssl INTEGER NOT NULL DEFAULT 1,
+          smtp_host TEXT NOT NULL DEFAULT '',
+          smtp_port INTEGER NOT NULL DEFAULT 465,
+          smtp_ssl INTEGER NOT NULL DEFAULT 1,
+          account_type TEXT NOT NULL DEFAULT 'imap',
+          jmap_url TEXT NULL,
+          username TEXT NOT NULL DEFAULT '',
+          verbose INTEGER NOT NULL DEFAULT 0,
+          manage_sieve_host TEXT NOT NULL DEFAULT '',
+          manage_sieve_port INTEGER NOT NULL DEFAULT 4190,
+          manage_sieve_ssl INTEGER NOT NULL DEFAULT 1,
+          manage_sieve_available INTEGER NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE emails (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          uid INTEGER NOT NULL,
+          subject TEXT NULL,
+          sent_at INTEGER NULL,
+          received_at INTEGER NOT NULL,
+          from_json TEXT NOT NULL DEFAULT '[]',
+          to_addresses TEXT NOT NULL DEFAULT '[]',
+          cc_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          is_seen INTEGER NOT NULL DEFAULT 0,
+          is_flagged INTEGER NOT NULL DEFAULT 0,
+          has_attachment INTEGER NOT NULL DEFAULT 0,
+          thread_id TEXT NULL,
+          message_id TEXT NULL,
+          in_reply_to TEXT NULL,
+          "references" TEXT NULL,
+          snoozed_until INTEGER NULL,
+          snoozed_from_mailbox_path TEXT NULL,
+          list_unsubscribe_header TEXT NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE email_bodies (
+          email_id TEXT NOT NULL PRIMARY KEY REFERENCES emails (id) ON DELETE CASCADE,
+          text_body TEXT NULL,
+          html_body TEXT NULL,
+          attachments_json TEXT NOT NULL DEFAULT '[]',
+          cached_at INTEGER NULL,
+          headers_json TEXT NULL,
+          mime_tree_json TEXT NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE threads (
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          id TEXT NOT NULL,
+          subject TEXT NULL,
+          latest_date INTEGER NOT NULL,
+          message_count INTEGER NOT NULL DEFAULT 1,
+          has_unread INTEGER NOT NULL DEFAULT 0,
+          is_flagged INTEGER NOT NULL DEFAULT 0,
+          participants_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          latest_email_id TEXT NOT NULL,
+          email_ids_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (account_id, mailbox_path, id)
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE pending_changes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          resource_type TEXT NOT NULL,
+          resource_id TEXT NOT NULL,
+          change_type TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NULL
+        )
+      ''');
+
+      // Insert an IMAP account.
+      rawDb.execute(
+        "INSERT INTO accounts (id, display_name, email) VALUES ('acc-1', 'Alice', 'alice@example.com')",
+      );
+
+      // Two emails with the same UID but in different mailboxes — old format.
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      rawDb.execute(
+        'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at, thread_id) '
+        "VALUES ('acc-1:50', 'acc-1', 'INBOX', 50, $now, 'acc-1:50')",
+      );
+      rawDb.execute(
+        'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at) '
+        "VALUES ('acc-1:50-arch', 'acc-1', 'Archive', 50, $now)",
+      );
+      // A third email with a Message-ID-based thread_id (should not be changed).
+      rawDb.execute(
+        'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at, thread_id) '
+        "VALUES ('acc-1:99', 'acc-1', 'INBOX', 99, $now, '<original@example.com>')",
+      );
+
+      // Email body for the first email.
+      rawDb.execute(
+        "INSERT INTO email_bodies (email_id, text_body) VALUES ('acc-1:50', 'body text')",
+      );
+
+      // Thread for the first email (old-format IDs).
+      rawDb.execute(
+        'INSERT INTO threads (account_id, mailbox_path, id, latest_date, latest_email_id, email_ids_json) '
+        "VALUES ('acc-1', 'INBOX', 'acc-1:50', $now, 'acc-1:50', '[\"acc-1:50\"]')",
+      );
+
+      // A pending change referencing the first email's old ID.
+      rawDb.execute(
+        'INSERT INTO pending_changes (account_id, resource_type, resource_id, change_type, payload, created_at) '
+        "VALUES ('acc-1', 'Email', 'acc-1:50', 'flag_seen', '{\"seen\":true}', $now)",
+      );
+
+      rawDb.execute('PRAGMA user_version = 40');
+      rawDb.close();
+
+      // Open with Drift to trigger the migration.
+      final db = AppDatabase(NativeDatabase(dbFile));
+      await db.select(db.accounts).get();
+
+      // emails.id should now use the accountId:mailboxPath:uid format.
+      final emailRows = await db.select(db.emails).get();
+      final emailIds = emailRows.map((r) => r.id).toSet();
+      expect(emailIds, contains('acc-1:INBOX:50'));
+      expect(emailIds, contains('acc-1:Archive:50'));
+      expect(emailIds, contains('acc-1:INBOX:99'));
+      // Old-format IDs must be gone.
+      expect(emailIds, isNot(contains('acc-1:50')));
+      expect(emailIds, isNot(contains('acc-1:99')));
+
+      // email_bodies.email_id must be updated.
+      final bodyRows = await db.select(db.emailBodies).get();
+      expect(bodyRows, hasLength(1));
+      expect(bodyRows.first.emailId, 'acc-1:INBOX:50');
+
+      // thread_id where it was the email's own ID should be updated.
+      final inboxEmail = emailRows.firstWhere((r) => r.id == 'acc-1:INBOX:50');
+      expect(inboxEmail.threadId, 'acc-1:INBOX:50');
+
+      // thread_id based on a real Message-ID must be left unchanged.
+      final inboxEmail99 =
+          emailRows.firstWhere((r) => r.id == 'acc-1:INBOX:99');
+      expect(inboxEmail99.threadId, '<original@example.com>');
+
+      // threads must be rebuilt with new-format IDs.
+      final threadRows = await db.select(db.threads).get();
+      final thread = threadRows.firstWhere((t) => t.mailboxPath == 'INBOX');
+      expect(thread.latestEmailId, 'acc-1:INBOX:50');
+      expect(thread.emailIdsJson, contains('acc-1:INBOX:50'));
+
+      // pending_changes.resource_id is not updated by the migration
+      // (IMAP operations use payload uid/mailboxPath, so this is safe).
+      final changeRows = await db.select(db.pendingChanges).get();
+      expect(changeRows, hasLength(1));
+
+      await db.close();
+      if (dbFile.existsSync()) dbFile.deleteSync();
+    });
+
+    test('fresh install creates all tables at schemaVersion 41', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
