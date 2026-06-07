@@ -21,14 +21,14 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           runner_start=$(date +%s)
-          created_at=$(curl -sf \
+          created=$(curl -sf --max-time 30 \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
-            | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
-          if [ -n "$created_at" ]; then
-            queued_epoch=$(date -d "$created_at" +%s)
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
+            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
+          if [ -n "$created" ]; then
+            queued_epoch=$(date -d "$created" +%s)
             wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
           else
             echo "Runner wait time: unknown (API lookup failed)"
           fi
@@ -51,43 +51,27 @@ jobs:
 
           HEAD_SHA=$(git rev-parse HEAD)
 
-          # Find the most recent workflow run where deploy-playstore actually succeeded
-          # (not merely skipped). Bug fix: previous code used commit_sha (always None in
-          # Forgejo's API) instead of head_sha, causing LAST_DEPLOYED_SHA to be empty on
-          # every run and the fallback diff to only cover HEAD~1..HEAD.
+          # Find the most recent successful "Build & Deploy to Play Store" task. Forgejo's API
+          # does not expose per-run jobs (/runs/{id}/jobs returns 404), so query /actions/tasks
+          # (per-job records) directly and filter for the task we care about. Filtering at the
+          # task level also distinguishes runs where the Play Store job actually ran from runs
+          # where it was skipped — at the run level both show status=success.
           LAST_DEPLOYED_SHA=$(python3 - << 'PYEOF'
           import json, os, sys, urllib.request
           token = os.environ.get("FORGEJO_TOKEN", "")
           server = os.environ.get("GITHUB_SERVER_URL", "").rstrip("/")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
-          base_api = f"{server}/api/v1/repos/{repo}/actions"
-          url = f"{base_api}/runs?workflow_id=deploy.yml&status=success&limit=10"
+          url = f"{server}/api/v1/repos/{repo}/actions/tasks?status=success&limit=100"
           req = urllib.request.Request(url, headers={"Authorization": f"token {token}"})
           try:
-              with urllib.request.urlopen(req) as r:
+              with urllib.request.urlopen(req, timeout=60) as r:
                   data = json.loads(r.read())
-              runs = [
-                  r for r in data.get("workflow_runs", [])
-                  if r.get("status") == "success"
-              ]
-              # Walk runs newest-first; pick the first one where deploy-playstore
-              # actually ran (conclusion=success), not just skipped.
-              for run in runs:
-                  run_id = run.get("id")
-                  jobs_url = f"{base_api}/runs/{run_id}/jobs"
-                  jobs_req = urllib.request.Request(jobs_url, headers={"Authorization": f"token {token}"})
-                  try:
-                      with urllib.request.urlopen(jobs_req) as jr:
-                          jobs_data = json.loads(jr.read())
-                      for job in jobs_data.get("workflow_jobs", []):
-                          if "Deploy to Play Store" in job.get("name", "") and (
-                              job.get("conclusion") == "success" or
-                              job.get("status") == "success"
-                          ):
-                              print(run.get("head_sha") or "")
-                              sys.exit(0)
-                  except Exception:
-                      pass  # skip this run if jobs API fails
+              for t in data.get("workflow_runs", []):
+                  if (t.get("workflow_id") == "deploy.yml"
+                      and t.get("name") == "Build & Deploy to Play Store"
+                      and t.get("status") == "success"):
+                      print(t.get("head_sha") or "")
+                      sys.exit(0)
               print("")
           except Exception as e:
               print(f"::error::LAST_DEPLOYED_SHA lookup failed ({type(e).__name__}: {e})")
@@ -164,14 +148,14 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           runner_start=$(date +%s)
-          created_at=$(curl -sf \
+          created=$(curl -sf --max-time 30 \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
-            | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
-          if [ -n "$created_at" ]; then
-            queued_epoch=$(date -d "$created_at" +%s)
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
+            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
+          if [ -n "$created" ]; then
+            queued_epoch=$(date -d "$created" +%s)
             wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
           else
             echo "Runner wait time: unknown (API lookup failed)"
           fi
@@ -215,14 +199,14 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           runner_start=$(date +%s)
-          created_at=$(curl -sf \
+          created=$(curl -sf --max-time 30 \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
-            | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
-          if [ -n "$created_at" ]; then
-            queued_epoch=$(date -d "$created_at" +%s)
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
+            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
+          if [ -n "$created" ]; then
+            queued_epoch=$(date -d "$created" +%s)
             wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
           else
             echo "Runner wait time: unknown (API lookup failed)"
           fi
@@ -260,14 +244,14 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           runner_start=$(date +%s)
-          created_at=$(curl -sf \
+          created=$(curl -sf --max-time 30 \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
-            | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
-          if [ -n "$created_at" ]; then
-            queued_epoch=$(date -d "$created_at" +%s)
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
+            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
+          if [ -n "$created" ]; then
+            queued_epoch=$(date -d "$created" +%s)
             wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
           else
             echo "Runner wait time: unknown (API lookup failed)"
           fi
@@ -310,14 +294,14 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           runner_start=$(date +%s)
-          created_at=$(curl -sf \
+          created=$(curl -sf --max-time 30 \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
-            | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
-          if [ -n "$created_at" ]; then
-            queued_epoch=$(date -d "$created_at" +%s)
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
+            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
+          if [ -n "$created" ]; then
+            queued_epoch=$(date -d "$created" +%s)
             wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
           else
             echo "Runner wait time: unknown (API lookup failed)"
           fi
