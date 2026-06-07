@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
@@ -681,6 +682,91 @@ void main() {
       expect(results[0].subject, 'Newer meeting');
       expect(results[1].subject, 'Older meeting');
     });
+
+    test(
+      'searchEmailsStructured returns results sorted by receivedAt descending',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Older invoice'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:2',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                subject: const Value('Newer invoice'),
+                receivedAt: DateTime(2024, 6),
+              ),
+            );
+
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.subject,
+              comparison: FilterComparison.contains,
+              value: 'invoice',
+            ),
+          ],
+        );
+        final results = await r.emails.searchEmailsStructured(null, filter);
+        expect(results, hasLength(2));
+        expect(results[0].subject, 'Newer invoice');
+        expect(results[1].subject, 'Older invoice');
+      },
+    );
+
+    test(
+      'getEmailsByAddress returns results sorted by receivedAt descending',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Older hello'),
+                receivedAt: DateTime(2024),
+                fromJson: const Value(
+                  '[{"name":"Bob","email":"bob@example.com"}]',
+                ),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:2',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                subject: const Value('Newer hello'),
+                receivedAt: DateTime(2024, 6),
+                fromJson: const Value(
+                  '[{"name":"Bob","email":"bob@example.com"}]',
+                ),
+              ),
+            );
+
+        final results =
+            await r.emails.getEmailsByAddress(null, 'bob@example.com');
+        expect(results, hasLength(2));
+        expect(results[0].subject, 'Newer hello');
+        expect(results[1].subject, 'Older hello');
+      },
+    );
 
     test(
       'searchAddresses returns results sorted by most recently used',
