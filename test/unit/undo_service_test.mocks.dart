@@ -7,10 +7,11 @@ import 'dart:async' as _i4;
 
 import 'package:mockito/mockito.dart' as _i1;
 import 'package:mockito/src/dummies.dart' as _i5;
+import 'package:sharedinbox/core/filter/filter_expression.dart' as _i6;
 import 'package:sharedinbox/core/models/email.dart' as _i2;
-import 'package:sharedinbox/core/models/undo_action.dart' as _i7;
+import 'package:sharedinbox/core/models/undo_action.dart' as _i8;
 import 'package:sharedinbox/core/repositories/email_repository.dart' as _i3;
-import 'package:sharedinbox/core/repositories/undo_repository.dart' as _i6;
+import 'package:sharedinbox/core/repositories/undo_repository.dart' as _i7;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -343,6 +344,22 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<List<_i2.Email>>);
 
   @override
+  _i4.Future<List<_i2.Email>> searchEmailsStructured(
+    String? accountId,
+    _i6.FilterGroup? filter,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #searchEmailsStructured,
+          [
+            accountId,
+            filter,
+          ],
+        ),
+        returnValue: _i4.Future<List<_i2.Email>>.value(<_i2.Email>[]),
+      ) as _i4.Future<List<_i2.Email>>);
+
+  @override
   _i4.Future<List<_i2.Email>> getEmailsByAddress(
     String? accountId,
     String? address,
@@ -558,13 +575,13 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
 /// A class which mocks [UndoRepository].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockUndoRepository extends _i1.Mock implements _i6.UndoRepository {
+class MockUndoRepository extends _i1.Mock implements _i7.UndoRepository {
   MockUndoRepository() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i4.Future<void> saveAction(_i7.UndoAction? action) => (super.noSuchMethod(
+  _i4.Future<void> saveAction(_i8.UndoAction? action) => (super.noSuchMethod(
         Invocation.method(
           #saveAction,
           [action],
@@ -584,15 +601,15 @@ class MockUndoRepository extends _i1.Mock implements _i6.UndoRepository {
       ) as _i4.Future<void>);
 
   @override
-  _i4.Future<List<_i7.UndoAction>> getHistory({int? limit = 10}) =>
+  _i4.Future<List<_i8.UndoAction>> getHistory({int? limit = 10}) =>
       (super.noSuchMethod(
         Invocation.method(
           #getHistory,
           [],
           {#limit: limit},
         ),
-        returnValue: _i4.Future<List<_i7.UndoAction>>.value(<_i7.UndoAction>[]),
-      ) as _i4.Future<List<_i7.UndoAction>>);
+        returnValue: _i4.Future<List<_i8.UndoAction>>.value(<_i8.UndoAction>[]),
+      ) as _i4.Future<List<_i8.UndoAction>>);
 
   @override
   _i4.Future<void> clearHistory() => (super.noSuchMethod(

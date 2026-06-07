@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -136,6 +137,12 @@ class FakeEmailRepository implements EmailRepository {
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
   @override
   Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f,
+  ) async =>
+      [];
   @override
   Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
   @override

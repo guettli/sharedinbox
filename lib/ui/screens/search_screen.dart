@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
@@ -37,6 +39,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   bool _loading = false;
   bool _fieldFocused = false;
 
+  // Advanced (structured) search state.
+  bool _advancedMode = false;
+  FilterGroup _filterGroup = FilterGroup.empty();
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +57,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _focusNode.dispose();
     _debounce?.cancel();
     super.dispose();
+  }
+
+  void _toggleAdvanced() {
+    setState(() {
+      _advancedMode = !_advancedMode;
+      _results = null;
+    });
   }
 
   void _onChanged(String value) {
@@ -135,22 +148,47 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
   }
 
+  Future<void> _searchStructured() async {
+    if (_filterGroup.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      final emails = await ref
+          .read(emailRepositoryProvider)
+          .searchEmailsStructured(widget.accountId, _filterGroup);
+      if (mounted) {
+        setState(() {
+          _results = _SearchResults(
+            mailboxes: const [],
+            addresses: const [],
+            emails: emails,
+          );
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      log('Structured search failed: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: TextField(
-          controller: _ctrl,
-          focusNode: _focusNode,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Search folders, addresses, emails…',
-            border: InputBorder.none,
-          ),
-          onChanged: _onChanged,
-        ),
+        title: _advancedMode
+            ? const Text('Advanced Search')
+            : TextField(
+                controller: _ctrl,
+                focusNode: _focusNode,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search folders, addresses, emails…',
+                  border: InputBorder.none,
+                ),
+                onChanged: _onChanged,
+              ),
         actions: [
-          if (_ctrl.text.isNotEmpty)
+          if (!_advancedMode && _ctrl.text.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.clear),
               onPressed: () {
@@ -158,6 +196,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 setState(() => _results = null);
               },
             ),
+          IconButton(
+            icon: Icon(
+              _advancedMode ? Icons.search : Icons.tune,
+              color:
+                  _advancedMode ? Theme.of(context).colorScheme.primary : null,
+            ),
+            tooltip: _advancedMode ? 'Simple search' : 'Advanced search',
+            onPressed: _toggleAdvanced,
+          ),
         ],
       ),
       body: _buildBody(),
@@ -165,6 +212,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildBody() {
+    if (_advancedMode) return _buildAdvancedBody();
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_results == null) {
       if (_fieldFocused && _ctrl.text.isEmpty) {
@@ -174,7 +222,54 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
     final r = _results!;
     if (r.isEmpty) return const Center(child: Text('No results'));
+    return _buildResultsList(r);
+  }
+
+  Widget _buildAdvancedBody() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilterBuilderWidget(
+            initialValue: _filterGroup,
+            onChanged: (g) => setState(() {
+              _filterGroup = g;
+              _results = null;
+            }),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: _filterGroup.isEmpty ? null : _searchStructured,
+            icon: const Icon(Icons.search),
+            label: const Text('Search'),
+          ),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.only(top: 24),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_results != null) ...[
+            const SizedBox(height: 8),
+            if (_results!.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('No results'),
+                ),
+              )
+            else
+              _buildResultsList(_results!),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultsList(_SearchResults r) {
     return ListView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       children: [
         if (r.mailboxes.isNotEmpty) ...[
           const _SectionHeader('Folders'),

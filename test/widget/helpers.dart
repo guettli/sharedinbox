@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/models/draft.dart';
@@ -365,6 +366,13 @@ class FakeEmailRepository implements EmailRepository {
     String query,
   ) async =>
       _searchResults;
+
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter,
+  ) async =>
+      [];
 
   @override
   Future<List<Email>> getEmailsByAddress(

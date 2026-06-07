@@ -1,0 +1,88 @@
+enum FilterField {
+  from_,
+  to,
+  cc,
+  subject,
+  size;
+
+  String get label => switch (this) {
+        FilterField.from_ => 'From',
+        FilterField.to => 'To',
+        FilterField.cc => 'CC',
+        FilterField.subject => 'Subject',
+        FilterField.size => 'Size (bytes)',
+      };
+
+  List<FilterComparison> get allowedComparisons => switch (this) {
+        FilterField.size => [FilterComparison.over, FilterComparison.under],
+        _ => [
+            FilterComparison.contains,
+            FilterComparison.is_,
+            FilterComparison.matches,
+          ],
+      };
+}
+
+enum FilterComparison {
+  contains,
+  is_,
+  matches,
+  over,
+  under;
+
+  String get label => switch (this) {
+        FilterComparison.contains => 'contains',
+        FilterComparison.is_ => 'is',
+        FilterComparison.matches => 'matches',
+        FilterComparison.over => 'over',
+        FilterComparison.under => 'under',
+      };
+}
+
+enum FilterOperator { and_, or_ }
+
+sealed class FilterNode {}
+
+final class FilterLeaf extends FilterNode {
+  FilterLeaf({
+    required this.field,
+    required this.comparison,
+    required this.value,
+  });
+
+  final FilterField field;
+  final FilterComparison comparison;
+  final String value;
+
+  FilterLeaf copyWith({
+    FilterField? field,
+    FilterComparison? comparison,
+    String? value,
+  }) =>
+      FilterLeaf(
+        field: field ?? this.field,
+        comparison: comparison ?? this.comparison,
+        value: value ?? this.value,
+      );
+}
+
+final class FilterGroup extends FilterNode {
+  FilterGroup({required this.operator, required this.children});
+
+  final FilterOperator operator;
+  final List<FilterNode> children;
+
+  bool get isEmpty => children.isEmpty;
+
+  FilterGroup copyWith({
+    FilterOperator? operator,
+    List<FilterNode>? children,
+  }) =>
+      FilterGroup(
+        operator: operator ?? this.operator,
+        children: children ?? this.children,
+      );
+
+  static FilterGroup empty() =>
+      FilterGroup(operator: FilterOperator.and_, children: []);
+}

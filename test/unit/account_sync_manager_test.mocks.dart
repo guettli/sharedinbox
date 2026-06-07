@@ -7,6 +7,7 @@ import 'dart:async' as _i5;
 
 import 'package:mockito/mockito.dart' as _i1;
 import 'package:mockito/src/dummies.dart' as _i7;
+import 'package:sharedinbox/core/filter/filter_expression.dart' as _i10;
 import 'package:sharedinbox/core/models/account.dart' as _i6;
 import 'package:sharedinbox/core/models/email.dart' as _i3;
 import 'package:sharedinbox/core/models/mailbox.dart' as _i2;
@@ -540,6 +541,22 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           [
             accountId,
             query,
+          ],
+        ),
+        returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
+      ) as _i5.Future<List<_i3.Email>>);
+
+  @override
+  _i5.Future<List<_i3.Email>> searchEmailsStructured(
+    String? accountId,
+    _i10.FilterGroup? filter,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #searchEmailsStructured,
+          [
+            accountId,
+            filter,
           ],
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),

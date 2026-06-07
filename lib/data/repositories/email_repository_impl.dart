@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -2985,6 +2986,91 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailRows =
         await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();
+  }
+
+  @override
+  Future<List<model.Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter,
+  ) async {
+    final rows = await (_db.select(_db.emails)
+          ..where((t) {
+            final fe = _filterGroup(filter, t);
+            if (accountId == null) return fe;
+            return t.accountId.equals(accountId) & fe;
+          })
+          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..limit(100))
+        .get();
+    return rows.map(_toModel).toList();
+  }
+
+  Expression<bool> _filterGroup(FilterGroup group, $EmailsTable t) {
+    if (group.isEmpty) return const Constant(true);
+    final exprs = group.children.map((c) => _filterNode(c, t)).toList();
+    return switch (group.operator) {
+      FilterOperator.and_ => exprs.reduce((a, b) => a & b),
+      FilterOperator.or_ => exprs.reduce((a, b) => a | b),
+    };
+  }
+
+  Expression<bool> _filterNode(FilterNode node, $EmailsTable t) =>
+      switch (node) {
+        final FilterLeaf l => _filterLeaf(l, t),
+        final FilterGroup g => _filterGroup(g, t),
+      };
+
+  Expression<bool> _filterLeaf(FilterLeaf leaf, $EmailsTable t) {
+    final val = leaf.value.toLowerCase();
+    return switch (leaf.field) {
+      FilterField.from_ => _jsonLike(t.fromJson, leaf.comparison, val),
+      FilterField.to => _jsonLike(t.toAddresses, leaf.comparison, val),
+      FilterField.cc => _jsonLike(t.ccJson, leaf.comparison, val),
+      FilterField.subject => _textLike(t.subject, leaf.comparison, val),
+      // Size is not stored in the local cache; skip silently.
+      FilterField.size => const Constant(true),
+    };
+  }
+
+  Expression<bool> _jsonLike(
+    GeneratedColumn<String> col,
+    FilterComparison comp,
+    String val,
+  ) =>
+      switch (comp) {
+        FilterComparison.contains => col.like('%$val%'),
+        FilterComparison.is_ => col.like('%"email":"$val"%'),
+        FilterComparison.matches => col.like(_globToLike(val)),
+        _ => const Constant(true),
+      };
+
+  Expression<bool> _textLike(
+    GeneratedColumn<String> col,
+    FilterComparison comp,
+    String val,
+  ) =>
+      switch (comp) {
+        FilterComparison.contains => col.like('%$val%'),
+        FilterComparison.is_ => col.like(val),
+        FilterComparison.matches => col.like(_globToLike(val)),
+        _ => const Constant(true),
+      };
+
+  static String _globToLike(String glob) {
+    final buf = StringBuffer();
+    for (var i = 0; i < glob.length; i++) {
+      final ch = glob[i];
+      if (ch == '%' || ch == '_') {
+        buf.write('\\$ch');
+      } else if (ch == '*') {
+        buf.write('%');
+      } else if (ch == '?') {
+        buf.write('_');
+      } else {
+        buf.write(ch);
+      }
+    }
+    return buf.toString();
   }
 
   /// Converts a user query string into an FTS5 match expression.

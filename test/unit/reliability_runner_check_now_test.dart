@@ -4,6 +4,7 @@
 // checked the _running flag (only true after start() is called).
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -143,6 +144,12 @@ class _FakeEmails implements EmailRepository {
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
   @override
   Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f,
+  ) async =>
+      [];
   @override
   Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
   @override

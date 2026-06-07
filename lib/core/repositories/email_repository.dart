@@ -1,3 +1,4 @@
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 
 abstract class EmailRepository {
@@ -60,6 +61,12 @@ abstract class EmailRepository {
   /// Searches the local DB across all mailboxes of [accountId] (or all accounts
   /// if null) by subject, preview, and notes. Fast, works offline.
   Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
+
+  /// Searches the local DB using a structured [FilterGroup]. Fast, works offline.
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter,
+  );
 
   /// Returns all locally cached emails in any mailbox of [accountId] (or all
   /// accounts if null) whose from, to, or cc fields contain [address].

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -271,6 +272,13 @@ class _FakeEmails implements EmailRepository {
 
   @override
   Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
+
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f,
+  ) async =>
+      [];
 
   @override
   Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];

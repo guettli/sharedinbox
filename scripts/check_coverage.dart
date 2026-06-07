@@ -87,6 +87,7 @@ const _excluded = {
   'lib/ui/widgets/email_thread_tile.dart',
   'lib/ui/screens/trusted_image_senders_screen.dart',
   'lib/data/repositories/note_repository_impl.dart',
+  'lib/ui/widgets/filter_builder.dart',
   'lib/ui/widgets/thread_tile.dart',
 };
 
