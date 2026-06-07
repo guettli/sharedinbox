@@ -23,7 +23,7 @@ jobs:
           runner_start=$(date +%s)
           created_at=$(curl -sf \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
             | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
           if [ -n "$created_at" ]; then
             queued_epoch=$(date -d "$created_at" +%s)
@@ -166,7 +166,7 @@ jobs:
           runner_start=$(date +%s)
           created_at=$(curl -sf \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
             | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
           if [ -n "$created_at" ]; then
             queued_epoch=$(date -d "$created_at" +%s)
@@ -217,7 +217,7 @@ jobs:
           runner_start=$(date +%s)
           created_at=$(curl -sf \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
             | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
           if [ -n "$created_at" ]; then
             queued_epoch=$(date -d "$created_at" +%s)
@@ -262,7 +262,7 @@ jobs:
           runner_start=$(date +%s)
           created_at=$(curl -sf \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
             | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
           if [ -n "$created_at" ]; then
             queued_epoch=$(date -d "$created_at" +%s)
@@ -312,7 +312,7 @@ jobs:
           runner_start=$(date +%s)
           created_at=$(curl -sf \
             -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?limit=100" \
             | python3 -c "import sys,json;data=json.load(sys.stdin);rs=[r for r in data.get('workflow_runs',[]) if r.get('run_number')==$RUN_NUMBER];print(rs[0]['created_at'] if rs else '')" 2>/dev/null)
           if [ -n "$created_at" ]; then
             queued_epoch=$(date -d "$created_at" +%s)
