@@ -798,6 +798,67 @@ void main() {
       },
     );
 
+    testWidgets(
+      'pressing Enter after search settles does not reorder results',
+      (tester) async {
+        // Reproduces: user types a query → onChanged fires → results settle.
+        // Then user presses Enter → onSubmitted fires a second search → the
+        // second IMAP response may return results in a different order, so the
+        // tile the user is about to tap is no longer the email they expect.
+        final email1 = testEmail(id: 'acc-1:1', subject: 'Alpha Foo');
+        final email2 = testEmail(id: 'acc-1:2', subject: 'Beta Foo');
+        var callCount = 0;
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  onSearch: (_) async {
+                    callCount++;
+                    // First call: [Alpha, Beta]. Second call: reversed.
+                    return callCount == 1 ? [email1, email2] : [email2, email1];
+                  },
+                  emailBody: const EmailBody(emailId: '', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Typing triggers onChanged → first search → results settle.
+        await tester.enterText(find.byType(TextField), 'foo');
+        await tester.pumpAndSettle();
+
+        expect(find.text('Alpha Foo'), findsOneWidget);
+        expect(find.text('Beta Foo'), findsOneWidget);
+        // Alpha must appear above Beta (it is first in the list).
+        expect(
+          tester.getTopLeft(find.text('Alpha Foo')).dy,
+          lessThan(tester.getTopLeft(find.text('Beta Foo')).dy),
+        );
+
+        // Pressing Enter triggers onSubmitted — must NOT re-run the search.
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        // Order must be unchanged: pressing Enter must not reorder results.
+        expect(find.text('Alpha Foo'), findsOneWidget);
+        expect(find.text('Beta Foo'), findsOneWidget);
+        expect(
+          tester.getTopLeft(find.text('Alpha Foo')).dy,
+          lessThan(tester.getTopLeft(find.text('Beta Foo')).dy),
+        );
+      },
+    );
+
     testWidgets('shows preview snippet when email has preview', (tester) async {
       final email = Email(
         id: 'acc-1:99',

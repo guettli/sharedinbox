@@ -278,7 +278,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 ),
             ],
             onChanged: _onSearchChanged,
-            onSubmitted: _runSearch,
+            onSubmitted: (value) {
+              // Only run the search if results haven't settled yet via
+              // onChanged — prevents a second IMAP round-trip from reordering
+              // the already-visible results when the user presses Enter.
+              if (_searchResults == null && !_searchLoading) {
+                unawaited(_runSearch(value));
+              }
+            },
             textInputAction: TextInputAction.search,
           ),
         ),
