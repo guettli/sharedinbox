@@ -74,10 +74,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !isMobile,
-        title: Text(
-          header?.subject ?? '(loading…)',
-          overflow: TextOverflow.ellipsis,
-        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.reply),
@@ -133,12 +129,20 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               if (mounted) setState(() => _isFlagged = next);
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.report_outlined),
+            tooltip: 'Mark as spam',
+            onPressed: header == null
+                ? null
+                : () {
+                    unawaited(_markAsSpam(context, header));
+                  },
+          ),
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
               const PopupMenuItem(value: 'forward', child: Text('Forward')),
               const PopupMenuItem(value: 'move', child: Text('Move to folder')),
               const PopupMenuItem(value: 'snooze', child: Text('Snooze')),
-              const PopupMenuItem(value: 'spam', child: Text('Mark as spam')),
               const PopupMenuItem(
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
@@ -166,8 +170,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 unawaited(_moveTo(context, header));
               } else if (value == 'snooze' && header != null) {
                 unawaited(_snooze(context, header));
-              } else if (value == 'spam' && header != null) {
-                unawaited(_markAsSpam(context, header));
               } else if (value == 'mark_unread') {
                 final nextEmailId = await _getNextEmailIdIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
