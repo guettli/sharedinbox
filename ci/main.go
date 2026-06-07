@@ -503,23 +503,19 @@ func (m *Ci) CheckFast(ctx context.Context) (string, error) {
 }
 
 // CheckGenerated verifies that all generated files (*.g.dart, *.mocks.dart) are up to date.
-// It snapshots the committed source (including any stale generated files) before
-// running build_runner, so git diff detects real staleness instead of always
-// comparing two freshly-generated outputs.
+// It reuses the codegenBase() output instead of running build_runner a second time,
+// diffing committed generated files against the freshly built ones.
 func (m *Ci) CheckGenerated(ctx context.Context) (string, error) {
+	fresh := m.codegenBase().Directory("/src")
 	return m.pubGetLayer().
-		WithDirectory("/src", m.checkSrc(), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
-		WithWorkdir("/src").
-		WithExec([]string{"git", "init"}).
-		WithExec([]string{"git", "config", "user.email", "ci@sharedinbox.de"}).
-		WithExec([]string{"git", "config", "user.name", "CI"}).
-		WithExec([]string{"git", "add", "."}).
-		WithExec([]string{"git", "commit", "-q", "-m", "baseline"}).
+		WithDirectory("/committed", m.checkSrc(), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
+		WithDirectory("/generated", fresh, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithExec([]string{"/bin/bash", "-c",
-			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
-				`grep -vE '^\[.*s\] \|' "$tmp" || true`}).
-		WithExec([]string{"/bin/bash", "-c", "CHANGED=$(find . \\( -name '*.g.dart' -o -name '*.mocks.dart' \\) | xargs -r git diff --exit-code); if [ $? -ne 0 ]; then echo \"ERROR: Generated files are out of date — run: dart run build_runner build\"; exit 1; fi; echo \"Generated files are up to date.\""}).
+			`stale=$(find /committed -name '*.g.dart' -o -name '*.mocks.dart' | ` +
+				`while IFS= read -r f; do rel="${f#/committed/}"; diff -q "$f" "/generated/$rel" >/dev/null 2>&1 || echo "$rel"; done); ` +
+				`if [ -n "$stale" ]; then ` +
+				`echo "ERROR: Generated files are out of date — run: dart run build_runner build"; echo "$stale"; exit 1; ` +
+				`else echo "Generated files are up to date."; fi`}).
 		Stdout(ctx)
 }
 
