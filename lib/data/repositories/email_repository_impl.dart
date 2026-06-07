@@ -3101,6 +3101,8 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  // Results are limited to emails already synced into the local SQLite FTS5
+  // index; call syncEmails first to ensure the index is up-to-date.
   Future<List<model.Email>> searchEmails(
     String accountId,
     String mailboxPath,

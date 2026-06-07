@@ -433,6 +433,7 @@ void main() {
 
     final r = makeRepo();
     await r.accounts.addAccount(account, userPass);
+    await r.emails.syncEmails('test', 'INBOX');
 
     final results = await r.emails.searchEmails(
       'test',
