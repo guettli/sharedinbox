@@ -388,7 +388,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 	return dag.Container().
 		From("stalwartlabs/stalwart:v0.14.1").
 		WithFile("/etc/stalwart/config.toml.orig", config).
-		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' -e 's/bind     = \\[\"0.0.0.0:\\([0-9]*\\)\"\\]/bind     = [\"0.0.0.0:\\1\", \"[::]:\\1\"]/g' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
+		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
 		WithDirectory("/tmp/stalwart", dataDir).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
