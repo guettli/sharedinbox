@@ -10,6 +10,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Print runner wait time
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          runner_start=$(date +%s)
+          created_at=$(curl -sf \
+            -H "Authorization: token $FORGEJO_TOKEN" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/tasks?limit=100" \
+            | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for r in data.get('workflow_runs', []):
+    if r.get('run_number') == $RUN_NUMBER:
+        print(r['created_at'])
+        break
+" 2>/dev/null)
+          if [ -n "$created_at" ]; then
+            queued_epoch=$(date -d "$created_at" +%s)
+            wait_seconds=$((runner_start - queued_epoch))
+            echo "Runner wait time: ${wait_seconds}s (queued at $created_at)"
+          else
+            echo "Runner wait time: unknown (API lookup failed)"
+          fi
       - uses: actions/checkout@v4
       - name: Setup Dagger Remote Engine
         env:
