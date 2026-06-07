@@ -594,25 +594,33 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	checkSetup := m.setup(m.checkSrc())
-
-	if _, err := checkSetup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx); err != nil {
-		return "Format check failed", err
-	}
-
-	analyze, err := checkSetup.WithExec([]string{"dart", "analyze", "--fatal-infos"}).Stdout(ctx)
-	if err != nil {
-		return analyze, err
-	}
-
-	mocks, err := m.CheckGenerated(ctx)
-	if err != nil {
-		return mocks, err
-	}
-
-	coverage, err := m.Coverage(ctx)
-	if err != nil {
-		return coverage, err
+	// Run format, analyze, generated-code check, and coverage in parallel —
+	// they all share the same setup base and have no dependencies on each other.
+	var analyze, mocks, coverage string
+	var checkEg errgroup.Group
+	checkEg.Go(func() error {
+		setup := m.setup(m.checkSrc())
+		_, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx)
+		return err
+	})
+	checkEg.Go(func() error {
+		setup := m.setup(m.checkSrc())
+		var err error
+		analyze, err = setup.WithExec([]string{"dart", "analyze", "--fatal-infos"}).Stdout(ctx)
+		return err
+	})
+	checkEg.Go(func() error {
+		var err error
+		mocks, err = m.CheckGenerated(ctx)
+		return err
+	})
+	checkEg.Go(func() error {
+		var err error
+		coverage, err = m.Coverage(ctx)
+		return err
+	})
+	if err := checkEg.Wait(); err != nil {
+		return "", err
 	}
 
 	// Use errgroup.Group (not WithContext) so a failing test does not cancel its
