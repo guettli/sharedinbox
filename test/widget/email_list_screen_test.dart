@@ -446,10 +446,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.byType(EmailDetailScreen), findsOneWidget);
-        // The detail AppBar title shows the first email's subject.
+        // The detail body header shows the first email's subject.
         expect(
           find.descendant(
-            of: find.byType(AppBar),
+            of: find.byType(EmailDetailScreen),
             matching: find.text('Alpha Match'),
           ),
           findsOneWidget,

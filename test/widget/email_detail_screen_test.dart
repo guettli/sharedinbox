@@ -81,7 +81,7 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
 
-    testWidgets('shows subject in app bar after data loads', (tester) async {
+    testWidgets('shows subject in email header section', (tester) async {
       final email = testEmail(subject: 'Project update');
       const body = EmailBody(
         emailId: 'acc-1:42',
@@ -106,8 +106,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Subject appears in both the app bar and the email header section.
-      expect(find.text('Project update'), findsAtLeastNWidgets(1));
+      // Subject appears only in the email header section, not in the app bar.
+      expect(find.text('Project update'), findsOneWidget);
       expect(find.text('See attached slides.'), findsOneWidget);
     });
 
@@ -266,7 +266,7 @@ void main() {
       expect(find.textContaining('carol@example.com'), findsAtLeastNWidgets(1));
     });
 
-    testWidgets('Mark as spam is in popup menu, not a standalone button', (
+    testWidgets('Mark as spam is a standalone button, not in popup menu', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -279,19 +279,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // No standalone icon button for mark as spam.
+      // Standalone icon button for mark as spam is in the app bar.
       expect(
         find.byWidgetPredicate(
           (w) => w is Tooltip && w.message == 'Mark as spam',
         ),
-        findsNothing,
+        findsOneWidget,
       );
 
-      // It appears in the popup menu.
+      // It does NOT appear in the popup menu.
       await tester.tap(find.byType(PopupMenuButton<String>));
       await tester.pumpAndSettle();
 
-      expect(find.text('Mark as spam'), findsOneWidget);
+      expect(find.text('Mark as spam'), findsNothing);
     });
 
     testWidgets('Mark as spam shows dialog when no junk folder', (
@@ -309,11 +309,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Open the popup menu first, then tap Mark as spam.
-      await tester.tap(find.byType(PopupMenuButton<String>));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Mark as spam'));
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is Tooltip && w.message == 'Mark as spam',
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('No spam folder found'), findsOneWidget);
