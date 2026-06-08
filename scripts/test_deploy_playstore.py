@@ -95,6 +95,30 @@ class TestMainHappyPath(unittest.TestCase):
         track_call = session.put.call_args_list[0]
         self.assertIn("/tracks/", track_call[0][0])
 
+    def test_updates_all_configured_tracks(self):
+        session = self._run_main()
+        track_urls = [c[0][0] for c in session.put.call_args_list]
+        self.assertEqual(len(track_urls), len(deploy_playstore.TRACKS))
+        for track in deploy_playstore.TRACKS:
+            self.assertTrue(
+                any(url.endswith(f"/tracks/{track}") for url in track_urls),
+                f"no PUT to /tracks/{track} (saw {track_urls})",
+            )
+
+    def test_commits_after_all_track_updates(self):
+        session = self._run_main()
+        # All PUTs are track updates; commit is the second POST after the
+        # initial edit-create. Verify PUTs precede the commit by checking
+        # mock_calls order across both methods.
+        method_order = [c[0] for c in session.method_calls]
+        commit_idx = next(
+            i for i, m in enumerate(method_order)
+            if m == "post" and ":commit" in session.method_calls[i][1][0]
+        )
+        put_indices = [i for i, m in enumerate(method_order) if m == "put"]
+        self.assertEqual(len(put_indices), len(deploy_playstore.TRACKS))
+        self.assertTrue(all(i < commit_idx for i in put_indices))
+
 
 class TestUploadRetry(unittest.TestCase):
     def _run_main(self, upload_side_effects, sleep_mock=None):

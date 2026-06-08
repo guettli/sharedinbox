@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Upload an Android App Bundle to the Google Play Store internal track."""
+"""Upload an Android App Bundle to the Google Play Store.
+
+The bundle is published to every track in ``TRACKS`` within a single Play edit,
+so internal testing and closed testing share the same version code. ``alpha``
+is what the Play Console labels "Closed testing"; publishing there removes the
+need to manually drag-and-drop the AAB into the closed-testing release form.
+"""
 
 import json
 import os
@@ -11,7 +17,7 @@ from google.oauth2 import service_account
 
 PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
-TRACK = "internal"
+TRACKS = ("internal", "alpha")
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
@@ -94,19 +100,20 @@ def main():
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    track_resp = session.put(
-        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{TRACK}",
-        json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
-        timeout=30,
-    )
-    track_resp.raise_for_status()
+    for track in TRACKS:
+        track_resp = session.put(
+            f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
+            json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
+            timeout=30,
+        )
+        track_resp.raise_for_status()
 
     commit_resp = session.post(
         f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
         timeout=30,
     )
     commit_resp.raise_for_status()
-    print(f"Deployed version {version_code} to {TRACK} track")
+    print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
 if __name__ == "__main__":
