@@ -53,3 +53,9 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command task check-ci-images'
         pass_filenames: false
         files: ^(ci/main\.go|\.fvmrc)$
+      - id: dagger-versions-aligned
+        name: verify Dagger version is consistent across dagger.json, flake.nix, Dockerfile and DAGGER.md
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && scripts/check_dagger_versions.sh'
+        pass_filenames: false
+        files: ^(ci/dagger\.json|flake\.nix|\.forgejo/Dockerfile|DAGGER\.md)$

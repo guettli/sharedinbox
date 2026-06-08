@@ -49,14 +49,16 @@
           '';
         };
 
-        # The dagger/nix flake pins 0.20.8, whose Nix wrapper is a broken self-exec
-        # loop.  Fetch 0.21.4 directly so the pre-commit dart-check hook can run.
-        dagger021 = pkgs.stdenv.mkDerivation {
+        # The dagger/nix flake's Nix wrapper is a broken self-exec loop, so we
+        # fetch the CLI binary directly.  Keep this version in lockstep with
+        # ci/dagger.json (engineVersion) and .forgejo/Dockerfile (DAGGER_VERSION) —
+        # scripts/check_dagger_versions.sh enforces this.
+        daggerCli = pkgs.stdenv.mkDerivation {
           pname = "dagger";
-          version = "0.21.4";
+          version = "0.20.8";
           src = pkgs.fetchurl {
-            url = "https://dl.dagger.io/dagger/releases/0.21.4/dagger_v0.21.4_linux_amd64.tar.gz";
-            sha256 = "0wlnbr4g5069755131yjp2a6alacn64f1c8b27xn0cbynq3zicjd";
+            url = "https://dl.dagger.io/dagger/releases/0.20.8/dagger_v0.20.8_linux_amd64.tar.gz";
+            sha256 = "1ns6wq2z1skd2fq9lbrcali0s8kn24p3haamnjjgchg6zlv6b960";
           };
           sourceRoot = ".";
           installPhase = ''
@@ -69,7 +71,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Dagger CLI
-            dagger021
+            daggerCli
 
             # Go compiler — for Dagger development
             go
