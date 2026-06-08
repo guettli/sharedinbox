@@ -582,6 +582,54 @@ void main() {
 
       expect(find.textContaining('Structure not available'), findsOneWidget);
     });
+
+    testWidgets(
+      'Load remote images snack bar auto-dismisses after 3 seconds',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          htmlBody: '<p>Hello <img src="https://example.com/x.png"/></p>',
+          attachments: [],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The "Load remote images" button is visible because the sender is
+        // not yet trusted.
+        expect(find.text('Load remote images'), findsOneWidget);
+
+        await tester.tap(find.text('Load remote images'));
+        // Settle the snack bar enter animation and the setState rebuild
+        // that swaps in the image-loading WebView.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+
+        // Snack bar must be visible.
+        expect(
+          find.text('Images will be loaded automatically for this sender.'),
+          findsOneWidget,
+        );
+
+        // After 3 seconds (the snack bar's duration) plus the reverse
+        // animation, the snack bar must be gone.
+        // Regression test for #484: SnackBar with an action defaults to
+        // persist=true, which disables auto-dismiss — explicit persist:false
+        // restores duration-based dismissal.
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Images will be loaded automatically for this sender.'),
+          findsNothing,
+        );
+      },
+    );
   });
 }
 

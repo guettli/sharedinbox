@@ -239,6 +239,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                       ScaffoldMessenger.of(ctx).showSnackBar(
                         SnackBar(
                           duration: const Duration(seconds: 3),
+                          // SnackBar defaults to persist=true when an action
+                          // is set, which disables the auto-dismiss timer.
+                          // Explicitly opt back into duration-based dismiss.
+                          persist: false,
                           content: const Text(
                             'Images will be loaded automatically for this sender.',
                           ),

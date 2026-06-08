@@ -214,6 +214,10 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 duration: const Duration(seconds: 3),
+                                // SnackBar defaults to persist=true when an
+                                // action is set, which disables auto-dismiss.
+                                // Explicitly opt into duration-based dismiss.
+                                persist: false,
                                 content: const Text(
                                   'Images will be loaded automatically for this sender.',
                                 ),
