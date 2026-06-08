@@ -26,13 +26,13 @@ repos:
       - id: forbidden-files-hook
         name: check for forbidden home-directory files
         language: system
-        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command task check-hygiene'
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && task check-hygiene'
         pass_filenames: false
         always_run: true
       - id: dart-check
         name: dart format (autofix) + check-fast (parallel)
         language: system
-        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command dagger call --progress=plain -q -m ci --source=. check-fast'
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && dagger call --progress=plain -q -m ci --source=. check-fast'
         pass_filenames: false
         always_run: true
       - id: ci-no-direct-dagger
@@ -50,12 +50,12 @@ repos:
       - id: ci-image-exists
         name: verify container images in ci/main.go are reachable
         language: system
-        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && nix develop --command task check-ci-images'
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && task check-ci-images'
         pass_filenames: false
         files: ^(ci/main\.go|\.fvmrc)$
       - id: dagger-versions-aligned
-        name: verify Dagger version is consistent across dagger.json, flake.nix, Dockerfile and DAGGER.md
+        name: verify Dagger version is consistent across dagger.json, Dockerfile and DAGGER.md
         language: system
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && scripts/check_dagger_versions.sh'
         pass_filenames: false
-        files: ^(ci/dagger\.json|flake\.nix|\.forgejo/Dockerfile|DAGGER\.md)$
+        files: ^(ci/dagger\.json|\.forgejo/Dockerfile|DAGGER\.md)$

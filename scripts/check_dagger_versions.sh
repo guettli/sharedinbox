@@ -13,11 +13,6 @@ ROOT=$(git rev-parse --show-toplevel)
 dagger_json=$(grep -oE '"engineVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/ci/dagger.json" \
   | sed -E 's/.*"v?([^"]+)"$/\1/')
 
-# flake.nix — the dagger021 derivation's CLI download URL.
-flake_nix=$(grep -oE 'dagger_v[0-9]+\.[0-9]+\.[0-9]+_linux' "$ROOT/flake.nix" \
-  | head -n1 \
-  | sed -E 's/dagger_v([0-9.]+)_linux/\1/')
-
 # .forgejo/Dockerfile — DAGGER_VERSION env on the install line.
 dockerfile=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/.forgejo/Dockerfile" \
   | head -n1 \
@@ -29,11 +24,10 @@ dagger_md=$(grep -oE 'dagger/nix/v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
   | sed -E 's@.*/v@@')
 
 printf 'ci/dagger.json    engineVersion = v%s\n' "$dagger_json"
-printf 'flake.nix         dagger021     = %s\n'  "$flake_nix"
 printf '.forgejo/Dockerf. DAGGER_VERSION= %s\n'  "$dockerfile"
 printf 'DAGGER.md         engine tag    = v%s\n' "$dagger_md"
 
-for v in "$flake_nix" "$dockerfile" "$dagger_md"; do
+for v in "$dockerfile" "$dagger_md"; do
   if [ -z "$v" ]; then
     echo "ERROR: failed to parse a Dagger version reference." >&2
     exit 1
@@ -41,7 +35,7 @@ for v in "$flake_nix" "$dockerfile" "$dagger_md"; do
   if [ "$v" != "$dagger_json" ]; then
     echo "" >&2
     echo "ERROR: Dagger versions are out of sync." >&2
-    echo "  Align ci/dagger.json, flake.nix, .forgejo/Dockerfile and DAGGER.md to the same version." >&2
+    echo "  Align ci/dagger.json, .forgejo/Dockerfile and DAGGER.md to the same version." >&2
     exit 1
   fi
 done

@@ -1,0 +1,59 @@
+# Development and Testing Container for SharedInbox
+# Replaces the Nix shell environment.
+FROM ghcr.io/cirruslabs/flutter:3.44.0
+
+# Install Linux desktop build and test dependencies, Go, NodeJS, python3, and utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    liblzma-dev \
+    libsecret-1-dev \
+    libgcrypt20-dev \
+    libjsoncpp-dev \
+    sqlite3 \
+    iproute2 \
+    netcat-openbsd \
+    xvfb \
+    libosmesa6 \
+    libegl1 \
+    lld \
+    git \
+    curl \
+    jq \
+    python3-pip \
+    nodejs \
+    npm \
+    hugo \
+    lcov \
+    rsync \
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Task runner
+RUN curl -fsSL https://taskfile.dev/install.sh \
+    | sh -s -- -b /usr/local/bin v3.48.0
+
+# Install Dagger CLI
+RUN curl -fsSL https://dl.dagger.io/dagger/install.sh \
+    | DAGGER_VERSION=0.20.8 BIN_DIR=/usr/local/bin sh
+
+# Install python packages (Play Store API clients + pre-commit)
+RUN pip install --break-system-packages --no-cache-dir \
+    google-api-python-client \
+    google-auth-httplib2 \
+    httplib2 \
+    pre-commit==4.5.1
+
+# Install acpx CLI globally
+RUN npm install -g acpx@0.10.0
+
+# Setup user "ci"
+RUN useradd -m -s /bin/bash ci
+USER ci
+ENV HOME=/home/ci
+ENV PATH=/home/ci/.pub-cache/bin:$PATH
+
+WORKDIR /src
