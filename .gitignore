@@ -123,3 +123,4 @@ dagger-certs
 /go
 .last_deployed_sha
 .fail_count
+/*.kubeconfig
