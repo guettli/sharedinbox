@@ -135,7 +135,7 @@ jobs:
           repo_labels = api_get("/labels")
           label_map = {l["name"]: l["id"] for l in repo_labels}
 
-          label_ids = [label_map["Ready"]] if "Ready" in label_map else []
+          label_ids = [label_map["loop/code"]] if "loop/code" in label_map else []
 
           title = "Firebase Tests failed — find root cause and fix"
           body = (
