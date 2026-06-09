@@ -1,0 +1,44 @@
+name: Publish Dev Container
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile.dev'
+      - '.devcontainer/devcontainer.json'
+      - '.forgejo/workflows/publish-dev-container.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Push sharedinbox-dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REGISTRY: codeberg.org
+      IMAGE: codeberg.org/guettli/sharedinbox-dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Codeberg container registry
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+        run: |
+          echo "$FORGEJO_TOKEN" \
+            | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          docker build \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:$SHORT_SHA" \
+            -f Dockerfile.dev \
+            .
+
+      - name: Push image
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:$SHORT_SHA"

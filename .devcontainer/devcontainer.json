@@ -1,0 +1,10 @@
+{
+    "name": "SharedInbox Dev",
+    "build": {
+        "dockerfile": "../Dockerfile.dev",
+        "context": ".."
+    },
+    "workspaceFolder": "/src",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/src,type=bind,consistency=cached",
+    "remoteUser": "ci"
+}
