@@ -93,7 +93,7 @@ void main() {
     test('multi-account threads are kept independent in the selection', () {
       final ctrl = EmailThreadListController()
         ..updateThreads([
-          _t('a', accountId: 'acc-1'),
+          _t('a'),
           _t('b', accountId: 'acc-2'),
         ]);
       ctrl.selectAll();
