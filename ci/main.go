@@ -814,7 +814,14 @@ func (m *Ci) DeployApk(
 // Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
 func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
 	built := m.firebaseBase().
-		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
+		// `flutter build apk` spawns a Gradle daemon. When this WithExec ends the
+		// container is torn down and the daemon is killed, but its journal-cache
+		// lock file on the persistent gradle-cache volume keeps its dead PID — the
+		// next gradlew invocation then times out waiting for that lock. `gradlew
+		// --stop` shuts the daemon down gracefully so the lock is released before
+		// Dagger snapshots the layer.
+		WithExec([]string{"/bin/bash", "-c",
+			`flutter build apk --debug --no-pub && (cd android && ./gradlew --stop)`}).
 		WithWorkdir("/src/android").
 		// --no-daemon avoids connecting to a stale daemon whose registry file was
 		// preserved in the Dagger layer snapshot but whose process no longer exists.
