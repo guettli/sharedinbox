@@ -3,19 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
-import 'package:sharedinbox/ui/widgets/email_thread_tile.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
-import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
-import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -40,12 +35,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // Error banner — tracks the last error message that the user dismissed.
   String? _dismissedError;
 
-  // Thread-level selection (key = threadId).
-  final Set<String> _selectedThreadIds = {};
-  // Last-emitted thread list, used to resolve emailIds for batch operations.
-  List<EmailThread> _currentThreads = [];
-  // Individual email selection used in search results.
-  final Set<String> _selectedSearchIds = {};
+  late final EmailThreadListController _selection;
 
   // Pagination: number of threads currently requested from the DB.
   static const _pageSize = 50;
@@ -59,12 +49,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // Used to skip redundant re-runs when the user presses Enter on an
   // already-settled search (issue #473).
   String? _lastSettledQuery;
-  bool get _selecting =>
-      _selectedThreadIds.isNotEmpty || _selectedSearchIds.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    _selection = EmailThreadListController()..addListener(_onSelectionChange);
     _searchController.addListener(() {
       if (_searchController.text.isEmpty) {
         setState(() {
@@ -78,52 +67,15 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   @override
   void dispose() {
+    _selection
+      ..removeListener(_onSelectionChange)
+      ..dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  void _toggleThreadSelection(EmailThread thread) {
-    setState(() {
-      if (_selectedThreadIds.contains(thread.threadId)) {
-        _selectedThreadIds.remove(thread.threadId);
-      } else {
-        _selectedThreadIds.add(thread.threadId);
-      }
-    });
-  }
-
-  void _clearSelection() => setState(() {
-        _selectedThreadIds.clear();
-        _selectedSearchIds.clear();
-      });
-
-  void _selectAll() {
-    setState(() {
-      if (_searching) {
-        _selectedSearchIds.addAll(_searchResults?.map((e) => e.id) ?? []);
-      } else {
-        _selectedThreadIds.addAll(_currentThreads.map((t) => t.threadId));
-      }
-    });
-  }
-
-  void _toggleSearchSelection(String emailId) {
-    setState(() {
-      if (_selectedSearchIds.contains(emailId)) {
-        _selectedSearchIds.remove(emailId);
-      } else {
-        _selectedSearchIds.add(emailId);
-      }
-    });
-  }
-
-  // All email IDs for the current selection context.
-  List<String> get _selectedEmailIds {
-    if (_searching) return _selectedSearchIds.toList();
-    return _currentThreads
-        .where((t) => _selectedThreadIds.contains(t.threadId))
-        .expand((t) => t.emailIds)
-        .toList();
+  void _onSelectionChange() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _runSearch(String query) async {
@@ -170,17 +122,23 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final prefs =
         ref.watch(userPreferencesProvider).value ?? const UserPreferences();
     final menuAtBottom = prefs.menuPosition == MenuPosition.bottom;
+    final selecting = _selection.isSelecting;
 
     return Scaffold(
       appBar: _buildAppBar(repo, accountAsync, menuAtBottom: menuAtBottom),
-      drawer: _selecting
+      drawer: selecting
           ? null
           : FolderDrawer(
               accountId: widget.accountId,
               currentMailboxPath: widget.mailboxPath,
             ),
-      bottomNavigationBar: _selecting
-          ? _selectionBottomBar()
+      bottomNavigationBar: selecting
+          ? buildSelectionBottomBar(
+              context,
+              ref,
+              _selection,
+              onAfterAction: _onAfterBatchAction,
+            )
           : (menuAtBottom ? _folderNavBottomBar() : null),
       body: Column(
         children: [
@@ -200,67 +158,52 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     AsyncValue<Account?> accountAsync, {
     required bool menuAtBottom,
   }) {
-    final selectionCount =
-        _searching ? _selectedSearchIds.length : _selectedThreadIds.length;
+    if (_selection.isSelecting) {
+      return buildSelectionAppBar(_selection);
+    }
 
     return AppBar(
       automaticallyImplyLeading: !menuAtBottom,
-      leading: _selecting
-          ? IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: _clearSelection,
-            )
-          : null,
-      title: _selecting
-          ? Text('$selectionCount selected')
-          : Text(widget.mailboxPath),
-      actions: _selecting
-          ? [
-              IconButton(
-                icon: const Icon(Icons.select_all),
-                tooltip: 'Select all',
-                onPressed: _selectAll,
+      title: Text(widget.mailboxPath),
+      actions: [
+        accountAsync.when(
+          loading: () => const SizedBox.shrink(),
+          error: (_, __) => const SizedBox.shrink(),
+          data: (account) => Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Center(
+              child: Text(
+                account?.displayName ?? '',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-            ]
-          : [
-              accountAsync.when(
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (account) => Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Center(
-                    child: Text(
-                      account?.displayName ?? '',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ),
-              ),
-              _buildSyncButton(emailRepo),
-              IconButton(
-                icon: const Icon(Icons.edit),
-                onPressed: () => context.push(
-                  '/compose',
-                  extra: {'accountId': widget.accountId},
-                ),
-              ),
-              PopupMenuButton<String>(
-                onSelected: (value) async {
-                  if (value == 'mark_all_read') {
-                    await emailRepo.markAllAsRead(
-                      widget.accountId,
-                      widget.mailboxPath,
-                    );
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: 'mark_all_read',
-                    child: Text('Mark all as read'),
-                  ),
-                ],
-              ),
-            ],
+            ),
+          ),
+        ),
+        _buildSyncButton(emailRepo),
+        IconButton(
+          icon: const Icon(Icons.edit),
+          onPressed: () => context.push(
+            '/compose',
+            extra: {'accountId': widget.accountId},
+          ),
+        ),
+        PopupMenuButton<String>(
+          onSelected: (value) async {
+            if (value == 'mark_all_read') {
+              await emailRepo.markAllAsRead(
+                widget.accountId,
+                widget.mailboxPath,
+              );
+            }
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: 'mark_all_read',
+              child: Text('Mark all as read'),
+            ),
+          ],
+        ),
+      ],
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(60),
         child: Padding(
@@ -269,9 +212,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
             controller: _searchController,
             hintText: 'Search…',
             leading: const Icon(Icons.search),
-            enabled: !_selecting,
             trailing: [
-              if (_searchController.text.isNotEmpty && !_selecting)
+              if (_searchController.text.isNotEmpty)
                 IconButton(
                   icon: const Icon(Icons.clear),
                   onPressed: () => _searchController.clear(),
@@ -350,41 +292,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
-  Widget _selectionBottomBar() {
-    return BottomAppBar(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.archive),
-            tooltip: 'Archive',
-            onPressed: _batchArchive,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete),
-            tooltip: 'Delete',
-            onPressed: _batchDelete,
-          ),
-          IconButton(
-            icon: const Icon(Icons.report),
-            tooltip: 'Mark as spam',
-            onPressed: _batchMarkSpam,
-          ),
-          IconButton(
-            icon: const Icon(Icons.drive_file_move),
-            tooltip: 'Move to folder',
-            onPressed: _batchMove,
-          ),
-          IconButton(
-            icon: const Icon(Icons.access_time),
-            tooltip: 'Snooze',
-            onPressed: _batchSnooze,
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildSearchBody() {
     if (_searchLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -395,7 +302,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (_searchResults!.isEmpty) {
       return const Center(child: Text('No results'));
     }
-    return _buildEmailList(_searchResults!);
+    final threads = _searchResults!.map(EmailThread.fromEmail).toList();
+    return EmailThreadList(
+      controller: _selection,
+      items: threads,
+      enableSwipe: false,
+      onTap: (t) => unawaited(_openSearchResultAndRefresh(t.latestEmailId)),
+    );
   }
 
   Widget _buildSyncErrorBanner() {
@@ -440,98 +353,17 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         // Also wait for this specific mailbox to sync for immediate feedback.
         await emailRepo.syncEmails(widget.accountId, widget.mailboxPath);
       },
-      child: StreamBuilder<List<EmailThread>>(
+      child: EmailThreadList(
+        controller: _selection,
         stream: emailRepo.observeThreads(
           widget.accountId,
           widget.mailboxPath,
           limit: _limit,
         ),
-        builder: (ctx, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final threads = snap.data!;
-          _currentThreads = threads;
-          if (threads.isEmpty) {
-            return ListView(
-              children: const [
-                SizedBox(height: 300, child: Center(child: Text('No emails'))),
-              ],
-            );
-          }
-          return _buildThreadList(threads);
-        },
+        enablePagination: true,
+        onLoadMore: () => setState(() => _limit += _pageSize),
       ),
     );
-  }
-
-  Future<void> _batchMoveToRole(
-    String role, {
-    required String dialogTitle,
-    required String createFolderName,
-  }) async {
-    final ids = _selectedEmailIds;
-    _clearSelection();
-
-    final mailbox = await resolveMailboxByRole(
-      context,
-      ref.read(mailboxRepositoryProvider),
-      widget.accountId,
-      widget.mailboxPath,
-      role,
-      dialogTitle: dialogTitle,
-      createFolderName: createFolderName,
-    );
-
-    if (!mounted || mailbox == null) return;
-
-    final repo = ref.read(emailRepositoryProvider);
-
-    // Fetch full email data before moving so we can restore them if user clicks Undo.
-    final originalEmails = (await Future.wait(
-      ids.map((id) => repo.getEmail(id)),
-    ))
-        .whereType<Email>()
-        .toList();
-
-    for (final id in ids) {
-      await repo.moveEmail(id, mailbox.path);
-    }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: widget.accountId,
-      type: UndoType.move,
-      emailIds: ids,
-      sourceMailboxPath: widget.mailboxPath,
-      destinationMailboxPath: mailbox.path,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-  }
-
-  Future<void> _batchArchive() => _batchMoveToRole(
-        'archive',
-        dialogTitle: 'No archive folder found',
-        createFolderName: 'Archive',
-      );
-
-  Future<void> _refreshSearchAndPopIfEmpty() async {
-    if (!mounted || !_searching) return;
-    final query = _searchController.text.trim();
-    final remaining = await ref
-        .read(emailRepositoryProvider)
-        .searchEmails(widget.accountId, widget.mailboxPath, query);
-    if (!mounted) return;
-    if (remaining.isEmpty) {
-      if (context.canPop()) {
-        context.pop();
-      } else {
-        _searchController.clear();
-      }
-    } else {
-      setState(() => _searchResults = remaining);
-    }
   }
 
   Future<void> _openSearchResultAndRefresh(String emailId) async {
@@ -543,279 +375,42 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     await _refreshSearchAndPopIfEmpty();
   }
 
-  Future<void> _batchDelete() async {
-    final ids = _selectedEmailIds;
-    final wasSearching = _searching;
-    _clearSelection();
-    final repo = ref.read(emailRepositoryProvider);
-
-    // Fetch full email data before deleting so we can restore them if user clicks Undo.
-    // This is especially important for IMAP where we hard-delete the row locally.
-    final originalEmails = (await Future.wait(
-      ids.map((id) => repo.getEmail(id)),
-    ))
-        .whereType<Email>()
-        .toList();
-
-    String? lastDestPath;
-    for (final id in ids) {
-      lastDestPath = await repo.deleteEmail(id);
-    }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: widget.accountId,
-      type: UndoType.delete,
-      emailIds: ids,
-      sourceMailboxPath: widget.mailboxPath,
-      destinationMailboxPath: lastDestPath,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-
-    if (wasSearching && mounted) {
-      // Filter deleted emails out of the local results immediately.
-      // Calling searchEmails here would still return deleted rows because the
-      // delete is only enqueued — not yet applied to the local DB.
-      final deletedIds = ids.toSet();
-      final remaining = (_searchResults ?? [])
-          .where((e) => !deletedIds.contains(e.id))
-          .toList();
-      if (remaining.isEmpty) {
-        if (context.canPop()) {
-          context.pop();
-        } else {
-          _searchController.clear();
-        }
-      } else {
-        setState(() => _searchResults = remaining);
-      }
-    }
-  }
-
-  Future<void> _batchMarkSpam() => _batchMoveToRole(
-        'junk',
-        dialogTitle: 'No spam folder found',
-        createFolderName: 'Junk',
-      );
-
-  Future<void> _batchMove() async {
-    final ids = _selectedEmailIds;
-    final mailboxes = await ref
-        .read(mailboxRepositoryProvider)
-        .observeMailboxes(widget.accountId)
-        .first;
-    final destinations =
-        mailboxes.where((m) => m.path != widget.mailboxPath).toList();
-
+  Future<void> _refreshSearchAndPopIfEmpty() async {
+    if (!mounted || !_searching) return;
+    final query = _searchController.text.trim();
+    final remaining = await ref
+        .read(emailRepositoryProvider)
+        .searchEmails(widget.accountId, widget.mailboxPath, query);
     if (!mounted) return;
-
-    final chosen = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => ListView(
-        shrinkWrap: true,
-        children: [
-          const ListTile(
-            title: Text(
-              'Move to…',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          for (final m in destinations)
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: Text(m.name),
-              onTap: () => Navigator.pop(ctx, m.path),
-            ),
-        ],
-      ),
-    );
-
-    if (chosen == null || !mounted) return;
-    _clearSelection();
-    final repo = ref.read(emailRepositoryProvider);
-
-    // Fetch full email data before moving so we can restore them if user clicks Undo.
-    final originalEmails = (await Future.wait(
-      ids.map((id) => repo.getEmail(id)),
-    ))
-        .whereType<Email>()
-        .toList();
-
-    for (final id in ids) {
-      await repo.moveEmail(id, chosen);
-    }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: widget.accountId,
-      type: UndoType.move,
-      emailIds: ids,
-      sourceMailboxPath: widget.mailboxPath,
-      destinationMailboxPath: chosen,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-  }
-
-  Future<void> _batchSnooze() async {
-    final ids = _selectedEmailIds;
-    final until = await showModalBottomSheet<DateTime>(
-      context: context,
-      builder: (ctx) => const SnoozePicker(),
-    );
-    if (until == null || !mounted) return;
-
-    _clearSelection();
-    final repo = ref.read(emailRepositoryProvider);
-    // Fetch full email data before snoozing so we can restore them if user clicks Undo.
-    final originalEmails = (await Future.wait(
-      ids.map((id) => repo.getEmail(id)),
-    ))
-        .whereType<Email>()
-        .toList();
-
-    for (final id in ids) {
-      await repo.snoozeEmail(id, until);
-    }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: widget.accountId,
-      type: UndoType.snooze,
-      emailIds: ids,
-      sourceMailboxPath: widget.mailboxPath,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 5),
-        content: Text(
-          'Snoozed ${ids.length} email${ids.length == 1 ? '' : 's'} until ${DateFormat('MMM d, HH:mm').format(until)}',
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThreadList(List<EmailThread> threads) {
-    final hasMore = threads.length == _limit;
-    return ListView.builder(
-      itemCount: threads.length + (hasMore ? 1 : 0),
-      itemBuilder: (ctx, i) {
-        if (i == threads.length) {
-          return TextButton(
-            onPressed: () => setState(() => _limit += _pageSize),
-            child: const Text('Load more'),
-          );
-        }
-        final t = threads[i];
-        return EmailThreadTile(
-          thread: t,
-          isSelected: _selectedThreadIds.contains(t.threadId),
-          isSelecting: _selecting,
-          onTap: _selecting
-              ? () => _toggleThreadSelection(t)
-              : t.messageCount > 1
-                  ? () => context.push(
-                        '/accounts/${widget.accountId}/mailboxes'
-                        '/${Uri.encodeComponent(widget.mailboxPath)}'
-                        '/threads/${Uri.encodeComponent(t.threadId)}',
-                      )
-                  : () => context.push(
-                        '/accounts/${widget.accountId}/mailboxes'
-                        '/${Uri.encodeComponent(widget.mailboxPath)}'
-                        '/emails/${Uri.encodeComponent(t.latestEmailId)}',
-                      ),
-          onLongPress: () => _toggleThreadSelection(t),
-          onDismissed: (direction) => _onSwipeDismissed(t, direction),
-        );
-      },
-    );
-  }
-
-  Future<void> _onSwipeDismissed(
-    EmailThread t,
-    DismissDirection direction,
-  ) async {
-    final repo = ref.read(emailRepositoryProvider);
-    final type = direction == DismissDirection.startToEnd
-        ? UndoType.move
-        : UndoType.delete;
-
-    // Fetch full email data before moving/deleting.
-    final originalEmails = (await Future.wait(
-      t.emailIds.map((id) => repo.getEmail(id)),
-    ))
-        .whereType<Email>()
-        .toList();
-
-    if (direction == DismissDirection.startToEnd) {
-      final archive = await ref
-          .read(mailboxRepositoryProvider)
-          .findMailboxByRole(widget.accountId, 'archive');
-      if (!mounted || archive == null) return;
-      for (final id in t.emailIds) {
-        await repo.moveEmail(id, archive.path);
+    if (remaining.isEmpty) {
+      if (context.canPop()) {
+        context.pop();
+        return;
       }
-      final action = UndoAction(
-        id: DateTime.now().toIso8601String(),
-        accountId: widget.accountId,
-        type: type,
-        emailIds: t.emailIds,
-        sourceMailboxPath: widget.mailboxPath,
-        destinationMailboxPath: archive.path,
-        originalEmails: originalEmails,
-      );
-      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+      _searchController.clear();
       return;
     }
-
-    String? lastDestPath;
-    for (final id in t.emailIds) {
-      lastDestPath = await repo.deleteEmail(id);
-    }
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: widget.accountId,
-      type: type,
-      emailIds: t.emailIds,
-      sourceMailboxPath: widget.mailboxPath,
-      destinationMailboxPath: lastDestPath,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+    setState(() => _searchResults = remaining);
   }
 
-  // Used for search results, which are individual emails.
-  Widget _buildEmailList(List<Email> emails) {
-    return ListView.builder(
-      itemCount: emails.length,
-      itemBuilder: (ctx, i) {
-        final e = emails[i];
-        final t = EmailThread.fromEmail(e);
-        final isSelected = _selectedSearchIds.contains(e.id);
-        return ThreadTile(
-          thread: t,
-          selected: isSelected,
-          leading: SizedBox(
-            width: 40,
-            child: _selecting
-                ? Checkbox(
-                    value: isSelected,
-                    onChanged: (_) => _toggleSearchSelection(e.id),
-                  )
-                : null,
-          ),
-          onTap: _selecting
-              ? () => _toggleSearchSelection(e.id)
-              : () => unawaited(_openSearchResultAndRefresh(e.id)),
-          onLongPress: () => _toggleSearchSelection(e.id),
-        );
-      },
-    );
+  void _onAfterBatchAction(List<String> actedThreadIds) {
+    if (!_searching || !mounted) return;
+
+    // Filter acted-on emails out of the local results immediately. Calling
+    // searchEmails would still return them because the delete is only
+    // enqueued — not yet applied to the local DB.
+    final actedSet = actedThreadIds.toSet();
+    final remaining = (_searchResults ?? [])
+        .where((e) => !actedSet.contains(e.threadId ?? e.id))
+        .toList();
+    if (remaining.isEmpty) {
+      if (context.canPop()) {
+        context.pop();
+        return;
+      }
+      _searchController.clear();
+      return;
+    }
+    setState(() => _searchResults = remaining);
   }
 }
