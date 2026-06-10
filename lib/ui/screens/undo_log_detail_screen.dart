@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -93,7 +94,9 @@ class UndoLogDetailScreen extends ConsumerWidget {
                 style: theme.textTheme.bodySmall,
               ),
             ),
-          ...action.originalEmails.map((email) => _EmailTile(email: email)),
+          ...action.originalEmails.map(
+            (email) => _EmailTile(email: email, accountId: action.accountId),
+          ),
         ],
       ),
     );
@@ -120,13 +123,14 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _EmailTile extends StatelessWidget {
-  const _EmailTile({required this.email});
+class _EmailTile extends ConsumerWidget {
+  const _EmailTile({required this.email, required this.accountId});
 
   final Email email;
+  final String accountId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final sender = email.from.isNotEmpty
         ? (email.from.first.name ?? email.from.first.email)
         : '(Unknown Sender)';
@@ -134,6 +138,43 @@ class _EmailTile extends StatelessWidget {
       leading: const Icon(Icons.email_outlined),
       title: Text(email.subject ?? '(No Subject)'),
       subtitle: Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _openEmail(context, ref),
+    );
+  }
+
+  Future<void> _openEmail(BuildContext context, WidgetRef ref) async {
+    final messageId = email.messageId;
+    final messenger = ScaffoldMessenger.of(context);
+    if (messageId == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Text('Cannot locate this email — no Message-ID.'),
+        ),
+      );
+      return;
+    }
+    final found = await ref
+        .read(emailRepositoryProvider)
+        .findEmailByMessageId(accountId, messageId);
+    if (!context.mounted) return;
+    if (found == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Text(
+            'Email no longer exists at its previous location. '
+            'Use Undo to restore it.',
+          ),
+        ),
+      );
+      return;
+    }
+    context.go(
+      '/accounts/$accountId'
+      '/mailboxes/${Uri.encodeComponent(found.mailboxPath)}'
+      '/emails/${Uri.encodeComponent(found.id)}',
     );
   }
 }
