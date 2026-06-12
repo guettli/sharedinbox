@@ -109,7 +109,7 @@ jobs:
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_URL: ${{ github.server_url }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_number }}
         run: |
           python3 - << 'PYEOF'
           import os, json, urllib.request, urllib.error
