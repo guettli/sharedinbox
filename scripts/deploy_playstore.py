@@ -106,13 +106,23 @@ def main():
             json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
             timeout=30,
         )
-        track_resp.raise_for_status()
+        try:
+            track_resp.raise_for_status()
+        except Exception as exc:
+            if hasattr(exc, "response") and exc.response is not None:
+                print(f"Track response error body: {exc.response.text}", file=sys.stderr)
+            raise
 
     commit_resp = session.post(
         f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
         timeout=30,
     )
-    commit_resp.raise_for_status()
+    try:
+        commit_resp.raise_for_status()
+    except Exception as exc:
+        if hasattr(exc, "response") and exc.response is not None:
+            print(f"Commit response error body: {exc.response.text}", file=sys.stderr)
+        raise
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
