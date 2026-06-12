@@ -1109,6 +1109,242 @@ void main() {
         expect(spy.movedToMailbox, 'Snoozed');
       },
     );
+
+    test(
+      'move flush remaps local id/uid from COPYUID and rewrites cached bodies',
+      () async {
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+
+        const oldId = 'acc-1:INBOX:5';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: oldId,
+                accountId: 'acc-1',
+                mailboxPath: 'Archive', // already optimistically moved
+                uid: 5,
+                receivedAt: DateTime(2024),
+                messageId: const Value('<msg-1@example.com>'),
+                threadId: const Value('thr-1'),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: oldId,
+                textBody: const Value('cached body'),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: oldId,
+                changeType: 'move',
+                payload: jsonEncode({
+                  'uid': 5,
+                  'mailboxPath': 'INBOX',
+                  'dest': 'Archive',
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        // Pending change drained.
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+        // Old id is gone; new id reflects destination mailbox + new UID.
+        expect(await r.emails.getEmail(oldId), isNull);
+        const newId = 'acc-1:Archive:42';
+        final moved = await r.emails.getEmail(newId);
+        expect(moved, isNotNull);
+        expect(moved!.uid, 42);
+        expect(moved.mailboxPath, 'Archive');
+
+        // Body cache follows the new id.
+        final bodies = await r.db.select(r.db.emailBodies).get();
+        expect(bodies, hasLength(1));
+        expect(bodies.first.emailId, newId);
+        expect(bodies.first.textBody, 'cached body');
+      },
+    );
+
+    test(
+      'move flush falls back to UID SEARCH HEADER Message-ID without UIDPLUS',
+      () async {
+        const messageId = '<msg-1@example.com>';
+        const criteria = 'HEADER Message-ID "$messageId"';
+        final spy = SnoozeSpyImapClient(
+          // No copyUidValidity → no COPYUID in the MOVE response.
+          searchResults: const {
+            criteria: [99],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+
+        const oldId = 'acc-1:INBOX:5';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: oldId,
+                accountId: 'acc-1',
+                mailboxPath: 'Archive',
+                uid: 5,
+                receivedAt: DateTime(2024),
+                messageId: const Value(messageId),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: oldId,
+                changeType: 'move',
+                payload: jsonEncode({
+                  'uid': 5,
+                  'mailboxPath': 'INBOX',
+                  'dest': 'Archive',
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.lastSearchCriteria, criteria);
+        const newId = 'acc-1:Archive:99';
+        final moved = await r.emails.getEmail(newId);
+        expect(moved, isNotNull);
+        expect(moved!.uid, 99);
+      },
+    );
+
+    test(
+      'move flush rewrites pending undo_actions referencing the old id',
+      () async {
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+
+        const oldId = 'acc-1:INBOX:5';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: oldId,
+                accountId: 'acc-1',
+                mailboxPath: 'Archive',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: oldId,
+                changeType: 'move',
+                payload: jsonEncode({
+                  'uid': 5,
+                  'mailboxPath': 'INBOX',
+                  'dest': 'Archive',
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+        // An undo entry created when the user did the move, referencing oldId
+        // in both emailIds and originalEmails[].id.
+        await r.db.into(r.db.undoActions).insert(
+              UndoActionsCompanion.insert(
+                id: 'undo-1',
+                accountId: 'acc-1',
+                dataJson: jsonEncode({
+                  'id': 'undo-1',
+                  'accountId': 'acc-1',
+                  'type': 'move',
+                  'emailIds': [oldId],
+                  'sourceMailboxPath': 'INBOX',
+                  'destinationMailboxPath': 'Archive',
+                  'timestamp': DateTime(2024).toIso8601String(),
+                  'originalEmails': [
+                    {
+                      'id': oldId,
+                      'accountId': 'acc-1',
+                      'mailboxPath': 'INBOX',
+                      'uid': 5,
+                      'receivedAt': DateTime(2024).toIso8601String(),
+                      'from': [],
+                      'to': [],
+                      'cc': [],
+                      'isSeen': false,
+                      'isFlagged': false,
+                      'hasAttachment': false,
+                    },
+                  ],
+                }),
+                createdAt: DateTime(2024),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        const newId = 'acc-1:Archive:42';
+        final stored = await r.db.select(r.db.undoActions).getSingle();
+        final json = jsonDecode(stored.dataJson) as Map<String, dynamic>;
+        expect(json['emailIds'], [newId]);
+        expect(
+          (json['originalEmails'] as List).first as Map<String, dynamic>,
+          containsPair('id', newId),
+        );
+      },
+    );
+
+    test(
+      'reconciliation skips rows with a pending move so they are not wiped',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        const oldId = 'acc-1:INBOX:5';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: oldId,
+                accountId: 'acc-1',
+                mailboxPath: 'Archive', // optimistically moved
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: oldId,
+                changeType: 'move',
+                payload: jsonEncode({
+                  'uid': 5,
+                  'mailboxPath': 'INBOX',
+                  'dest': 'Archive',
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        // Run the deletion-reconciliation pass with a destination snapshot
+        // that does NOT contain UID 5 — the row would be wiped without the
+        // in-flight guard.
+        await r.emails
+            .reconcileDeletedImapForTest('acc-1', 'Archive', const []);
+
+        expect(await r.emails.getEmail(oldId), isNotNull);
+      },
+    );
   });
 
   group('Snooze', () {

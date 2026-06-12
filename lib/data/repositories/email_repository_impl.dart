@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -728,6 +729,14 @@ class EmailRepositoryImpl implements EmailRepository {
     await _saveSyncState(accountId, resourceType, jsonEncode(data));
   }
 
+  @visibleForTesting
+  Future<void> reconcileDeletedImapForTest(
+    String accountId,
+    String mailboxPath,
+    List<int> serverUids,
+  ) =>
+      _reconcileDeletedImap(accountId, mailboxPath, serverUids);
+
   Future<void> _reconcileDeletedImap(
     String accountId,
     String mailboxPath,
@@ -752,10 +761,28 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
 
+    // Email IDs that still have a queued move/snooze/unsnooze waiting to be
+    // flushed. The optimistic local move has already updated mailbox_path, so
+    // these rows look orphaned from both the old and new mailbox until the
+    // server applies the change and we remap to the destination UID. Skipping
+    // them here avoids wiping the row mid-flight.
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const ['move', 'snooze', 'unsnooze'],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
     final serverUidSet = serverUids.toSet();
     final affectedThreads = <String>{};
     for (final row in localRows) {
       if (!serverUidSet.contains(row.uid)) {
+        if (inFlightSet.contains(row.id)) continue;
         affectedThreads.add(row.threadId ?? row.id);
         await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
       }
@@ -2317,7 +2344,15 @@ class EmailRepositoryImpl implements EmailRepository {
             ? await client.uidMarkFlagged(seq)
             : await client.uidMarkUnflagged(seq);
       case 'move':
-        await client.uidMove(seq, targetMailboxPath: payload['dest'] as String);
+        final dest = payload['dest'] as String;
+        final result = await client.uidMove(seq, targetMailboxPath: dest);
+        await _remapEmailAfterImapMove(
+          client,
+          oldId: row.resourceId,
+          sourceUid: uid,
+          destMailboxPath: dest,
+          moveResult: result,
+        );
       case 'delete':
         await client.uidMarkDeleted(seq);
         await client.uidExpunge(seq);
@@ -2332,7 +2367,14 @@ class EmailRepositoryImpl implements EmailRepository {
           await client.createMailbox(dest);
         } catch (_) {}
         await client.uidStore(seq, [keyword], action: imap.StoreAction.add);
-        await client.uidMove(seq, targetMailboxPath: dest);
+        final snoozeResult = await client.uidMove(seq, targetMailboxPath: dest);
+        await _remapEmailAfterImapMove(
+          client,
+          oldId: row.resourceId,
+          sourceUid: uid,
+          destMailboxPath: dest,
+          moveResult: snoozeResult,
+        );
       case 'unsnooze':
         final dest = payload['dest'] as String;
         try {
@@ -2351,7 +2393,151 @@ class EmailRepositoryImpl implements EmailRepository {
             );
           }
         }
-        await client.uidMove(seq, targetMailboxPath: dest);
+        final unsnoozeResult =
+            await client.uidMove(seq, targetMailboxPath: dest);
+        await _remapEmailAfterImapMove(
+          client,
+          oldId: row.resourceId,
+          sourceUid: uid,
+          destMailboxPath: dest,
+          moveResult: unsnoozeResult,
+        );
+    }
+  }
+
+  /// Rewrites the local row identity after an IMAP MOVE so the cache keeps
+  /// tracking the same physical message under its new (mailbox, UID).
+  ///
+  /// The new UID is taken from the RFC 4315 `COPYUID` response code first
+  /// (every modern server advertises `UIDPLUS`). If that's missing we fall
+  /// back to `UID SEARCH HEADER Message-ID …` in the destination mailbox.
+  /// When neither yields a UID we leave the row in place; the next sync
+  /// cycle will re-fetch it as a new message and reconciliation will drop
+  /// the stale source-side row.
+  Future<void> _remapEmailAfterImapMove(
+    imap.ImapClient client, {
+    required String oldId,
+    required int sourceUid,
+    required String destMailboxPath,
+    required imap.GenericImapResult moveResult,
+  }) async {
+    final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
+        .getSingleOrNull();
+    if (row == null) return;
+
+    final newUid = _resolveCopyUid(moveResult, sourceUid) ??
+        await _searchUidByMessageId(
+          client,
+          destMailboxPath,
+          row.messageId,
+        );
+    if (newUid == null) {
+      log(
+        '_remapEmailAfterImapMove: could not resolve new UID for $oldId '
+        'after move to $destMailboxPath (no COPYUID, '
+        'messageId=${row.messageId}); row will be re-fetched on next sync',
+      );
+      return;
+    }
+
+    final newId = '${row.accountId}:$destMailboxPath:$newUid';
+    if (newId == oldId) return;
+
+    await _db.transaction(() async {
+      await _db.customStatement('PRAGMA defer_foreign_keys = ON');
+
+      await _db.customStatement(
+        'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
+
+      await (_db.update(_db.emails)..where((t) => t.id.equals(oldId))).write(
+        EmailsCompanion(
+          id: Value(newId),
+          uid: Value(newUid),
+          mailboxPath: Value(destMailboxPath),
+        ),
+      );
+
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.resourceId.equals(oldId)))
+          .write(PendingChangesCompanion(resourceId: Value(newId)));
+
+      // threads.latest_email_id is a plain equality match; threads.email_ids_json
+      // is a JSON array of email IDs — both are safe to update via REPLACE()
+      // because email IDs are unique opaque strings.
+      await _db.customStatement(
+        'UPDATE threads SET latest_email_id = ?1 '
+        'WHERE latest_email_id = ?2',
+        [newId, oldId],
+      );
+      await _db.customStatement(
+        'UPDATE threads SET email_ids_json = '
+        'REPLACE(email_ids_json, ?1, ?2) '
+        'WHERE email_ids_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+
+      // UndoAction.toJson() embeds email IDs as quoted JSON strings in both
+      // emailIds and originalEmails[].id, so the same REPLACE() works.
+      await _db.customStatement(
+        'UPDATE undo_actions SET data_json = '
+        'REPLACE(data_json, ?1, ?2) '
+        'WHERE data_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+    });
+
+    // Rebuild thread aggregates in both mailboxes from the now-updated emails.
+    final threadId = row.threadId ?? newId;
+    await _updateThread(row.accountId, row.mailboxPath, threadId);
+    await _updateThread(row.accountId, destMailboxPath, threadId);
+  }
+
+  /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
+  /// `COPYUID` response code (RFC 4315). Returns null when the server did not
+  /// advertise UIDPLUS or the response code is malformed.
+  int? _resolveCopyUid(imap.GenericImapResult result, int sourceUid) {
+    final code = result.responseCodeCopyUid;
+    if (code == null) return null;
+    try {
+      final sources = code.originalSequence?.toList();
+      final targets = code.targetSequence.toList();
+      if (sources == null) {
+        // Some servers omit the source set when only one message moved.
+        return targets.length == 1 ? targets.first : null;
+      }
+      final idx = sources.indexOf(sourceUid);
+      if (idx < 0 || idx >= targets.length) return null;
+      return targets[idx];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Looks up the UID of a message in [mailboxPath] by its RFC 2822
+  /// `Message-ID` header. Used as a fallback when the server doesn't
+  /// support UIDPLUS so we can still relink the local row after a move.
+  Future<int?> _searchUidByMessageId(
+    imap.ImapClient client,
+    String mailboxPath,
+    String? messageId,
+  ) async {
+    if (messageId == null || messageId.isEmpty) return null;
+    try {
+      await client.selectMailboxByPath(mailboxPath);
+      // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is safe
+      // for typical Message-ID syntax (no embedded quotes or backslashes).
+      final escaped = messageId.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+      final result = await client.uidSearchMessages(
+        searchCriteria: 'HEADER Message-ID "$escaped"',
+      );
+      final uids = result.matchingSequence?.toList() ?? const <int>[];
+      if (uids.isEmpty) return null;
+      return uids.reduce((a, b) => a > b ? a : b);
+    } catch (e) {
+      log('_searchUidByMessageId failed for $messageId in $mailboxPath: $e');
+      return null;
     }
   }
 

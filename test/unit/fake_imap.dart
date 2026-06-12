@@ -19,9 +19,25 @@ class FakeImapClient extends imap.ImapClient {
 
 /// Spy IMAP client that records snooze-related operations and succeeds silently.
 class SnoozeSpyImapClient extends FakeImapClient {
+  SnoozeSpyImapClient({
+    this.copyUidValidity,
+    this.copyUidSourceToTarget = const {},
+    this.searchResults = const {},
+  });
+
   String? selectedMailbox;
   String? createdMailbox;
   String? movedToMailbox;
+  String? lastSearchCriteria;
+
+  /// When non-null, `uidMove` returns a `COPYUID` response code built from
+  /// these mappings (sourceUid → destinationUid) for the moved sequence.
+  final int? copyUidValidity;
+  final Map<int, int> copyUidSourceToTarget;
+
+  /// Maps a `UID SEARCH HEADER Message-ID …` search criteria (the literal
+  /// IMAP atom incl. quotes) to the UIDs the fake should return.
+  final Map<String, List<int>> searchResults;
 
   imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
         encodedName: path,
@@ -63,7 +79,33 @@ class SnoozeSpyImapClient extends FakeImapClient {
     String? targetMailboxPath,
   }) async {
     movedToMailbox = targetMailboxPath;
-    return imap.GenericImapResult();
+    final result = imap.GenericImapResult();
+    if (copyUidValidity != null && copyUidSourceToTarget.isNotEmpty) {
+      final sources = sequence.toList();
+      final mapped = sources
+          .where(copyUidSourceToTarget.containsKey)
+          .map((uid) => copyUidSourceToTarget[uid]!)
+          .toList();
+      if (mapped.isNotEmpty) {
+        final src = sources.join(',');
+        final dst = mapped.join(',');
+        result.responseCode = 'COPYUID $copyUidValidity $src $dst';
+      }
+    }
+    return result;
+  }
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    lastSearchCriteria = searchCriteria;
+    final hits = searchResults[searchCriteria] ?? const <int>[];
+    final result = imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
+    return result;
   }
 
   @override

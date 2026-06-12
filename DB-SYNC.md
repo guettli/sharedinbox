@@ -54,6 +54,13 @@ This document covers the mail-to-database sync layer only, not the UI.
   optimistic local update; `flushPendingChanges` drains the queue over a single
   IMAP connection at the start of each sync cycle.
 - Sent messages are appended to the Sent folder after SMTP delivery.
+- IMAP move remap: after a `MOVE` is flushed, the local row id is rewritten in
+  place using the RFC 4315 `COPYUID` response code (UIDPLUS); if the server
+  doesn't support UIDPLUS, the new UID is looked up via `UID SEARCH HEADER
+  Message-ID …` in the destination mailbox. Cached bodies (`email_bodies`),
+  threads, queued pending changes, and undo entries follow the new id.
+  Deletion reconciliation skips rows whose `move`/`snooze`/`unsnooze` is still
+  in `pending_changes` so the optimistic local move isn't wiped mid-flight.
 - Sync retries use exponential backoff after failures.
 
 ### Cross-protocol

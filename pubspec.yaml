@@ -67,6 +67,9 @@ dependencies:
   share_plus: ^13.1.0
   device_info_plus: ^13.1.0
 
+  # @visibleForTesting annotation used in lib/data/repositories.
+  meta: ^1.16.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

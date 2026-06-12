@@ -81,6 +81,17 @@ start()
 On each run, only UIDs greater than `lastUid` are fetched. If `uidValidity` changes the full
 folder is re-scanned and the checkpoint is reset.
 
+**IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
+its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the local row
+id (`accountId:mailboxPath:uid`) is rewritten in place to point at the new UID. The new
+UID is taken from the RFC 4315 `COPYUID` response code returned by `MOVE`; if the server
+does not advertise `UIDPLUS`, a `UID SEARCH HEADER Message-ID …` in the destination
+mailbox is used as a fallback. `email_bodies`, `threads`, `pending_changes`, and
+`undo_actions` rows that reference the old id are updated atomically so cached bodies and
+pending undo operations keep tracking the same physical message. Deletion reconciliation
+also skips rows whose move is still queued, so the optimistic local move never gets
+wiped mid-flight.
+
 **IDLE cap** — IDLE sessions are limited to 25 minutes per the RFC. The loop also wakes
 immediately if `syncNow()` is called (e.g. user pulls-to-refresh).
 
