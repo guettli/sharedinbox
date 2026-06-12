@@ -100,30 +100,34 @@ def main():
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    for track in TRACKS:
-        track_resp = session.put(
-            f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
-            json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
-            timeout=30,
-        )
+    release_status = "completed"
+    for attempt in range(2):
+        print(f"Assigning AAB to tracks with status: {release_status}…")
         try:
-            track_resp.raise_for_status()
+            for track in TRACKS:
+                track_resp = session.put(
+                    f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
+                    json={"releases": [{"versionCodes": [version_code], "status": release_status}]},
+                    timeout=30,
+                )
+                track_resp.raise_for_status()
+
+            commit_resp = session.post(
+                f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
+                timeout=30,
+            )
+            commit_resp.raise_for_status()
+            print(f"Deployed version {version_code} as {release_status} to tracks: {', '.join(TRACKS)}")
+            break
         except Exception as exc:
             if hasattr(exc, "response") and exc.response is not None:
-                print(f"Track response error body: {exc.response.text}", file=sys.stderr)
+                err_text = exc.response.text
+                print(f"API error body: {err_text}", file=sys.stderr)
+                if "Only releases with status draft may be created on draft app" in err_text and release_status == "completed":
+                    print("App is in draft status. Retrying deploy with status: draft…")
+                    release_status = "draft"
+                    continue
             raise
-
-    commit_resp = session.post(
-        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
-        timeout=30,
-    )
-    try:
-        commit_resp.raise_for_status()
-    except Exception as exc:
-        if hasattr(exc, "response") and exc.response is not None:
-            print(f"Commit response error body: {exc.response.text}", file=sys.stderr)
-        raise
-    print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
 if __name__ == "__main__":
