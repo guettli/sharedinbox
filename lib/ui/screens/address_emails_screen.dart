@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 
 class AddressEmailsScreen extends ConsumerStatefulWidget {
   const AddressEmailsScreen({
@@ -26,10 +26,25 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
   List<Email>? _emails;
   bool _loading = true;
 
+  late final EmailThreadListController _selection;
+
   @override
   void initState() {
     super.initState();
+    _selection = EmailThreadListController()..addListener(_onSelectionChange);
     unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    _selection
+      ..removeListener(_onSelectionChange)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onSelectionChange() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _load() async {
@@ -46,43 +61,35 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final selecting = _selection.isSelecting;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.address)),
+      appBar: selecting
+          ? buildSelectionAppBar(_selection)
+          : AppBar(title: Text(widget.address)),
+      bottomNavigationBar: selecting
+          ? buildSelectionBottomBar(
+              context,
+              ref,
+              _selection,
+              onAfterAction: _onAfterBatchAction,
+            )
+          : null,
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _emails!.isEmpty
-              ? const Center(child: Text('No emails'))
-              : ListView.builder(
-                  itemCount: _emails!.length,
-                  itemBuilder: (ctx, i) {
-                    final e = _emails![i];
-                    final sender = e.from.isNotEmpty
-                        ? (e.from.first.name ?? e.from.first.email)
-                        : '(unknown)';
-                    return ListTile(
-                      leading: Icon(
-                        e.isSeen ? Icons.mail_outline : Icons.mail,
-                        color:
-                            e.isSeen ? null : Theme.of(ctx).colorScheme.primary,
-                      ),
-                      title: Text(sender),
-                      subtitle: Text(
-                        e.subject ?? '(no subject)',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Text(
-                        e.mailboxPath,
-                        style: Theme.of(ctx).textTheme.bodySmall,
-                      ),
-                      onTap: () => context.push(
-                        '/accounts/${widget.accountId}/mailboxes'
-                        '/${Uri.encodeComponent(e.mailboxPath)}'
-                        '/emails/${Uri.encodeComponent(e.id)}',
-                      ),
-                    );
-                  },
-                ),
+          : EmailThreadList(
+              controller: _selection,
+              items: _emails!.map(EmailThread.fromEmail).toList(),
+              enableSwipe: false,
+              showLocationLabel: true,
+            ),
     );
+  }
+
+  void _onAfterBatchAction(List<String> actedThreadIds) {
+    if (_emails == null || !mounted) return;
+    final actedSet = actedThreadIds.toSet();
+    final remaining =
+        _emails!.where((e) => !actedSet.contains(e.threadId ?? e.id)).toList();
+    setState(() => _emails = remaining);
   }
 }
