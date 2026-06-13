@@ -267,10 +267,12 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.reply),
+                        tooltip: 'Reply',
                         onPressed: () => _reply(context, body, replyAll: false),
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete_outline),
+                        tooltip: 'Delete',
                         onPressed: _delete,
                       ),
                     ],

@@ -183,6 +183,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         _buildSyncButton(emailRepo),
         IconButton(
           icon: const Icon(Icons.edit),
+          tooltip: 'Compose',
           onPressed: () => context.push(
             '/compose',
             extra: {'accountId': widget.accountId},
@@ -222,6 +223,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               if (_searchController.text.isNotEmpty)
                 IconButton(
                   icon: const Icon(Icons.clear),
+                  tooltip: 'Clear search',
                   onPressed: () => _searchController.clear(),
                 ),
             ],

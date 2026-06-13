@@ -329,6 +329,7 @@ PreferredSizeWidget buildSelectionAppBar(EmailThreadListController controller) {
   return AppBar(
     leading: IconButton(
       icon: const Icon(Icons.close),
+      tooltip: 'Clear selection',
       onPressed: controller.clear,
     ),
     title: Text('${controller.selectionCount} selected'),

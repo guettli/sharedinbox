@@ -265,6 +265,44 @@ void main() {
       expect(find.byIcon(Icons.close), findsOneWidget);
     });
 
+    testWidgets('icon-only toolbar buttons expose tooltips', (tester) async {
+      final email = testEmail(subject: 'Select me');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Normal mode: AppBar actions and the bottom folder-nav button.
+      expect(find.byTooltip('Compose'), findsOneWidget);
+      expect(find.byTooltip('Sync'), findsOneWidget);
+      expect(find.byTooltip('Open folders'), findsOneWidget);
+
+      // Enter selection mode: AppBar swaps and BottomAppBar appears.
+      await tester.longPress(find.text('Select me'));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Clear selection'), findsOneWidget);
+      expect(find.byTooltip('Select all'), findsOneWidget);
+      expect(find.byTooltip('Archive'), findsOneWidget);
+      expect(find.byTooltip('Delete'), findsOneWidget);
+      expect(find.byTooltip('Mark as spam'), findsOneWidget);
+      expect(find.byTooltip('Move to folder'), findsOneWidget);
+      expect(find.byTooltip('Snooze'), findsOneWidget);
+    });
+
     testWidgets('selection bar close button exits selection mode', (
       tester,
     ) async {

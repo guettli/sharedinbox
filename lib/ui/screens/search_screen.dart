@@ -192,6 +192,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           if (!_advancedMode && _ctrl.text.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.clear),
+              tooltip: 'Clear search',
               onPressed: () {
                 _ctrl.clear();
                 setState(() => _results = null);
