@@ -29,11 +29,14 @@ class UndoRepositoryImpl implements UndoRepository {
 
   @override
   Future<List<UndoAction>> getHistory({int limit = 10}) async {
+    // Fetch the newest `limit` rows but return them in chronological order
+    // (oldest first) to match the in-memory list invariant in UndoService,
+    // where pushAction appends newer actions to the end.
     final rows = await (_db.select(_db.undoActions)
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(limit))
         .get();
-    return rows.map((row) {
+    return rows.reversed.map((row) {
       return UndoAction.fromJson(
         jsonDecode(row.dataJson) as Map<String, dynamic>,
       );
@@ -43,5 +46,26 @@ class UndoRepositoryImpl implements UndoRepository {
   @override
   Future<void> clearHistory() async {
     await _db.delete(_db.undoActions).go();
+  }
+
+  @override
+  Future<void> pushAndTrim(
+    UndoAction action, {
+    required int maxHistory,
+  }) async {
+    await _db.transaction(() async {
+      await saveAction(action);
+      await trim(maxHistory: maxHistory);
+    });
+  }
+
+  @override
+  Future<void> trim({required int maxHistory}) async {
+    await _db.customStatement(
+      'DELETE FROM undo_actions WHERE id NOT IN ('
+      'SELECT id FROM undo_actions ORDER BY created_at DESC LIMIT ?'
+      ')',
+      [maxHistory],
+    );
   }
 }

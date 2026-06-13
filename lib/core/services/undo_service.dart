@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:collection';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
@@ -7,13 +5,18 @@ import 'package:sharedinbox/di.dart';
 class UndoService extends Notifier<List<UndoAction>> {
   static const int _maxHistory = 10;
 
-  // Resolves once build() has loaded persisted history.
+  // Resolves once build() has loaded persisted history and reconciled the DB
+  // with the in-memory cap.
   late Future<void> _ready;
 
   @override
   List<UndoAction> build() {
-    _ready = ref.read(undoRepositoryProvider).getHistory().then((history) {
+    final repo = ref.read(undoRepositoryProvider);
+    _ready = repo.getHistory().then((history) async {
       if (ref.mounted) state = history;
+      // Reconcile the persisted log with the in-memory cap so an older app
+      // version that allowed more entries cannot keep them around forever.
+      await repo.trim(maxHistory: _maxHistory);
     });
     return [];
   }
@@ -25,18 +28,22 @@ class UndoService extends Notifier<List<UndoAction>> {
   Future<void> pushAction(UndoAction action) async {
     await _ready;
     final newList = [...state, action];
-    if (newList.length > _maxHistory) {
-      final removed = newList.removeAt(0);
-      await ref.read(undoRepositoryProvider).deleteAction(removed.id);
+    while (newList.length > _maxHistory) {
+      newList.removeAt(0);
     }
     state = newList;
-    await ref.read(undoRepositoryProvider).saveAction(action);
+    // Insert + trim atomically so a crash between them cannot lose both rows.
+    await ref
+        .read(undoRepositoryProvider)
+        .pushAndTrim(action, maxHistory: _maxHistory);
   }
 
   Future<void> clear() async {
     await _ready;
     state = [];
-    unawaited(ref.read(undoRepositoryProvider).clearHistory());
+    // Await so callers can rely on the next read seeing an empty log even
+    // across an immediate process restart.
+    await ref.read(undoRepositoryProvider).clearHistory();
   }
 
   Future<void> undo({String? actionId}) async {

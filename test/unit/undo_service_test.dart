@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
@@ -20,11 +22,16 @@ void main() {
     mockEmailRepo = MockEmailRepository();
     mockUndoRepo = MockUndoRepository();
 
-    when(mockUndoRepo.saveAction(any)).thenAnswer((_) async {});
-    when(mockUndoRepo.deleteAction(any)).thenAnswer((_) async {});
+    when(
+      mockUndoRepo.pushAndTrim(any, maxHistory: anyNamed('maxHistory')),
+    ).thenAnswer((_) async {});
+    when(
+      mockUndoRepo.trim(maxHistory: anyNamed('maxHistory')),
+    ).thenAnswer((_) async {});
     when(
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => []);
+    when(mockUndoRepo.clearHistory()).thenAnswer((_) async {});
     when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
     when(
       mockEmailRepo.findEmailByMessageId(any, any),
@@ -155,8 +162,9 @@ void main() {
       expect(inv.sourceMailboxPath, 'Trash');
       expect(inv.destinationMailboxPath, 'INBOX');
       verify(
-        mockUndoRepo.saveAction(
+        mockUndoRepo.pushAndTrim(
           argThat(predicate<UndoAction>((a) => a.id == 'del1-inv')),
+          maxHistory: anyNamed('maxHistory'),
         ),
       ).called(1);
     },
@@ -367,5 +375,55 @@ void main() {
     await Future.wait([initFuture, pushFuture]);
 
     expect(container.read(undoServiceProvider), [persisted, raced]);
+  });
+
+  test('pushAction persists via pushAndTrim (atomic insert + trim)', () async {
+    final action = UndoAction(
+      id: 'a1',
+      accountId: 'acc1',
+      type: UndoType.move,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+    );
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+
+    verify(
+      mockUndoRepo.pushAndTrim(action, maxHistory: anyNamed('maxHistory')),
+    ).called(1);
+    verifyNever(mockUndoRepo.saveAction(any));
+    verifyNever(mockUndoRepo.deleteAction(any));
+  });
+
+  test('clear awaits the persisted delete', () async {
+    final completer = Completer<void>();
+    when(mockUndoRepo.clearHistory()).thenAnswer((_) => completer.future);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    final clearFuture = notifier.clear();
+    // State is cleared eagerly so the UI updates immediately…
+    expect(container.read(undoServiceProvider), isEmpty);
+    // …but clear() must not resolve until the DB write finishes so a process
+    // restart right after a successful clear() cannot resurrect entries.
+    var resolved = false;
+    unawaited(clearFuture.then((_) => resolved = true));
+    await Future<void>.delayed(Duration.zero);
+    expect(resolved, isFalse);
+
+    completer.complete();
+    await clearFuture;
+    expect(resolved, isTrue);
+    verify(mockUndoRepo.clearHistory()).called(1);
+  });
+
+  test('init trims the persisted log down to the in-memory cap', () async {
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    verify(mockUndoRepo.trim(maxHistory: anyNamed('maxHistory'))).called(1);
   });
 }

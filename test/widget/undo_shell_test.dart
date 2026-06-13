@@ -13,8 +13,12 @@ void main() {
 
   setUp(() {
     mockUndoRepo = MockUndoRepository();
-    when(mockUndoRepo.saveAction(any)).thenAnswer((_) async {});
-    when(mockUndoRepo.deleteAction(any)).thenAnswer((_) async {});
+    when(
+      mockUndoRepo.pushAndTrim(any, maxHistory: anyNamed('maxHistory')),
+    ).thenAnswer((_) async {});
+    when(
+      mockUndoRepo.trim(maxHistory: anyNamed('maxHistory')),
+    ).thenAnswer((_) async {});
     when(mockUndoRepo.clearHistory()).thenAnswer((_) async {});
   });
 

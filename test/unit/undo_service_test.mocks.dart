@@ -620,4 +620,30 @@ class MockUndoRepository extends _i1.Mock implements _i7.UndoRepository {
         returnValue: _i4.Future<void>.value(),
         returnValueForMissingStub: _i4.Future<void>.value(),
       ) as _i4.Future<void>);
+
+  @override
+  _i4.Future<void> pushAndTrim(
+    _i8.UndoAction? action, {
+    required int? maxHistory,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #pushAndTrim,
+          [action],
+          {#maxHistory: maxHistory},
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
+
+  @override
+  _i4.Future<void> trim({required int? maxHistory}) => (super.noSuchMethod(
+        Invocation.method(
+          #trim,
+          [],
+          {#maxHistory: maxHistory},
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
 }

@@ -24,9 +24,6 @@ Then push
 - **FTS5 Search Indexing**: Migrate the local search from SQLite `LIKE` queries to
   a proper `FTS5` virtual table. This is critical for maintaining performance as
   the local database grows into thousands of messages.
-- **Undo Log Persistence**: Move the `UndoService` state from memory to the
-  database. This ensures that the Undo Log survives app restarts and crashes,
-  preventing data loss of destructive action history.
 - **Search History**: Implement a "Recent Searches" UI component in the
   `SearchScreen` to allow quick re-runs of common queries.
 

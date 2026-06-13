@@ -4,6 +4,27 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Tasks (2026-06-13)
+
+- **Undo Log Persistence (Issue #578)**: The `UndoService` state was already
+  persisted to the `undo_actions` Drift table (commit `11e337e`); this issue
+  hardened that work so the log survives app restarts and crashes cleanly:
+  - `UndoService.pushAction` now writes through a new
+    `UndoRepository.pushAndTrim` that performs the insert and the FIFO trim
+    inside a single Drift transaction. Previously a crash between the trim
+    delete and the insert could drop both rows.
+  - `UndoService.clear` now awaits `clearHistory()` instead of fire-and-forget,
+    so the next read (or an immediate restart) cannot resurrect cleared
+    entries.
+  - `UndoService.build` calls a new `UndoRepository.trim` after loading so a
+    DB left with more than `_maxHistory` rows by an older app version is
+    reconciled with the in-memory cap.
+  - `UndoRepositoryImpl.getHistory` now returns rows in chronological order
+    (oldest first) to match the in-memory list invariant, so multi-entry
+    histories load in the correct order.
+  - Unit tests cover the awaited clear, the atomic push-and-trim, and the
+    startup trim; widget tests stubs updated.
+
 ## Tasks (2026-05-29)
 
 - **Merge PR #307 — user preferences and configurable navigation (Issue #315)**: Confirmed that
