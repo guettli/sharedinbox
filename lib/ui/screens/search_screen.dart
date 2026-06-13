@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
@@ -227,7 +228,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _buildAdvancedBody() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -238,7 +239,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               _results = null;
             }),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           FilledButton.icon(
             onPressed: _filterGroup.isEmpty ? null : _searchStructured,
             icon: const Icon(Icons.search),
@@ -246,15 +247,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
           if (_loading)
             const Padding(
-              padding: EdgeInsets.only(top: 24),
+              padding: EdgeInsets.only(top: AppSpacing.xl),
               child: Center(child: CircularProgressIndicator()),
             )
           else if (_results != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             if (_results!.isEmpty)
               const Center(
                 child: Padding(
-                  padding: EdgeInsets.all(24),
+                  padding: EdgeInsets.all(AppSpacing.xl),
                   child: Text('No results'),
                 ),
               )
@@ -312,7 +313,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.md,
+                AppSpacing.lg,
+                AppSpacing.xs,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -333,10 +339,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
               child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.xs,
                 children: [
                   for (final term in terms)
                     InputChip(
@@ -388,7 +394,12 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        AppSpacing.xs,
+      ),
       child: Text(title, style: Theme.of(context).textTheme.labelLarge),
     );
   }

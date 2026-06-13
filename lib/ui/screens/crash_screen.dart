@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class CrashScreen extends StatelessWidget {
@@ -65,18 +66,22 @@ class CrashScreen extends StatelessWidget {
         ),
         body: Builder(
           builder: (ctx) => SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(AppSpacing.lg),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.error_outline, color: Colors.red, size: 64),
-                const SizedBox(height: 16),
+                const Icon(
+                  Icons.error_outline,
+                  color: Colors.red,
+                  size: AppIconSize.hero,
+                ),
+                const SizedBox(height: AppSpacing.lg),
                 Text(
                   'sharedinbox.de encountered an unexpected error and needs to be restarted.',
                   style: Theme.of(ctx).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: AppSpacing.xs),
                 FutureBuilder<String>(
                   future: _fetchVersion(),
                   builder: (context, snapshot) => Text(
@@ -89,7 +94,7 @@ class CrashScreen extends StatelessWidget {
                   ),
                 ),
                 if (gitHash.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   FutureBuilder<PackageInfo>(
                     future: PackageInfo.fromPlatform(),
                     builder: (_, snapshot) {
@@ -118,7 +123,7 @@ class CrashScreen extends StatelessWidget {
                       );
                     },
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: AppSpacing.xs),
                   GestureDetector(
                     onTap: () async {
                       final url = Uri.parse(
@@ -140,14 +145,14 @@ class CrashScreen extends StatelessWidget {
                     ),
                   ),
                 ],
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.xl),
                 const Text(
                   'Error Details:',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(AppSpacing.md),
                   decoration: BoxDecoration(
                     color: Colors.grey[200],
                     borderRadius: BorderRadius.circular(8),
@@ -161,14 +166,14 @@ class CrashScreen extends StatelessWidget {
                   ),
                 ),
                 if (stackTrace != null) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.lg),
                   const Text(
                     'Stack Trace:',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppSpacing.md),
                     decoration: BoxDecoration(
                       color: Colors.grey[200],
                       borderRadius: BorderRadius.circular(8),
@@ -182,7 +187,7 @@ class CrashScreen extends StatelessWidget {
                     ),
                   ),
                 ],
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.xl),
                 FilledButton.icon(
                   onPressed: () async {
                     final data = await _buildReport();
@@ -199,7 +204,7 @@ class CrashScreen extends StatelessWidget {
                   icon: const Icon(Icons.copy),
                   label: const Text('Copy to Clipboard'),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 OutlinedButton.icon(
                   onPressed: () async {
                     // URL carries only the title to avoid exceeding browser

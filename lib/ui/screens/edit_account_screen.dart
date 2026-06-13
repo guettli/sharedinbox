@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 class EditAccountScreen extends ConsumerStatefulWidget {
@@ -247,7 +248,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   Widget _buildForm() {
     final account = _account!;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Form(
         key: _formKey,
         child: Column(
@@ -258,10 +259,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               account.type == AccountType.jmap ? 'JMAP' : 'IMAP',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             if (_errorMessage != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: AppSpacing.md),
                 child: Text(
                   _errorMessage!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
@@ -359,7 +360,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                   ? _tryConnection
                   : null,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             FilledButton(
               onPressed: _hasStoredPassword || _passwordCtrl.text.isNotEmpty
                   ? _save
@@ -382,7 +383,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     String? Function(String?)? validator,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: TextFormField(
         key: key,
         controller: ctrl,

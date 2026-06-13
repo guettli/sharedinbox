@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -168,7 +169,7 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
                 ],
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               url,
               style: const TextStyle(fontSize: 11, color: Colors.grey),

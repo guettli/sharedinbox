@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Receiving side of the secure account-sharing flow.
 ///
@@ -213,17 +214,21 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 CircularProgressIndicator(),
-                SizedBox(height: 16),
+                SizedBox(height: AppSpacing.lg),
                 Text('Importing accounts…'),
               ],
             ),
           ),
         _Step.done => const Center(
-            child: Icon(Icons.check_circle, size: 64, color: Colors.green),
+            child: Icon(
+              Icons.check_circle,
+              size: AppIconSize.hero,
+              color: Colors.green,
+            ),
           ),
         _Step.error => Center(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               child: Text('Error: $_errorMessage'),
             ),
           ),
@@ -234,7 +239,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   Widget _buildPubKeyView(BuildContext context) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -243,18 +248,18 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             style: theme.textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             'The sender scans this code, selects the account(s) to transfer, '
             'and shows an encrypted QR code. Then come back here for step 2.',
             style: theme.textTheme.bodySmall,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
           Center(
             child: Container(
               color: Colors.white,
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(AppSpacing.sm),
               child: QrImageView(
                 key: const Key('pubKeyQrCode'),
                 data: _pubKeyQr!,
@@ -262,7 +267,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           OutlinedButton.icon(
             icon: const Icon(Icons.copy),
             label: const Text('Copy public key'),
@@ -273,16 +278,16 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
               );
             },
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           _ExpiryHint(expiresAt: _keyExpiresAt!),
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.xxl),
           if (_errorMessage != null) ...[
             Text(
               _errorMessage!,
               style: TextStyle(color: theme.colorScheme.error),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
           ],
           FilledButton.icon(
             key: const Key('scanEncryptedButton'),
@@ -320,7 +325,10 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
           right: 0,
           child: Container(
             color: Colors.black54,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.md,
+              horizontal: AppSpacing.lg,
+            ),
             child: const Text(
               'Point the camera at the encrypted QR code from the sender\'s device',
               style: TextStyle(color: Colors.white),
@@ -329,9 +337,9 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
           ),
         ),
         Positioned(
-          bottom: 32,
-          left: 16,
-          right: 16,
+          bottom: AppSpacing.xxl,
+          left: AppSpacing.lg,
+          right: AppSpacing.lg,
           child: OutlinedButton(
             style: OutlinedButton.styleFrom(
               backgroundColor: Colors.black54,
@@ -357,7 +365,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     final ctrl = TextEditingController();
     final theme = Theme.of(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -365,7 +373,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             'Paste the encrypted code from the sender\'s device',
             style: theme.textTheme.titleMedium,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           TextField(
             key: const Key('encryptedCodeField'),
             controller: ctrl,
@@ -376,7 +384,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
               hintText: 'sharedinbox.de:encrypted-accounts:v1:…',
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           FilledButton(
             onPressed: () {
               final text = ctrl.text.trim();
@@ -384,7 +392,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             },
             child: const Text('Import'),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           OutlinedButton(
             onPressed: () => setState(() {
               _scannerActive = false;
@@ -438,14 +446,16 @@ class _ExpiryHintState extends State<_ExpiryHint> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.timer_outlined, size: 14, color: Colors.grey[600]),
-        const SizedBox(width: 4),
+        Icon(Icons.timer_outlined, size: AppIconSize.sm, color: muted),
+        const SizedBox(width: AppSpacing.xs),
         Text(
           'This key expires in ${_formatRemaining()}',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          style: theme.textTheme.bodySmall?.copyWith(color: muted),
         ),
       ],
     );

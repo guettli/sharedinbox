@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 class MailboxListScreen extends ConsumerWidget {
@@ -35,7 +36,7 @@ class MailboxListScreen extends ConsumerWidget {
             loading: () => const SizedBox.shrink(),
             error: (_, __) => const SizedBox.shrink(),
             data: (account) => Padding(
-              padding: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.only(right: AppSpacing.md),
               child: Center(
                 child: Text(
                   account?.displayName ?? '',
@@ -140,15 +141,18 @@ class _FailedMutationBanner extends StatelessWidget {
     return Material(
       color: Theme.of(context).colorScheme.errorContainer,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.sm,
+        ),
         child: Row(
           children: [
             Icon(
               Icons.warning_amber,
               color: Theme.of(context).colorScheme.onErrorContainer,
-              size: 20,
+              size: AppIconSize.md,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 _label(mutations.first),

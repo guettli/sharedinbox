@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 /// Controller for [EmailThreadList].
@@ -310,12 +311,12 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
     return Container(
       color: color,
       alignment: alignment,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: Colors.white),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Text(label, style: const TextStyle(color: Colors.white)),
         ],
       ),

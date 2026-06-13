@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 enum _Step { email, detecting, chooseType, jmapForm, imapForm, connecting }
@@ -268,7 +269,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _buildEmailStep() {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Form(
         key: _emailFormKey,
         child: Column(
@@ -290,12 +291,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
                 return null;
               },
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             FilledButton(
               onPressed: _detectAccount,
               child: const Text('Continue'),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             OutlinedButton.icon(
               key: const Key('importAccountButton'),
               icon: const Icon(Icons.qr_code_scanner),
@@ -314,7 +315,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const CircularProgressIndicator(),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           Text(label),
         ],
       ),
@@ -323,7 +324,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _buildChooseTypeStep() {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -333,7 +334,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             '${_emailCtrl.text.trim()}.\n'
             'Choose account type:',
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
           FilledButton(
             onPressed: () => setState(() {
               _jmapApiUrlCtrl.clear();
@@ -341,7 +342,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             }),
             child: const Text('JMAP'),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           OutlinedButton(
             onPressed: () => setState(() {
               _imapHostCtrl.clear();
@@ -361,7 +362,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _buildJmapForm() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Form(
         key: _jmapFormKey,
         child: Column(
@@ -388,7 +389,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               errorMessage: _tryErr,
               onPressed: () => _tryConnection(_jmapFormKey, _buildJmapAccount),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             FilledButton(onPressed: _saveJmap, child: const Text('Save')),
           ],
         ),
@@ -398,7 +399,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _buildImapForm() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Form(
         key: _imapFormKey,
         child: Column(
@@ -440,7 +441,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               errorMessage: _tryErr,
               onPressed: () => _tryConnection(_imapFormKey, _buildImapAccount),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             FilledButton(onPressed: _saveImap, child: const Text('Save')),
           ],
         ),
@@ -452,7 +453,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _emailHeader(String accountTypeLabel) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -468,7 +469,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   Widget _errorBanner() {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: AppSpacing.md),
       child: Text(
         _errorMessage!,
         style: TextStyle(color: Theme.of(context).colorScheme.error),
@@ -485,7 +486,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     String? Function(String?)? validator,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: TextFormField(
         controller: ctrl,
         obscureText: obscure,

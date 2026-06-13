@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d, HH:mm');
@@ -55,7 +56,7 @@ class ThreadDetailScreen extends ConsumerWidget {
           }
 
           return ListView.builder(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             itemCount: emails.length,
             itemBuilder: (context, index) {
               final email = emails[index];
@@ -123,7 +124,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
         trustedSenders.any((p) => globMatch(senderEmail, p));
 
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Column(
         children: [
           ListTile(
@@ -151,7 +152,11 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (widget.email.isFlagged)
-                  const Icon(Icons.star, color: Colors.amber, size: 20),
+                  const Icon(
+                    Icons.star,
+                    color: Colors.amber,
+                    size: AppIconSize.md,
+                  ),
                 Icon(_expanded ? Icons.expand_less : Icons.expand_more),
               ],
             ),
@@ -164,7 +169,12 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
 
   Widget _buildExpandedBody(bool isTrusted, String? senderEmail) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.lg,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -174,7 +184,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(AppSpacing.lg),
                   child: Text(
                     'Failed to load email: ${snapshot.error}',
                     style: TextStyle(
@@ -186,7 +196,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
               if (!snapshot.hasData) {
                 return const Center(
                   child: Padding(
-                    padding: EdgeInsets.all(16),
+                    padding: EdgeInsets.all(AppSpacing.lg),
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 );
@@ -201,7 +211,10 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                   if (hasHtml) ...[
                     if (!effectiveLoadImages)
                       TextButton.icon(
-                        icon: const Icon(Icons.image_outlined, size: 16),
+                        icon: const Icon(
+                          Icons.image_outlined,
+                          size: AppIconSize.sm,
+                        ),
                         label: const Text('Load remote images'),
                         onPressed: () {
                           setState(() => _loadRemoteImages = true);
@@ -248,7 +261,7 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                       body.textBody ?? '(no body text)',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.lg),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [

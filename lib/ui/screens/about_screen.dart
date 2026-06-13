@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -190,8 +191,8 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.md,
                 ),
                 child: Row(
                   children: [
@@ -204,7 +205,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: AppSpacing.xs),
                     Expanded(
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.bug_report_outlined),
@@ -214,7 +215,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: AppSpacing.xs),
                     Expanded(
                       child: FilledButton.icon(
                         icon: const Icon(Icons.feedback_outlined),

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AccountListScreen extends ConsumerWidget {
@@ -28,11 +29,14 @@ class AccountListScreen extends ConsumerWidget {
       drawer: Drawer(
         child: ListView(
           children: [
-            const DrawerHeader(
-              decoration: BoxDecoration(color: Colors.blueGrey),
+            DrawerHeader(
+              decoration: const BoxDecoration(color: Colors.blueGrey),
               child: Text(
                 'sharedinbox.de',
-                style: TextStyle(color: Colors.white, fontSize: 24),
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(color: Colors.white),
               ),
             ),
             ListTile(
@@ -133,8 +137,8 @@ class _AccountTile extends ConsumerWidget {
             children: [
               status.when(
                 loading: () => const SizedBox(
-                  width: 20,
-                  height: 20,
+                  width: AppIconSize.md,
+                  height: AppIconSize.md,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
                 data: (_) =>
@@ -188,7 +192,10 @@ class _AccountTile extends ConsumerWidget {
           onTap: () => context.push('/accounts/${account.id}/mailboxes'),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(72, 0, 16, 8),
+          // 72 aligns with the ListTile leading indent so the health row
+          // lines up with the title above.
+          padding:
+              const EdgeInsets.fromLTRB(72, 0, AppSpacing.lg, AppSpacing.sm),
           child: health.when(
             data: (h) {
               if (h == null) return const Text('Sync health: Not verified yet');
@@ -198,10 +205,10 @@ class _AccountTile extends ConsumerWidget {
                   const Text('Sync health: '),
                   Icon(
                     h.isHealthy ? Icons.verified : Icons.warning_amber,
-                    size: 14,
+                    size: AppIconSize.sm,
                     color: h.isHealthy ? Colors.green : Colors.orange,
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: AppSpacing.xs),
                   Expanded(
                     child: Text(
                       h.isHealthy
@@ -209,7 +216,10 @@ class _AccountTile extends ConsumerWidget {
                           : _formatDiscrepancies(h.discrepancySummary),
                     ),
                   ),
-                  Text(' ($date)', style: const TextStyle(fontSize: 10)),
+                  Text(
+                    ' ($date)',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
                 ],
               );
             },
@@ -342,28 +352,28 @@ class _OnboardingView extends StatelessWidget {
     final theme = Theme.of(context);
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               Icons.mail_outline,
-              size: 64,
+              size: AppIconSize.hero,
               color: theme.colorScheme.primary,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             Text(
               'Welcome to sharedinbox.de',
               style: theme.textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               'Get started in three steps:',
               style: theme.textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xl),
             const _Step(
               number: '1',
               title: 'Add an account',
@@ -381,7 +391,7 @@ class _OnboardingView extends StatelessWidget {
               description:
                   'Tap the account to browse mailboxes and read emails.',
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: AppSpacing.xxl),
             FilledButton.icon(
               onPressed: () => context.push('/accounts/add'),
               icon: const Icon(Icons.add),
@@ -409,22 +419,22 @@ class _Step extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            radius: 16,
+            radius: AppSpacing.lg,
             backgroundColor: theme.colorScheme.primaryContainer,
             child: Text(
               number,
-              style: TextStyle(
+              style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onPrimaryContainer,
                 fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: AppSpacing.lg),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

@@ -106,20 +106,20 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'sharedinbox.de',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-        splashFactory: NoSplash.splashFactory,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        splashFactory: NoSplash.splashFactory,
-      ),
+      theme: _buildTheme(Brightness.light),
+      darkTheme: _buildTheme(Brightness.dark),
       routerConfig: router,
     );
   }
+}
+
+ThemeData _buildTheme(Brightness brightness) {
+  return ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: Colors.indigo,
+      brightness: brightness,
+    ),
+    useMaterial3: true,
+    splashFactory: NoSplash.splashFactory,
+  );
 }

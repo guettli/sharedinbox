@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 class TrustedImageSendersScreen extends ConsumerWidget {
   const TrustedImageSendersScreen({super.key, this.highlightedSender});
@@ -28,7 +29,7 @@ class TrustedImageSendersScreen extends ConsumerWidget {
         data: (senders) {
           if (senders.isEmpty) {
             return const Padding(
-              padding: EdgeInsets.all(16),
+              padding: EdgeInsets.all(AppSpacing.lg),
               child: Text(
                 'No addresses added yet. '
                 'Tap + to add an address or pattern (e.g. *@example.com), '

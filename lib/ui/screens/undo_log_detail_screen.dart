@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateTimeFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
 
@@ -88,7 +89,10 @@ class UndoLogDetailScreen extends ConsumerWidget {
           ),
           if (action.originalEmails.isEmpty)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.lg,
+                vertical: AppSpacing.sm,
+              ),
               child: Text(
                 '${action.emailIds.length} email(s) — details not available',
                 style: theme.textTheme.bodySmall,
@@ -112,7 +116,12 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.xs,
+      ),
       child: Text(
         text,
         style: theme.textTheme.labelLarge?.copyWith(

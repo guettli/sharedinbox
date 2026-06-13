@@ -10,6 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Sending side of the secure account-sharing flow.
 ///
@@ -196,7 +197,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         _Step.showEncrypted => _buildEncryptedQrStep(context),
         _Step.error => Center(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               child: Text('Error: $_errorMessage'),
             ),
           ),
@@ -227,7 +228,10 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
           right: 0,
           child: Container(
             color: Colors.black54,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.md,
+              horizontal: AppSpacing.lg,
+            ),
             child: const Text(
               'Point the camera at the public-key QR code shown by the receiver',
               style: TextStyle(color: Colors.white),
@@ -242,14 +246,14 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   Widget _buildTextFallbackView(BuildContext context) {
     final ctrl = TextEditingController();
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
             'Paste the public key shown by the receiver\'s "Receive accounts" screen.',
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           TextField(
             key: const Key('pubKeyInputField'),
             controller: ctrl,
@@ -260,7 +264,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
               hintText: 'sharedinbox.de:pubkey:v1:…',
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           FilledButton(
             onPressed: () {
               final text = ctrl.text.trim();
@@ -278,7 +282,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpacing.lg),
           child: Text(
             'Select accounts to send',
             style: theme.textTheme.titleMedium,
@@ -306,7 +310,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpacing.lg),
           child: FilledButton(
             key: const Key('sendSelectedButton'),
             onPressed: _selectedIds.isEmpty
@@ -322,7 +326,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   Widget _buildEncryptedQrStep(BuildContext context) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -331,17 +335,17 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
             style: theme.textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             'The receiver taps "Step 2 — Scan encrypted QR code" and scans this.',
             style: theme.textTheme.bodySmall,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
           Center(
             child: Container(
               color: Colors.white,
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(AppSpacing.sm),
               child: QrImageView(
                 key: const Key('encryptedAccountsQrCode'),
                 data: _encryptedQr!,
@@ -349,7 +353,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           OutlinedButton.icon(
             key: const Key('copyEncryptedButton'),
             icon: const Icon(Icons.copy),
@@ -363,7 +367,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
               );
             },
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             'This code contains encrypted account data. It is safe to display '
             'briefly — only the receiver\'s device can decrypt it.',

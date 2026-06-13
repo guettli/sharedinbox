@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Full-screen dialog for browsing email headers, organised into groups.
 class EmailHeadersDialog extends StatelessWidget {
@@ -171,7 +172,10 @@ class _HeaderRow extends StatelessWidget {
         : Theme.of(context).colorScheme.surface;
     return Container(
       color: bg,
-      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      padding: const EdgeInsets.symmetric(
+        vertical: AppSpacing.xs,
+        horizontal: AppSpacing.sm,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -181,7 +185,7 @@ class _HeaderRow extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(flex: 2, child: SelectableText(header.value)),
         ],
       ),
@@ -197,19 +201,20 @@ class _DelayRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = _delayColor(delay);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: 2),
       child: Row(
         children: [
-          Icon(Icons.arrow_downward, size: 14, color: color),
-          const SizedBox(width: 4),
+          Icon(Icons.arrow_downward, size: AppIconSize.sm, color: color),
+          const SizedBox(width: AppSpacing.xs),
           Text(
             _formatDuration(delay),
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight:
-                  delay.inSeconds >= 30 ? FontWeight.bold : FontWeight.normal,
-            ),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: color,
+                  fontWeight: delay.inSeconds >= 30
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
           ),
         ],
       ),

@@ -9,7 +9,8 @@ import 'dart:io';
 // Minimum line-hit percentage across all measured (non-excluded) files.
 const _minCoveragePercent = 80;
 
-// Pure-abstract interfaces: no executable code, Dart VM never instruments them.
+// Pure-abstract interfaces and const-only token classes: no executable code,
+// Dart VM never instruments them.
 const _noCode = {
   'lib/core/db_schema_version.dart',
   'lib/core/repositories/account_repository.dart',
@@ -26,6 +27,7 @@ const _noCode = {
   'lib/core/models/note.dart',
   'lib/core/repositories/note_repository.dart',
   'lib/core/storage/secure_storage.dart',
+  'lib/ui/theme/spacing.dart',
 };
 
 // Files excluded from the unit-coverage gate because they require integration

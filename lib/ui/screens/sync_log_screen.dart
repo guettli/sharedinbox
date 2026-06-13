@@ -9,6 +9,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
@@ -167,10 +168,10 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
         actions: [
           if (_syncing)
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
+              padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               child: SizedBox(
-                width: 24,
-                height: 24,
+                width: AppIconSize.lg,
+                height: AppIconSize.lg,
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
@@ -207,7 +208,10 @@ class _SyncLogTile extends StatelessWidget {
     final proto =
         entry.protocol.isEmpty ? '' : ' · ${entry.protocol.toUpperCase()}';
     final theme = Theme.of(context);
-    final errorColor = theme.colorScheme.error;
+    final cs = theme.colorScheme;
+    final errorColor = cs.error;
+    final smallStyle = theme.textTheme.bodySmall;
+    final mutedSmallStyle = smallStyle?.copyWith(color: cs.onSurfaceVariant);
 
     final subtitleText = entry.isOk
         ? '${entry.emailsFetched} new · ${entry.emailsSkipped} up-to-date · took $durationLabel'
@@ -226,13 +230,13 @@ class _SyncLogTile extends StatelessWidget {
       ),
       subtitle: Text(
         subtitleText,
-        style: TextStyle(fontSize: 12, color: entry.isOk ? null : errorColor),
+        style: smallStyle?.copyWith(color: entry.isOk ? null : errorColor),
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.copy, size: 18),
+            icon: const Icon(Icons.copy, size: AppIconSize.sm),
             tooltip: 'Copy as markdown',
             onPressed: onCopy,
           ),
@@ -241,30 +245,42 @@ class _SyncLogTile extends StatelessWidget {
       ),
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+          // 72 aligns with the ListTile leading indent so children line up
+          // with the title text.
+          padding:
+              const EdgeInsets.fromLTRB(72, 0, AppSpacing.lg, AppSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _row('Started', _timeFmt.format(entry.startedAt)),
-              _row('Finished', _timeFmt.format(entry.finishedAt)),
-              _row('Duration', durationLabel),
+              _row(context, 'Started', _timeFmt.format(entry.startedAt)),
+              _row(context, 'Finished', _timeFmt.format(entry.finishedAt)),
+              _row(context, 'Duration', durationLabel),
               if (entry.protocol.isNotEmpty)
-                _row('Protocol', entry.protocol.toUpperCase()),
-              _row('Emails fetched', '${entry.emailsFetched}'),
-              _row('Emails up-to-date', '${entry.emailsSkipped}'),
-              _row('Mailboxes synced', '${entry.mailboxesSynced}'),
-              _row('Pending changes flushed', '${entry.pendingFlushed}'),
-              _row('Data transferred', _fmtBytes(entry.bytesTransferred)),
+                _row(context, 'Protocol', entry.protocol.toUpperCase()),
+              _row(context, 'Emails fetched', '${entry.emailsFetched}'),
+              _row(context, 'Emails up-to-date', '${entry.emailsSkipped}'),
+              _row(context, 'Mailboxes synced', '${entry.mailboxesSynced}'),
+              _row(
+                context,
+                'Pending changes flushed',
+                '${entry.pendingFlushed}',
+              ),
+              _row(
+                context,
+                'Data transferred',
+                _fmtBytes(entry.bytesTransferred),
+              ),
               if (entry.mailboxStats.isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.only(top: 6, bottom: 2),
-                  child: Text(
-                    'Per mailbox',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: AppSpacing.sm,
+                    bottom: AppSpacing.xs,
                   ),
+                  child: Text('Per mailbox', style: mutedSmallStyle),
                 ),
                 for (final m in entry.mailboxStats)
                   _row(
+                    context,
                     '  ${m.mailboxPath}',
                     [
                       '${m.fetched} new · ${m.skipped} up-to-date',
@@ -274,23 +290,23 @@ class _SyncLogTile extends StatelessWidget {
               ],
               if (entry.errorMessage != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(top: AppSpacing.xs),
                   child: Text(
                     entry.errorMessage!,
-                    style: TextStyle(color: errorColor, fontSize: 12),
+                    style: smallStyle?.copyWith(color: errorColor),
                   ),
                 ),
               if (entry.stackTrace != null) ...[
-                const Padding(
-                  padding: EdgeInsets.only(top: 6, bottom: 2),
-                  child: Text(
-                    'Stack trace',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: AppSpacing.sm,
+                    bottom: AppSpacing.xs,
                   ),
+                  child: Text('Stack trace', style: mutedSmallStyle),
                 ),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(AppSpacing.sm),
                   decoration: BoxDecoration(
                     color: Colors.black87,
                     borderRadius: BorderRadius.circular(4),
@@ -306,16 +322,16 @@ class _SyncLogTile extends StatelessWidget {
                 ),
               ],
               if (entry.protocolLog != null) ...[
-                const Padding(
-                  padding: EdgeInsets.only(top: 6, bottom: 2),
-                  child: Text(
-                    'Protocol log',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: AppSpacing.sm,
+                    bottom: AppSpacing.xs,
                   ),
+                  child: Text('Protocol log', style: mutedSmallStyle),
                 ),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(AppSpacing.sm),
                   decoration: BoxDecoration(
                     color: Colors.black87,
                     borderRadius: BorderRadius.circular(4),
@@ -337,19 +353,25 @@ class _SyncLogTile extends StatelessWidget {
     );
   }
 
-  Widget _row(String label, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 180,
-              child: Text(
-                label,
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+  Widget _row(BuildContext context, String label, String value) {
+    final theme = Theme.of(context);
+    final smallStyle = theme.textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 180,
+            child: Text(
+              label,
+              style: smallStyle?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            Expanded(child: Text(value, style: const TextStyle(fontSize: 12))),
-          ],
-        ),
-      );
+          ),
+          Expanded(child: Text(value, style: smallStyle)),
+        ],
+      ),
+    );
+  }
 }

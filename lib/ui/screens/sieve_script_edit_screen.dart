@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 
 class SieveScriptEditScreen extends ConsumerStatefulWidget {
@@ -178,7 +179,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         actions: [
           if (_saving)
             const Padding(
-              padding: EdgeInsets.all(16),
+              padding: EdgeInsets.all(AppSpacing.lg),
               child: SizedBox(
                 width: 20,
                 height: 20,
@@ -196,7 +197,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       body: _loadingContent
           ? const Center(child: CircularProgressIndicator())
           : Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -209,7 +210,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
                     textInputAction: TextInputAction.next,
                     enabled: !_saving,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   if (_error != null) ...[
                     Text(
                       _error!,
@@ -217,7 +218,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                   ],
                   Expanded(
                     child: TabBarView(
@@ -235,7 +236,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (!_visualSupported) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(AppSpacing.xl),
           child: Text(
             'This script uses features not supported by the visual editor.\n'
             'Edit as raw Sieve on the Script tab.',
@@ -256,7 +257,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
             initialValue: _filterGroup,
             onChanged: (g) => setState(() => _filterGroup = g),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           _ActionEditor(
             actions: _actions,
             onChanged: (a) => setState(() => _actions = a),
@@ -339,13 +340,13 @@ class _ActionEditor extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
           child: Text('Actions', style: Theme.of(context).textTheme.labelLarge),
         ),
         for (var i = 0; i < actions.length; i++) _buildRow(context, i),
         TextButton.icon(
           onPressed: _add,
-          icon: const Icon(Icons.add, size: 16),
+          icon: const Icon(Icons.add, size: AppIconSize.sm),
           label: const Text('Add action'),
         ),
       ],
@@ -356,7 +357,7 @@ class _ActionEditor extends StatelessWidget {
     final action = actions[i];
     final type = _typeOf(action);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
         children: [
           DropdownButton<_ActionType>(
@@ -383,7 +384,7 @@ class _ActionEditor extends StatelessWidget {
             ],
           ),
           if (type == _ActionType.fileInto) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: _FolderField(
                 value: (action as FileIntoAction).folder,
@@ -393,7 +394,7 @@ class _ActionEditor extends StatelessWidget {
           ] else
             const Spacer(),
           IconButton(
-            icon: const Icon(Icons.remove_circle_outline, size: 18),
+            icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
             tooltip: 'Remove',
             onPressed: () => _remove(i),
           ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// A widget that lets the user build a structured [FilterGroup] interactively.
 ///
@@ -107,18 +108,18 @@ class _GroupEditor extends StatelessWidget {
           onRemove: onRemoveGroup,
         ),
         for (var i = 0; i < group.children.length; i++) _buildChild(context, i),
-        const SizedBox(height: 6),
+        const SizedBox(height: AppSpacing.sm),
         Row(
           children: [
             TextButton.icon(
               onPressed: _addLeaf,
-              icon: const Icon(Icons.add, size: 16),
+              icon: const Icon(Icons.add, size: AppIconSize.sm),
               label: const Text('Add condition'),
             ),
             if (depth < _maxDepth)
               TextButton.icon(
                 onPressed: _addSubGroup,
-                icon: const Icon(Icons.playlist_add, size: 16),
+                icon: const Icon(Icons.playlist_add, size: AppIconSize.sm),
                 label: const Text('Add group'),
               ),
           ],
@@ -127,10 +128,14 @@ class _GroupEditor extends StatelessWidget {
     );
     if (isRoot) return content;
     return Card(
-      margin: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
+      margin: const EdgeInsets.only(
+        left: AppSpacing.md,
+        top: AppSpacing.xs,
+        bottom: AppSpacing.xs,
+      ),
       color: theme.colorScheme.surfaceContainerLow,
       child: Padding(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(AppSpacing.sm),
         child: content,
       ),
     );
@@ -190,7 +195,7 @@ class _OperatorRow extends StatelessWidget {
         const Spacer(),
         if (onRemove != null)
           IconButton(
-            icon: const Icon(Icons.close, size: 18),
+            icon: const Icon(Icons.close, size: AppIconSize.sm),
             tooltip: 'Remove group',
             onPressed: onRemove,
           ),
@@ -259,7 +264,7 @@ class _LeafRowState extends State<_LeafRow> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
         children: [
           DropdownButton<FilterField>(
@@ -273,7 +278,7 @@ class _LeafRowState extends State<_LeafRow> {
                 )
                 .toList(),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           DropdownButton<FilterComparison>(
             value: widget.leaf.comparison,
             onChanged: _onCompChanged,
@@ -285,7 +290,7 @@ class _LeafRowState extends State<_LeafRow> {
                 )
                 .toList(),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: TextField(
               controller: _ctrl,
@@ -295,13 +300,15 @@ class _LeafRowState extends State<_LeafRow> {
                 hintText: 'value',
                 isDense: true,
                 border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.sm,
+                ),
               ),
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.remove_circle_outline, size: 18),
+            icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
             tooltip: 'Remove',
             onPressed: widget.onDelete,
           ),

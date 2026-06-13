@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 class SieveScriptsScreen extends ConsumerStatefulWidget {
   const SieveScriptsScreen({
@@ -157,12 +158,12 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     if (_error != null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpacing.lg),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(_error!, style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               FilledButton(onPressed: _load, child: const Text('Retry')),
             ],
           ),
@@ -214,16 +215,19 @@ class _SieveSourceBanner extends StatelessWidget {
     return Container(
       width: double.infinity,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.md,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
             isLocal ? Icons.phone_android : Icons.dns,
-            size: 18,
+            size: AppIconSize.sm,
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
               text,

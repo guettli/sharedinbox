@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 class UserPreferencesScreen extends ConsumerWidget {
   const UserPreferencesScreen({super.key});
@@ -183,13 +184,13 @@ class UserPreferencesScreen extends ConsumerWidget {
               ),
             ),
             if (prefs.prefetchMode != PrefetchMode.disabled) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: AppSpacing.xs),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                 child: Row(
                   children: [
                     const Text('Cache size limit:'),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: AppSpacing.lg),
                     DropdownButton<int>(
                       value: _nearestCacheOption(prefs.bodyCacheLimitMb),
                       items: const [
@@ -210,7 +211,7 @@ class UserPreferencesScreen extends ConsumerWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
             ],
             const Divider(),
             ListTile(

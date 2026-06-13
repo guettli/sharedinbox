@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:sharedinbox/ui/theme/spacing.dart';
+
 /// Renders the "Try connection" button together with its success/error result.
 ///
 /// The parent manages [testing], [okMessage], [errorMessage], and [onPressed]
@@ -27,7 +29,7 @@ class TryConnectionButton extends StatelessWidget {
       children: [
         if (okMessage != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: Text(
               okMessage!,
               style: TextStyle(color: Theme.of(context).colorScheme.primary),
@@ -35,13 +37,13 @@ class TryConnectionButton extends StatelessWidget {
           ),
         if (errorMessage != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: Text(
               errorMessage!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpacing.md),
         OutlinedButton(
           key: buttonKey,
           onPressed: testing ? null : onPressed,

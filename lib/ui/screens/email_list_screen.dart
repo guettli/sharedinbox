@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
@@ -170,7 +171,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           loading: () => const SizedBox.shrink(),
           error: (_, __) => const SizedBox.shrink(),
           data: (account) => Padding(
-            padding: const EdgeInsets.only(right: 4),
+            padding: const EdgeInsets.only(right: AppSpacing.xs),
             child: Center(
               child: Text(
                 account?.displayName ?? '',
@@ -207,7 +208,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(60),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.sm,
+            0,
+            AppSpacing.sm,
+            AppSpacing.sm,
+          ),
           child: SearchBar(
             controller: _searchController,
             hintText: 'Search…',
@@ -318,7 +324,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return const SizedBox.shrink();
     }
     return MaterialBanner(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.sm,
+        AppSpacing.sm,
+      ),
       content: Text(error, maxLines: 2, overflow: TextOverflow.ellipsis),
       leading: Icon(
         Icons.sync_problem,

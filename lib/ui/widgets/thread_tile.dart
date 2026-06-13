@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateFmt = DateFormat('MMM d');
 // Cache formatted dates by local calendar day to avoid repeated DateFormat.format calls.
@@ -64,7 +65,7 @@ class ThreadTile extends StatelessWidget {
           ),
           if (thread.messageCount > 1)
             Padding(
-              padding: const EdgeInsets.only(left: 4),
+              padding: const EdgeInsets.only(left: AppSpacing.xs),
               child: Text(
                 '[${thread.messageCount}]',
                 style: Theme.of(context).textTheme.bodySmall,
@@ -105,8 +106,8 @@ class ThreadTile extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (thread.isFlagged)
-            const Icon(Icons.star, color: Colors.amber, size: 16),
-          const SizedBox(width: 4),
+            const Icon(Icons.star, color: Colors.amber, size: AppIconSize.sm),
+          const SizedBox(width: AppSpacing.xs),
           Text(
             _fmtDate(thread.latestDate),
             style: Theme.of(context).textTheme.bodySmall,

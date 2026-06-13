@@ -21,6 +21,7 @@ import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
@@ -217,7 +218,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final effectiveLoadImages = _loadRemoteImages || isTrusted;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         if (header != null) ...[_buildHeader(ctx, header), const Divider()],
         if (hasHtml) ...[
@@ -225,9 +226,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             Align(
               alignment: Alignment.centerLeft,
               child: Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: OutlinedButton.icon(
-                  icon: const Icon(Icons.image_outlined, size: 18),
+                  icon: const Icon(Icons.image_outlined, size: AppIconSize.sm),
                   label: const Text('Load remote images'),
                   onPressed: () {
                     setState(() => _loadRemoteImages = true);
@@ -280,7 +281,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         if (body.attachments.isNotEmpty) ...[
           const Divider(),
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
             child: Text(
               'Attachments',
               style: Theme.of(ctx).textTheme.titleSmall,
@@ -294,8 +295,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               subtitle: Text('${att.contentType} • ${fmtSize(att.size)}'),
               trailing: _downloading.contains(att.filename)
                   ? const SizedBox(
-                      width: 24,
-                      height: 24,
+                      width: AppIconSize.lg,
+                      height: AppIconSize.lg,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : IconButton(
@@ -371,7 +372,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         Row(
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
               child: Text(
                 'Notes',
                 style: Theme.of(ctx).textTheme.titleSmall,
@@ -379,7 +380,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
             const Spacer(),
             TextButton.icon(
-              icon: const Icon(Icons.add, size: 16),
+              icon: const Icon(Icons.add, size: AppIconSize.sm),
               label: const Text('Add'),
               onPressed: () => unawaited(_addNoteDialog(ctx, header)),
             ),
@@ -390,11 +391,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           error: (e, _) => Text('Error loading notes: $e'),
           data: (list) {
             if (list.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.only(bottom: 4),
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
                 child: Text(
                   'No notes yet.',
-                  style: TextStyle(color: Colors.grey),
+                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
                 ),
               );
             }
@@ -419,7 +422,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         style: Theme.of(ctx).textTheme.bodySmall,
       ),
       trailing: IconButton(
-        icon: const Icon(Icons.delete_outline, size: 20),
+        icon: const Icon(Icons.delete_outline, size: AppIconSize.md),
         tooltip: 'Delete note',
         onPressed: () {
           unawaited(ref.read(noteRepositoryProvider).deleteNote(note.id));
@@ -476,7 +479,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           email.subject ?? '(no subject)',
           style: Theme.of(ctx).textTheme.titleMedium,
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: AppSpacing.xs),
         if (email.from.isNotEmpty)
           Text(
             'From: ${email.from.first}',
@@ -494,7 +497,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
         if (email.listUnsubscribeHeader != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: _UnsubscribeChip(header: email.listUnsubscribeHeader!),
           ),
       ],
@@ -747,10 +750,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       builder: (ctx) => ListView(
         shrinkWrap: true,
         children: [
-          const ListTile(
+          ListTile(
             title: Text(
               'Move to…',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              style: Theme.of(ctx)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
           ),
           for (final m in destinations)
@@ -866,15 +872,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                         color: Theme.of(ctx).colorScheme.outline,
                       ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: AppSpacing.xs),
                 Flexible(
                   child: SingleChildScrollView(
                     child: SelectableText(
                       raw,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                      ),
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                          ),
                     ),
                   ),
                 ),
@@ -995,12 +1000,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                       ? Theme.of(ctx).colorScheme.surfaceContainerHighest
                       : Theme.of(ctx).colorScheme.surface,
                   padding: const EdgeInsets.symmetric(
-                    vertical: 4,
-                    horizontal: 8,
+                    vertical: AppSpacing.xs,
+                    horizontal: AppSpacing.sm,
                   ),
                   child: Row(
                     children: [
-                      SizedBox(width: row.depth * 16.0),
+                      SizedBox(width: row.depth * AppSpacing.lg),
                       Expanded(
                         child: Text(
                           row.label,
@@ -1059,7 +1064,7 @@ class _ReplyAllDialogState extends State<_ReplyAllDialog> {
           children: [
             for (final c in _candidates)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
                 child: Row(
                   children: [
                     Expanded(
@@ -1068,7 +1073,7 @@ class _ReplyAllDialogState extends State<_ReplyAllDialog> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: AppSpacing.sm),
                     SegmentedButton<_Placement>(
                       showSelectedIcon: false,
                       segments: const [
@@ -1164,7 +1169,7 @@ class _UnsubscribeChip extends StatelessWidget {
     return Tooltip(
       message: uri.toString(),
       child: ActionChip(
-        avatar: const Icon(Icons.unsubscribe_outlined, size: 16),
+        avatar: const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
         label: const Text('Unsubscribe'),
         onPressed: () => _onTap(context, uri),
       ),

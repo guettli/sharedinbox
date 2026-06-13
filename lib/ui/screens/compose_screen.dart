@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({
@@ -269,10 +270,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         title: const Text('Compose'),
         actions: [
           if (_draftSaved)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
               child: Center(
-                child: Text('Saved', style: TextStyle(fontSize: 12)),
+                child: Text(
+                  'Saved',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ),
             ),
           IconButton(
@@ -293,11 +297,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         children: [
           if (_accounts.length > 1)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: DropdownButtonFormField<String>(
                 initialValue: _accountId,
                 decoration: const InputDecoration(
@@ -317,7 +321,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             )
           else if (_accounts.length == 1)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: InputDecorator(
                 decoration: const InputDecoration(
                   labelText: 'From',
@@ -331,7 +335,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           _addressField(_to, _toFocus, 'To'),
           _addressField(_cc, _ccFocus, 'Cc'),
           _field(_subject, 'Subject'),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           TextFormField(
             controller: _body,
             maxLines: null,
@@ -343,10 +347,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           ),
           if (_attachments.isNotEmpty) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             const Divider(),
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
               child: Text(
                 'Attachments',
                 style: Theme.of(context).textTheme.titleSmall,
@@ -388,7 +392,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     String label,
   ) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: RawAutocomplete<EmailAddress>(
         textEditingController: ctrl,
         focusNode: focusNode,
@@ -444,8 +448,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                       onTap: () => onSelected(option),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
+                          horizontal: AppSpacing.lg,
+                          vertical: AppSpacing.sm,
                         ),
                         child: option.name != null
                             ? Column(
@@ -455,7 +459,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                                   Text(option.name!),
                                   Text(
                                     option.email,
-                                    style: const TextStyle(fontSize: 12),
+                                    style: Theme.of(ctx).textTheme.bodySmall,
                                   ),
                                 ],
                               )
@@ -478,7 +482,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     TextInputType? keyboardType,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: TextFormField(
         controller: ctrl,
         keyboardType: keyboardType,

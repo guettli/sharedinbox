@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
 
 const _bugReportApiUrl = String.fromEnvironment(
@@ -302,13 +303,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
               child: ListBody(
                 children: [
                   const Text('Thank you for helping us improve SharedInbox!'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   Text(
                     'Your Report ID is:\n$reportId',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   const Text(
                     'Your report is handled confidentially and has not been posted to the public issue tracker.',
                   ),
@@ -346,7 +347,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           : Form(
               key: _formKey,
               child: ListView(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(AppSpacing.lg),
                 children: [
                   // Confidentiality info card
                   Card(
@@ -361,14 +362,14 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(16.0),
+                      padding: const EdgeInsets.all(AppSpacing.lg),
                       child: Row(
                         children: [
                           Icon(
                             Icons.lock_outline,
                             color: theme.colorScheme.secondary,
                           ),
-                          const SizedBox(width: 16),
+                          const SizedBox(width: AppSpacing.lg),
                           const Expanded(
                             child: Text(
                               'Your report is handled confidentially and will not be posted to the public issue tracker.',
@@ -379,7 +380,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: AppSpacing.lg),
 
                   // Description Text Field
                   TextFormField(
@@ -401,7 +402,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       return null;
                     },
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: AppSpacing.lg),
 
                   // Email info chip if email is attached
                   if (_attachedEmail != null) ...[
@@ -410,17 +411,17 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       color: theme.colorScheme.surfaceContainerHighest,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12.0,
-                          vertical: 8.0,
+                          horizontal: AppSpacing.md,
+                          vertical: AppSpacing.sm,
                         ),
                         child: Row(
                           children: [
                             Icon(
                               Icons.email_outlined,
-                              size: 20,
+                              size: AppIconSize.md,
                               color: theme.colorScheme.primary,
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: AppSpacing.md),
                             const Expanded(
                               child: Text(
                                 'The current email metadata will be attached automatically.',
@@ -431,7 +432,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                   ],
 
                   // Attachments Section
@@ -439,7 +440,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                     'Attachments',
                     style: theme.textTheme.titleMedium,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -448,17 +449,19 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                         icon: const Icon(Icons.add_a_photo_outlined),
                         label: const Text('Add screenshots'),
                       ),
-                      const SizedBox(width: 16),
-                      const Expanded(
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(
                         child: Text(
                           'Screenshots help us understand the problem faster.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ),
                     ],
                   ),
                   if (_attachments.isNotEmpty) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.md),
                     SizedBox(
                       height: 48,
                       child: ListView.builder(
@@ -467,7 +470,8 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                         itemBuilder: (context, index) {
                           final file = _attachments[index];
                           return Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
+                            padding:
+                                const EdgeInsets.only(right: AppSpacing.sm),
                             child: InputChip(
                               label: Text(
                                 '${file.name} (${_formatSize(file.size)})',
@@ -480,7 +484,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                         },
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     Row(
                       children: [
                         Text(
@@ -498,17 +502,17 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                           ),
                         ),
                         if (totalSize > sizeLimit) ...[
-                          const SizedBox(width: 8),
+                          const SizedBox(width: AppSpacing.sm),
                           const Icon(
                             Icons.error_outline,
-                            size: 16,
+                            size: AppIconSize.sm,
                             color: Colors.red,
                           ),
                         ],
                       ],
                     ),
                   ],
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
 
                   // Email opt-in
                   CheckboxListTile(
@@ -524,7 +528,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   if (_includeEmail) ...[
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0),
+                      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
                       child: TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
@@ -559,7 +563,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       controlAffinity: ListTileControlAffinity.leading,
                       contentPadding: EdgeInsets.zero,
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.md),
                   ],
 
                   // System info section
@@ -594,7 +598,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                           ),
                           children: [
                             Padding(
-                              padding: const EdgeInsets.all(12.0),
+                              padding: const EdgeInsets.all(AppSpacing.md),
                               child: Align(
                                 alignment: Alignment.topLeft,
                                 child: MarkdownBody(data: aboutMd),
@@ -605,13 +609,14 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                       );
                     },
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: AppSpacing.xxl),
 
                   // Submit Button
                   FilledButton(
                     onPressed: _submitting ? null : _submitReport,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12.0),
+                      padding:
+                          const EdgeInsets.symmetric(vertical: AppSpacing.md),
                       child: _submitting
                           ? const SizedBox(
                               height: 20,
