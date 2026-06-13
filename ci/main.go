@@ -306,17 +306,26 @@ func (m *Ci) firebaseSrc() *dagger.Directory {
 
 // androidBase wraps setup(androidSrc()) with the Gradle named-cache so that
 // Gradle dependencies survive across Dagger execution-cache misses.
+//
+// GRADLE_OPTS disables the Gradle daemon for every invocation in this
+// container. Each WithExec runs in its own ephemeral container, so a daemon
+// cannot survive to the next exec anyway — its only lasting effect is to
+// leave a stale journal-cache lock on the persistent gradle-cache volume
+// that then blocks the next gradlew invocation (see issue #549/#555).
 func (m *Ci) androidBase() *dagger.Container {
 	return m.setup(m.androidSrc()).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
-			dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
+			dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
+		WithEnvVariable("GRADLE_OPTS", "-Dorg.gradle.daemon=false")
 }
 
 // firebaseBase wraps setup(firebaseSrc()) with the Gradle named-cache.
+// See androidBase for the GRADLE_OPTS rationale.
 func (m *Ci) firebaseBase() *dagger.Container {
 	return m.setup(m.firebaseSrc()).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
-			dagger.ContainerWithMountedCacheOpts{Owner: "ci"})
+			dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
+		WithEnvVariable("GRADLE_OPTS", "-Dorg.gradle.daemon=false")
 }
 
 // linuxSrc is the source subset for Linux builds and integration tests.
@@ -814,18 +823,9 @@ func (m *Ci) DeployApk(
 // Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
 func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
 	built := m.firebaseBase().
-		// `flutter build apk` spawns a Gradle daemon. When this WithExec ends the
-		// container is torn down and the daemon is killed, but its journal-cache
-		// lock file on the persistent gradle-cache volume keeps its dead PID — the
-		// next gradlew invocation then times out waiting for that lock. `gradlew
-		// --stop` shuts the daemon down gracefully so the lock is released before
-		// Dagger snapshots the layer.
-		WithExec([]string{"/bin/bash", "-c",
-			`flutter build apk --debug --no-pub && (cd android && ./gradlew --stop)`}).
+		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
 		WithWorkdir("/src/android").
-		// --no-daemon avoids connecting to a stale daemon whose registry file was
-		// preserved in the Dagger layer snapshot but whose process no longer exists.
-		WithExec([]string{"./gradlew", "--no-daemon", "app:assembleAndroidTest"}).
+		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
 			`apk=$(find /src -path "*androidTest*" -name "*.apk" -type f 2>/dev/null | head -1) && \
