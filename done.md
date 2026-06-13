@@ -6,6 +6,14 @@ Tasks get moved from next.md to done.md
 
 ## Tasks (2026-06-13)
 
+- **Fuzz Testing (Issue #584)**: Expanded the sync-reliability runner with a
+  randomised fault-injection layer. New `scripts/sync_reliability_fuzz.dart`
+  wraps the IMAP/SMTP/JMAP clients with deterministic, seed-reproducible
+  faults — connection failures, latency, HTTP 503s, truncated JMAP bodies and
+  JMAP `stateMismatch` responses. Wired into `scripts/sync_reliability.dart`
+  via `--fuzz` / `--fuzz-seed=N` / `--fuzz-prob=0..1`; the existing
+  convergence assertion still applies. Documented in `SYNC.md` §9 and covered
+  by `test/unit/sync_reliability_fuzz_test.dart`.
 - **Undo Log Persistence (Issue #578)**: The `UndoService` state was already
   persisted to the `undo_actions` Drift table (commit `11e337e`); this issue
   hardened that work so the log survives app restarts and crashes cleanly:

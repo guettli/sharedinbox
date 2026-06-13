@@ -215,3 +215,36 @@ server round-trip; if it had already been flushed, a compensating move is queued
   visible in the UI (Settings → Failed mutations).
 - **UI layer isolation**: `lib/ui/` never imports `lib/data/`; all interaction goes
   through `core/` interfaces. The `check-layers` Taskfile task enforces this.
+
+---
+
+## 9. Fuzz testing the sync engine
+
+`scripts/sync_reliability.sh` runs the IMAP/JMAP sync engine against an isolated
+Stalwart instance with multiple parallel DBs, performs random create / update /
+delete operations, and asserts that all snapshots converge.
+
+Pass `--fuzz` to additionally inject randomised faults around the IMAP, SMTP and
+JMAP clients:
+
+| Fault | Effect |
+|-------|--------|
+| `imap`/`smtp` connect failure | `SocketException` before reaching the server |
+| `imap`/`smtp` latency | 100–800 ms delay before connecting |
+| HTTP connect failure | `http.ClientException` from the JMAP client |
+| HTTP 503 | transient server-side error response |
+| HTTP latency | 100–800 ms delay before forwarding the request |
+| HTTP truncated body | the JMAP response stream closes mid-payload |
+| JMAP `stateMismatch` | provokes the engine's state-token reset / re-fetch path |
+
+The sync engine is expected to recover from every fault — the existing
+convergence assertion in `_waitForConvergence` still applies. Each run prints
+its seed; re-running with `--fuzz-seed=N` reproduces the exact same fault
+sequence.
+
+```
+scripts/sync_reliability.sh --fuzz --fuzz-seed=42 --fuzz-prob=0.15 --cycles=5
+```
+
+The fault-injection layer itself lives in `scripts/sync_reliability_fuzz.dart`
+and has unit coverage in `test/unit/sync_reliability_fuzz_test.dart`.

@@ -42,5 +42,3 @@ Then push
 - **Advanced Error Boundaries**: Implement more granular `ErrorWidget` wrappers
   around critical components (like the HTML renderer) to prevent localized
   rendering issues from crashing the whole screen.
-- **Fuzz Testing**: Expand the `reliability_runner` with a basic fuzz test for the
-  sync engine to simulate extreme network conditions and server edge cases.

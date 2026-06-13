@@ -15,6 +15,8 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
+import 'sync_reliability_fuzz.dart';
+
 Future<void> main() async {
   final rawArgs = Platform.environment['SYNC_RELIABILITY_ARGS'];
   final args = rawArgs == null || rawArgs.isEmpty
@@ -29,9 +31,15 @@ Future<void> runSyncReliability(List<String> args) async {
   final options = _parseOptions(args);
   final random = Random();
 
+  final fuzzPolicy = options.fuzz
+      ? FuzzPolicy(seed: options.fuzzSeed, probability: options.fuzzProb)
+      : null;
+
   stdout.writeln(
     'sync-reliability: updates=${options.updates} cycles=${options.cycles} '
-    'imap-dbs=${options.imapDbs} jmap-dbs=${options.jmapDbs}',
+    'imap-dbs=${options.imapDbs} jmap-dbs=${options.jmapDbs}'
+    '${fuzzPolicy == null ? '' : ' fuzz=on seed=${fuzzPolicy.seed} '
+        'prob=${fuzzPolicy.probability}'}',
   );
 
   final imapEnv = _StalwartEnv.fromEnvironment();
@@ -66,6 +74,7 @@ Future<void> runSyncReliability(List<String> args) async {
         accountId: 'sync-account',
         env: protocol == _Protocol.imap ? imapEnv : jmapEnv,
         protocol: protocol,
+        fuzz: fuzzPolicy,
       );
       runners.add(runner);
     }
@@ -96,6 +105,15 @@ Future<void> runSyncReliability(List<String> args) async {
       }
       await tempRoot.delete(recursive: true);
     }
+  }
+
+  if (fuzzPolicy != null) {
+    stdout.writeln(
+      '\nfuzz summary (seed=${fuzzPolicy.seed}, prob=${fuzzPolicy.probability}):',
+    );
+    fuzzPolicy.fireCountsSnapshot().forEach((kind, count) {
+      stdout.writeln('  ${kind.name}: $count');
+    });
   }
 
   stdout.writeln('\nAll sync reliability checks passed.');
@@ -254,6 +272,7 @@ Future<_Runner> _createRunner({
   required String accountId,
   required _StalwartEnv env,
   required _Protocol protocol,
+  FuzzPolicy? fuzz,
 }) async {
   await rootDir.create(recursive: true);
   final dbFile = File(p.join(rootDir.path, 'db.sqlite'));
@@ -261,18 +280,29 @@ Future<_Runner> _createRunner({
   final storage = _MemSecureStorage();
   final accounts = AccountRepositoryImpl(db, storage);
 
+  final imapConnect = fuzz == null
+      ? _connectImapPlaintext
+      : wrapImapConnect(fuzz, _connectImapPlaintext);
+  final smtpConnect = fuzz == null
+      ? _connectSmtpPlaintext
+      : wrapSmtpConnect(fuzz, _connectSmtpPlaintext);
+  http.Client buildHttpClient() {
+    final base = http.Client();
+    return fuzz == null ? base : FuzzHttpClient(fuzz, base);
+  }
+
   final mailboxRepo = MailboxRepositoryImpl(
     db,
     accounts,
-    imapConnect: _connectImapPlaintext,
-    httpClient: http.Client(),
+    imapConnect: imapConnect,
+    httpClient: buildHttpClient(),
   );
   final emailRepo = EmailRepositoryImpl(
     db,
     accounts,
-    imapConnect: _connectImapPlaintext,
-    smtpConnect: _connectSmtpPlaintext,
-    httpClient: http.Client(),
+    imapConnect: imapConnect,
+    smtpConnect: smtpConnect,
+    httpClient: buildHttpClient(),
   );
 
   final account = switch (protocol) {
@@ -620,12 +650,18 @@ class _Options {
     required this.cycles,
     required this.imapDbs,
     required this.jmapDbs,
+    required this.fuzz,
+    required this.fuzzSeed,
+    required this.fuzzProb,
   });
 
   final int updates;
   final int cycles;
   final int imapDbs;
   final int jmapDbs;
+  final bool fuzz;
+  final int fuzzSeed;
+  final double fuzzProb;
 }
 
 enum _Protocol { imap, jmap }
@@ -635,6 +671,9 @@ _Options _parseOptions(List<String> args) {
   var cycles = 3;
   var imapDbs = 1;
   var jmapDbs = 1;
+  var fuzz = false;
+  int? fuzzSeed;
+  var fuzzProb = 0.15;
 
   final positionals = <String>[];
 
@@ -660,6 +699,23 @@ _Options _parseOptions(List<String> args) {
 
     if (arg.startsWith('--jmap-dbs=')) {
       jmapDbs = _parseNonNegativeInt(arg.split('=').last, '--jmap-dbs');
+      continue;
+    }
+
+    if (arg == '--fuzz') {
+      fuzz = true;
+      continue;
+    }
+
+    if (arg.startsWith('--fuzz-seed=')) {
+      fuzz = true;
+      fuzzSeed = _parseNonNegativeInt(arg.split('=').last, '--fuzz-seed');
+      continue;
+    }
+
+    if (arg.startsWith('--fuzz-prob=')) {
+      fuzz = true;
+      fuzzProb = _parseProbability(arg.split('=').last, '--fuzz-prob');
       continue;
     }
 
@@ -689,7 +745,20 @@ _Options _parseOptions(List<String> args) {
     cycles: cycles,
     imapDbs: imapDbs,
     jmapDbs: jmapDbs,
+    fuzz: fuzz,
+    fuzzSeed: fuzzSeed ?? DateTime.now().millisecondsSinceEpoch,
+    fuzzProb: fuzzProb,
   );
+}
+
+double _parseProbability(String value, String name) {
+  final parsed = double.tryParse(value);
+  if (parsed == null || parsed < 0.0 || parsed > 1.0) {
+    throw StateError(
+      '$name must be a number in [0.0, 1.0], got "$value"',
+    );
+  }
+  return parsed;
 }
 
 int _parsePositiveInt(String value, String name) {
@@ -711,8 +780,14 @@ int _parseNonNegativeInt(String value, String name) {
 Never _printUsageAndExit(int code) {
   stdout.writeln(
     'Usage: fvm flutter pub run scripts/sync_reliability.dart [updates] [cycles] '
-    '[--imap-dbs=N] [--jmap-dbs=N]\n\n'
-    'Defaults: updates=10 cycles=3 imap-dbs=1 jmap-dbs=1',
+    '[--imap-dbs=N] [--jmap-dbs=N] [--fuzz] [--fuzz-seed=N] [--fuzz-prob=0..1]\n\n'
+    'Defaults: updates=10 cycles=3 imap-dbs=1 jmap-dbs=1 '
+    'fuzz=off fuzz-prob=0.15\n\n'
+    'Fuzz mode injects randomised network and server-edge faults around the\n'
+    'IMAP/SMTP/JMAP clients (connection failures, latency, 503 responses,\n'
+    'truncated bodies, stateMismatch). The sync engine is expected to recover\n'
+    'and all DB snapshots must still converge. Re-run with the printed seed to\n'
+    'reproduce a failure.',
   );
   exit(code);
 }

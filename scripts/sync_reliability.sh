@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Starts an isolated Stalwart instance, runs the Dart sync reliability runner,
 # then stops Stalwart.
+#
+# Fuzz mode (issue #584): pass --fuzz (optionally with --fuzz-seed=N and
+# --fuzz-prob=0..1) to inject randomised network and server-edge faults around
+# the IMAP/SMTP/JMAP clients. The sync engine is expected to recover and all
+# DB snapshots must still converge.
+#
+# Example:
+#   scripts/sync_reliability.sh --fuzz --fuzz-seed=42 --cycles=5
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
