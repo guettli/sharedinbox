@@ -570,13 +570,9 @@ func (m *Ci) TestSyncReliability(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// ChaosMonkeyBackend runs random IMAP/SMTP operations against Stalwart to surface crashes.
 func (m *Ci) ChaosMonkeyBackend(ctx context.Context) (string, error) {
 	return m.WithStalwart(m.setup(m.backendSrc())).
-		WithExec([]string{"/bin/bash", "-c",
-			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`flutter test test/backend/chaos_monkey_test.dart --reporter expanded --concurrency=1 --no-pub --tags=nightly >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
-				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
+		WithExec([]string{"flutter", "test", "test/backend/chaos_monkey_test.dart", "--reporter", "expanded", "--concurrency=1", "--no-pub", "--tags=nightly"}).
 		Stdout(ctx)
 }
 
