@@ -339,7 +339,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 runSpacing: 4,
                 children: [
                   for (final term in terms)
-                    ActionChip(
+                    InputChip(
                       label: Text(term),
                       onPressed: () {
                         _ctrl.text = term;
@@ -348,6 +348,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         );
                         unawaited(_search(term));
                       },
+                      onDeleted: () async {
+                        await ref
+                            .read(searchHistoryRepositoryProvider)
+                            .deleteSearch(term);
+                        ref.invalidate(_searchHistoryProvider);
+                      },
+                      deleteIcon: const Icon(Icons.close, size: 18),
+                      deleteButtonTooltipMessage: 'Remove from history',
                     ),
                 ],
               ),

@@ -755,7 +755,10 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
 }
 
 class FakeSearchHistoryRepository implements SearchHistoryRepository {
-  final List<String> _history = [];
+  FakeSearchHistoryRepository([List<String> initial = const []])
+      : _history = List.of(initial);
+
+  final List<String> _history;
 
   @override
   Future<List<String>> getRecentSearches() async => List.unmodifiable(_history);
@@ -765,6 +768,11 @@ class FakeSearchHistoryRepository implements SearchHistoryRepository {
     _history.remove(query);
     _history.insert(0, query);
     if (_history.length > 10) _history.removeLast();
+  }
+
+  @override
+  Future<void> deleteSearch(String query) async {
+    _history.remove(query);
   }
 
   @override

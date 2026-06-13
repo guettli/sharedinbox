@@ -268,4 +268,136 @@ void main() {
       expect(find.text('found'), findsOneWidget);
     });
   });
+
+  group('SearchScreen recent searches', () {
+    testWidgets('shows seeded recent searches when input is empty', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(['alpha', 'beta']),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Recent searches'), findsOneWidget);
+      expect(find.text('alpha'), findsOneWidget);
+      expect(find.text('beta'), findsOneWidget);
+    });
+
+    testWidgets('tapping a recent-search chip re-runs the query', (
+      tester,
+    ) async {
+      final email = testEmail(subject: 'Quarterly Report');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(searchResults: [email]),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(['quarterly']),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('quarterly'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Messages'), findsOneWidget);
+      expect(find.text('Quarterly Report'), findsOneWidget);
+    });
+
+    testWidgets('tapping the chip delete icon removes that entry', (
+      tester,
+    ) async {
+      final history = FakeSearchHistoryRepository(['alpha', 'beta']);
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(history),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The delete icon lives inside the InputChip for "alpha".
+      final alphaChip = find.ancestor(
+        of: find.text('alpha'),
+        matching: find.byType(InputChip),
+      );
+      final deleteIcon = find.descendant(
+        of: alphaChip,
+        matching: find.byIcon(Icons.close),
+      );
+      expect(deleteIcon, findsOneWidget);
+
+      await tester.tap(deleteIcon);
+      await tester.pumpAndSettle();
+
+      expect(find.text('alpha'), findsNothing);
+      expect(find.text('beta'), findsOneWidget);
+      expect(await history.getRecentSearches(), ['beta']);
+    });
+
+    testWidgets('tapping Clear empties the recent searches panel', (
+      tester,
+    ) async {
+      final history = FakeSearchHistoryRepository(['alpha', 'beta']);
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            searchHistoryRepositoryProvider.overrideWithValue(history),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Clear'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('alpha'), findsNothing);
+      expect(find.text('beta'), findsNothing);
+      expect(find.text('Recent searches'), findsNothing);
+      expect(find.text('Type 3+ characters to search'), findsOneWidget);
+      expect(await history.getRecentSearches(), isEmpty);
+    });
+  });
 }

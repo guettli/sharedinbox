@@ -11,7 +11,12 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
   @override
   Future<List<String>> getRecentSearches() async {
     final rows = await (_db.select(_db.searchHistoryEntries)
-          ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
+          // Secondary id DESC breaks ties when consecutive saves share a
+          // millisecond — without it, "most recent" ordering is undefined.
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.searchedAt),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(_maxEntries))
         .get();
     return rows.map((r) => r.query).toList();
@@ -38,7 +43,10 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
 
       // Prune to the most recent _maxEntries.
       final keepIds = await (_db.select(_db.searchHistoryEntries)
-            ..orderBy([(t) => OrderingTerm.desc(t.searchedAt)])
+            ..orderBy([
+              (t) => OrderingTerm.desc(t.searchedAt),
+              (t) => OrderingTerm.desc(t.id),
+            ])
             ..limit(_maxEntries))
           .map((r) => r.id)
           .get();
@@ -50,6 +58,16 @@ class SearchHistoryRepositoryImpl implements SearchHistoryRepository {
             .go();
       }
     });
+  }
+
+  @override
+  Future<void> deleteSearch(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    await (_db.delete(
+      _db.searchHistoryEntries,
+    )..where((t) => t.query.equals(trimmed)))
+        .go();
   }
 
   @override
