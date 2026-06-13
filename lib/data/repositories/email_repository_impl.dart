@@ -3133,19 +3133,16 @@ class EmailRepositoryImpl implements EmailRepository {
     return merged;
   }
 
-  /// Returns emails whose associated notes contain all words from [query].
-  /// Optionally filtered by [accountId] and [mailboxPath].
+  /// Returns emails whose associated notes match [query] via the
+  /// `email_notes_fts` FTS5 index. Optionally filtered by [accountId] and
+  /// [mailboxPath].
   Future<List<model.Email>> _searchEmailsByNotes(
     String? accountId,
     String? mailboxPath,
     String query,
   ) async {
-    final words =
-        query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    if (words.isEmpty) return [];
-
-    final noteConditions = words.map((_) => 'n.note_text LIKE ?').join(' AND ');
-    final likeVars = words.map((w) => Variable<String>('%$w%')).toList();
+    final ftsQuery = _toFtsQuery(query);
+    if (ftsQuery.isEmpty) return [];
 
     final extraConditions = StringBuffer();
     final extraVars = <Variable<String>>[];
@@ -3158,15 +3155,16 @@ class EmailRepositoryImpl implements EmailRepository {
       extraVars.add(Variable<String>(mailboxPath));
     }
 
-    final sql = 'SELECT DISTINCT e.* FROM emails e'
-        ' JOIN email_notes n ON n.message_id = e.message_id'
-        ' AND n.account_id = e.account_id'
-        ' WHERE $noteConditions$extraConditions'
+    final sql = 'SELECT DISTINCT e.* FROM email_notes_fts f'
+        ' JOIN email_notes n ON n.rowid = f.rowid'
+        ' JOIN emails e ON e.message_id = n.message_id'
+        ' AND e.account_id = n.account_id'
+        ' WHERE email_notes_fts MATCH ?$extraConditions'
         ' ORDER BY e.received_at DESC LIMIT 50';
 
     final rows = await _db.customSelect(
       sql,
-      variables: [...likeVars, ...extraVars],
+      variables: [Variable<String>(ftsQuery), ...extraVars],
       readsFrom: {_db.emails, _db.emailNotes},
     ).get();
     final emailRows =

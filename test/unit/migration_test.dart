@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 41);
+      expect(db.schemaVersion, 42);
       await db.close();
     });
 
@@ -527,6 +527,19 @@ void main() {
           last_error TEXT NULL
         )
       ''');
+      // email_notes already exists in any real v40 database (added in v39);
+      // the v42 migration backfills email_notes_fts from it, so the test
+      // setup must include the table for the migration chain to succeed.
+      rawDb.execute('''
+        CREATE TABLE email_notes (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL,
+          note_text TEXT NOT NULL,
+          server_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      ''');
 
       // Insert an IMAP account.
       rawDb.execute(
@@ -612,7 +625,7 @@ void main() {
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 41', () async {
+    test('fresh install creates all tables at schemaVersion 42', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -684,7 +697,136 @@ void main() {
       // v40: installed_versions table.
       await db.customSelect('SELECT count(*) FROM installed_versions').get();
 
+      // v42: email_notes FTS5 virtual table and triggers.
+      final triggerNames = (await db
+              .customSelect(
+                "SELECT name FROM sqlite_master WHERE type='trigger'",
+              )
+              .get())
+          .map((r) => r.read<String>('name'))
+          .toSet();
+      expect(
+        triggerNames,
+        containsAll([
+          'email_notes_fts_ai',
+          'email_notes_fts_au',
+          'email_notes_fts_ad',
+        ]),
+      );
+      await db.customSelect('SELECT count(*) FROM email_notes_fts').get();
+
       await db.close();
+    });
+
+    test('v41→v42: email_notes FTS table is created and backfilled', () async {
+      final dbFile = File('test_migration_v41_to_v42.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      // Minimal v41 schema needed to upgrade: accounts, emails, email_notes
+      // (plus the tables the v41 migration block touches: email_bodies,
+      // threads, pending_changes).
+      rawDb.execute('''
+        CREATE TABLE accounts (
+          id TEXT NOT NULL PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          imap_host TEXT NOT NULL DEFAULT '',
+          imap_port INTEGER NOT NULL DEFAULT 993,
+          imap_ssl INTEGER NOT NULL DEFAULT 1,
+          smtp_host TEXT NOT NULL DEFAULT '',
+          smtp_port INTEGER NOT NULL DEFAULT 465,
+          smtp_ssl INTEGER NOT NULL DEFAULT 1,
+          account_type TEXT NOT NULL DEFAULT 'jmap',
+          jmap_url TEXT NULL,
+          username TEXT NOT NULL DEFAULT '',
+          verbose INTEGER NOT NULL DEFAULT 0,
+          manage_sieve_host TEXT NOT NULL DEFAULT '',
+          manage_sieve_port INTEGER NOT NULL DEFAULT 4190,
+          manage_sieve_ssl INTEGER NOT NULL DEFAULT 1,
+          manage_sieve_available INTEGER NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE emails (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          uid INTEGER NOT NULL,
+          subject TEXT NULL,
+          sent_at INTEGER NULL,
+          received_at INTEGER NOT NULL,
+          from_json TEXT NOT NULL DEFAULT '[]',
+          to_addresses TEXT NOT NULL DEFAULT '[]',
+          cc_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          is_seen INTEGER NOT NULL DEFAULT 0,
+          is_flagged INTEGER NOT NULL DEFAULT 0,
+          has_attachment INTEGER NOT NULL DEFAULT 0,
+          thread_id TEXT NULL,
+          message_id TEXT NULL,
+          in_reply_to TEXT NULL,
+          "references" TEXT NULL,
+          snoozed_until INTEGER NULL,
+          snoozed_from_mailbox_path TEXT NULL,
+          list_unsubscribe_header TEXT NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE email_notes (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL,
+          note_text TEXT NOT NULL,
+          server_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      ''');
+
+      // Pre-existing note row that the v42 backfill must index.
+      rawDb.execute(
+        'INSERT INTO accounts (id, display_name, email) '
+        "VALUES ('acc-1', 'Alice', 'alice@example.com')",
+      );
+      rawDb.execute(
+        'INSERT INTO email_notes (id, account_id, message_id, note_text, server_id, created_at) '
+        "VALUES ('note-1', 'acc-1', '<msg1@example.com>', 'urgent follow-up needed', '42', 0)",
+      );
+
+      rawDb.execute('PRAGMA user_version = 41');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      // Trigger migration.
+      await db.select(db.accounts).get();
+
+      // The FTS table and its sync triggers must exist.
+      final triggerNames = (await db
+              .customSelect(
+                "SELECT name FROM sqlite_master WHERE type='trigger'",
+              )
+              .get())
+          .map((r) => r.read<String>('name'))
+          .toSet();
+      expect(
+        triggerNames,
+        containsAll([
+          'email_notes_fts_ai',
+          'email_notes_fts_au',
+          'email_notes_fts_ad',
+        ]),
+      );
+
+      // Backfill: the pre-existing note must be searchable via MATCH.
+      final matches = await db
+          .customSelect(
+            "SELECT rowid FROM email_notes_fts WHERE email_notes_fts MATCH 'urgent'",
+          )
+          .get();
+      expect(matches, hasLength(1));
+
+      await db.close();
+      if (dbFile.existsSync()) dbFile.deleteSync();
     });
   });
 

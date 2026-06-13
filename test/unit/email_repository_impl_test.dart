@@ -619,6 +619,87 @@ void main() {
       expect(results.first.mailboxPath, 'INBOX');
     });
 
+    test('searchEmailsGlobal note search uses FTS prefix semantics', () async {
+      // Notes search runs against the email_notes_fts virtual table and uses
+      // the same _toFtsQuery prefix builder as subject search: a query of
+      // 'foll' must match a note containing 'follow-up' (prefix), but a query
+      // of 'low' must NOT match (FTS5 indexes whole tokens, not substrings).
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              messageId: const Value('<msg1@example.com>'),
+              subject: const Value('Weekly report'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-1',
+              accountId: 'acc-1',
+              messageId: '<msg1@example.com>',
+              noteText: 'urgent follow-up needed',
+              serverId: '42',
+              createdAt: DateTime(2024),
+            ),
+          );
+
+      final prefix = await r.emails.searchEmailsGlobal(null, 'foll');
+      expect(prefix, hasLength(1));
+      expect(prefix.first.subject, 'Weekly report');
+
+      // 'low' is not a prefix of any token in the note ('urgent',
+      // 'follow', 'up', 'needed'), so FTS5 must not return a match.
+      final substring = await r.emails.searchEmailsGlobal(null, 'low');
+      expect(substring, isEmpty);
+    });
+
+    test('searchEmailsGlobal note search picks up note inserts via FTS trigger',
+        () async {
+      // Inserting a note after the email already exists must keep the FTS
+      // index in sync via the email_notes_fts_ai trigger.
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              messageId: const Value('<msg1@example.com>'),
+              subject: const Value('Project update'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Sanity: before the note is inserted, the search returns nothing.
+      expect(
+        await r.emails.searchEmailsGlobal(null, 'unicorn'),
+        isEmpty,
+      );
+
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-1',
+              accountId: 'acc-1',
+              messageId: '<msg1@example.com>',
+              noteText: 'unicorn migration plan',
+              serverId: '42',
+              createdAt: DateTime(2024),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'unicorn');
+      expect(results, hasLength(1));
+      expect(results.first.subject, 'Project update');
+    });
+
     test('searchEmailsGlobal returns results sorted by receivedAt descending',
         () async {
       final r = _makeRepos();

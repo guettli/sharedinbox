@@ -438,11 +438,48 @@ class AppDatabase extends _$AppDatabase {
     ''');
   }
 
+  /// FTS5 shadow index over [EmailNotes.noteText]. Contentless mirror keyed
+  /// on the email_notes rowid; join back via
+  /// `email_notes_fts.rowid = email_notes.rowid`.
+  Future<void> _createEmailNotesFts() async {
+    await customStatement('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS email_notes_fts USING fts5(
+        note_text,
+        content='email_notes',
+        content_rowid='rowid'
+      )
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_notes_fts_ai
+      AFTER INSERT ON email_notes BEGIN
+        INSERT INTO email_notes_fts(rowid, note_text)
+        VALUES (new.rowid, new.note_text);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_notes_fts_au
+      AFTER UPDATE OF note_text ON email_notes BEGIN
+        INSERT INTO email_notes_fts(email_notes_fts, rowid, note_text)
+        VALUES ('delete', old.rowid, old.note_text);
+        INSERT INTO email_notes_fts(rowid, note_text)
+        VALUES (new.rowid, new.note_text);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_notes_fts_ad
+      AFTER DELETE ON email_notes BEGIN
+        INSERT INTO email_notes_fts(email_notes_fts, rowid, note_text)
+        VALUES ('delete', old.rowid, old.note_text);
+      END
+    ''');
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           await _createEmailFts();
+          await _createEmailNotesFts();
         },
         onUpgrade: (m, from, to) async {
           // NOTE: m.createTable(T) creates the LATEST version of table T.
@@ -788,6 +825,15 @@ class AppDatabase extends _$AppDatabase {
                 );
               }
             }
+          }
+          if (from < 42) {
+            // Add FTS5 shadow table for email_notes so note search no longer
+            // falls back to LIKE scans as the local DB grows.
+            await _createEmailNotesFts();
+            await customStatement('''
+              INSERT INTO email_notes_fts(rowid, note_text)
+              SELECT rowid, note_text FROM email_notes
+            ''');
           }
         },
       );
