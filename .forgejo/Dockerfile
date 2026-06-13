@@ -18,7 +18,7 @@ RUN curl -fsSL -o /usr/local/bin/sops https://github.com/getsops/sops/releases/d
 
 # Dagger CLI — pinned to match the engine version on the runner host
 RUN curl -fsSL https://dl.dagger.io/dagger/install.sh \
-    | DAGGER_VERSION=0.20.8 BIN_DIR=/usr/local/bin sh
+    | DAGGER_VERSION=0.21.6 BIN_DIR=/usr/local/bin sh
 
 # Task runner
 RUN curl -fsSL https://taskfile.dev/install.sh \

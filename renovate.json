@@ -29,7 +29,7 @@
     },
     {
       "customType": "regex",
-      "fileMatch": ["^\\.forgejo/Dockerfile$"],
+      "fileMatch": ["^\\.forgejo/Dockerfile$", "^Dockerfile\\.dev$"],
       "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
@@ -39,6 +39,14 @@
       "customType": "regex",
       "fileMatch": ["^DAGGER\\.md$"],
       "matchStrings": ["github:dagger/nix/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)#dagger"],
+      "depNameTemplate": "dagger/dagger",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["^ci/dagger\\.json$"],
+      "matchStrings": ["\"engineVersion\"\\s*:\\s*\"v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"

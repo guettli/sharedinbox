@@ -713,7 +713,7 @@ tasks:
       - scripts/check_ci_images.sh
 
   check-dagger-versions:
-    desc: Verify ci/dagger.json, flake.nix, .forgejo/Dockerfile and DAGGER.md pin the same Dagger version
+    desc: Verify .forgejo/Dockerfile, Dockerfile.dev and DAGGER.md pin the same Dagger version and that ci/dagger.json engineVersion is not newer
     cmds:
       - scripts/check_dagger_versions.sh
 

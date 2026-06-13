@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Verify that the Dagger version is consistent across the project.
+# Verify that the Dagger version pins are consistent across the project.
 #
-# The Dagger CLI must speak the same protocol as the engine it talks to.  We
-# pin the version in four places (engine image in DAGGER.md, the CLI in
-# flake.nix, the CLI in the Forgejo runner Dockerfile, and the module
-# engineVersion in ci/dagger.json).  This script fails if any of them drift.
+# Three "deployment" pins tell the operator which Dagger to install:
+#   - .forgejo/Dockerfile    (CLI in the act-runner image)
+#   - Dockerfile.dev         (CLI in the local dev container)
+#   - DAGGER.md              (engine systemd unit on the shared host)
+# These must agree with each other.
+#
+# The fourth pin lives in ci/dagger.json (the module's "engineVersion").
+# It is the *minimum* Dagger version the module supports.  Engine and CLI
+# upgrades are deployed manually first, so engineVersion is allowed to lag
+# behind the deployment pins; Renovate bumps engineVersion in a follow-up
+# PR once the runtime catches up.  We therefore require:
+#   engineVersion (ci/dagger.json) <= deployment pin version
 set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
@@ -18,6 +26,11 @@ dockerfile=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/.forgejo/Do
   | head -n1 \
   | cut -d= -f2)
 
+# Dockerfile.dev — DAGGER_VERSION env on the install line.
+dockerfile_dev=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/Dockerfile.dev" \
+  | head -n1 \
+  | cut -d= -f2)
+
 # DAGGER.md — engine image tag in the example systemd unit.
 dagger_md=$(grep -oE 'dagger/nix/v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
   | head -n1 \
@@ -25,19 +38,39 @@ dagger_md=$(grep -oE 'dagger/nix/v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
 
 printf 'ci/dagger.json    engineVersion = v%s\n' "$dagger_json"
 printf '.forgejo/Dockerf. DAGGER_VERSION= %s\n'  "$dockerfile"
+printf 'Dockerfile.dev    DAGGER_VERSION= %s\n'  "$dockerfile_dev"
 printf 'DAGGER.md         engine tag    = v%s\n' "$dagger_md"
 
-for v in "$dockerfile" "$dagger_md"; do
+for v in "$dagger_json" "$dockerfile" "$dockerfile_dev" "$dagger_md"; do
   if [ -z "$v" ]; then
     echo "ERROR: failed to parse a Dagger version reference." >&2
     exit 1
   fi
-  if [ "$v" != "$dagger_json" ]; then
+done
+
+# The three deployment pins must agree with each other.
+for v in "$dockerfile_dev" "$dagger_md"; do
+  if [ "$v" != "$dockerfile" ]; then
     echo "" >&2
-    echo "ERROR: Dagger versions are out of sync." >&2
-    echo "  Align ci/dagger.json, .forgejo/Dockerfile and DAGGER.md to the same version." >&2
+    echo "ERROR: deployment-side Dagger pins are out of sync." >&2
+    echo "  Align .forgejo/Dockerfile, Dockerfile.dev and DAGGER.md to the same version." >&2
     exit 1
   fi
 done
 
-echo "Dagger versions aligned (v$dagger_json)."
+# engineVersion in ci/dagger.json must not exceed the deployment pin
+# (otherwise CI would fail with "module requires dagger vX, but you have vY").
+lower=$(printf '%s\n%s\n' "$dagger_json" "$dockerfile" | sort -V | head -n1)
+if [ "$lower" != "$dagger_json" ]; then
+  echo "" >&2
+  echo "ERROR: ci/dagger.json engineVersion (v$dagger_json) is newer than the" >&2
+  echo "       deployed CLI/engine pin (v$dockerfile).  Bumping engineVersion" >&2
+  echo "       before the runtime is upgraded would break CI." >&2
+  exit 1
+fi
+
+if [ "$dagger_json" = "$dockerfile" ]; then
+  echo "Dagger versions aligned (v$dagger_json)."
+else
+  echo "Dagger versions OK: engineVersion v$dagger_json <= deployment v$dockerfile (staged upgrade)."
+fi

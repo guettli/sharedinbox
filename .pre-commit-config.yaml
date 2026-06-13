@@ -54,8 +54,8 @@ repos:
         pass_filenames: false
         files: ^(ci/main\.go|\.fvmrc)$
       - id: dagger-versions-aligned
-        name: verify Dagger version is consistent across dagger.json, Dockerfile and DAGGER.md
+        name: verify Dagger version is consistent across dagger.json, Dockerfiles and DAGGER.md
         language: system
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && scripts/check_dagger_versions.sh'
         pass_filenames: false
-        files: ^(ci/dagger\.json|\.forgejo/Dockerfile|DAGGER\.md)$
+        files: ^(ci/dagger\.json|\.forgejo/Dockerfile|Dockerfile\.dev|DAGGER\.md)$

@@ -39,7 +39,7 @@ WorkingDirectory=/home/dagger-svc
 # Replace 1003 with the actual UID of dagger-svc
 Environment=DOCKER_HOST=unix:///run/user/1003/podman/podman.sock
 Environment=XDG_RUNTIME_DIR=/run/user/1003
-ExecStart=/usr/bin/nix run github:dagger/nix/v0.20.8#dagger -- engine --addr tcp://0.0.0.0:8080
+ExecStart=/usr/bin/nix run github:dagger/nix/v0.21.6#dagger -- engine --addr tcp://0.0.0.0:8080
 Restart=always
 
 [Install]
