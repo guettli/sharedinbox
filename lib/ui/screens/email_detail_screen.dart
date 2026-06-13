@@ -18,6 +18,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
+import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -1119,37 +1120,53 @@ void _flattenMimeTree(MimePart part, int depth, List<_MimeRow> out) {
   }
 }
 
-/// Parses a List-Unsubscribe header and returns the first usable URI.
-/// Prefers mailto: so unsubscribing sends an email; falls back to https:.
-Uri? _parseUnsubscribeUri(String header) {
-  final matches = RegExp(r'<([^>]+)>').allMatches(header);
-  Uri? fallback;
-  for (final m in matches) {
-    final raw = m.group(1)!.trim();
-    final uri = Uri.tryParse(raw);
-    if (uri == null) continue;
-    if (uri.scheme == 'mailto') return uri;
-    if ((uri.scheme == 'https' || uri.scheme == 'http') && fallback == null) {
-      fallback = uri;
-    }
-  }
-  return fallback;
-}
-
 class _UnsubscribeChip extends StatelessWidget {
   const _UnsubscribeChip({required this.header});
   final String header;
 
+  Future<void> _onTap(BuildContext context, Uri uri) async {
+    final isMailto = uri.scheme == 'mailto';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsubscribe?'),
+        content: Text(
+          isMailto
+              ? 'Send an unsubscribe email to:\n${uri.path}'
+              : 'Open the unsubscribe page:\n$uri',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Unsubscribe'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open unsubscribe link')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final uri = _parseUnsubscribeUri(header);
+    final uri = parseListUnsubscribeUri(header);
     if (uri == null) return const SizedBox.shrink();
     return Tooltip(
       message: uri.toString(),
       child: ActionChip(
         avatar: const Icon(Icons.unsubscribe_outlined, size: 16),
         label: const Text('Unsubscribe'),
-        onPressed: () => launchUrl(uri, mode: LaunchMode.externalApplication),
+        onPressed: () => _onTap(context, uri),
       ),
     );
   }

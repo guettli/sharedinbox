@@ -139,7 +139,3 @@ Thread view (group by References / In-Reply-To)
 Search (IMAP SEARCH command)
 
 ---
-
-List-Unsubscribe email header --> show button.
-
----

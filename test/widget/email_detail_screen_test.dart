@@ -515,6 +515,119 @@ void main() {
       expect(find.text('https://example.com/unsubscribe'), findsOneWidget);
     });
 
+    testWidgets('mailto unsubscribe header renders chip with mailto URI', (
+      tester,
+    ) async {
+      final email = testEmail(
+        listUnsubscribeHeader: '<mailto:unsub@example.com?subject=unsubscribe>',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+            email: email,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Unsubscribe'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w is Tooltip &&
+              w.message == 'mailto:unsub@example.com?subject=unsubscribe',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'unsubscribe chip is hidden when header has no usable URI',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader: '<ftp://example.com/u>',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'tapping unsubscribe shows confirmation dialog; Cancel dismisses it',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader: '<https://example.com/unsubscribe>',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsOneWidget);
+        expect(
+          find.textContaining('https://example.com/unsubscribe'),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'mailto unsubscribe dialog mentions the recipient address',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader: '<mailto:unsub@example.com>',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsOneWidget);
+        expect(
+          find.textContaining('unsub@example.com'),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
       tester,
     ) async {
