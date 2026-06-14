@@ -117,6 +117,9 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
     ref.read(reliabilityRunnerProvider).start();
+    // Resume any saved UnifiedPush distributor registration so push wake-ups
+    // start arriving again as soon as possible after launch.
+    unawaited(ref.read(unifiedPushServiceProvider).initialize());
     if (_kGitHash.isNotEmpty) {
       unawaited(
         ref.read(dbProvider).recordInstalledVersionIfNew(_kGitHash),

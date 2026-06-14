@@ -71,9 +71,19 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin share_plus, dev.fluttercommunity.plus.share.SharePlusPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new org.unifiedpush.flutter.connector.Plugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin unifiedpush_android, org.unifiedpush.flutter.connector.Plugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new io.flutter.plugins.urllauncher.UrlLauncherPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin url_launcher_android, io.flutter.plugins.urllauncher.UrlLauncherPlugin", e);
+    }
+    try {
+      flutterEngine.getPlugins().add(new com.example.webcrypto.WebcryptoPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin webcrypto, com.example.webcrypto.WebcryptoPlugin", e);
     }
     try {
       flutterEngine.getPlugins().add(new io.flutter.plugins.webviewflutter.WebViewFlutterPlugin());

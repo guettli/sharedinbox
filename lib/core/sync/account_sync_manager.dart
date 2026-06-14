@@ -119,6 +119,15 @@ class AccountSyncManager {
     _active[accountId]?.kick();
   }
 
+  /// Wakes the idle/wait phase of every active account loop. Used by the
+  /// UnifiedPush handler to trigger an immediate fetch on all accounts in
+  /// response to an opaque push wake-up.
+  void syncAll() {
+    for (final loop in _active.values) {
+      loop.kick();
+    }
+  }
+
   /// Clears all locally-cached emails and mailboxes for [accountId], then
   /// immediately starts a fresh sync cycle. Use this as an escape hatch when
   /// the local DB is believed to be out of sync with the server.

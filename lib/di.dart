@@ -23,6 +23,7 @@ import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
+import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
@@ -167,6 +168,16 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
   );
   ref.onDispose(manager.dispose);
   return manager;
+});
+
+/// UnifiedPush registration owned by the running app. Reads back to the
+/// [AccountSyncManager] to trigger an immediate fetch on every push wake-up.
+final unifiedPushServiceProvider = Provider<UnifiedPushService>((ref) {
+  final service = UnifiedPushService(
+    onPushKick: () => ref.read(syncManagerProvider).syncAll(),
+  );
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((

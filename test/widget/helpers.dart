@@ -45,6 +45,7 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
@@ -487,6 +488,10 @@ Widget buildApp({
           GoRoute(
             path: 'preferences',
             builder: (ctx, state) => const UserPreferencesScreen(),
+          ),
+          GoRoute(
+            path: 'push',
+            builder: (ctx, state) => const PushSettingsScreen(),
           ),
           GoRoute(
             path: 'trusted-senders',

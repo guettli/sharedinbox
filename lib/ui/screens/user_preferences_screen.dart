@@ -229,6 +229,19 @@ class UserPreferencesScreen extends ConsumerWidget {
               onTap: () => context.push('/accounts/trusted-senders'),
             ),
             const Divider(),
+            ListTile(
+              title: Text(
+                'UnifiedPush',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'Real-time push notifications via a distributor app — no '
+                'reliance on Google or Apple push services.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/accounts/push'),
+            ),
+            const Divider(),
             _EncryptionSection(),
           ],
         ),
