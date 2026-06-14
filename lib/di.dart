@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
@@ -56,6 +57,13 @@ final dbProvider = Provider<AppDatabase>((ref) {
 
 final secureStorageProvider = Provider<SecureStorage>((ref) {
   return const FlutterSecureStorageImpl();
+});
+
+/// Controls the SQLCipher encryption toggle exposed in Preferences. The
+/// service operates on `<applicationSupportDir>/sharedinbox.db`, the same
+/// path resolved by [initDatabasePath].
+final dbEncryptionServiceProvider = Provider<DbEncryptionService>((ref) {
+  return DbEncryptionService(currentDatabasePath());
 });
 
 final httpClientProvider = Provider<http.Client>((ref) {

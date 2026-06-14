@@ -20,7 +20,11 @@ dependencies:
   # Local persistence (offline-first)
   drift: ^2.20.3
   sqlite3: ^3.1.5  # used directly in lib/data/db/database.dart (_setupPragmas)
-  sqlite3_flutter_libs: ^0.6.0+eol
+  # SQLCipher provides AES-256 page-level encryption for the Drift database
+  # when the user opts in via Preferences (#582). The library is API-compatible
+  # with plain SQLite, so unencrypted installs continue to work unchanged — the
+  # cipher only activates after `PRAGMA key` is issued in _setupPragmas.
+  sqlcipher_flutter_libs: ^0.6.0
   path_provider: ^2.1.5
   path: ^1.9.1
 

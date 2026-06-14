@@ -7,6 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/db_schema_version.dart';
+import 'package:sharedinbox/core/storage/db_encryption.dart';
+import 'package:sharedinbox/core/storage/secure_storage.dart';
+import 'package:sharedinbox/data/db/db_encryption_migration.dart';
+import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:sqlite3/sqlite3.dart' show Database;
 
 part 'database.g.dart';
@@ -890,6 +894,10 @@ String? _dbPath;
 /// path_provider plugin channel is registered before the first DB access.
 /// On some Android versions the Pigeon channel is not ready at the very
 /// start of main(); if it fails, _openConnection() retries lazily.
+///
+/// Also drains any pending encryption state change (toggle from Preferences):
+/// the swap must happen before Drift opens its connection because converting
+/// the file between plaintext and SQLCipher requires exclusive access.
 Future<void> initDatabasePath() async {
   try {
     final dir = await getApplicationSupportDirectory();
@@ -897,6 +905,18 @@ Future<void> initDatabasePath() async {
   } on PlatformException {
     // Channel not yet established; LazyDatabase will resolve the path
     // on first access, after runApp() completes initialization.
+  }
+  if (_dbPath != null) {
+    try {
+      await processPendingDbEncryptionChange(
+        dbPath: _dbPath!,
+        storage: const FlutterSecureStorageImpl(),
+      );
+    } catch (_) {
+      // Migration is best-effort: any failure leaves the original DB in
+      // place. Surfacing a UI error here would require a context we don't
+      // have yet; the user can re-toggle from Preferences.
+    }
   }
 }
 
@@ -969,23 +989,48 @@ Future<String?> _androidFallbackPath() async {
   }
 }
 
+/// Returns the resolved DB path. Must be called after [initDatabasePath]
+/// has completed (which it has, by the time any UI provider is built).
+/// Throws [StateError] if invoked before the path is known — that would
+/// indicate a wiring bug, not a recoverable runtime condition.
+String currentDatabasePath() {
+  final path = _dbPath;
+  if (path == null) {
+    throw StateError(
+      'currentDatabasePath() called before initDatabasePath() resolved.',
+    );
+  }
+  return path;
+}
+
 // These functions are only called from unit tests (database_path_test.dart).
 // They expose internals that cannot be reached via the public API.
 Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
 void resetDatabasePathForTesting() => _dbPath = null;
+void setDatabasePathForTesting(String path) => _dbPath = path;
 Future<String?> androidFallbackPathForTesting() => _androidFallbackPath();
 
 /// Configures PRAGMAs on a newly opened SQLite connection.
 ///
-/// busy_timeout must come first so subsequent statements retry on SQLITE_BUSY
-/// instead of immediately failing.
+/// When [cipherKeyHex] is non-null, SQLCipher is activated by issuing
+/// `PRAGMA key` as the very first statement — required by SQLCipher so that
+/// the header can be decrypted before any other operation runs.
+/// `cipher_compatibility = 4` pins the KDF defaults so the on-disk format
+/// stays stable across SQLCipher upstream releases.
+///
+/// busy_timeout must come after `PRAGMA key` so subsequent statements retry
+/// on SQLITE_BUSY instead of immediately failing.
 ///
 /// journal_mode = WAL is wrapped in a try/catch because a concurrent
 /// WorkManager background task may already have the DB open when the app
 /// starts.  SQLITE_BUSY_SNAPSHOT (extended code 261, primary code 5) is
 /// returned in that situation; it only occurs when the DB is already in WAL
 /// mode, so the pragma would be a no-op anyway and it is safe to continue.
-void _setupPragmas(Database db) {
+void _setupPragmas(Database db, {String? cipherKeyHex}) {
+  if (cipherKeyHex != null && cipherKeyHex.isNotEmpty) {
+    db.execute("PRAGMA key = \"x'$cipherKeyHex'\";");
+    db.execute('PRAGMA cipher_compatibility = 4;');
+  }
   db.execute('PRAGMA busy_timeout = 5000;');
   try {
     db.execute('PRAGMA journal_mode = WAL;');
@@ -996,13 +1041,44 @@ void _setupPragmas(Database db) {
   }
 }
 
+/// Resolves the SQLCipher key (if any) for the DB at [dbPath].
+///
+/// Returns null when the marker file is absent (DB is plaintext) or when the
+/// marker is present but secure-storage has no key — the caller treats that
+/// as "open plaintext" and the DB layer will surface a clean `not a database`
+/// error if the file is in fact encrypted.
+Future<String?> _resolveCipherKey(String dbPath, SecureStorage storage) async {
+  if (!isDbEncrypted(dbPath)) return null;
+  return readDbCipherKey(storage);
+}
+
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final file = File(await _resolveDatabasePath());
-    return NativeDatabase.createInBackground(file, setup: _setupPragmas);
+    final path = await _resolveDatabasePath();
+    final keyHex =
+        await _resolveCipherKey(path, const FlutterSecureStorageImpl());
+    return NativeDatabase.createInBackground(
+      File(path),
+      setup: (db) => _setupPragmas(db, cipherKeyHex: keyHex),
+    );
   });
+}
+
+/// Background-isolate counterpart to [_openConnection] — exposed so the
+/// WorkManager handler (background_sync.dart) opens the DB with the same
+/// encryption logic as the foreground app.
+Future<NativeDatabase> openNativeDatabaseForBackground(File dbFile) async {
+  final keyHex = await _resolveCipherKey(
+    dbFile.path,
+    const FlutterSecureStorageImpl(),
+  );
+  return NativeDatabase(
+    dbFile,
+    setup: (db) => _setupPragmas(db, cipherKeyHex: keyHex),
+  );
 }
 
 // Exposed so tests can run the exact production setup logic on a raw
 // sqlite3 connection (same pattern as resolveDatabasePathForTesting).
-void setupPragmasForTesting(Database db) => _setupPragmas(db);
+void setupPragmasForTesting(Database db, {String? cipherKeyHex}) =>
+    _setupPragmas(db, cipherKeyHex: cipherKeyHex);

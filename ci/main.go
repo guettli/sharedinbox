@@ -214,7 +214,16 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithExec([]string{"/bin/sh", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
-		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"})
+		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"}).
+		// libssl-dev — sqlcipher_flutter_libs compiles SQLCipher against OpenSSL
+		// on the Linux desktop integration_test build; its CMake
+		// find_package(OpenSSL) fails without the dev headers (#582). Installed
+		// here, AFTER the expensive Android-SDK/precache layers, so it does not
+		// invalidate their cache and force a full cold rebuild. update+install
+		// share one exec so a stale cached index can't pin a superseded .deb (404).
+		WithUser("root").
+		WithExec([]string{"/bin/sh", "-c", "apt-get -qq update && apt-get install -y -qq libssl-dev"}).
+		WithUser("ci")
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.

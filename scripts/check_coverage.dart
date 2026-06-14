@@ -34,6 +34,7 @@ const _noCode = {
 // or widget tests (covered by `task integration` / `task test-flutter`).
 const _excluded = {
   'lib/data/db/database.dart',
+  'lib/data/db/db_encryption_migration.dart',
   'lib/data/imap/imap_client_factory.dart',
   'lib/data/imap/managesieve_client.dart',
   'lib/data/storage/flutter_secure_storage_impl.dart',

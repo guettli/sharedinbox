@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -87,11 +86,14 @@ Future<void> registerBodyPrefetchTask(PrefetchMode mode) async {
   } catch (_) {}
 }
 
-Future<void> _doBackgroundSync() async {
+Future<AppDatabase> _openBackgroundDb() async {
   final dir = await getApplicationSupportDirectory();
-  final db = AppDatabase(
-    NativeDatabase(File(p.join(dir.path, 'sharedinbox.db'))),
-  );
+  final file = File(p.join(dir.path, 'sharedinbox.db'));
+  return AppDatabase(await openNativeDatabaseForBackground(file));
+}
+
+Future<void> _doBackgroundSync() async {
+  final db = await _openBackgroundDb();
   try {
     final accountRepo = AccountRepositoryImpl(
       db,
@@ -109,10 +111,7 @@ Future<void> _doBackgroundSync() async {
 }
 
 Future<void> _doBodyPrefetch() async {
-  final dir = await getApplicationSupportDirectory();
-  final db = AppDatabase(
-    NativeDatabase(File(p.join(dir.path, 'sharedinbox.db'))),
-  );
+  final db = await _openBackgroundDb();
   try {
     final accountRepo = AccountRepositoryImpl(
       db,

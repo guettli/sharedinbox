@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -227,6 +228,8 @@ class UserPreferencesScreen extends ConsumerWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => context.push('/accounts/trusted-senders'),
             ),
+            const Divider(),
+            _EncryptionSection(),
           ],
         ),
       ),
@@ -237,6 +240,89 @@ class UserPreferencesScreen extends ConsumerWidget {
     const options = [50, 100, 200, 500];
     return options.reduce(
       (a, b) => (a - mb).abs() <= (b - mb).abs() ? a : b,
+    );
+  }
+}
+
+/// Local-storage encryption toggle (issue #582).
+///
+/// Conversion between plaintext and SQLCipher requires exclusive access to
+/// the DB, so flipping the switch only stages a pending change — the actual
+/// migration runs on the next app start in [initDatabasePath].
+class _EncryptionSection extends ConsumerStatefulWidget {
+  @override
+  ConsumerState<_EncryptionSection> createState() => _EncryptionSectionState();
+}
+
+class _EncryptionSectionState extends ConsumerState<_EncryptionSection> {
+  @override
+  Widget build(BuildContext context) {
+    final service = ref.read(dbEncryptionServiceProvider);
+    final status = service.status();
+    final effectiveValue = switch (status.pendingChange) {
+      PendingEncryptionChange.enable => true,
+      PendingEncryptionChange.disable => false,
+      null => status.isEncrypted,
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          title: Text(
+            'Encrypt local storage',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          subtitle: const Text(
+            'Encrypt the cached email database at rest with SQLCipher. '
+            'The encryption key is stored in your device keystore. '
+            'Toggling on or off requires an app restart and rewrites the '
+            'database file.',
+          ),
+        ),
+        SwitchListTile(
+          title: Text(effectiveValue ? 'Enabled' : 'Disabled'),
+          value: effectiveValue,
+          onChanged: (value) {
+            setState(() {
+              if (value) {
+                service.scheduleEnable();
+              } else {
+                service.scheduleDisable();
+              }
+            });
+            if (service.status().hasPendingChange) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Restart the app to apply the new encryption setting.',
+                  ),
+                ),
+              );
+            }
+          },
+        ),
+        if (status.hasPendingChange)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    status.pendingChange == PendingEncryptionChange.enable
+                        ? 'Encryption will be enabled on next app start.'
+                        : 'Encryption will be disabled on next app start.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(service.cancelPendingChange),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

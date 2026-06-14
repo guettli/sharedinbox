@@ -4,6 +4,8 @@
 // as the real app) inside a ProviderScope whose repository providers are
 // replaced with lightweight in-memory fakes.  No database or network is used.
 
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +29,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/data/db/database.dart'
@@ -642,7 +645,18 @@ List<Override> baseOverrides({
       // syncHealthProvider is backed by a Drift StreamQuery; override with a
       // plain stream to avoid "A Timer is still pending" in tests.
       syncHealthProvider.overrideWith((ref, _) => Stream.value(syncHealth)),
+      // The real provider reads the resolved DB path which is only set in
+      // production after initDatabasePath() runs. Point it at a temp file
+      // so the Preferences screen can render in widget tests.
+      dbEncryptionServiceProvider.overrideWith(
+        (ref) => DbEncryptionService(_makeTempDbPathForTest()),
+      ),
     ];
+
+String _makeTempDbPathForTest() {
+  final dir = Directory.systemTemp.createTempSync('si_widget_db_');
+  return '${dir.path}/sharedinbox.db';
+}
 
 // ---------------------------------------------------------------------------
 // Common test fixtures
