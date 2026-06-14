@@ -70,7 +70,7 @@ tasks:
     desc: Generate assets/changelog.txt from git history
     cmds:
       - mkdir -p assets
-      - 'git log -n 50 --pretty=format:"* %ad [%h](https://codeberg.org/guettli/sharedinbox/commit/%H): %s" --date=short > assets/changelog.txt'
+      - 'git log -n 50 --pretty=format:"* %ad [%h](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/%H): %s" --date=short > assets/changelog.txt'
 
   _pub-get:
     internal: true

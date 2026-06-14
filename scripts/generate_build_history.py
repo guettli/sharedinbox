@@ -21,11 +21,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-CODEBERG_REPO = "guettli/sharedinbox"
+SIALOOP_REPO = "guettli/sharedinbox"
 REMOTE_BUILDS_DIR = "public_html/builds"
 CONTENT_DIR = Path("website/content/builds")
 BASE_URL = "https://sharedinbox.de"
-CODEBERG_BASE = "https://codeberg.org"
+SIALOOP_BASE = "https://sialoop.thomas-guettler.de"
 MAX_BUILDS_PER_PLATFORM = 30
 
 
@@ -52,7 +52,7 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
 
 def get_commit_info(hash_val: str) -> tuple[str, str]:
     """Return (title, datetime_iso) for the given commit hash."""
-    url = f"https://codeberg.org/api/v1/repos/{CODEBERG_REPO}/git/commits/{hash_val}"
+    url = f"https://sialoop.thomas-guettler.de/api/v1/repos/{SIALOOP_REPO}/git/commits/{hash_val}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "sharedinbox-ci"})
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -91,7 +91,7 @@ def render_entries(
 ) -> str:
     lines = []
     for hash_val, download_url, commit_title, commit_dt in entries:
-        commit_url = f"{CODEBERG_BASE}/{CODEBERG_REPO}/commit/{hash_val}"
+        commit_url = f"{SIALOOP_BASE}/{SIALOOP_REPO}/commit/{hash_val}"
         dt_str = f" · {commit_dt}" if commit_dt else ""
         lines.append(
             f"- [{commit_title}]({commit_url}){dt_str}  \n"

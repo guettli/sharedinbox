@@ -47,7 +47,7 @@ ssh-keygen
 Clone the project into your new user's home directory:
 
 ```bash^
-git clone ssh://git@codeberg.org/guettli/sharedinbox.git
+git clone ssh://git@sialoop.thomas-guettler.de/guettli/sharedinbox.git
 
 # Move git directory into $HOME
 # This user only works on the git repo. Avoid "cd sharedinbox" after each login...

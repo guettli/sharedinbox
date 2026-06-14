@@ -184,7 +184,7 @@ void main() {
     expect(clipboardText, contains('[sharedinbox.de](https://sharedinbox.de)'));
   });
 
-  testWidgets('AboutScreen create-issue button opens Codeberg URL', (
+  testWidgets('AboutScreen create-issue button opens sialoop URL', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1200);
@@ -203,7 +203,9 @@ void main() {
 
     expect(
       mock.launchedUrl,
-      contains('https://codeberg.org/guettli/sharedinbox/issues/new'),
+      contains(
+        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
+      ),
     );
     expect(mock.launchedUrl, contains('1.2.3%2B99'));
   });

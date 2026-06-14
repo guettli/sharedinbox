@@ -55,9 +55,9 @@ void main() {
     );
 
     expect(find.textContaining('TestException'), findsOneWidget);
-    expect(find.text('Report Issue on Codeberg'), findsOneWidget);
+    expect(find.text('Report Issue on sialoop'), findsOneWidget);
 
-    await tester.tap(find.text('Report Issue on Codeberg'));
+    await tester.tap(find.text('Report Issue on sialoop'));
     await tester.pumpAndSettle();
 
     // Regression for #146: URL must contain only the title, NOT the full
@@ -66,7 +66,9 @@ void main() {
     // so the user can paste it into the issue body.
     expect(
       mock.launchedUrl,
-      contains('https://codeberg.org/guettli/sharedinbox/issues/new'),
+      contains(
+        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
+      ),
     );
     expect(
       mock.launchedUrl,
@@ -162,13 +164,15 @@ void main() {
       lessThan(tester.getTopLeft(stackTraceFinder).dy),
     );
 
-    // Tapping the link should open the Codeberg commit URL
+    // Tapping the link should open the sialoop commit URL
     await tester.tap(gitLinkFinder);
     await tester.pumpAndSettle();
 
     expect(
       mock.launchedUrl,
-      equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+      equals(
+        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234',
+      ),
     );
   });
 
@@ -234,13 +238,15 @@ void main() {
         lessThan(tester.getTopLeft(gitLinkFinder).dy),
       );
 
-      // Tapping it should open the Codeberg commit URL
+      // Tapping it should open the sialoop commit URL
       await tester.tap(versionLinkFinder);
       await tester.pumpAndSettle();
 
       expect(
         mock.launchedUrl,
-        equals('https://codeberg.org/guettli/sharedinbox/commit/abc1234'),
+        equals(
+          'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234',
+        ),
       );
     },
   );
@@ -293,13 +299,13 @@ void main() {
       expect(
         clipboardText,
         contains(
-          'App Version: [1.0.0+42](https://codeberg.org/guettli/sharedinbox/commit/abc1234)',
+          'App Version: [1.0.0+42](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234)',
         ),
       );
       expect(
         clipboardText,
         contains(
-          'Git Commit: [abc1234](https://codeberg.org/guettli/sharedinbox/commit/abc1234)',
+          'Git Commit: [abc1234](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234)',
         ),
       );
     },
@@ -327,15 +333,17 @@ void main() {
 
       expect(find.textContaining('TestException'), findsOneWidget);
 
-      // Tapping 'Report Issue on Codeberg' must not crash. Previously
+      // Tapping 'Report Issue on sialoop' must not crash. Previously
       // ScaffoldMessenger.of(context) threw because context was above the
       // MaterialApp that CrashScreen itself creates.
-      await tester.tap(find.text('Report Issue on Codeberg'));
+      await tester.tap(find.text('Report Issue on sialoop'));
       await tester.pumpAndSettle();
 
       expect(
         mock.launchedUrl,
-        contains('https://codeberg.org/guettli/sharedinbox/issues/new'),
+        contains(
+          'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
+        ),
       );
     },
   );
