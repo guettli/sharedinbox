@@ -86,6 +86,7 @@ class AccountSyncManager {
               _emails,
               _accounts,
               _syncLog,
+              _drafts,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
@@ -153,6 +154,7 @@ class AccountSyncManager {
           _emails,
           _accounts,
           _syncLog,
+          _drafts,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
@@ -336,7 +338,7 @@ class _AccountSync implements _SyncLoop {
   Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
 
-    await _drafts?.syncDrafts(account.id, password);
+    await _drafts?.syncDrafts(account.id);
 
     // Check for expired snoozes and move them back to Inbox before syncing.
     await _emails.wakeUpEmails(account.id);
@@ -440,7 +442,8 @@ class _JmapAccountSync implements _SyncLoop {
     this._mailboxes,
     this._emails,
     this._accounts,
-    this._syncLog, {
+    this._syncLog,
+    this._drafts, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
   })  : _onSyncStart = onSyncStart,
@@ -451,6 +454,7 @@ class _JmapAccountSync implements _SyncLoop {
   final EmailRepository _emails;
   final AccountRepository _accounts;
   final SyncLogRepository _syncLog;
+  final DraftRepository? _drafts;
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
 
@@ -591,6 +595,8 @@ class _JmapAccountSync implements _SyncLoop {
 
   Future<_SyncStats> _sync() async {
     final password = await _accounts.getPassword(account.id);
+
+    await _drafts?.syncDrafts(account.id);
 
     // Check for expired snoozes and move them back to Inbox before syncing.
     await _emails.wakeUpEmails(account.id);

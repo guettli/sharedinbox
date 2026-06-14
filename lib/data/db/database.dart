@@ -242,6 +242,23 @@ class Drafts extends Table {
   DateTimeColumn get updatedAt => dateTime()();
   // Added in schema v24: IMAP UID string ("mailbox:uid") on the server.
   TextColumn get imapServerId => text().nullable()();
+  // Added in schema v42: JMAP Email id on the server.
+  TextColumn get jmapServerId => text().nullable()();
+  // Added in schema v42: local edits not yet pushed to the server.
+  BoolColumn get dirty => boolean().withDefault(const Constant(true))();
+}
+
+/// Tombstones for drafts that were deleted locally but still need to be
+/// removed from the server on the next sync cycle.
+// Added in schema v42.
+@DataClassName('DraftTombstoneRow')
+class DraftTombstones extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // IMAP UID string or JMAP Email id on the server.
+  TextColumn get serverId => text()();
+  DateTimeColumn get createdAt => dateTime()();
 }
 
 /// Ephemeral public/private key pair generated for secure account sharing.
@@ -397,6 +414,7 @@ class UserPreferences extends Table {
     ImageTrustedSenders,
     EmailNotes,
     InstalledVersions,
+    DraftTombstones,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -834,6 +852,13 @@ class AppDatabase extends _$AppDatabase {
               INSERT INTO email_notes_fts(rowid, note_text)
               SELECT rowid, note_text FROM email_notes
             ''');
+          }
+          if (from >= 4 && from < 43) {
+            await m.addColumn(drafts, drafts.jmapServerId);
+            await m.addColumn(drafts, drafts.dirty);
+          }
+          if (from < 43) {
+            await m.createTable(draftTombstones);
           }
         },
       );

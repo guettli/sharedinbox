@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 42);
+      expect(db.schemaVersion, 43);
       await db.close();
     });
 
@@ -119,9 +119,11 @@ void main() {
       expect(bodyColumns, contains('cached_at'));
       expect(bodyColumns, contains('headers_json'));
 
-      // v4: drafts table with v24 imap_server_id column.
+      // v4: drafts table with v24 imap_server_id column, v43 sync columns.
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));
+      expect(draftColumns, contains('jmap_server_id')); // v43
+      expect(draftColumns, contains('dirty')); // v43
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
       final allTables = await db
@@ -138,6 +140,7 @@ void main() {
           'threads', // v17
           'sync_health', // v19
           'undo_actions', // v21
+          'draft_tombstones', // v43
         ]),
       );
 
@@ -540,6 +543,21 @@ void main() {
           created_at INTEGER NOT NULL
         )
       ''');
+      // drafts exists at v40 (was created at v4, gained imap_server_id at v24).
+      // Required so the v43 addColumn for jmap_server_id/dirty has a table.
+      rawDb.execute('''
+        CREATE TABLE drafts (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NULL,
+          reply_to_email_id TEXT NULL,
+          to_text TEXT NOT NULL DEFAULT '',
+          cc_text TEXT NOT NULL DEFAULT '',
+          subject_text TEXT NOT NULL DEFAULT '',
+          body_text TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER NOT NULL,
+          imap_server_id TEXT NULL
+        )
+      ''');
 
       // Insert an IMAP account.
       rawDb.execute(
@@ -625,7 +643,7 @@ void main() {
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 42', () async {
+    test('fresh install creates all tables at schemaVersion 43', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -656,6 +674,7 @@ void main() {
           'image_trusted_senders', // v37
           'email_notes', // v39
           'installed_versions', // v40
+          'draft_tombstones', // v43
         ]),
       );
 
@@ -664,6 +683,8 @@ void main() {
 
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));
+      expect(draftColumns, contains('jmap_server_id')); // v43
+      expect(draftColumns, contains('dirty')); // v43
 
       // v30: duration_ms column on sync_log_mailboxes.
       final syncLogMailboxColumns = await _tableColumns(
@@ -780,6 +801,21 @@ void main() {
           note_text TEXT NOT NULL,
           server_id TEXT NOT NULL,
           created_at INTEGER NOT NULL
+        )
+      ''');
+      // drafts exists at v41 (created at v4); the migration continues past v42
+      // to v43, whose addColumn for jmap_server_id/dirty needs this table.
+      rawDb.execute('''
+        CREATE TABLE drafts (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NULL,
+          reply_to_email_id TEXT NULL,
+          to_text TEXT NOT NULL DEFAULT '',
+          cc_text TEXT NOT NULL DEFAULT '',
+          subject_text TEXT NOT NULL DEFAULT '',
+          body_text TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER NOT NULL,
+          imap_server_id TEXT NULL
         )
       ''');
 

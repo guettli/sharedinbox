@@ -88,6 +88,7 @@ final draftRepositoryProvider = Provider<DraftRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    httpClient: ref.watch(httpClientProvider),
   );
 });
 

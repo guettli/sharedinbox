@@ -38,6 +38,12 @@ This document covers the mail-to-database sync layer only, not the UI.
   is unavailable or the server does not advertise the URL.
 - `notUpdated`/`notDestroyed` per-item errors from `Email/set` are treated as
   permanent failures and discarded immediately (no retry).
+- **Draft sync**: compose drafts are mirrored two-way with the JMAP `drafts`
+  mailbox. Local edits flip `drafts.dirty`; the next sync cycle calls
+  `Email/set` to recreate (`destroy` + `create`) the server copy. Deleted
+  drafts go to a `draft_tombstones` table and are dropped via `Email/set`
+  `destroy`. Server-side drafts not present locally are pulled via
+  `Email/query` + `Email/get` and inserted as non-dirty rows.
 
 ### IMAP
 
@@ -62,6 +68,14 @@ This document covers the mail-to-database sync layer only, not the UI.
   Deletion reconciliation skips rows whose `move`/`snooze`/`unsnooze` is still
   in `pending_changes` so the optimistic local move isn't wiped mid-flight.
 - Sync retries use exponential backoff after failures.
+- **Draft sync**: compose drafts are mirrored two-way with the server `Drafts`
+  folder. Edited drafts (`drafts.dirty = true`) are pushed as `APPEND` (with
+  the old UID expunged when an edit replaces a previously synced copy).
+  Deleted drafts go to `draft_tombstones` and are expunged from the server
+  on the next cycle. Server-side drafts not tracked locally are pulled via
+  `UID FETCH (UID FLAGS ENVELOPE BODY.PEEK[])` and inserted as non-dirty rows
+  with the full plain-text body. Server-side deletions are reconciled by
+  comparing against `UID SEARCH NOT DELETED`.
 
 ### Cross-protocol
 

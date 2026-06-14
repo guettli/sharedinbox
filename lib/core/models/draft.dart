@@ -8,6 +8,8 @@ class SavedDraft {
   final String bodyText;
   final DateTime updatedAt;
   final String? imapServerId;
+  final String? jmapServerId;
+  final bool dirty;
 
   const SavedDraft({
     required this.id,
@@ -19,5 +21,7 @@ class SavedDraft {
     required this.bodyText,
     required this.updatedAt,
     this.imapServerId,
+    this.jmapServerId,
+    this.dirty = true,
   });
 }

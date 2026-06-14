@@ -2,6 +2,7 @@ import 'package:sharedinbox/core/models/draft.dart';
 
 abstract class DraftRepository {
   /// Inserts or updates a draft.  Pass [id] to update; omit to create new.
+  /// Marks the row as dirty so the next sync cycle pushes it to the server.
   Future<SavedDraft> saveDraft({
     int? id,
     String? accountId,
@@ -19,12 +20,20 @@ abstract class DraftRepository {
   /// Returns the draft with [id], or null.
   Future<SavedDraft?> getDraft(int id);
 
-  /// Permanently removes the draft with [id].
+  /// Permanently removes the draft with [id]. If the row had been synced to
+  /// the server, writes a tombstone so the next sync cycle deletes the
+  /// server-side copy too.
   Future<void> deleteDraft(int id);
 
-  /// Syncs local drafts with the server IMAP Drafts folder for [accountId].
-  /// Uploads local drafts that have no [SavedDraft.imapServerId]; imports
-  /// server drafts that are not already tracked locally.
-  /// No-op when the implementation has no IMAP connection configured.
-  Future<void> syncDrafts(String accountId, String password);
+  /// Two-way sync between the local drafts table and the server-side Drafts
+  /// folder for [accountId]:
+  ///
+  /// 1. Push tombstones (delete server-side copies of locally-deleted drafts).
+  /// 2. Push dirty rows (replace server-side copy for edits; append for new).
+  /// 3. Pull server-side drafts not already tracked locally.
+  /// 4. Remove local rows whose server counterpart has disappeared.
+  ///
+  /// No-op for accounts whose protocol the implementation cannot reach
+  /// (e.g. JMAP without a configured `jmapUrl`).
+  Future<void> syncDrafts(String accountId);
 }
