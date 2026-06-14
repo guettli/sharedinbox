@@ -14,6 +14,11 @@ jobs:
     name: Build & Push sharedinbox-dev
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The auto-provisioned Actions token needs package-write scope to log in to
+    # and push to sialoop's (Gitea) container registry; without it docker login
+    # returns "unauthorized" (#614 follow-up).
+    permissions:
+      packages: write
     env:
       REGISTRY: sialoop.thomas-guettler.de
       IMAGE: sialoop.thomas-guettler.de/guettli/sharedinbox-dev
