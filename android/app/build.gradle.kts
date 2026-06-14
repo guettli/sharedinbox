@@ -51,8 +51,15 @@ android {
             if (ksPath != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 + resource shrinking. Produces build/app/outputs/mapping/release/mapping.txt
+            // which is uploaded alongside the AAB so Play Console can deobfuscate
+            // crash and ANR stack traces (see scripts/deploy_playstore.py).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             ndk {
                 debugSymbolLevel = "FULL"
             }

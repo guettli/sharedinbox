@@ -21,6 +21,9 @@ TRACKS = ("internal", "alpha")
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
+# Env var pointing at the R8 mapping file (build/app/outputs/mapping/release/mapping.txt).
+# CI (ci/main.go UploadToPlayStore) sets this; local builds may leave it unset.
+_MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
 
 
 def _upload_aab_resumable(session, package, edit_id, aab_path):
@@ -55,6 +58,33 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
         )
     upload_resp.raise_for_status()
     return upload_resp.json()
+
+
+def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_path):
+    """Upload an R8/proguard mapping file as the proguard deobfuscation file
+    for the bundle just uploaded (identified by ``version_code``).
+
+    Uses the simple media upload form documented at
+    https://developers.google.com/android-publisher/api-ref/rest/v3/edits.deobfuscationfiles/upload.
+    """
+    with open(mapping_path, "rb") as f:
+        data = f.read()
+    url = (
+        f"{_UPLOAD_BASE}/{package}/edits/{edit_id}/bundles/{version_code}"
+        "/deobfuscationFiles/proguard"
+    )
+    resp = session.post(
+        url,
+        params={"uploadType": "media"},
+        data=data,
+        headers={
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(data)),
+        },
+        timeout=600,
+    )
+    resp.raise_for_status()
+    return resp.json() if resp.content else {}
 
 
 def main():
@@ -99,6 +129,43 @@ def main():
 
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
+
+    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
+    if mapping_path and os.path.exists(mapping_path):
+        mapping_size = os.path.getsize(mapping_path)
+        last_exc = None
+        uploaded = False
+        for attempt in range(_MAX_UPLOAD_ATTEMPTS):
+            try:
+                _upload_deobfuscation_file(
+                    session, PACKAGE_NAME, edit_id, version_code, mapping_path
+                )
+                uploaded = True
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
+                    delay = 10 * (2 ** attempt)
+                    print(
+                        f"Deobfuscation upload attempt {attempt + 1} failed "
+                        f"({type(exc).__name__}: {exc}), retrying in {delay}s…"
+                    )
+                    time.sleep(delay)
+        if not uploaded:
+            raise RuntimeError(
+                f"Deobfuscation file upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
+            ) from last_exc
+        print(f"Uploaded deobfuscation file ({mapping_size} bytes)")
+    elif mapping_path:
+        print(
+            f"Warning: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
+            "does not exist; skipping deobfuscation upload.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Note: {_MAPPING_PATH_ENV} not set; skipping deobfuscation upload."
+        )
 
     release_status = "completed"
     for attempt in range(2):

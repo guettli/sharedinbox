@@ -873,6 +873,19 @@ func (m *Ci) TestAndroidFirebase(
 		Stdout(ctx)
 }
 
+// buildAndroidReleaseDir runs `flutter build appbundle --release` once and
+// returns build/app/outputs/ so callers can select both the AAB and the R8
+// mapping file from a single cached execution.
+func (m *Ci) buildAndroidReleaseDir(commitHash string) *dagger.Directory {
+	args := []string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	return m.androidBase().
+		WithExec(args).
+		Directory("build/app/outputs")
+}
+
 // BuildAndroidRelease builds the AAB with a fixed build-number so Dagger can cache it.
 // versionCode and signing are applied separately via StampAndroidVersionCode + SignAndroidBundle.
 func (m *Ci) BuildAndroidRelease(
@@ -880,13 +893,20 @@ func (m *Ci) BuildAndroidRelease(
 	// +optional
 	commitHash string,
 ) *dagger.File {
-	args := []string{"flutter", "build", "appbundle", "--release", "--no-pub", "--build-number", "1"}
-	if commitHash != "" {
-		args = append(args, "--dart-define=GIT_HASH="+commitHash)
-	}
-	return m.androidBase().
-		WithExec(args).
-		File("build/app/outputs/bundle/release/app-release.aab")
+	return m.buildAndroidReleaseDir(commitHash).
+		File("bundle/release/app-release.aab")
+}
+
+// BuildAndroidReleaseMapping returns the R8 mapping file produced by the same
+// release build as BuildAndroidRelease. Uploading it alongside the AAB lets
+// Play Console deobfuscate crash and ANR stack traces.
+func (m *Ci) BuildAndroidReleaseMapping(
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	return m.buildAndroidReleaseDir(commitHash).
+		File("mapping/release/mapping.txt")
 }
 
 // withGoCache mounts Dagger cache volumes for GOCACHE and GOMODCACHE so Go
@@ -900,16 +920,20 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 }
 
 // UploadToPlayStore uploads a pre-built AAB to the Play Store internal and closed-testing (alpha) tracks.
+// When mappingFile is provided, its contents are also uploaded as the R8
+// deobfuscation file so Play Console can deobfuscate stack traces.
 func (m *Ci) UploadToPlayStore(
 	ctx context.Context,
 	aab *dagger.File,
 	playStoreConfig *dagger.Secret,
+	// +optional
+	mappingFile *dagger.File,
 ) (string, error) {
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/deploy_playstore.py"},
 	})
 
-	return dag.Container().
+	container := dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
 		WithMountedCache("/root/.cache/pip", dag.CacheVolume("pip-cache")).
@@ -917,7 +941,16 @@ func (m *Ci) UploadToPlayStore(
 		WithFile("/src/build/app/outputs/bundle/release/app-release.aab", aab).
 		WithFile("/src/scripts/deploy_playstore.py", scriptSource.File("scripts/deploy_playstore.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
-		WithWorkdir("/src").
+		WithWorkdir("/src")
+
+	if mappingFile != nil {
+		const mappingPath = "/src/build/app/outputs/mapping/release/mapping.txt"
+		container = container.
+			WithFile(mappingPath, mappingFile).
+			WithEnvVariable("MAPPING_TXT_PATH", mappingPath)
+	}
+
+	return container.
 		WithExec([]string{"python3", "scripts/deploy_playstore.py"}).
 		Stdout(ctx)
 }
@@ -951,7 +984,8 @@ func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, 
 		File("/signed.aab")
 }
 
-// PublishAndroid builds a cached AAB, stamps the versionCode, re-signs, and uploads to Play Store.
+// PublishAndroid builds a cached AAB, stamps the versionCode, re-signs, and uploads to Play Store
+// together with the R8 mapping file produced by the same build.
 func (m *Ci) PublishAndroid(
 	ctx context.Context,
 	playStoreConfig *dagger.Secret,
@@ -962,10 +996,12 @@ func (m *Ci) PublishAndroid(
 	commitHash string,
 ) (string, error) {
 	versionCode := int(time.Now().Unix())
-	aab := m.BuildAndroidRelease(commitHash)
+	buildDir := m.buildAndroidReleaseDir(commitHash)
+	aab := buildDir.File("bundle/release/app-release.aab")
+	mapping := buildDir.File("mapping/release/mapping.txt")
 	stamped := m.StampAndroidVersionCode(aab, versionCode)
 	signed := m.SignAndroidBundle(stamped, keystoreBase64, keystorePassword)
-	return m.UploadToPlayStore(ctx, signed, playStoreConfig)
+	return m.UploadToPlayStore(ctx, signed, playStoreConfig, mapping)
 }
 
 // Renovate runs Renovate bot against the repository on Forgejo/Codeberg.

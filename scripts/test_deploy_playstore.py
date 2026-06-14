@@ -220,5 +220,147 @@ class TestUploadAabResumable(unittest.TestCase):
         self.assertEqual(put_call[0][0], "https://upload.example.com/sess")
 
 
+class TestDeobfuscationUpload(unittest.TestCase):
+    def _run_main(self, mapping_path=None, deobf_side_effects=None):
+        mock_session = MagicMock()
+        # POST sequence: edit-create, optional deobfuscation upload(s), commit.
+        post_responses = [MagicMock(**{"json.return_value": {"id": "edit-1"}})]
+        if mapping_path and deobf_side_effects is None:
+            post_responses.append(MagicMock(**{"content": b"", "json.return_value": {}}))
+        post_responses.append(MagicMock())  # commit
+
+        if deobf_side_effects is not None:
+            # Build a side_effect list with the deobf attempts inserted between
+            # edit-create and commit.
+            mock_session.post.side_effect = (
+                [post_responses[0]] + list(deobf_side_effects) + [post_responses[-1]]
+            )
+        else:
+            mock_session.post.side_effect = post_responses
+
+        mock_session.put.return_value = MagicMock()
+
+        env = {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+        if mapping_path is not None:
+            env["MAPPING_TXT_PATH"] = mapping_path
+
+        real_exists = os.path.exists
+        with patch.dict(os.environ, env, clear=True):
+            with patch("deploy_playstore.os.path.exists") as exists_mock:
+                # AAB_PATH is always reported as present so main() proceeds; the
+                # mapping path is checked against the real filesystem so the
+                # "missing path" case actually returns False.
+                exists_mock.side_effect = lambda p: (
+                    True if p == deploy_playstore.AAB_PATH else real_exists(p)
+                )
+                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
+                    with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                        with patch(
+                            "deploy_playstore._upload_aab_resumable",
+                            return_value={"versionCode": 11},
+                        ):
+                            with patch("deploy_playstore.time.sleep"):
+                                deploy_playstore.main()
+
+        return mock_session
+
+    def test_skips_when_env_unset(self):
+        session = self._run_main(mapping_path=None)
+        # Only edit-create + commit; no deobfuscationFiles call.
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        self.assertFalse(any("deobfuscationFiles" in u for u in post_urls))
+
+    def test_uploads_when_env_set(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+        try:
+            session = self._run_main(mapping_path=mapping_path)
+        finally:
+            os.unlink(mapping_path)
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        deobf_urls = [u for u in post_urls if "deobfuscationFiles/proguard" in u]
+        self.assertEqual(len(deobf_urls), 1)
+        # Must run after AAB upload (version code known) and before commit.
+        deobf_idx = next(i for i, u in enumerate(post_urls) if "deobfuscationFiles" in u)
+        commit_idx = next(i for i, u in enumerate(post_urls) if ":commit" in u)
+        self.assertLess(deobf_idx, commit_idx)
+        # URL must contain the version code returned by the AAB upload.
+        self.assertIn("/bundles/11/deobfuscationFiles/proguard", deobf_urls[0])
+
+    def test_warns_when_path_missing(self):
+        # Point at a non-existent file: upload should be skipped but main() must succeed.
+        session = self._run_main(mapping_path="/tmp/does-not-exist-mapping.txt")
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        self.assertFalse(any("deobfuscationFiles" in u for u in post_urls))
+
+    def test_retries_on_failure_then_succeeds(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+        try:
+            # Patch the helper directly so we control retry behaviour without
+            # threading attempts through the post mock's side_effect.
+            with patch(
+                "deploy_playstore._upload_deobfuscation_file",
+                side_effect=[ValueError("boom"), {"status": "ok"}],
+            ) as upload_mock:
+                self._run_main(mapping_path=mapping_path)
+            self.assertEqual(upload_mock.call_count, 2)
+        finally:
+            os.unlink(mapping_path)
+
+    def test_raises_after_all_attempts_exhausted(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+        try:
+            with patch(
+                "deploy_playstore._upload_deobfuscation_file",
+                side_effect=[ValueError("boom")] * deploy_playstore._MAX_UPLOAD_ATTEMPTS,
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self._run_main(mapping_path=mapping_path)
+            self.assertIn("Deobfuscation file upload failed", str(ctx.exception))
+        finally:
+            os.unlink(mapping_path)
+
+
+class TestUploadDeobfuscationFile(unittest.TestCase):
+    def test_posts_to_proguard_endpoint(self):
+        mock_session = MagicMock()
+        resp = MagicMock()
+        resp.content = b""
+        resp.json.return_value = {}
+        mock_session.post.return_value = resp
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"obfuscated-mapping")
+            mapping_path = f.name
+
+        try:
+            deploy_playstore._upload_deobfuscation_file(
+                mock_session, "com.example.app", "edit-7", 42, mapping_path
+            )
+        finally:
+            os.unlink(mapping_path)
+
+        mock_session.post.assert_called_once()
+        call_url = mock_session.post.call_args[0][0]
+        self.assertIn(
+            "/edits/edit-7/bundles/42/deobfuscationFiles/proguard", call_url
+        )
+        self.assertEqual(
+            mock_session.post.call_args[1]["params"], {"uploadType": "media"}
+        )
+        self.assertEqual(
+            mock_session.post.call_args[1]["data"], b"obfuscated-mapping"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
