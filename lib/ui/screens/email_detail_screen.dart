@@ -23,6 +23,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
+import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -268,9 +269,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 ),
               ),
             ),
-          SecureEmailWebView(
-            htmlBody: body.htmlBody!,
-            loadRemoteImages: effectiveLoadImages,
+          ErrorBoundary(
+            label: 'Email body',
+            child: SecureEmailWebView(
+              htmlBody: body.htmlBody!,
+              loadRemoteImages: effectiveLoadImages,
+            ),
           ),
         ] else
           SelectableText(

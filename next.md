@@ -39,6 +39,3 @@ Then push
 ### 3. Safety & Resilience
 - **Encrypted Local Storage**: Add an optional layer of encryption to the Drift
   database (using `sqlcipher`) to protect cached emails when the device is locked.
-- **Advanced Error Boundaries**: Implement more granular `ErrorWidget` wrappers
-  around critical components (like the HTML renderer) to prevent localized
-  rendering issues from crashing the whole screen.

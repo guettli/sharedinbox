@@ -4,6 +4,28 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Advanced Error Boundaries (Issue #583)
+
+Added a reusable `ErrorBoundary` widget that contains build- and paint-time
+exceptions to its subtree instead of escalating to the global crash screen.
+
+- **`lib/ui/widgets/error_boundary.dart`**: `ErrorBoundary` exposes a
+  `_BoundaryController` to its descendants via an `InheritedWidget`. The
+  boundary-aware `ErrorWidget.builder` (installed in `main.dart`) writes
+  caught exceptions into the nearest enclosing controller; if none exists,
+  it falls through to the full-screen `CrashScreen`.
+- **Async errors**: `ErrorBoundaryScope.reportError` lets a widget hand a
+  caught async exception to the nearest boundary instead of crashing the
+  whole screen.
+- **HTML renderer wrapping**: Both `SecureEmailWebView` call sites
+  (`email_detail_screen.dart`, `thread_detail_screen.dart`) are wrapped in
+  `ErrorBoundary(label: 'Email body', …)`.
+- **Less aggressive global handler**: `FlutterError.onError` no longer
+  `runApp(CrashScreen(...))` for widget/rendering-library errors — those are
+  already substituted in place by `ErrorWidget.builder`, so a global swap
+  would defeat any in-tree boundary. Non-widget-tree errors (timers,
+  gestures, async) still trigger the existing crash screen.
+
 ## Tasks (2026-06-13)
 
 - **Fuzz Testing (Issue #584)**: Expanded the sync-reliability runner with a

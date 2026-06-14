@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d, HH:mm');
@@ -252,9 +253,12 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                           }
                         },
                       ),
-                    SecureEmailWebView(
-                      htmlBody: body.htmlBody!,
-                      loadRemoteImages: effectiveLoadImages,
+                    ErrorBoundary(
+                      label: 'Email body',
+                      child: SecureEmailWebView(
+                        htmlBody: body.htmlBody!,
+                        loadRemoteImages: effectiveLoadImages,
+                      ),
                     ),
                   ] else
                     SelectableText(

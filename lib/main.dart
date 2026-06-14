@@ -12,6 +12,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
+import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:stack_trace/stack_trace.dart' as stack_trace;
 
 void main({List<Override> overrides = const []}) {
@@ -29,15 +30,27 @@ void main({List<Override> overrides = const []}) {
           return s;
         };
 
-        // Catch errors during build (e.g. layout exceptions) and show CrashScreen.
-        ErrorWidget.builder = (details) => CrashScreen(
-              exception: details.exception,
-              stackTrace: details.stack,
+        // Catch errors during build (e.g. layout exceptions). The boundary-
+        // aware widget routes the error to an enclosing ErrorBoundary if one
+        // exists in the failing widget's ancestry, otherwise substitutes the
+        // failing slot with a full-screen CrashScreen.
+        ErrorWidget.builder = (details) => BoundaryAwareErrorWidget(
+              details: details,
+              fallback: (d) => CrashScreen(
+                exception: d.exception,
+                stackTrace: d.stack,
+              ),
             );
 
-        // Catch framework-level errors (e.g. from gestures, timers).
+        // Catch framework-level errors (e.g. from gestures, timers). For
+        // widget/rendering library errors the framework also substitutes the
+        // failing widget via ErrorWidget.builder above, so a global
+        // runApp(CrashScreen) would defeat any ErrorBoundary placed in the
+        // tree. Only escalate to the full-screen CrashScreen for errors that
+        // ErrorWidget.builder cannot recover from.
         FlutterError.onError = (details) {
           FlutterError.presentError(details);
+          if (_isWidgetTreeError(details)) return;
           runApp(
             CrashScreen(
               exception: details.exception,
@@ -63,6 +76,15 @@ void main({List<Override> overrides = const []}) {
       ),
     ),
   );
+}
+
+/// True when [details] comes from the widget build or rendering pipeline. The
+/// framework already substitutes the failing widget via `ErrorWidget.builder`
+/// for these, so we suppress the global runApp(CrashScreen) to let any
+/// in-tree [ErrorBoundary] keep the rest of the screen alive.
+bool _isWidgetTreeError(FlutterErrorDetails details) {
+  final lib = details.library;
+  return lib == 'widgets library' || lib == 'rendering library';
 }
 
 /// Reads the stored prefetch preference and registers the WorkManager task
