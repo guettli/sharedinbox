@@ -80,3 +80,13 @@ dependencies {
     // without bundling it in the APK.
     releaseCompileOnly(project(":integration_test"))
 }
+
+// Exclude the JVM tink artifact in favor of tink-android. Both artifacts ship
+// overlapping classes (e.g. com.google.crypto.tink.Aead), which fails the
+// `:app:checkDebugDuplicateClasses` task when something pulls in `tink` while
+// another dependency (e.g. flutter_secure_storage) pulls in `tink-android`.
+// `tink-android` contains everything `tink` does plus Android-specific code,
+// so dropping `tink` is safe. See https://github.com/tink-crypto/tink-java.
+configurations.configureEach {
+    exclude(group = "com.google.crypto.tink", module = "tink")
+}
