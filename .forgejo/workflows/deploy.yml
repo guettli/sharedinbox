@@ -15,26 +15,14 @@ jobs:
       linux: ${{ steps.diff.outputs.linux }}
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Print runner wait time
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          runner_start=$(date +%s)
-          created=$(curl -sf --max-time 30 \
-            -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
-            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
-          if [ -n "$created" ]; then
-            queued_epoch=$(date -d "$created" +%s)
-            wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
-          else
-            echo "Runner wait time: unknown (API lookup failed)"
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        run: scripts/print_runner_wait.sh
 
       - name: Detect Android and Linux changes
         id: diff
@@ -142,26 +130,14 @@ jobs:
     if: needs.check-changes.outputs.android == 'true'
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
       - name: Print runner wait time
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          runner_start=$(date +%s)
-          created=$(curl -sf --max-time 30 \
-            -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
-            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
-          if [ -n "$created" ]; then
-            queued_epoch=$(date -d "$created" +%s)
-            wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
-          else
-            echo "Runner wait time: unknown (API lookup failed)"
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
+        run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
         run: |
@@ -193,26 +169,14 @@ jobs:
     if: needs.check-changes.outputs.android == 'true'
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
       - name: Print runner wait time
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          runner_start=$(date +%s)
-          created=$(curl -sf --max-time 30 \
-            -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
-            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
-          if [ -n "$created" ]; then
-            queued_epoch=$(date -d "$created" +%s)
-            wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
-          else
-            echo "Runner wait time: unknown (API lookup failed)"
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
+        run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
         run: |
@@ -238,26 +202,14 @@ jobs:
     if: needs.check-changes.outputs.linux == 'true'
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
       - name: Print runner wait time
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          runner_start=$(date +%s)
-          created=$(curl -sf --max-time 30 \
-            -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
-            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
-          if [ -n "$created" ]; then
-            queued_epoch=$(date -d "$created" +%s)
-            wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
-          else
-            echo "Runner wait time: unknown (API lookup failed)"
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
+        run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
         run: |
@@ -288,23 +240,6 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Print runner wait time
-        env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          runner_start=$(date +%s)
-          created=$(curl -sf --max-time 30 \
-            -H "Authorization: token $FORGEJO_TOKEN" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/runs?run_number=$RUN_NUMBER" \
-            | python3 -c "import sys,json;rs=json.load(sys.stdin).get('workflow_runs',[]);print(rs[0]['created'] if rs else '')" 2>/dev/null) || true
-          if [ -n "$created" ]; then
-            queued_epoch=$(date -d "$created" +%s)
-            wait_seconds=$((runner_start - queued_epoch))
-            echo "Runner wait time: ${wait_seconds}s (queued at $created)"
-          else
-            echo "Runner wait time: unknown (API lookup failed)"
-          fi
       - name: Set CI/Full-Pass or CI/Full-Fail label on tracking issue
         env:
           FORGEJO_TOKEN: ${{ github.token }}

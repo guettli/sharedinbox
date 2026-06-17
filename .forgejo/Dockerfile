@@ -12,6 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-set init.defaultBranch so actions/checkout's initial `git init` does not
+# emit the 13-line "Using 'master' as the name for the initial branch" hint
+# on every workflow run.
+RUN git config --global init.defaultBranch main
+
 # SOPS
 RUN curl -fsSL -o /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.9.4/sops-v3.9.4.linux.amd64 \
     && chmod +x /usr/local/bin/sops
