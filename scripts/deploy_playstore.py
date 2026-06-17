@@ -167,11 +167,15 @@ def main():
             f"Note: {_MAPPING_PATH_ENV} not set; skipping deobfuscation upload."
         )
 
+    # Draft apps in the Play Console can only receive releases with status
+    # "draft", and only on the "internal" track — the closed-testing ("alpha")
+    # track rejects releases until the app is moved out of draft state.
     release_status = "completed"
+    tracks = TRACKS
     for attempt in range(2):
-        print(f"Assigning AAB to tracks with status: {release_status}…")
+        print(f"Assigning AAB to tracks {tracks} with status: {release_status}…")
         try:
-            for track in TRACKS:
+            for track in tracks:
                 track_resp = session.put(
                     f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
                     json={"releases": [{"versionCodes": [version_code], "status": release_status}]},
@@ -184,15 +188,18 @@ def main():
                 timeout=30,
             )
             commit_resp.raise_for_status()
-            print(f"Deployed version {version_code} as {release_status} to tracks: {', '.join(TRACKS)}")
+            print(f"Deployed version {version_code} as {release_status} to tracks: {', '.join(tracks)}")
             break
         except Exception as exc:
             if hasattr(exc, "response") and exc.response is not None:
                 err_text = exc.response.text
                 print(f"API error body: {err_text}", file=sys.stderr)
-                if "Only releases with status draft may be created on draft app" in err_text and release_status == "completed":
-                    print("App is in draft status. Retrying deploy with status: draft…")
+                # Google wraps 'draft' in single quotes in the actual response,
+                # so match on the invariant tail "draft app" instead.
+                if release_status == "completed" and "draft app" in err_text.lower():
+                    print("App is in draft state. Retrying with status=draft on internal track only…")
                     release_status = "draft"
+                    tracks = ("internal",)
                     continue
             raise
 
