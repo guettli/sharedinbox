@@ -1013,7 +1013,7 @@ func (m *Ci) PublishAndroid(
 	return m.UploadToPlayStore(ctx, signed, playStoreConfig, mapping)
 }
 
-// Renovate runs Renovate bot against the repository on Forgejo/Codeberg.
+// Renovate runs Renovate bot against the repository on the sialoop Gitea instance.
 func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string, error) {
 	// Codeberg's GET /pulls?state=all&limit=100 times out with a 504, but limit=10
 	// completes in ~9 s. Patch the compiled pr-cache.js to use 10 instead of the
@@ -1026,7 +1026,7 @@ func (m *Ci) Renovate(ctx context.Context, renovateToken *dagger.Secret) (string
 	return dag.Container().
 		From("renovate/renovate:43").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken).
-		WithEnvVariable("RENOVATE_PLATFORM", "forgejo").
+		WithEnvVariable("RENOVATE_PLATFORM", "gitea").
 		WithEnvVariable("RENOVATE_ENDPOINT", "https://sialoop.thomas-guettler.de").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
