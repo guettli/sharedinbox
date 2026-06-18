@@ -55,9 +55,9 @@ void main() {
     );
 
     expect(find.textContaining('TestException'), findsOneWidget);
-    expect(find.text('Report Issue on sialoop'), findsOneWidget);
+    expect(find.text('Report Issue on GitHub'), findsOneWidget);
 
-    await tester.tap(find.text('Report Issue on sialoop'));
+    await tester.tap(find.text('Report Issue on GitHub'));
     await tester.pumpAndSettle();
 
     // Regression for #146: URL must contain only the title, NOT the full
@@ -66,9 +66,7 @@ void main() {
     // so the user can paste it into the issue body.
     expect(
       mock.launchedUrl,
-      contains(
-        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
-      ),
+      contains('https://github.com/guettli/sharedinbox/issues/new'),
     );
     expect(
       mock.launchedUrl,
@@ -333,17 +331,15 @@ void main() {
 
       expect(find.textContaining('TestException'), findsOneWidget);
 
-      // Tapping 'Report Issue on sialoop' must not crash. Previously
+      // Tapping 'Report Issue on GitHub' must not crash. Previously
       // ScaffoldMessenger.of(context) threw because context was above the
       // MaterialApp that CrashScreen itself creates.
-      await tester.tap(find.text('Report Issue on sialoop'));
+      await tester.tap(find.text('Report Issue on GitHub'));
       await tester.pumpAndSettle();
 
       expect(
         mock.launchedUrl,
-        contains(
-          'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
-        ),
+        contains('https://github.com/guettli/sharedinbox/issues/new'),
       );
     },
   );

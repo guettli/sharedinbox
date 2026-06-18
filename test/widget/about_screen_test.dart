@@ -184,7 +184,7 @@ void main() {
     expect(clipboardText, contains('[sharedinbox.de](https://sharedinbox.de)'));
   });
 
-  testWidgets('AboutScreen create-issue button opens sialoop URL', (
+  testWidgets('AboutScreen create-issue button opens GitHub URL', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1200);
@@ -203,9 +203,7 @@ void main() {
 
     expect(
       mock.launchedUrl,
-      contains(
-        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new',
-      ),
+      contains('https://github.com/guettli/sharedinbox/issues/new'),
     );
     expect(mock.launchedUrl, contains('1.2.3%2B99'));
   });

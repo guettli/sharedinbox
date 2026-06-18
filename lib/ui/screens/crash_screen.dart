@@ -215,7 +215,7 @@ class CrashScreen extends StatelessWidget {
                       'Crash: ${exception.toString().split('\n').first}',
                     );
                     final url = Uri.parse(
-                      'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new?title=$title',
+                      'https://github.com/guettli/sharedinbox/issues/new?title=$title',
                     );
                     try {
                       final launched = await launchUrl(
@@ -242,7 +242,7 @@ class CrashScreen extends StatelessWidget {
                     }
                   },
                   icon: const Icon(Icons.bug_report),
-                  label: const Text('Report Issue on sialoop'),
+                  label: const Text('Report Issue on GitHub'),
                 ),
               ],
             ),

@@ -10,6 +10,7 @@ jobs:
     name: Detect Firebase-Relevant Changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: github.server_url != 'https://github.com'
     outputs:
       has_changes: ${{ steps.diff.outputs.has_changes }}
 

@@ -122,7 +122,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       ),
     );
     final url = Uri.parse(
-      'https://sialoop.thomas-guettler.de/guettli/sharedinbox/issues/new?body=$body',
+      'https://github.com/guettli/sharedinbox/issues/new?body=$body',
     );
     try {
       final launched = await launchUrl(

@@ -31,8 +31,7 @@ class ChangeLogScreen extends ConsumerWidget {
     return '$h:$m, ${dt.day} $month ${dt.year}';
   }
 
-  static const _repoUrl =
-      'https://sialoop.thomas-guettler.de/guettli/sharedinbox';
+  static const _repoUrl = 'https://github.com/guettli/sharedinbox';
 
   static final _issueRefPattern = RegExp(r'#(\d+)');
 

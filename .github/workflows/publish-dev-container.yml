@@ -14,6 +14,7 @@ jobs:
     name: Build & Push sharedinbox-dev
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: github.server_url != 'https://github.com'
     # The auto-provisioned Actions token needs package-write scope to log in to
     # and push to sialoop's (Gitea) container registry; without it docker login
     # returns "unauthorized" (#614 follow-up).
