@@ -79,6 +79,12 @@ dependencies {
     // references its class in all variants. Make it available for release compilation
     // without bundling it in the APK.
     releaseCompileOnly(project(":integration_test"))
+    // Flutter's embedding bundles PlayStoreDeferredComponentManager, which references
+    // com.google.android.play.core.* classes (tasks.Task, splitinstall.*). We don't use
+    // deferred components, but AGP 9.x's release build trace-references step fails on
+    // these missing references. compileOnly satisfies the static check without bundling
+    // the library into the APK.
+    releaseCompileOnly("com.google.android.play:core:1.10.3")
 }
 
 // Exclude the JVM tink artifact in favor of tink-android. Both artifacts ship
