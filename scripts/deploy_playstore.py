@@ -69,8 +69,11 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
     """
     with open(mapping_path, "rb") as f:
         data = f.read()
+    # The endpoint path is /apks/{apkVersionCode}/... even when the artifact
+    # was an AAB — Google reuses the same resource for bundles, keyed by
+    # versionCode. Using /bundles/ here returns 404.
     url = (
-        f"{_UPLOAD_BASE}/{package}/edits/{edit_id}/bundles/{version_code}"
+        f"{_UPLOAD_BASE}/{package}/edits/{edit_id}/apks/{version_code}"
         "/deobfuscationFiles/proguard"
     )
     resp = session.post(

@@ -287,7 +287,8 @@ class TestDeobfuscationUpload(unittest.TestCase):
         commit_idx = next(i for i, u in enumerate(post_urls) if ":commit" in u)
         self.assertLess(deobf_idx, commit_idx)
         # URL must contain the version code returned by the AAB upload.
-        self.assertIn("/bundles/11/deobfuscationFiles/proguard", deobf_urls[0])
+        # Google's endpoint uses /apks/{versionCode}/... even for AAB uploads.
+        self.assertIn("/apks/11/deobfuscationFiles/proguard", deobf_urls[0])
 
     def test_warns_when_path_missing(self):
         # Point at a non-existent file: upload should be skipped but main() must succeed.
@@ -352,7 +353,7 @@ class TestUploadDeobfuscationFile(unittest.TestCase):
         mock_session.post.assert_called_once()
         call_url = mock_session.post.call_args[0][0]
         self.assertIn(
-            "/edits/edit-7/bundles/42/deobfuscationFiles/proguard", call_url
+            "/edits/edit-7/apks/42/deobfuscationFiles/proguard", call_url
         )
         self.assertEqual(
             mock_session.post.call_args[1]["params"], {"uploadType": "media"}
