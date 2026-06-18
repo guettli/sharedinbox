@@ -66,8 +66,8 @@ jobs:
 
       - name: Check runner tools
         run: |
-          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image."; exit 1; }
 
       - name: Setup Dagger Remote Engine
         env:

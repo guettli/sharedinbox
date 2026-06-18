@@ -8,7 +8,7 @@ on:
     paths:
       - 'website/**'
       - 'scripts/website-verify.sh'
-      - '.forgejo/workflows/website.yml'
+      - '.github/workflows/website.yml'
   workflow_dispatch:
 
 jobs:
@@ -93,7 +93,7 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          website_re='^(website/|scripts/website-verify\.sh|\.forgejo/workflows/website\.yml)'
+          website_re='^(website/|scripts/website-verify\.sh|\.github/workflows/website\.yml)'
 
           if echo "$CHANGED" | grep -qE "$website_re"; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
@@ -122,8 +122,8 @@ jobs:
 
       - name: Check runner tools
         run: |
-          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
-          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image. Add it to .forgejo/Dockerfile."; exit 1; }
+          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image."; exit 1; }
+          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image."; exit 1; }
 
       - name: Setup Dagger Remote Engine
         env:

@@ -29,7 +29,7 @@
     },
     {
       "customType": "regex",
-      "fileMatch": ["^\\.forgejo/Dockerfile$", "^Dockerfile\\.dev$"],
+      "fileMatch": ["^Dockerfile\\.dev$"],
       "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",

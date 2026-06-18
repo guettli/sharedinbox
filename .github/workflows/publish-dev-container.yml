@@ -6,7 +6,7 @@ on:
     paths:
       - 'Dockerfile.dev'
       - '.devcontainer/devcontainer.json'
-      - '.forgejo/workflows/publish-dev-container.yml'
+      - '.github/workflows/publish-dev-container.yml'
   workflow_dispatch:
 
 jobs:

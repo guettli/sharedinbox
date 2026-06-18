@@ -84,9 +84,9 @@ The only credentials not typed as `dagger.Secret` are the test passwords
 (`STALWART_PASS_B`, `STALWART_PASS_C`) in `WithStalwart`. These are hardcoded
 development values defined in `stalwart-dev/` — not production secrets.
 
-## CI Integration (Codeberg/Forgejo)
+## CI Integration
 
-The CI workflow in `.forgejo/workflows/ci.yml` is configured to use the Dagger module located in the `ci/` directory.
+The CI workflow in `.github/workflows/ci.yml` is configured to use the Dagger module located in the `ci/` directory.
 
 - **Check Suite:** Runs analysis and tests in parallel.
 - **Builds:** Produces Linux and Android artifacts.
