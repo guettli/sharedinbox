@@ -366,7 +366,8 @@ func (m *Ci) Hugo() *dagger.Container {
 		WithExec([]string{"curl", "-sL", "https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_0.152.2_linux-amd64.tar.gz", "-o", "/tmp/hugo.tar.gz"}).
 		WithExec([]string{"sh", "-c", "echo '416bcfbdf5f68469ec9644dbe507da50fc21b94b69a125b059d64ed2cb4d8c27  /tmp/hugo.tar.gz' | sha256sum -c -"}).
 		WithExec([]string{"tar", "-xzf", "/tmp/hugo.tar.gz", "-C", "/usr/local/bin", "hugo"}).
-		WithExec([]string{"rm", "/tmp/hugo.tar.gz"})
+		WithExec([]string{"rm", "/tmp/hugo.tar.gz"}).
+		WithUser("nobody")
 }
 
 // Deploy container for rsync/ssh
@@ -374,9 +375,10 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "--no-cache", "add", "rsync", "openssh-client", "python3", "tar"}).
+		WithExec([]string{"adduser", "-D", "-s", "/bin/sh", "deploy"}).
 		// Create .ssh with strict permissions before Dagger mounts anything there,
 		// so the directory is 700 (not Dagger's default 755).
-		WithExec([]string{"sh", "-c", "mkdir -p /root/.ssh && chmod 700 /root/.ssh"}).
+		WithExec([]string{"sh", "-c", "mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh && chown deploy:deploy /home/deploy/.ssh"}).
 		// Mount the raw key outside .ssh so Dagger cannot override the directory
 		// permissions we just set above.
 		WithMountedSecret("/tmp/id_ed25519.raw", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
@@ -384,9 +386,10 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 		// Using Python3 (not tr) changes the Dagger cache key so stale cached
 		// results from the old tr-based step are not reused.
 		WithExec([]string{"python3", "-c",
-			"import os; raw=open('/tmp/id_ed25519.raw','rb').read(); key=raw.replace(b'\\r\\n',b'\\n').replace(b'\\r',b'\\n'); key=key if key.endswith(b'\\n') else key+b'\\n'; open('/root/.ssh/id_ed25519','wb').write(key); os.chmod('/root/.ssh/id_ed25519',0o600)"}).
-		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
-		WithEnvVariable("RSYNC_RSH", "ssh -i /root/.ssh/id_ed25519")
+			"import os; raw=open('/tmp/id_ed25519.raw','rb').read(); key=raw.replace(b'\\r\\n',b'\\n').replace(b'\\r',b'\\n'); key=key if key.endswith(b'\\n') else key+b'\\n'; open('/home/deploy/.ssh/id_ed25519','wb').write(key); os.chmod('/home/deploy/.ssh/id_ed25519',0o600); os.chown('/home/deploy/.ssh/id_ed25519', __import__('pwd').getpwnam('deploy').pw_uid, __import__('pwd').getpwnam('deploy').pw_gid)"}).
+		WithMountedSecret("/home/deploy/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
+		WithUser("deploy").
+		WithEnvVariable("RSYNC_RSH", "ssh -i /home/deploy/.ssh/id_ed25519")
 }
 
 // Stalwart mail server service for backend and integration tests.
@@ -400,6 +403,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 		From("alpine:3.21").
 		WithExec([]string{"apk", "add", "--no-cache", "sqlite"}).
 		WithExec([]string{"/bin/sh", "-c", "mkdir -p /tmp/stalwart && chmod 777 /tmp/stalwart"}).
+		WithUser("nobody").
 		WithExec([]string{"sqlite3", "/tmp/stalwart/data.sqlite", "CREATE TABLE IF NOT EXISTS s (k BLOB PRIMARY KEY, v BLOB NOT NULL); INSERT OR REPLACE INTO s VALUES ('version.spam-filter', 'dev');"}).
 		Directory("/tmp/stalwart")
 
@@ -670,12 +674,15 @@ func (m *Ci) GenerateBuildHistory(
 	return dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
-		WithMountedSecret("/root/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
-		WithMountedSecret("/root/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
+		WithExec([]string{"adduser", "-D", "-s", "/bin/sh", "deploy"}).
+		WithExec([]string{"sh", "-c", "mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh && chown deploy:deploy /home/deploy/.ssh"}).
+		WithMountedSecret("/home/deploy/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
+		WithMountedSecret("/home/deploy/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
 		WithEnvVariable("SSH_USER", sshUser).
 		WithEnvVariable("SSH_HOST", sshHost).
-		WithDirectory("/src", scriptSource).
+		WithDirectory("/src", scriptSource, dagger.ContainerWithDirectoryOpts{Owner: "deploy"}).
 		WithWorkdir("/src").
+		WithUser("deploy").
 		WithExec([]string{"/bin/sh", "-c", "python3 scripts/generate_build_history.py"}).
 		Directory("website/content/builds")
 }
@@ -697,14 +704,14 @@ func (m *Ci) BuildWebsite(
 	}).WithDirectory("website/content/builds", buildHistory)
 
 	hugo := m.Hugo().
-		WithDirectory("/src", websiteSource).
+		WithDirectory("/src", websiteSource, dagger.ContainerWithDirectoryOpts{Owner: "nobody"}).
 		WithWorkdir("/src/website")
 	if commitHash != "" {
 		hugo = hugo.WithEnvVariable("HUGO_PARAMS_GITVERSION", commitHash)
 	}
 	return hugo.
-		WithExec([]string{"hugo", "--minify"}).
-		Directory("public")
+		WithExec([]string{"hugo", "--minify", "--destination", "/tmp/public"}).
+		Directory("/tmp/public")
 }
 
 // PublishWebsite builds and deploys the website to the remote server.
@@ -767,8 +774,8 @@ func (m *Ci) DeployLinux(
 	return m.Deployer(sshKey, knownHosts).
 		WithDirectory("/bundle", bundle).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
-		WithExec([]string{"ssh", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /root/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		WithExec([]string{"ssh", "-i", "/home/deploy/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /home/deploy/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
 		Stdout(ctx)
 }
 
@@ -819,8 +826,8 @@ func (m *Ci) DeployApk(
 
 	return m.Deployer(sshKey, knownHosts).
 		WithFile("/tmp/app.apk", apk).
-		WithExec([]string{"ssh", "-i", "/root/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /root/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
+		WithExec([]string{"ssh", "-i", "/home/deploy/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /home/deploy/.ssh/id_ed25519 /tmp/app.apk %s@%s:%s/%s", sshUser, sshHost, remoteDir, apkName)}).
 		Stdout(ctx)
 }
 
@@ -858,6 +865,7 @@ func (m *Ci) TestAndroidFirebase(
 		WithDirectory("/apks", apks).
 		WithSecretVariable("FIREBASE_SA_KEY", serviceAccountKey).
 		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
+		WithUser("cloudsdk").
 		WithExec([]string{"/bin/bash", "-c",
 			`auth_err=$(mktemp); trap 'rm -f "$auth_err"' EXIT; \
 			 gcloud auth activate-service-account --key-file=<(echo "$FIREBASE_SA_KEY") 2>"$auth_err" \
@@ -945,8 +953,8 @@ func (m *Ci) UploadToPlayStore(
 	container := dag.Container().
 		From("python:3.12-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
-		WithMountedCache("/root/.cache/pip", dag.CacheVolume("pip-cache")).
-		WithExec([]string{"pip", "install", "google-auth", "requests"}).
+		WithMountedCache("/tmp/pip-cache", dag.CacheVolume("pip-cache")).
+		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
 		WithFile("/src/build/app/outputs/bundle/release/app-release.aab", aab).
 		WithFile("/src/scripts/deploy_playstore.py", scriptSource.File("scripts/deploy_playstore.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
@@ -960,6 +968,7 @@ func (m *Ci) UploadToPlayStore(
 	}
 
 	return container.
+		WithUser("nobody").
 		WithExec([]string{"python3", "scripts/deploy_playstore.py"}).
 		Stdout(ctx)
 }
@@ -968,10 +977,11 @@ func (m *Ci) UploadToPlayStore(
 func (m *Ci) StampAndroidVersionCode(aab *dagger.File, versionCode int) *dagger.File {
 	return dag.Container().
 		From("python:3.12-alpine").
-		WithNewFile("/patch.py", patchAabScript).
-		WithFile("/in.aab", aab).
-		WithExec([]string{"python3", "/patch.py", "/in.aab", "/out.aab", fmt.Sprintf("%d", versionCode)}).
-		File("/out.aab")
+		WithNewFile("/tmp/patch.py", patchAabScript).
+		WithFile("/tmp/in.aab", aab).
+		WithUser("nobody").
+		WithExec([]string{"python3", "/tmp/patch.py", "/tmp/in.aab", "/tmp/out.aab", fmt.Sprintf("%d", versionCode)}).
+		File("/tmp/out.aab")
 }
 
 // SignAndroidBundle signs an AAB with the release upload key via jarsigner.
