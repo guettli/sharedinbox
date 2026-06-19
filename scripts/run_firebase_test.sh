@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the Firebase Test Lab Dagger pipeline with Gradle/Dagger noise filtered out.
-# Retries up to 3 times on transient Dagger engine connectivity errors.
+# Retries up to 3 times on transient Dagger engine connectivity errors, and on
+# "No space left on device" after pruning the Dagger cache.
 set -uo pipefail
 
 OUT=$(mktemp)
@@ -50,6 +51,11 @@ for attempt in 1 2 3; do
     fi
     if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|No Dagger server responded" "$OUT"; then
         echo "[firebase] dagger connectivity error on attempt $attempt/3, retrying..." >&2
+    elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$OUT"; then
+        echo "[firebase] dagger disk space error on attempt $attempt/3, pruning Dagger cache..." >&2
+        timeout 120 dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' 2>/dev/null || true
+        echo "[firebase] waiting 90s for freed space to settle..." >&2
+        sleep 90
     else
         exit "$RC"
     fi
