@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Upload an Android App Bundle to the Google Play Store.
-
-The bundle is published to every track in ``TRACKS`` within a single Play edit,
-so internal testing and closed testing share the same version code. ``alpha``
-is what the Play Console labels "Closed testing"; publishing there removes the
-need to manually drag-and-drop the AAB into the closed-testing release form.
-"""
+"""Upload an Android App Bundle to the Google Play Store."""
 
 import json
 import os
@@ -17,7 +11,7 @@ from google.oauth2 import service_account
 
 PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
-TRACKS = ("internal", "alpha")
+TRACKS = ("internal",)
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
@@ -170,52 +164,21 @@ def main():
             f"Note: {_MAPPING_PATH_ENV} not set; skipping deobfuscation upload."
         )
 
-    # Draft apps in the Play Console can only receive releases with status
-    # "draft", and only on the "internal" track — the closed-testing ("alpha")
-    # track rejects releases until the app is moved out of draft state.
-    release_status = "completed"
-    tracks = list(TRACKS)
-    for attempt in range(2):
-        print(f"Assigning AAB to tracks {tracks} with status: {release_status}…")
-        try:
-            for track in tracks:
-                track_resp = session.put(
-                    f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
-                    json={"releases": [{"versionCodes": [version_code], "status": release_status}]},
-                    timeout=30,
-                )
-                track_resp.raise_for_status()
+    print(f"Assigning AAB to tracks {TRACKS} with status: completed…")
+    for track in TRACKS:
+        track_resp = session.put(
+            f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
+            json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
+            timeout=30,
+        )
+        track_resp.raise_for_status()
 
-            # Reset tracks not targeted in this attempt (e.g. alpha was assigned
-            # status=completed in a previous attempt before the commit was rejected
-            # for a draft app; leaving it set causes the retry commit to fail too).
-            for track in TRACKS:
-                if track not in tracks:
-                    session.put(
-                        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
-                        json={"releases": []},
-                        timeout=30,
-                    )
-
-            commit_resp = session.post(
-                f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
-                timeout=30,
-            )
-            commit_resp.raise_for_status()
-            print(f"Deployed version {version_code} as {release_status} to tracks: {', '.join(tracks)}")
-            break
-        except Exception as exc:
-            if hasattr(exc, "response") and exc.response is not None:
-                err_text = exc.response.text
-                print(f"API error body: {err_text}", file=sys.stderr)
-                # Google wraps 'draft' in single quotes in the actual response,
-                # so match on the invariant tail "draft app" instead.
-                if release_status == "completed" and "draft app" in err_text.lower():
-                    print("App is in draft state. Retrying with status=draft on internal track only…")
-                    release_status = "draft"
-                    tracks = ["internal"]
-                    continue
-            raise
+    commit_resp = session.post(
+        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
+        timeout=30,
+    )
+    commit_resp.raise_for_status()
+    print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
 if __name__ == "__main__":
