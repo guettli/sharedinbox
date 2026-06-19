@@ -978,19 +978,20 @@ func (m *Ci) StampAndroidVersionCode(aab *dagger.File, versionCode int) *dagger.
 func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, keystorePassword *dagger.Secret) *dagger.File {
 	return dag.Container().
 		From("eclipse-temurin:17-jdk-alpine").
-		WithFile("/app.aab", aab).
+		WithFile("/tmp/app.aab", aab).
 		WithSecretVariable("KS_BASE64", keystoreBase64).
 		WithSecretVariable("KS_PASS", keystorePassword).
+		WithUser("nobody").
 		WithExec([]string{"sh", "-c",
 			`[ -n "$KS_BASE64" ] || { echo "ERROR: KS_BASE64 secret is empty — ANDROID_KEYSTORE_BASE64 not set"; exit 1; }
 			 [ -n "$KS_PASS" ]   || { echo "ERROR: KS_PASS secret is empty — ANDROID_KEYSTORE_PASSWORD not set"; exit 1; }
-			 echo "$KS_BASE64" | base64 -d > /keystore.jks && \
+			 echo "$KS_BASE64" | base64 -d > /tmp/keystore.jks && \
 			 jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
-			 -signedjar /signed.aab \
-			 -keystore /keystore.jks \
+			 -signedjar /tmp/signed.aab \
+			 -keystore /tmp/keystore.jks \
 			 -storepass:env KS_PASS -keypass:env KS_PASS \
-			 /app.aab upload`}).
-		File("/signed.aab")
+			 /tmp/app.aab upload`}).
+		File("/tmp/signed.aab")
 }
 
 // PublishAndroid builds a cached AAB, stamps the versionCode, re-signs, and uploads to Play Store
