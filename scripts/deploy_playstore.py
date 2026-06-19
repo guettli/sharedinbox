@@ -174,7 +174,7 @@ def main():
     # "draft", and only on the "internal" track — the closed-testing ("alpha")
     # track rejects releases until the app is moved out of draft state.
     release_status = "completed"
-    tracks = TRACKS
+    tracks = list(TRACKS)
     for attempt in range(2):
         print(f"Assigning AAB to tracks {tracks} with status: {release_status}…")
         try:
@@ -185,6 +185,17 @@ def main():
                     timeout=30,
                 )
                 track_resp.raise_for_status()
+
+            # Reset tracks not targeted in this attempt (e.g. alpha was assigned
+            # status=completed in a previous attempt before the commit was rejected
+            # for a draft app; leaving it set causes the retry commit to fail too).
+            for track in TRACKS:
+                if track not in tracks:
+                    session.put(
+                        f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}/tracks/{track}",
+                        json={"releases": []},
+                        timeout=30,
+                    )
 
             commit_resp = session.post(
                 f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
@@ -202,7 +213,7 @@ def main():
                 if release_status == "completed" and "draft app" in err_text.lower():
                     print("App is in draft state. Retrying with status=draft on internal track only…")
                     release_status = "draft"
-                    tracks = ("internal",)
+                    tracks = ["internal"]
                     continue
             raise
 
