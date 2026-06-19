@@ -15,9 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.server_url != 'https://github.com'
-    # The auto-provisioned Actions token needs package-write scope to log in to
-    # and push to sialoop's (Gitea) container registry; without it docker login
-    # returns "unauthorized" (#614 follow-up).
+    # REGISTRY_TOKEN must be set as a repo secret: a Gitea personal access token
+    # for guettlibot with package-write scope. The auto-provisioned github.token
+    # does not authenticate against sialoop's container registry.
     permissions:
       packages: write
     env:
@@ -28,11 +28,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Log in to sialoop container registry
-        env:
-          FORGEJO_TOKEN: ${{ github.token }}
         run: |
-          echo "$FORGEJO_TOKEN" \
-            | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.REGISTRY_TOKEN }}" \
+            | docker login "$REGISTRY" -u guettlibot --password-stdin
 
       - name: Build image
         run: |
