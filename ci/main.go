@@ -988,7 +988,7 @@ func (m *Ci) SignAndroidBundle(aab *dagger.File, keystoreBase64 *dagger.Secret, 
 			 jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
 			 -signedjar /signed.aab \
 			 -keystore /keystore.jks \
-			 -storepass "$KS_PASS" -keypass "$KS_PASS" \
+			 -storepass:env KS_PASS -keypass:env KS_PASS \
 			 /app.aab upload`}).
 		File("/signed.aab")
 }
