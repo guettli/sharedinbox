@@ -22,7 +22,7 @@ jobs:
       packages: write
     env:
       REGISTRY: sialoop.thomas-guettler.de
-      IMAGE: sialoop.thomas-guettler.de/guettli/sharedinbox-dev
+      IMAGE: sialoop.thomas-guettler.de/guettlibot/sharedinbox-dev
 
     steps:
       - uses: actions/checkout@v4
