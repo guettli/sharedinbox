@@ -13,6 +13,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
+import 'package:sqlcipher_flutter_libs/sqlcipher_flutter_libs.dart';
 import 'package:stack_trace/stack_trace.dart' as stack_trace;
 
 void main({List<Override> overrides = const []}) {
@@ -59,6 +60,11 @@ void main({List<Override> overrides = const []}) {
           );
         };
 
+        // Ensure libsqlcipher.so is loaded before any sqlite3 API. On
+        // Android 6 (minSdk=23) dlopen can fail unless the library is first
+        // opened via Java; the workaround handles that transparently.
+        await applyWorkaroundToOpenSqlCipherOnOldAndroidVersions();
+
         await initDatabasePath();
         if (Platform.isAndroid) {
           await initNotifications();
@@ -90,16 +96,30 @@ bool _isWidgetTreeError(FlutterErrorDetails details) {
 /// Reads the stored prefetch preference and registers the WorkManager task
 /// with the correct network constraint for it. Opens and immediately closes
 /// a temporary DB connection; safe because initDatabasePath() has already run.
+///
+/// Any failure (DB open, query, or Workmanager call) is silently swallowed so
+/// that a broken environment never prevents the app from starting. The task
+/// will be registered with the correct preference the next time it succeeds.
 Future<void> _registerPrefetchTaskFromStoredPrefs() async {
-  final db = AppDatabase();
   try {
-    final row = await db.select(db.userPreferences).getSingleOrNull();
-    final mode = PrefetchMode.fromString(row?.prefetchMode);
-    await registerBodyPrefetchTask(mode);
-  } finally {
-    await db.close();
+    final db = AppDatabase();
+    try {
+      final row = await db.select(db.userPreferences).getSingleOrNull();
+      final mode = PrefetchMode.fromString(row?.prefetchMode);
+      await registerBodyPrefetchTask(mode);
+    } finally {
+      await db.close();
+    }
+  } catch (_) {
+    // Startup is more important than getting the prefetch constraint exactly
+    // right. registerBodyPrefetchTask itself also catches all errors.
   }
 }
+
+// Exposed so unit tests can verify the function swallows errors without
+// crashing the app when the database environment is broken at startup.
+Future<void> registerPrefetchTaskFromStoredPrefsForTesting() =>
+    _registerPrefetchTaskFromStoredPrefs();
 
 class SharedInboxApp extends ConsumerStatefulWidget {
   const SharedInboxApp({super.key});

@@ -7,6 +7,17 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
   flutter: '>=3.22.0'
 
+# Tell sqlite3's native-assets hook to resolve its FFI bindings against
+# libsqlcipher.so on Android (provided by sqlcipher_flutter_libs via Gradle)
+# instead of the default plain sqlite3 binary it would otherwise download and
+# bundle. Without this, PRAGMA key silently no-ops and any previously-encrypted
+# database appears corrupt, crashing the app on startup.
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name_android: sqlcipher
+
 dependencies:
   flutter:
     sdk: flutter
