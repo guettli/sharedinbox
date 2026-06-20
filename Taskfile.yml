@@ -342,7 +342,12 @@ tasks:
       - sh: test -n "$RENOVATE_FORGEJO_TOKEN"
         msg: "RENOVATE_FORGEJO_TOKEN is not set"
     cmds:
-      - timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate --renovate-token env:RENOVATE_FORGEJO_TOKEN
+      - |
+        ARGS="--renovate-token env:RENOVATE_FORGEJO_TOKEN"
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+          ARGS="$ARGS --github-token env:GITHUB_TOKEN"
+        fi
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate $ARGS
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)

@@ -60,6 +60,7 @@ export_secret "ANDROID_KEYSTORE_BASE64"
 export_secret "ANDROID_KEYSTORE_PASSWORD"
 export_secret "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
 export_secret "RENOVATE_FORGEJO_TOKEN"
+export_secret "GITHUB_TOKEN"
 
 # Setup SSH directory and keys
 mkdir -p ~/.ssh
