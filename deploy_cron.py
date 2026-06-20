@@ -2,7 +2,7 @@
 """
 Cron deploy script for sharedinbox website.
 Runs every 5 minutes; skips if origin/main has not changed since last trigger.
-Triggers the 'Deploy Website' Forgejo Actions workflow via fgj on each new commit.
+Triggers the 'Deploy Website' Forgejo Actions workflow via fj on each new commit.
 Forgejo Actions handles failure reporting.
 """
 import subprocess
@@ -40,11 +40,11 @@ def main():
 
     print(f'New commit {remote_sha[:8]} (was {last_sha[:8] or "none"}) — triggering workflow...')
     result = subprocess.run(
-        ['fgj', 'actions', 'workflow', 'run', 'website.yml', '-R', REPO],
+        ['fj', '-H', 'sialoop.thomas-guettler.de', 'actions', 'dispatch', '-r', REPO, 'website.yml', 'main'],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f'fgj workflow run failed: {result.stderr}', file=sys.stderr)
+        print(f'fj workflow run failed: {result.stderr}', file=sys.stderr)
         sys.exit(1)
 
     SHA_FILE.write_text(remote_sha + '\n')

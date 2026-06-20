@@ -14,7 +14,7 @@ export SSH_PRIVATE_KEY=$(cat "$HOME/.ssh/id_ed25519")
 
 # Add nix profile and nix store tools (task, dagger) to PATH
 export PATH="$HOME/.nix-profile/bin:$PATH"
-for pkg in "*go-task-*/bin/task" "*dagger-*/bin/dagger" "*fgj-*/bin/fgj"; do
+for pkg in "*go-task-*/bin/task" "*dagger-*/bin/dagger" "*forgejo-cli-*/bin/fj"; do
     bin=$(ls -d /nix/store/$pkg 2>/dev/null | sort -V | tail -1)
     [ -n "$bin" ] && export PATH="$(dirname "$bin"):$PATH"
 done
