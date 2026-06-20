@@ -32,10 +32,14 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
+      # PLAY_STORE_CONFIG_JSON and FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY are
+      # exported into GITHUB_ENV by the Setup Dagger Remote Engine step above
+      # (decrypted from secrets.enc.yaml). Do not re-declare them as step env —
+      # ${{ secrets.* }} resolves to empty in Gitea Actions and would overwrite
+      # the SOPS-decrypted value, causing the Taskfile precondition to fail.
       - name: Run Android Tests on Firebase Test Lab
         env:
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-          PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_URL: ${{ github.server_url }}
           DAGGER_NO_NAG: "1"
