@@ -7,6 +7,9 @@
   "github-actions": {
     "enabled": false
   },
+  "ignoreDeps": [
+    "dev.flutter.flutter-plugin-loader"
+  ],
   "packageRules": [
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
