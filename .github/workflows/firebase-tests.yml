@@ -6,54 +6,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-changes:
-    name: Detect Firebase-Relevant Changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.server_url != 'https://github.com'
-    outputs:
-      has_changes: ${{ steps.diff.outputs.has_changes }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Print runner wait time
-        env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: scripts/print_runner_wait.sh
-
-      - name: Detect Firebase-relevant changes in last 24 hours
-        id: diff
-        shell: bash
-        run: |
-          # On workflow_dispatch always run
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%S')
-          CHANGED=$(git log --since="$SINCE" --name-only --format= -- \
-            'android/' 'integration_test/' 'lib/' 'pubspec.yaml' 'pubspec.lock' 'drift_schemas/' \
-            | sort -u | grep -v '^$')
-
-          if [ -n "$CHANGED" ]; then
-            echo "Firebase-relevant files changed since $SINCE:"
-            echo "$CHANGED"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No Firebase-relevant changes in the last 24 hours — skipping tests"
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          fi
-
   test-android-firebase:
-    name: Android Instrumented Tests (Firebase Test Lab)
+    name: Android Robo Crawl (Firebase Test Lab) — Play Store alpha
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [check-changes]
-    if: needs.check-changes.outputs.has_changes == 'true'
+    if: github.server_url != 'https://github.com'
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +35,9 @@ jobs:
       - name: Run Android Tests on Firebase Test Lab
         env:
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          PLAY_STORE_CONFIG_JSON: ${{ secrets.PLAY_STORE_CONFIG_JSON }}
+          FORGEJO_TOKEN: ${{ github.token }}
+          FORGEJO_URL: ${{ github.server_url }}
           DAGGER_NO_NAG: "1"
         run: task test-android-firebase
 
@@ -116,10 +76,10 @@ jobs:
 
           title = "Firebase Tests failed — find root cause and fix"
           body = (
-              "Firebase instrumented tests failed in the daily run.\n\n"
+              "Firebase robo crawl of the Play Store **alpha** APK failed in the daily run.\n\n"
               f"**Failed run:** {run_url}\n\n"
               "## Steps to resolve\n\n"
-              "1. **Find the root cause**: Check the test run logs linked above and identify which test(s) failed and why.\n"
+              "1. **Find the root cause**: Check the test run logs linked above. The job runs `gcloud firebase test android run --type robo` against the split APKs downloaded from the alpha track, so a failure means the production binary either crashed (look for `FATAL EXCEPTION` / `Process … has died`) or the robo crawl reported `Failed`/`Inconclusive`.\n"
               "2. **Fix if possible**: If the failure is caused by a code bug, create a fix. If it is a flaky or infrastructure issue, document the findings.\n"
               "3. Close this issue once the root cause is resolved and the tests pass.\n"
           )

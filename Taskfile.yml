@@ -181,12 +181,14 @@ tasks:
       - timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. test-sync-reliability
 
   test-android-firebase:
-    desc: Build Android debug APKs and run instrumented tests on Firebase Test Lab (via Dagger)
+    desc: Fetch the Play Store alpha APK and run a Firebase Test Lab robo crawl against it (via Dagger)
     preconditions:
       - sh: test -n "$FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
         msg: "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY is not set"
       - sh: test -n "$FIREBASE_PROJECT_ID"
         msg: "FIREBASE_PROJECT_ID is not set"
+      - sh: test -n "$PLAY_STORE_CONFIG_JSON"
+        msg: "PLAY_STORE_CONFIG_JSON is not set (needed to download the alpha APK)"
     cmds:
       - scripts/run_firebase_test.sh
 

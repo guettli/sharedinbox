@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for Firebase CI check patterns used in ci/main.go.
+# Tests for Firebase CI check patterns used in ci/main.go TestAndroidFirebase.
 # Run directly: bash scripts/test_firebase_check.sh
 
 PASS=0
@@ -45,22 +45,23 @@ _assert "auth: unexpected line passes through" "some unexpected error" \
 _assert "auth: unknown line kept alongside known messages" "unexpected line" \
     "$(printf 'Activated service account credentials for: [x]\nunexpected line\nUpdated property [core/project].\n' | _filter_auth)"
 
-# --- "error" word detection: grep -qwi 'error' ---
-# Matches "error" as a whole word (case-insensitive).
-# Must NOT match "error" as part of another word (e.g. "stderr", "AssertionError").
-_has_err() { printf '%s\n' "$1" | grep -qwi 'error' && echo yes || echo no; }
+# --- robo crash markers ---
+# The check fails the run if any of these appear anywhere in gcloud output.
+_has_crash() {
+    printf '%s\n' "$1" | grep -qE "FATAL EXCEPTION|Process .* has died|Crashed|Error: Robo test failed" \
+        && echo yes || echo no
+}
 
-_assert "error: non-retryable error line matched"  yes "$(_has_err 'A non-retryable error occurred.')"
-_assert "error: uppercase ERROR matched"           yes "$(_has_err 'ERROR: infrastructure_failure')"
-_assert "error: mixed-case Error matched"          yes "$(_has_err 'Error: something went wrong')"
-_assert "error: normal pending line not matched"   no  "$(_has_err 'Test is Pending')"
-_assert "error: timing line not matched"           no  "$(_has_err 'Done. Test time = 183 (secs)')"
-_assert "error: completion line not matched"       no  "$(_has_err 'Instrumentation testing complete.')"
-_assert "error: 'stderr' word not matched"         no  "$(_has_err 'some stderr: gcloud output')"
-_assert "error: 'AssertionError' not matched"      no  "$(_has_err 'java.lang.AssertionError: expected true')"
+_assert "crash: FATAL EXCEPTION matched"                yes "$(_has_crash 'E AndroidRuntime: FATAL EXCEPTION: main')"
+_assert "crash: process has died matched"               yes "$(_has_crash 'I ActivityManager: Process de.sharedinbox.mua has died: pid 1234')"
+_assert "crash: 'Crashed' outcome detail matched"       yes "$(_has_crash '│ Failed  │ oriole-33-en-portrait │ Crashed     │')"
+_assert "crash: Robo test failed matched"               yes "$(_has_crash 'Error: Robo test failed: robo script exception')"
+_assert "crash: clean robo output not matched"          no  "$(_has_crash 'Robo script executed 12 actions. Crawling complete.')"
+_assert "crash: outcome=Passed not matched"             no  "$(_has_crash '│ Passed  │ oriole-33-en-portrait │ --           │')"
+_assert "crash: 'stderr' word not falsely matched"      no  "$(_has_crash 'some stderr: gcloud output')"
 
-# --- device count from result table ---
-# Counts data rows by looking for lines with "│" that contain an outcome word.
+# --- outcome row detection ---
+# The check requires exactly one Passed outcome row and zero Failed/Inconclusive ones.
 TABLE_PASS="┌─────────┬───────────────────────┬──────────────┐
 │ OUTCOME │    TEST_AXIS_VALUE    │ TEST_DETAILS │
 ├─────────┼───────────────────────┼──────────────┤
@@ -70,19 +71,37 @@ TABLE_PASS="┌─────────┬───────────�
 TABLE_FAIL="┌─────────┬───────────────────────┬──────────────┐
 │ OUTCOME │    TEST_AXIS_VALUE    │ TEST_DETAILS │
 ├─────────┼───────────────────────┼──────────────┤
-│ Failed  │ oriole-33-en-portrait │ --           │
+│ Failed  │ oriole-33-en-portrait │ Crashed      │
 └─────────┴───────────────────────┴──────────────┘"
 
-_count() {
+TABLE_INCONCLUSIVE="┌──────────────┬───────────────────────┬──────────────┐
+│   OUTCOME    │    TEST_AXIS_VALUE    │ TEST_DETAILS │
+├──────────────┼───────────────────────┼──────────────┤
+│ Inconclusive │ oriole-33-en-portrait │ Timed out    │
+└──────────────┴───────────────────────┴──────────────┘"
+
+_count_outcomes() {
     local n
     n=$(printf '%s' "$1" | grep "│" | grep -cE "(Passed|Failed|Inconclusive|Skipped)") || n=0
     printf '%s' "$n"
 }
 
-_assert "count: one passing device gives 1"  1 "$(_count "$TABLE_PASS")"
-_assert "count: one failing device gives 1"  1 "$(_count "$TABLE_FAIL")"
-_assert "count: no table gives 0"            0 "$(_count 'Test is Pending\nDone.')"
-_assert "count: plain output gives 0"        0 "$(_count 'Instrumentation testing complete.')"
+_has_bad_outcome() {
+    printf '%s\n' "$1" | grep "│" | grep -qE "(Failed|Inconclusive)" && echo yes || echo no
+}
+
+_has_passed() {
+    printf '%s\n' "$1" | grep "│" | grep -q "Passed" && echo yes || echo no
+}
+
+_assert "outcome: one passing device counted"   1   "$(_count_outcomes "$TABLE_PASS")"
+_assert "outcome: one failing device counted"   1   "$(_count_outcomes "$TABLE_FAIL")"
+_assert "outcome: empty output counted 0"       0   "$(_count_outcomes 'Test is Pending')"
+_assert "outcome: Passed table has no bad row"  no  "$(_has_bad_outcome "$TABLE_PASS")"
+_assert "outcome: Failed table has bad row"     yes "$(_has_bad_outcome "$TABLE_FAIL")"
+_assert "outcome: Inconclusive table flagged"   yes "$(_has_bad_outcome "$TABLE_INCONCLUSIVE")"
+_assert "outcome: Passed row detected"          yes "$(_has_passed "$TABLE_PASS")"
+_assert "outcome: Failed table has no Passed"   no  "$(_has_passed "$TABLE_FAIL")"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

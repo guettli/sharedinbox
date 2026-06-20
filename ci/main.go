@@ -306,13 +306,6 @@ func (m *Ci) androidSrc() *dagger.Directory {
 	})
 }
 
-// firebaseSrc is the source subset for Firebase Test Lab builds (app + instrumented tests).
-func (m *Ci) firebaseSrc() *dagger.Directory {
-	return m.Source.Filter(dagger.DirectoryFilterOpts{
-		Include: []string{"lib/", "android/", "integration_test/", "assets/", "pubspec.yaml", "pubspec.lock", "drift_schemas/"},
-	})
-}
-
 // androidBase wraps setup(androidSrc()) with the Gradle named-cache so that
 // Gradle dependencies survive across Dagger execution-cache misses.
 //
@@ -323,15 +316,6 @@ func (m *Ci) firebaseSrc() *dagger.Directory {
 // that then blocks the next gradlew invocation (see issue #549/#555).
 func (m *Ci) androidBase() *dagger.Container {
 	return m.setup(m.androidSrc()).
-		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
-			dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
-		WithEnvVariable("GRADLE_OPTS", "-Dorg.gradle.daemon=false")
-}
-
-// firebaseBase wraps setup(firebaseSrc()) with the Gradle named-cache.
-// See androidBase for the GRADLE_OPTS rationale.
-func (m *Ci) firebaseBase() *dagger.Container {
-	return m.setup(m.firebaseSrc()).
 		WithMountedCache("/home/ci/.gradle", dag.CacheVolume("gradle-cache"),
 			dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
 		WithEnvVariable("GRADLE_OPTS", "-Dorg.gradle.daemon=false")
@@ -831,35 +815,23 @@ func (m *Ci) DeployApk(
 		Stdout(ctx)
 }
 
-// BuildAndroidDebugApks builds the debug app APK and the androidTest APK needed for Firebase Test Lab.
-// Returns a flat directory with app-debug.apk and app-debug-androidTest.apk.
-func (m *Ci) BuildAndroidDebugApks() *dagger.Directory {
-	built := m.firebaseBase().
-		WithExec([]string{"flutter", "build", "apk", "--debug", "--no-pub"}).
-		WithWorkdir("/src/android").
-		WithExec([]string{"./gradlew", "app:assembleAndroidTest"}).
-		WithWorkdir("/src").
-		WithExec([]string{"/bin/bash", "-c",
-			`apk=$(find /src -path "*androidTest*" -name "*.apk" -type f 2>/dev/null | head -1) && \
-			 [ -n "$apk" ] || { echo "ERROR: no androidTest APK found; APKs present:"; find /src -name "*.apk" -type f 2>/dev/null; exit 1; } && \
-			 echo "Found test APK: $apk" && \
-			 cp "$apk" /src/app-debug-androidTest.apk`})
-
-	return dag.Directory().
-		WithFile("app-debug.apk",
-			built.File("build/app/outputs/flutter-apk/app-debug.apk")).
-		WithFile("app-debug-androidTest.apk",
-			built.File("app-debug-androidTest.apk"))
-}
-
-// TestAndroidFirebase builds Android APKs and runs instrumented tests on Firebase Test Lab.
+// TestAndroidFirebase runs a Firebase Test Lab robo crawl against the split
+// APKs of the Play Store alpha release. Callers (scripts/run_firebase_test.sh)
+// supply the APK directory after downloading via fetch_playstore_apks.py so
+// the test exercises exactly the binary users install — not a debug build.
+//
+// The robo crawl drives the app for 90s. We fail the run if the gcloud table
+// reports anything other than "Passed", if the output mentions known crash
+// markers (FATAL EXCEPTION / "has died" / "Crashed"), or if gcloud itself
+// returns a Robo-specific failure string.
 func (m *Ci) TestAndroidFirebase(
 	ctx context.Context,
+	// Directory containing the Play Store split APKs. Must include a
+	// base-master.apk; everything else is forwarded as --additional-apks.
+	apks *dagger.Directory,
 	serviceAccountKey *dagger.Secret,
 	projectID string,
 ) (string, error) {
-	apks := m.BuildAndroidDebugApks()
-
 	return dag.Container().
 		From("google/cloud-sdk:slim").
 		WithDirectory("/apks", apks).
@@ -875,18 +847,28 @@ func (m *Ci) TestAndroidFirebase(
 			 unknown=$(grep -vF "Activated service account credentials for:" "$auth_err" \
 			   | grep -vF "Updated property [core/project]." | grep -v "^$" || true); \
 			 [ -z "$unknown" ] || { echo "ERROR: unexpected gcloud auth output: $unknown"; exit 1; }; \
+			 ls /apks; \
+			 app="/apks/base-master.apk"; \
+			 [ -f "$app" ] || { echo "ERROR: base-master.apk missing from /apks"; exit 1; }; \
+			 extras=$(find /apks -maxdepth 1 -name "*.apk" -not -name "base-master.apk" -printf "%p," | sed "s/,$//"); \
+			 extra_args=(); [ -n "$extras" ] && extra_args=(--additional-apks "$extras"); \
 			 out=$(gcloud firebase test android run \
-			   --type instrumentation \
-			   --app /apks/app-debug.apk \
-			   --test /apks/app-debug-androidTest.apk \
+			   --type robo \
+			   --app "$app" \
+			   "${extra_args[@]}" \
 			   --device model=oriole,version=33,locale=en,orientation=portrait \
+			   --timeout 90s \
 			   --results-bucket=gs://sharedinbox-ftl-results 2>&1); rc=$?; echo "$out"; \
 			 [ "$rc" -eq 0 ] || { echo "ERROR: gcloud firebase test exited with code $rc"; exit "$rc"; }; \
-			 expected_devices=1; \
-			 actual_devices=$(echo "$out" | grep "│" | grep -cE "(Passed|Failed|Inconclusive|Skipped)") || actual_devices=0; \
-			 [ "$actual_devices" -eq "$expected_devices" ] || \
-			   { echo "ERROR: expected $expected_devices test result(s) but found $actual_devices"; exit 1; }; \
-			 echo "$out" | grep -q "Passed" || { echo "ERROR: no passing test results — tests failed or did not run"; exit 1; }`}).
+			 if echo "$out" | grep -qE "FATAL EXCEPTION|Process .* has died|Crashed|Error: Robo test failed"; then \
+			   echo "ERROR: alpha APK crashed during robo crawl"; exit 1; \
+			 fi; \
+			 outcomes=$(echo "$out" | grep "│" | grep -cE "(Passed|Failed|Inconclusive|Skipped)") || outcomes=0; \
+			 [ "$outcomes" -ge 1 ] || { echo "ERROR: no outcome row found in gcloud output"; exit 1; }; \
+			 if echo "$out" | grep "│" | grep -qE "(Failed|Inconclusive)"; then \
+			   echo "ERROR: robo crawl reported Failed/Inconclusive outcome"; exit 1; \
+			 fi; \
+			 echo "$out" | grep "│" | grep -q "Passed" || { echo "ERROR: no Passed outcome — alpha APK did not survive robo crawl"; exit 1; }`}).
 		Stdout(ctx)
 }
 
@@ -1110,16 +1092,18 @@ flowchart TD
         buildLinux["build-linux\n(linux changed)"]
         deployPS["deploy-playstore\n(android changed)"]
         deployApk["deploy-apk\n(android changed)"]
-        fbTest["test-android-firebase\n(android changed)"]
         pubWeb["publish-website\n(any build succeeded)"]
 
         detectChanges --> buildLinux
         detectChanges --> deployPS
         detectChanges --> deployApk
-        detectChanges --> fbTest
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
         deployApk   --> pubWeb
+    end
+
+    subgraph forgejo_firebase ["Codeberg CI · firebase-tests.yml (daily cron + workflow_dispatch)"]
+        fbTest["test-android-firebase\n(alpha versionCode changed)"]
     end
 
     check -- "task check-dagger" --> ciCheck
