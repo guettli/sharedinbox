@@ -1,3 +1,3 @@
-module codeberg.org/guettli/sharedinbox
+module sialoop.thomas-guettler.de/guettli/sharedinbox
 
 go 1.22

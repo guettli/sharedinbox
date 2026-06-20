@@ -1,8 +1,8 @@
 # SharedInbox — Development Guide
 
-## Codeberg
+## Sialoop
 
-We use Codeberg: https://codeberg.org/guettli/sharedinbox/
+We use Sialoop: https://sialoop.thomas-guettler.de/guettli/sharedinbox/
 
 CLI tool `fgj` is available to query issues/PRs/actions.
 
