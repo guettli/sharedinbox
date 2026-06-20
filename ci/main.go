@@ -918,6 +918,31 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 		WithEnvVariable("GOMODCACHE", "/home/ci/go/pkg/mod")
 }
 
+// FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
+// release using the Play Developer API. Returns a Directory containing the
+// APKs and a ``versionCode`` text file with the resolved alpha versionCode.
+// Runs in a Python container so the runner host does not need google-auth /
+// requests installed (matches the UploadToPlayStore pattern).
+func (m *Ci) FetchPlayStoreApks(
+	playStoreConfig *dagger.Secret,
+) *dagger.Directory {
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/fetch_playstore_apks.py"},
+	})
+
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithMountedCache("/tmp/pip-cache", dag.CacheVolume("pip-cache")).
+		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
+		WithFile("/src/scripts/fetch_playstore_apks.py", scriptSource.File("scripts/fetch_playstore_apks.py")).
+		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
+		WithWorkdir("/src").
+		WithUser("nobody").
+		WithExec([]string{"/bin/sh", "-c",
+			`mkdir -p /tmp/apks && python3 scripts/fetch_playstore_apks.py /tmp/apks`}).
+		Directory("/tmp/apks")
+}
+
 // UploadToPlayStore uploads a pre-built AAB to the Play Store closed-testing (alpha) track.
 // When mappingFile is provided, its contents are also uploaded as the R8
 // deobfuscation file so Play Console can deobfuscate stack traces.

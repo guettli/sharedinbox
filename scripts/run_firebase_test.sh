@@ -44,9 +44,22 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
     exit 1
 fi
 
-echo "[firebase] fetching latest alpha APK set from Play Store…" >&2
-if ! VERSION_CODE=$(python3 scripts/fetch_playstore_apks.py "$APK_DIR"); then
-    echo "ERROR: fetch_playstore_apks.py failed" >&2
+echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&2
+# Run inside a Dagger container so the runner host does not need google-auth /
+# requests installed. The Dagger function writes the resolved versionCode to
+# <dest>/versionCode in addition to the APKs.
+if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+        --play-store-config env:PLAY_STORE_CONFIG_JSON -o "$APK_DIR"; then
+    echo "ERROR: dagger fetch-play-store-apks failed" >&2
+    exit 1
+fi
+if [ ! -f "$APK_DIR/versionCode" ]; then
+    echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
+    exit 1
+fi
+VERSION_CODE=$(tr -d '[:space:]' < "$APK_DIR/versionCode")
+if [ -z "$VERSION_CODE" ]; then
+    echo "ERROR: $APK_DIR/versionCode is empty" >&2
     exit 1
 fi
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2

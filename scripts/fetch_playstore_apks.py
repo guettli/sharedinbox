@@ -127,6 +127,11 @@ def main():
         print(f"Downloading {name}…", file=sys.stderr)
         _download(session, PACKAGE_NAME, version_code, download_id, dest)
 
+    # Also persist the versionCode next to the APKs so callers that cannot
+    # capture stdout (e.g. dagger call -o <dir>) can still recover it.
+    with open(os.path.join(dest_dir, "versionCode"), "w") as f:
+        f.write(f"{version_code}\n")
+
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)
 
