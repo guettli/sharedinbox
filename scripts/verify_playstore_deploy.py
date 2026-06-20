@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Verify that the Android app was recently published to the Play Store internal track.
+"""Verify that the Android app was recently published to the Play Store alpha track.
 
 The publish-android pipeline sets versionCode = int(time.Now().Unix()), so a
 freshly deployed release always has a version code close to the current Unix
-timestamp.  This script queries the internal track and fails if the latest
-version code is older than _MAX_DEPLOY_AGE_SECONDS, which would mean the
-deployment silently did not land.
+timestamp.  This script queries the alpha (closed-testing) track and fails if
+the latest version code is older than _MAX_DEPLOY_AGE_SECONDS, which would
+mean the deployment silently did not land.
 """
 
 import json
@@ -17,7 +17,7 @@ from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 
 PACKAGE_NAME = "de.sharedinbox.mua"
-TRACK = "internal"
+TRACK = "alpha"
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 # Allow up to one hour for the build + upload to complete.
 _MAX_DEPLOY_AGE_SECONDS = 3600

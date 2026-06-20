@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload an Android App Bundle to the Google Play Store."""
+"""Upload an Android App Bundle to the Google Play Store closed-testing (alpha) track."""
 
 import json
 import os
@@ -11,7 +11,7 @@ from google.oauth2 import service_account
 
 PACKAGE_NAME = "de.sharedinbox.mua"
 AAB_PATH = "build/app/outputs/bundle/release/app-release.aab"
-TRACKS = ("internal",)
+TRACKS = ("alpha",)
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import verify_playstore_deploy
 
 
-def _make_session(version_code, track="internal"):
+def _make_session(version_code, track="alpha"):
     """Return a mock AuthorizedSession with the given version code on the track."""
     session = MagicMock()
 

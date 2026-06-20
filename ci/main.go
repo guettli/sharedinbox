@@ -936,7 +936,7 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 		WithEnvVariable("GOMODCACHE", "/home/ci/go/pkg/mod")
 }
 
-// UploadToPlayStore uploads a pre-built AAB to the Play Store internal and closed-testing (alpha) tracks.
+// UploadToPlayStore uploads a pre-built AAB to the Play Store closed-testing (alpha) track.
 // When mappingFile is provided, its contents are also uploaded as the R8
 // deobfuscation file so Play Console can deobfuscate stack traces.
 func (m *Ci) UploadToPlayStore(
