@@ -13,28 +13,44 @@ import fetch_playstore_apks
 
 
 class TestResolveVersionCode(unittest.TestCase):
-    def test_returns_highest_version_code_across_releases(self):
+    def _session_with_releases(self, releases):
         session = MagicMock()
-        resp = MagicMock()
-        resp.json.return_value = {
-            "releases": [
+        edit_resp = MagicMock()
+        edit_resp.json.return_value = {"id": "edit-1"}
+        session.post.return_value = edit_resp
+        track_resp = MagicMock()
+        track_resp.json.return_value = {"releases": releases}
+        session.get.return_value = track_resp
+        return session
+
+    def test_returns_highest_version_code_across_releases(self):
+        session = self._session_with_releases(
+            [
                 {"versionCodes": ["100", "120"]},
                 {"versionCodes": ["110"]},
             ]
-        }
-        session.get.return_value = resp
+        )
         self.assertEqual(
             fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
             120,
         )
 
     def test_raises_when_no_releases(self):
-        session = MagicMock()
-        resp = MagicMock()
-        resp.json.return_value = {"releases": []}
-        session.get.return_value = resp
+        session = self._session_with_releases([])
         with self.assertRaises(RuntimeError):
             fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha")
+
+    def test_reads_track_via_edit_and_discards_edit(self):
+        """Regression for #666: the non-edit track URL returns 404, so we must
+        open an edit, read the track within it, and discard the edit."""
+        session = self._session_with_releases([{"versionCodes": ["42"]}])
+        fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha")
+        post_url = session.post.call_args[0][0]
+        get_url = session.get.call_args[0][0]
+        delete_url = session.delete.call_args[0][0]
+        self.assertTrue(post_url.endswith("/applications/pkg/edits"))
+        self.assertIn("/edits/edit-1/tracks/alpha", get_url)
+        self.assertTrue(delete_url.endswith("/edits/edit-1"))
 
 
 class TestEnumerateDownloads(unittest.TestCase):
@@ -58,7 +74,7 @@ class TestEnumerateDownloads(unittest.TestCase):
 
 class TestMainWritesVersionCodeFile(unittest.TestCase):
     """Regression: the runner has no way to capture stdout when callers invoke
-    the script via ``dagger call ... -o <dir>``. The script must also persist
+    the script via ``dagger call --progress=plain ... -o <dir>``. The script must also persist
     the resolved versionCode to ``<dest_dir>/versionCode`` so those callers
     can recover it."""
 

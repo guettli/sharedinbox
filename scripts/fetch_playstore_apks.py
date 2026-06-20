@@ -27,10 +27,27 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 
 
 def _resolve_version_code(session, package, track):
-    """Return the highest versionCode currently published on ``track``."""
-    resp = session.get(f"{_BASE}/{package}/tracks/{track}", timeout=30)
-    resp.raise_for_status()
-    releases = resp.json().get("releases") or []
+    """Return the highest versionCode currently published on ``track``.
+
+    Track state is only exposed through the edits API; the non-edit
+    ``applications/{package}/tracks/{track}`` URL returns 404 even when the
+    track has a live release (see ``verify_playstore_deploy.py`` for the same
+    pattern).
+    """
+    edit_resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
+    edit_resp.raise_for_status()
+    edit_id = edit_resp.json()["id"]
+    try:
+        resp = session.get(
+            f"{_BASE}/{package}/edits/{edit_id}/tracks/{track}", timeout=30
+        )
+        resp.raise_for_status()
+        releases = resp.json().get("releases") or []
+    finally:
+        try:
+            session.delete(f"{_BASE}/{package}/edits/{edit_id}", timeout=30)
+        except Exception:
+            pass
     best = None
     for release in releases:
         for code in release.get("versionCodes") or []:
@@ -128,7 +145,8 @@ def main():
         _download(session, PACKAGE_NAME, version_code, download_id, dest)
 
     # Also persist the versionCode next to the APKs so callers that cannot
-    # capture stdout (e.g. dagger call -o <dir>) can still recover it.
+    # capture stdout (e.g. `dagger call --progress=plain ... -o <dir>`) can
+    # still recover it.
     with open(os.path.join(dest_dir, "versionCode"), "w") as f:
         f.write(f"{version_code}\n")
 
