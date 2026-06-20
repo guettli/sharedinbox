@@ -1043,7 +1043,7 @@ func (m *Ci) Renovate(
 		From("renovate/renovate:43").
 		WithSecretVariable("RENOVATE_TOKEN", renovateToken)
 	if githubToken != nil {
-		container = container.WithSecretVariable("GITHUB_TOKEN", githubToken)
+		container = container.WithSecretVariable("GITHUB_COM_TOKEN", githubToken)
 	}
 	return container.
 		WithEnvVariable("RENOVATE_PLATFORM", "gitea").
