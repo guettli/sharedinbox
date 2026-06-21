@@ -43,6 +43,9 @@ jobs:
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_URL: ${{ github.server_url }}
           DAGGER_NO_NAG: "1"
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
+          OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task test-android-firebase
 
       - name: Create issue on test failure

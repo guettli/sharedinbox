@@ -25,4 +25,8 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
       - name: Run Full Check Suite
+        env:
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
+          OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task check-dagger
