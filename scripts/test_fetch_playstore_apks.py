@@ -53,6 +53,115 @@ class TestResolveVersionCode(unittest.TestCase):
         self.assertTrue(delete_url.endswith("/edits/edit-1"))
 
 
+class TestListGeneratedApks(unittest.TestCase):
+    def test_returns_none_on_404(self):
+        """Regression for #668: Play returns 404 until it has finished
+        generating split APKs for a freshly uploaded AAB. The helper must
+        signal this with ``None`` rather than raising, so callers can fall
+        back to an older bundle."""
+        session = MagicMock()
+        resp = MagicMock(status_code=404)
+        session.get.return_value = resp
+        self.assertIsNone(
+            fetch_playstore_apks._list_generated_apks(session, "pkg", 42)
+        )
+        resp.raise_for_status.assert_not_called()
+
+    def test_raises_on_other_errors(self):
+        from requests.exceptions import HTTPError
+
+        session = MagicMock()
+        resp = MagicMock(status_code=500)
+        resp.raise_for_status.side_effect = HTTPError("500 Server Error")
+        session.get.return_value = resp
+        with self.assertRaises(HTTPError):
+            fetch_playstore_apks._list_generated_apks(session, "pkg", 42)
+
+
+class TestListBundles(unittest.TestCase):
+    def test_returns_version_codes_descending(self):
+        session = MagicMock()
+        edit_resp = MagicMock()
+        edit_resp.json.return_value = {"id": "edit-1"}
+        session.post.return_value = edit_resp
+        bundles_resp = MagicMock()
+        bundles_resp.json.return_value = {
+            "bundles": [
+                {"versionCode": 100},
+                {"versionCode": 200},
+                {"versionCode": 150},
+            ]
+        }
+        session.get.return_value = bundles_resp
+
+        self.assertEqual(
+            fetch_playstore_apks._list_bundles(session, "pkg"),
+            [200, 150, 100],
+        )
+        # Must list via an edit and clean it up.
+        self.assertIn("/edits/edit-1/bundles", session.get.call_args[0][0])
+        session.delete.assert_called_once()
+
+
+class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
+    """Regression for #668: when Play has not yet generated split APKs for
+    the alpha release (the new endpoint 404s), the script must fall back to
+    the most recent older bundle whose APKs are available instead of
+    aborting the Firebase test."""
+
+    def test_uses_next_older_bundle_when_latest_404s(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            session = MagicMock()
+            calls = []
+
+            def list_apks(_session, _package, vc):
+                calls.append(vc)
+                return None if vc == 200 else {"generatedApks": []}
+
+            with patch.dict(
+                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
+                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession", return_value=session
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=200
+            ), patch(
+                "fetch_playstore_apks._list_generated_apks", side_effect=list_apks
+            ), patch(
+                "fetch_playstore_apks._list_bundles", return_value=[200, 150, 100]
+            ), patch(
+                "fetch_playstore_apks._enumerate_downloads",
+                return_value=[("dl-1", "base-master.apk")],
+            ), patch(
+                "fetch_playstore_apks._download"
+            ):
+                fetch_playstore_apks.main()
+
+            self.assertEqual(calls, [200, 150])
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertEqual(vc_path.read_text().strip(), "150")
+
+    def test_raises_when_no_bundle_has_generated_apks(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            session = MagicMock()
+            with patch.dict(
+                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
+                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession", return_value=session
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=200
+            ), patch(
+                "fetch_playstore_apks._list_generated_apks", return_value=None
+            ), patch(
+                "fetch_playstore_apks._list_bundles", return_value=[200, 150]
+            ):
+                with self.assertRaises(RuntimeError):
+                    fetch_playstore_apks.main()
+
+
 class TestEnumerateDownloads(unittest.TestCase):
     def test_master_split_named_base_master(self):
         listing = {

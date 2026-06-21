@@ -60,10 +60,47 @@ def _resolve_version_code(session, package, track):
 
 
 def _list_generated_apks(session, package, version_code):
+    """Return the generatedApks listing for ``version_code``, or ``None`` on 404.
+
+    Play returns 404 until it has finished generating the downloadable split
+    APKs for an uploaded AAB. Generation can take an hour or more after the
+    AAB upload completes (occasionally much longer), so callers must be
+    prepared to fall back to an older bundle whose APKs are already ready.
+    """
     url = f"{_BASE}/{package}/generatedApks/{version_code}/downloads"
     resp = session.get(url, timeout=60)
+    if resp.status_code == 404:
+        return None
     resp.raise_for_status()
     return resp.json()
+
+
+def _list_bundles(session, package):
+    """Return all uploaded bundle versionCodes, newest first.
+
+    Bundles can only be enumerated through the edits API; there is no
+    top-level ``applications/{package}/bundles`` resource. Used to fall
+    back to an older bundle when ``generatedApks`` 404s for the most
+    recent release.
+    """
+    edit_resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
+    edit_resp.raise_for_status()
+    edit_id = edit_resp.json()["id"]
+    try:
+        resp = session.get(
+            f"{_BASE}/{package}/edits/{edit_id}/bundles", timeout=30
+        )
+        resp.raise_for_status()
+        bundles = resp.json().get("bundles") or []
+    finally:
+        try:
+            session.delete(f"{_BASE}/{package}/edits/{edit_id}", timeout=30)
+        except Exception:
+            pass
+    return sorted(
+        (int(b["versionCode"]) for b in bundles if "versionCode" in b),
+        reverse=True,
+    )
 
 
 def _download(session, package, version_code, download_id, dest):
@@ -137,6 +174,31 @@ def main():
     print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
     listing = _list_generated_apks(session, PACKAGE_NAME, version_code)
+    if listing is None:
+        # Play has not yet generated split APKs for the latest release. Fall
+        # back to the most recent older bundle whose APKs are available so
+        # the Firebase test still has something to crawl.
+        print(
+            f"Play has not yet generated split APKs for versionCode "
+            f"{version_code}; falling back to an older bundle…",
+            file=sys.stderr,
+        )
+        for candidate in _list_bundles(session, PACKAGE_NAME):
+            if candidate == version_code:
+                continue
+            listing = _list_generated_apks(session, PACKAGE_NAME, candidate)
+            if listing is not None:
+                print(
+                    f"Using fallback versionCode {candidate}",
+                    file=sys.stderr,
+                )
+                version_code = candidate
+                break
+        else:
+            raise RuntimeError(
+                "No uploaded bundle has generated APKs available "
+                f"(checked versionCode {version_code} plus all older bundles)"
+            )
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:
