@@ -120,7 +120,8 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<Email?> getEmail(String id) async => null;
   @override
-  Future<EmailBody> getEmailBody(String id) async =>
+  Future<EmailBody> getEmailBody(String id,
+          {bool forceRefresh = false}) async =>
       const EmailBody(emailId: '', attachments: []);
   @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}

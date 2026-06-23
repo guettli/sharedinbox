@@ -360,6 +360,75 @@ void main() {
   );
 
   test(
+    'getEmailBody(forceRefresh: true) bypasses the IMAP body cache',
+    () async {
+      await appendToInbox('force-refresh', body: 'Force refresh content');
+
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
+
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
+
+      await r.emails.getEmailBody(emailId);
+      // Rewind cachedAt so the refresh produces a strictly newer timestamp.
+      final stale = DateTime.now().subtract(const Duration(hours: 1));
+      await (r.db.update(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .write(EmailBodiesCompanion(cachedAt: Value(stale)));
+
+      final refreshed =
+          await r.emails.getEmailBody(emailId, forceRefresh: true);
+      expect(refreshed.textBody, contains('Force refresh content'));
+
+      final row = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .getSingle();
+      expect(row.cachedAt!.isAfter(stale), isTrue);
+    },
+  );
+
+  test(
+    'blob expiry: re-fetches body when cached row has null mimeTreeJson',
+    () async {
+      await appendToInbox('null-mime-tree', body: 'Self-heal body');
+
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.emails.syncEmails('test', 'INBOX');
+
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
+
+      // Simulate a row written by an older app version: textBody only, no
+      // mimeTreeJson, and the timestamp well within TTL.
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: const Value('legacy text'),
+              attachmentsJson: const Value('[]'),
+              cachedAt: Value(DateTime.now()),
+            ),
+          );
+      var row = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .getSingle();
+      expect(row.mimeTreeJson, isNull);
+
+      // A normal read should trigger a network fetch because the cached row
+      // lacks mimeTreeJson, and persist the refreshed data.
+      final body = await r.emails.getEmailBody(emailId);
+      expect(body.textBody, contains('Self-heal body'));
+
+      row = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .getSingle();
+      expect(row.mimeTreeJson, isNotNull);
+    },
+  );
+
+  test(
     'blob expiry: re-fetches body when cachedAt is older than 7 days',
     () async {
       await appendToInbox('old-body-test', body: 'Current content');

@@ -9,7 +9,7 @@
 
 import 'dart:io';
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -249,6 +249,74 @@ void main() {
     final cached = await r.emails.getEmailBody(emailId);
     expect(cached.textBody, body.textBody);
   });
+
+  test('getEmailBody(forceRefresh: true) bypasses cache via JMAP', () async {
+    await appendToInbox('force-refresh', body: 'Force refresh body');
+
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    await r.emails.syncEmails('test-jmap', inboxId);
+
+    final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
+    final emailId = emails.first.id;
+
+    // Warm the cache, then artificially rewind `cachedAt` so a refresh
+    // is observable via a strictly-newer timestamp on the second fetch.
+    await r.emails.getEmailBody(emailId);
+    final stale = DateTime.now().subtract(const Duration(hours: 1));
+    await (r.db.update(r.db.emailBodies)
+          ..where((t) => t.emailId.equals(emailId)))
+        .write(EmailBodiesCompanion(cachedAt: Value(stale)));
+
+    final refreshed = await r.emails.getEmailBody(emailId, forceRefresh: true);
+    expect(refreshed.textBody, contains('Force refresh body'));
+
+    final row = await (r.db.select(r.db.emailBodies)
+          ..where((t) => t.emailId.equals(emailId)))
+        .getSingle();
+    expect(row.cachedAt!.isAfter(stale), isTrue);
+  });
+
+  test(
+    'getEmailBody self-heals when cached row has null mimeTreeJson (JMAP)',
+    () async {
+      await appendToInbox('self-heal', body: 'Self-heal body');
+
+      final r = makeRepo();
+      final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+      await r.emails.syncEmails('test-jmap', inboxId);
+
+      final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
+      final emailId = emails.first.id;
+
+      // Simulate a row written by an older app version: textBody only, no
+      // bodyStructure or headers, and the timestamp well within TTL.
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: const Value('legacy text'),
+              attachmentsJson: const Value('[]'),
+              cachedAt: Value(DateTime.now()),
+              // headersJson and mimeTreeJson deliberately left absent.
+            ),
+          );
+      var row = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .getSingle();
+      expect(row.mimeTreeJson, isNull);
+      expect(row.headersJson, isNull);
+
+      // A normal (non-forced) read should trigger a network fetch because
+      // the cached row lacks mimeTreeJson, and persist the refreshed data.
+      await r.emails.getEmailBody(emailId);
+
+      row = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(emailId)))
+          .getSingle();
+      expect(row.mimeTreeJson, isNotNull);
+      expect(row.headersJson, isNotNull);
+    },
+  );
 
   test(
     'sendEmail submits via JMAP EmailSubmission and creates Sent copy',
