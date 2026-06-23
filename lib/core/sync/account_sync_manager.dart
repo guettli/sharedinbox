@@ -368,6 +368,7 @@ class _AccountSync implements _SyncLoop {
       mailboxStats.add(
         MailboxSyncStats(
           mailboxPath: mailbox.path,
+          mailboxName: mailbox.name,
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,
@@ -629,6 +630,7 @@ class _JmapAccountSync implements _SyncLoop {
       mailboxStats.add(
         MailboxSyncStats(
           mailboxPath: mailbox.path,
+          mailboxName: mailbox.name,
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,

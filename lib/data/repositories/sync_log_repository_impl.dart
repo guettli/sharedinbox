@@ -54,6 +54,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
                 skipped: Value(s.skipped),
                 bytesTransferred: Value(s.bytesTransferred),
                 durationMs: Value(s.duration?.inMilliseconds),
+                mailboxName: Value(s.mailboxName),
               ),
             );
       }
@@ -70,9 +71,14 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     return logsQuery.watch().asyncMap((rows) async {
       final entries = <SyncLogEntry>[];
       for (final r in rows) {
+        // Sort by mailbox_name when present (JMAP labels) and fall back to
+        // mailbox_path so pre-v44 rows still produce a stable order.
         final mailboxRows = await (_db.select(_db.syncLogMailboxes)
               ..where((t) => t.syncLogId.equals(r.id))
-              ..orderBy([(t) => OrderingTerm.asc(t.mailboxPath)]))
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.mailboxName),
+                (t) => OrderingTerm.asc(t.mailboxPath),
+              ]))
             .get();
         entries.add(
           SyncLogEntry(
@@ -94,6 +100,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
                 .map(
                   (m) => MailboxSyncStats(
                     mailboxPath: m.mailboxPath,
+                    mailboxName: m.mailboxName,
                     fetched: m.fetched,
                     skipped: m.skipped,
                     bytesTransferred: m.bytesTransferred,
