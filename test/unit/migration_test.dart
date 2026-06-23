@@ -562,6 +562,19 @@ void main() {
           imap_server_id TEXT NULL
         )
       ''');
+      // sync_log_mailboxes was created at v12; v44 addColumn for mailbox_name
+      // needs this table to exist on the upgrade path.
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NULL
+        )
+      ''');
 
       // Insert an IMAP account.
       rawDb.execute(
@@ -824,6 +837,19 @@ void main() {
           imap_server_id TEXT NULL
         )
       ''');
+      // sync_log_mailboxes was created at v12; v44 addColumn for mailbox_name
+      // needs this table to exist on the upgrade path.
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NULL
+        )
+      ''');
 
       // Pre-existing note row that the v42 backfill must index.
       rawDb.execute(
@@ -934,7 +960,7 @@ void main() {
 
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       rawDb.execute(
-        "INSERT INTO accounts (id, display_name, email) "
+        'INSERT INTO accounts (id, display_name, email) '
         "VALUES ('acc-1', 'Alice', 'alice@example.com')",
       );
       rawDb.execute(
