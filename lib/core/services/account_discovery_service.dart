@@ -109,7 +109,7 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
 
   /// Queries DNS-over-HTTPS for MX records and returns an [ImapSmtpDiscovery]
   /// using the highest-priority MX host with standard ports (IMAP 993/SSL,
-  /// SMTP 587/STARTTLS). Used as a last-resort fallback when neither the JMAP
+  /// SMTP 465/SSL). Used as a last-resort fallback when neither the JMAP
   /// well-known endpoint nor the autoconfig XML was found.
   Future<ImapSmtpDiscovery?> _tryMxFallback(String domain) async {
     try {
