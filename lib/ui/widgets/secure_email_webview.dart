@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
-import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -138,45 +137,17 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
     final uri = Uri.tryParse(url);
     if (uri == null || !mounted) return;
 
-    final host = uri.host;
-    final parts = host.split('.');
-    // Bold the registered domain (last two DNS labels) to aid phishing detection.
-    final boldStart = (parts.length >= 2
-            ? host.length -
-                parts.last.length -
-                1 -
-                parts[parts.length - 2].length
-            : 0)
-        .clamp(0, host.length);
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Open link?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text.rich(
-              TextSpan(
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                children: [
-                  TextSpan(text: host.substring(0, boldStart)),
-                  TextSpan(
-                    text: host.substring(boldStart),
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
+        content: SingleChildScrollView(
+          child: Text.rich(
+            TextSpan(
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+              children: buildLinkDialogSpans(url, uri),
             ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              url,
-              style: const TextStyle(fontSize: 11, color: Colors.grey),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
@@ -218,4 +189,35 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
       child: WebViewWidget(controller: _controller!),
     );
   }
+}
+
+/// Splits [url] into text spans so the registered domain (last two DNS labels
+/// of [uri]'s host) can be rendered in bold to aid phishing detection.
+///
+/// Returns the URL as a single plain span when [uri] has no host or the host
+/// cannot be located in the URL string.
+@visibleForTesting
+List<TextSpan> buildLinkDialogSpans(String url, Uri uri) {
+  final host = uri.host;
+  if (host.isEmpty) return [TextSpan(text: url)];
+
+  final hostStart = url.toLowerCase().indexOf(host.toLowerCase());
+  if (hostStart < 0) return [TextSpan(text: url)];
+
+  final parts = host.split('.');
+  final registeredLen = parts.length >= 2
+      ? parts.last.length + 1 + parts[parts.length - 2].length
+      : host.length;
+
+  final domainStart = hostStart + host.length - registeredLen;
+  final domainEnd = hostStart + host.length;
+
+  return [
+    TextSpan(text: url.substring(0, domainStart)),
+    TextSpan(
+      text: url.substring(domainStart, domainEnd),
+      style: const TextStyle(fontWeight: FontWeight.bold),
+    ),
+    TextSpan(text: url.substring(domainEnd)),
+  ];
 }
