@@ -6,9 +6,9 @@ set -uo pipefail
 
 # shellcheck source=ci-monitor.sh
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Provide a placeholder GITEA_TOKEN so the `set -u` in ci-monitor.sh's main()
+# Provide a placeholder GITHUB_TOKEN so the `set -u` in ci-monitor.sh's main()
 # never trips; we never call main() here.
-GITEA_TOKEN="test-token"
+GITHUB_TOKEN="test-token"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/ci-monitor.sh"
 

@@ -162,14 +162,14 @@ void main() {
       lessThan(tester.getTopLeft(stackTraceFinder).dy),
     );
 
-    // Tapping the link should open the sialoop commit URL
+    // Tapping the link should open the GitHub commit URL
     await tester.tap(gitLinkFinder);
     await tester.pumpAndSettle();
 
     expect(
       mock.launchedUrl,
       equals(
-        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234',
+        'https://github.com/guettli/sharedinbox/commit/abc1234',
       ),
     );
   });
@@ -236,14 +236,14 @@ void main() {
         lessThan(tester.getTopLeft(gitLinkFinder).dy),
       );
 
-      // Tapping it should open the sialoop commit URL
+      // Tapping it should open the GitHub commit URL
       await tester.tap(versionLinkFinder);
       await tester.pumpAndSettle();
 
       expect(
         mock.launchedUrl,
         equals(
-          'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234',
+          'https://github.com/guettli/sharedinbox/commit/abc1234',
         ),
       );
     },
@@ -297,13 +297,13 @@ void main() {
       expect(
         clipboardText,
         contains(
-          'App Version: [1.0.0+42](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234)',
+          'App Version: [1.0.0+42](https://github.com/guettli/sharedinbox/commit/abc1234)',
         ),
       );
       expect(
         clipboardText,
         contains(
-          'Git Commit: [abc1234](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/abc1234)',
+          'Git Commit: [abc1234](https://github.com/guettli/sharedinbox/commit/abc1234)',
         ),
       );
     },

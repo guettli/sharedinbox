@@ -15,7 +15,7 @@ theme = 'PaperMod'
 
     [[params.socialIcons]]
         name = "codeberg"
-        url = "https://sialoop.thomas-guettler.de/guettli/sharedinbox"
+        url = "https://github.com/guettli/sharedinbox"
 
 [[menu.main]]
     name = "Builds"

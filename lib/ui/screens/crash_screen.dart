@@ -39,10 +39,10 @@ class CrashScreen extends StatelessWidget {
     final platform =
         '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
     final versionDisplay = gitHash.isNotEmpty
-        ? '[$version](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$gitHash)'
+        ? '[$version](https://github.com/guettli/sharedinbox/commit/$gitHash)'
         : version;
     final gitLine = gitHash.isNotEmpty
-        ? 'Git Commit: [$gitHash](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$gitHash)\n'
+        ? 'Git Commit: [$gitHash](https://github.com/guettli/sharedinbox/commit/$gitHash)\n'
         : '';
     final timestamp = DateTime.now().toUtc().toIso8601String();
     return 'App Version: $versionDisplay\n'
@@ -104,7 +104,7 @@ class CrashScreen extends StatelessWidget {
                       return GestureDetector(
                         onTap: () async {
                           final url = Uri.parse(
-                            'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$gitHash',
+                            'https://github.com/guettli/sharedinbox/commit/$gitHash',
                           );
                           await launchUrl(
                             url,
@@ -127,7 +127,7 @@ class CrashScreen extends StatelessWidget {
                   GestureDetector(
                     onTap: () async {
                       final url = Uri.parse(
-                        'https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$gitHash',
+                        'https://github.com/guettli/sharedinbox/commit/$gitHash',
                       );
                       await launchUrl(
                         url,

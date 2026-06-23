@@ -90,7 +90,7 @@ class TestRenderEntries(unittest.TestCase):
         entry = self._make_entry(hash_val="deadbeef")
         out = render_entries([entry], "Download")
         self.assertIn("deadbeef", out)
-        self.assertIn("sialoop.thomas-guettler.de", out)
+        self.assertIn("github.com/guettli/sharedinbox/commit/", out)
 
     def test_datetime_shown_when_present(self):
         entry = self._make_entry(dt="2025-05-10T12:00:00Z")
