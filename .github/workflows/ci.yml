@@ -20,6 +20,20 @@ jobs:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
         run: scripts/print_runner_wait.sh
+      # sops, dagger and task are baked into the sialoop self-hosted runner
+      # image but are absent from GitHub-hosted ubuntu-latest. Install them with
+      # the same versions pinned in Dockerfile.dev (dagger/task) and
+      # publish-dev-container.yml (sops).
+      - name: Install runner tools
+        run: |
+          sudo curl -fsSL \
+            https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
+            -o /usr/local/bin/sops
+          sudo chmod +x /usr/local/bin/sops
+          curl -fsSL https://taskfile.dev/install.sh \
+            | sudo sh -s -- -b /usr/local/bin v3.48.0
+          curl -fsSL https://dl.dagger.io/dagger/install.sh \
+            | sudo DAGGER_VERSION=0.21.6 BIN_DIR=/usr/local/bin sh
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
