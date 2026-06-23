@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}

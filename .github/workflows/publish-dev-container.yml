@@ -22,7 +22,7 @@ jobs:
       IMAGE: ghcr.io/guettli/sharedinbox-dev
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Log in to GitHub Container Registry
         run: |

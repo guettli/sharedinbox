@@ -16,7 +16,7 @@ jobs:
       linux: ${{ steps.diff.outputs.linux }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Print runner wait time
@@ -138,7 +138,7 @@ jobs:
     if: needs.check-changes.outputs.android == 'true'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 100
       - name: Print runner wait time
@@ -182,7 +182,7 @@ jobs:
       && needs.check-changes.outputs.android == 'true'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 100
       - name: Print runner wait time
@@ -214,7 +214,7 @@ jobs:
     if: needs.check-changes.outputs.linux == 'true'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 100
       - name: Print runner wait time
