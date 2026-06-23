@@ -36,6 +36,10 @@ jobs:
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: |
+          if [ -z "$SOPS_AGE_KEY" ]; then
+            echo "::error::SOPS_AGE_KEY repository secret is not set; cannot decrypt secrets.enc.yaml." >&2
+            exit 1
+          fi
           REGISTRY_TOKEN=$(sops -d --extract '["REGISTRY_TOKEN"]' secrets.enc.yaml)
           echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u guettlibot --password-stdin
 
