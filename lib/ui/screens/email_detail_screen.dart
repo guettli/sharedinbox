@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
@@ -19,6 +17,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
+import 'package:sharedinbox/data/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -925,23 +924,29 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     String raw,
   ) async {
     try {
-      final dir = await getTemporaryDirectory();
-      final subject = (header?.subject ?? 'email')
-          .replaceAll(RegExp(r'[^\w\s-]'), '_')
-          .trim();
-      final filename = '$subject.eml';
-      final file = File('${dir.path}/$filename');
-      await file.writeAsString(raw);
+      final filename = _rawEmailFilename(header?.subject);
+      final saved = await saveRawEmail(filename: filename, content: raw);
       if (!context.mounted) return;
+      // On platforms that wrote to a public, system-indexed location
+      // (Android Downloads), offer "Open" — opening the file is what makes
+      // it appear in the system file picker's "Recently used" list.
+      // Elsewhere fall back to "Share" so the user can still hand the file
+      // off to another app.
+      final action = saved.isPublic
+          ? SnackBarAction(
+              label: 'Open',
+              onPressed: () => OpenFilex.open(saved.path),
+            )
+          : SnackBarAction(
+              label: 'Share',
+              onPressed: () => SharePlus.instance.share(
+                ShareParams(files: [XFile(saved.path)]),
+              ),
+            );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Saved $filename'),
-          action: SnackBarAction(
-            label: 'Share',
-            onPressed: () => SharePlus.instance.share(
-              ShareParams(files: [XFile(file.path)]),
-            ),
-          ),
+          content: Text('Saved ${saved.displayLocation}'),
+          action: action,
         ),
       );
     } catch (e) {
@@ -950,6 +955,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
     }
+  }
+
+  static String _rawEmailFilename(String? subject) {
+    final sanitized = (subject ?? 'email')
+        .replaceAll(RegExp(r'[^\w\s-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .trim();
+    final base = sanitized.isEmpty ? 'email' : sanitized;
+    final clipped = base.length > 120 ? base.substring(0, 120) : base;
+    return '$clipped.eml';
   }
 
   void _showHeaders(BuildContext context, EmailBody body) {

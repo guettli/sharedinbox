@@ -3,11 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/data/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
@@ -479,9 +481,87 @@ void main() {
 
       // Dialog must be dismissed after download completes.
       expect(find.text('Raw Email'), findsNothing);
-      // SnackBar with Share action must be visible.
+      // Non-Android fallback writes to the temp dir, so the SnackBar offers
+      // a Share action to hand the file off to another app.
       expect(find.text('Share'), findsOneWidget);
     });
+
+    testWidgets(
+      'Download Raw Email on Android writes via MediaStore and shows Open',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  emailDetail: testEmail(subject: 'agenda'),
+                  emailBody: const EmailBody(
+                    emailId: 'acc-1:42',
+                    attachments: [],
+                  ),
+                  rawRfc822: 'Subject: agenda\r\n\r\nBody',
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Show Raw Email'));
+        await tester.pumpAndSettle();
+
+        // Force the Android branch in the downloader and stub the platform
+        // channel that would normally write to MediaStore.Downloads.
+        final prevIsAndroid = rawEmailIsAndroid;
+        rawEmailIsAndroid = () => true;
+        String? capturedFilename;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          androidRawEmailChannel,
+          (MethodCall call) async {
+            if (call.method == 'saveToDownloads') {
+              final args = call.arguments as Map<dynamic, dynamic>;
+              capturedFilename = args['filename'] as String?;
+              return 'content://media/external/downloads/42';
+            }
+            return null;
+          },
+        );
+        addTearDown(() {
+          rawEmailIsAndroid = prevIsAndroid;
+          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            androidRawEmailChannel,
+            null,
+          );
+        });
+
+        await tester.tap(find.text('Download'));
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(Duration.zero);
+        }
+        await tester.pumpAndSettle();
+
+        // Channel received the .eml content with a sanitized filename.
+        expect(capturedFilename, 'agenda.eml');
+        // Dialog must be dismissed after download completes.
+        expect(find.text('Raw Email'), findsNothing);
+        // SnackBar must show the public Downloads path and an Open action
+        // (which, when tapped, registers the file in the system's recents).
+        expect(find.text('Saved Download/agenda.eml'), findsOneWidget);
+        expect(find.text('Open'), findsOneWidget);
+        expect(find.text('Share'), findsNothing);
+      },
+    );
 
     testWidgets('long-press on unsubscribe chip shows URL tooltip', (
       tester,
