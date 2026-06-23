@@ -103,6 +103,21 @@ _assert "outcome: Inconclusive table flagged"   yes "$(_has_bad_outcome "$TABLE_
 _assert "outcome: Passed row detected"          yes "$(_has_passed "$TABLE_PASS")"
 _assert "outcome: Failed table has no Passed"   no  "$(_has_passed "$TABLE_FAIL")"
 
+# --- project_id extraction from service account JSON ---
+# TestAndroidFirebase derives FIREBASE_PROJECT_ID from FIREBASE_SA_KEY rather
+# than requiring a separate input; this exercises the same python one-liner.
+_extract_project_id() {
+    FIREBASE_SA_KEY="$1" python3 -c 'import json,os; print(json.loads(os.environ["FIREBASE_SA_KEY"])["project_id"])' 2>/dev/null \
+        || echo "__ERROR__"
+}
+
+_assert "project_id: extracted from typical SA key" "sharedinbox-ftl" \
+    "$(_extract_project_id '{"type":"service_account","project_id":"sharedinbox-ftl","private_key_id":"abc"}')"
+_assert "project_id: missing key surfaces as error" "__ERROR__" \
+    "$(_extract_project_id '{"type":"service_account"}')"
+_assert "project_id: malformed JSON surfaces as error" "__ERROR__" \
+    "$(_extract_project_id 'not json')"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

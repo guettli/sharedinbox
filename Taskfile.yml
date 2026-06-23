@@ -185,8 +185,6 @@ tasks:
     preconditions:
       - sh: test -n "$FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
         msg: "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY is not set"
-      - sh: test -n "$FIREBASE_PROJECT_ID"
-        msg: "FIREBASE_PROJECT_ID is not set"
       - sh: test -n "$PLAY_STORE_CONFIG_JSON"
         msg: "PLAY_STORE_CONFIG_JSON is not set (needed to download the alpha APK)"
     cmds:
