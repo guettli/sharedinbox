@@ -14,16 +14,6 @@ trap "rm -f $SECRETS_JSON" EXIT
 
 sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
-DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
-DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
-
-# Register inline secrets for log redaction. Multiline values (e.g. SSH keys)
-# must be masked line-by-line because ::add-mask:: covers one line at a time.
-printf '::add-mask::%s\n' "$DAGGER_ENGINE_HOST"
-while IFS= read -r line; do
-    [ -n "$line" ] && printf '::add-mask::%s\n' "$line"
-done <<< "$DAGGER_SSH_KEY"
-
 # Export all CI secrets to the GitHub Actions environment so subsequent steps
 # can use them without referencing Forgejo secrets directly.
 export_secret() {
@@ -63,57 +53,9 @@ export_secret "RENOVATE_FORGEJO_TOKEN"
 export_secret "GITHUB_TOKEN"
 export_secret "AGENTLOOP_OTEL_TOKEN"
 
-# The Dagger remote engine lives on a private network reachable from the
-# sialoop self-hosted runners but not from GitHub-hosted ubuntu-latest. On
-# those public runners, skip the SSH tunnel and let the Dagger CLI start a
-# local engine via the runner's Docker daemon — ubuntu-latest pre-installs
-# Docker, so this works out of the box. The shared cache is lost, but each
-# ephemeral runner has no cache to share anyway.
-if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
-    echo "GitHub-hosted runner detected; skipping remote Dagger engine SSH setup."
-    echo "Dagger will start a local engine via the runner's Docker daemon."
-    exit 0
-fi
-
-# Setup SSH directory and keys
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-rm -f ~/.ssh/dagger_key
-echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
-chmod 600 ~/.ssh/dagger_key
-
-# Add remote host to known_hosts
-_t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-_elapsed=$(( SECONDS - _t0 ))
-if [ "$_elapsed" -gt 10 ]; then
-    echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
-fi
-
-# Create a background SSH tunnel to the Dagger engine Unix socket.
-# Forwards local TCP port 8080 directly to /run/dagger/engine.sock on the remote host,
-# eliminating the need for a socat bridge on the server side.
-echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
-_t0=$SECONDS
-timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST"
-_elapsed=$(( SECONDS - _t0 ))
-if [ "$_elapsed" -gt 10 ]; then
-    echo "::warning::SSH tunnel setup took ${_elapsed}s"
-fi
-
-# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://localhost:8080"
-if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080" >> "$GITHUB_ENV"
-fi
-
-# Verify the connection
-echo "Verifying connection to Dagger engine via SSH tunnel..."
-# Use a simple command that doesn't require complex GraphQL operations.
-if ! timeout 45 dagger core --help >/dev/null 2>&1 ; then
-    echo "Error: Dagger engine unreachable via tunnel at localhost:8080"
-    # Debug
-    ps aux | grep ssh
-    exit 1
-fi
-echo "Dagger connection verified successfully."
+# The legacy remote Dagger engine on the sialoop private network is gone:
+# both the sharedinbox-arc Kubernetes runner and GitHub-hosted ubuntu-latest
+# reach it via no route. With _EXPERIMENTAL_DAGGER_RUNNER_HOST left unset the
+# Dagger CLI starts a local engine via the runner's container engine — Docker
+# on ubuntu-latest, dind on the ARC runner pod. Shared cache is lost, but
+# ephemeral runners have nothing to share anyway.
