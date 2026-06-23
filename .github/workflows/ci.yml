@@ -20,6 +20,8 @@ jobs:
           FORGEJO_TOKEN: ${{ github.token }}
           RUN_NUMBER: ${{ github.run_number }}
         run: scripts/print_runner_wait.sh
+      - name: Install runner tools
+        run: scripts/install_runner_tools.sh
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}

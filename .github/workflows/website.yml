@@ -122,15 +122,7 @@ jobs:
         run: scripts/print_runner_wait.sh
 
       - name: Install runner tools
-        # GitHub-hosted runners do not ship dagger or task; pin to the same
-        # versions as Dockerfile.dev so workflow runs match the dev container.
-        run: |
-          curl -fsSL https://taskfile.dev/install.sh \
-            | sudo sh -s -- -b /usr/local/bin v3.48.0
-          curl -fsSL https://dl.dagger.io/dagger/install.sh \
-            | sudo DAGGER_VERSION=0.21.6 BIN_DIR=/usr/local/bin sh
-          command -v dagger >/dev/null 2>&1 || { echo "ERROR: dagger install failed."; exit 1; }
-          command -v task   >/dev/null 2>&1 || { echo "ERROR: task install failed.";   exit 1; }
+        run: scripts/install_runner_tools.sh
 
       - name: Setup Dagger Remote Engine
         env:
