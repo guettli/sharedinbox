@@ -142,7 +142,13 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             vc_path = Path(dest_dir) / "versionCode"
             self.assertEqual(vc_path.read_text().strip(), "150")
 
-    def test_raises_when_no_bundle_has_generated_apks(self):
+    def test_skips_when_no_bundle_has_generated_apks(self):
+        """Regression for #83: when Play has not generated APKs for the latest
+        alpha and no older bundle has APKs to fall back to, write a ``.skip``
+        sentinel in the dest dir and return cleanly. The daily Firebase CI
+        treats ``.skip`` as a transient infrastructure state (Play APK
+        generation can take an hour or more after upload) and skips the run
+        instead of opening a spurious failure issue."""
         with tempfile.TemporaryDirectory() as dest_dir:
             session = MagicMock()
             with patch.dict(
@@ -158,8 +164,46 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             ), patch(
                 "fetch_playstore_apks._list_bundles", return_value=[200, 150]
             ):
-                with self.assertRaises(RuntimeError):
-                    fetch_playstore_apks.main()
+                fetch_playstore_apks.main()
+
+            skip_path = Path(dest_dir) / ".skip"
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
+            self.assertIn("split APKs", skip_path.read_text())
+            self.assertFalse(
+                vc_path.is_file(),
+                "versionCode must not be written when skipping — otherwise the "
+                "CI cache would treat the untested versionCode as 'tested'.",
+            )
+
+    def test_skip_message_includes_latest_versioncode(self):
+        """The skip reason is surfaced as a ``::notice::`` line in the CI log,
+        so include the resolved versionCode so the operator sees which build
+        Play is still processing."""
+        with tempfile.TemporaryDirectory() as dest_dir:
+            session = MagicMock()
+            with patch.dict(
+                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
+                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession", return_value=session
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=1782243611
+            ), patch(
+                "fetch_playstore_apks._list_generated_apks", return_value=None
+            ), patch(
+                "fetch_playstore_apks._list_bundles", return_value=[1782243611]
+            ):
+                fetch_playstore_apks.main()
+
+            skip_text = (Path(dest_dir) / ".skip").read_text()
+            self.assertIn("1782243611", skip_text)
+            self.assertEqual(
+                skip_text.count("\n"), 1,
+                "skip message must be a single line (plus trailing newline) so "
+                "the ::notice:: line stays on one row in the Actions log",
+            )
 
 
 class TestEnumerateDownloads(unittest.TestCase):

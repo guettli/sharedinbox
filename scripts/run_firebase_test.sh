@@ -56,6 +56,15 @@ if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=
     echo "ERROR: dagger fetch-play-store-apks failed" >&2
     exit 1
 fi
+# The fetch script writes a .skip sentinel when no uploaded bundle has Play-
+# generated split APKs yet (generation can take an hour or more after upload).
+# Don't fail the daily run in that case — let tomorrow's cron retry once Play
+# catches up. Skip BEFORE the versionCode check so the cache stays untouched.
+if [ -f "$APK_DIR/.skip" ]; then
+    reason=$(tr -d '\n' < "$APK_DIR/.skip")
+    echo "::notice::[firebase] skipping: $reason" >&2
+    exit 0
+fi
 if [ ! -f "$APK_DIR/versionCode" ]; then
     echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
     exit 1

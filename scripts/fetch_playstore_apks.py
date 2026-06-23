@@ -195,10 +195,21 @@ def main():
                 version_code = candidate
                 break
         else:
-            raise RuntimeError(
-                "No uploaded bundle has generated APKs available "
-                f"(checked versionCode {version_code} plus all older bundles)"
+            # No bundle has generated APKs available yet — Play APK generation
+            # can take an hour or more after upload, and a freshly-promoted
+            # alpha release may legitimately have no older bundle with APKs
+            # still around to fall back to. Signal the caller to skip this run
+            # cleanly instead of failing the daily CI; tomorrow's cron will
+            # retry once Play catches up.
+            skip_reason = (
+                "Play has not yet generated split APKs for versionCode "
+                f"{version_code} and no older bundle has APKs available "
+                "(Play APK generation can take an hour or more after upload)"
             )
+            print(f"Skipping: {skip_reason}", file=sys.stderr)
+            with open(os.path.join(dest_dir, ".skip"), "w") as f:
+                f.write(skip_reason + "\n")
+            return
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:
