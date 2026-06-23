@@ -25,7 +25,7 @@ while IFS= read -r line; do
 done <<< "$DAGGER_SSH_KEY"
 
 # Export all CI secrets to the GitHub Actions environment so subsequent steps
-# can use them without referencing Forgejo secrets directly.
+# can use them without referencing the SOPS store directly.
 export_secret() {
     local name="$1"
     local value
@@ -59,12 +59,11 @@ export_secret "PLAY_STORE_CONFIG_JSON"
 export_secret "ANDROID_KEYSTORE_BASE64"
 export_secret "ANDROID_KEYSTORE_PASSWORD"
 export_secret "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
-export_secret "RENOVATE_FORGEJO_TOKEN"
 export_secret "GITHUB_TOKEN"
 export_secret "AGENTLOOP_OTEL_TOKEN"
 
 # The Dagger remote engine lives on a private network reachable from the
-# sialoop self-hosted runners but not from GitHub-hosted ubuntu-latest. On
+# self-hosted runners but not from GitHub-hosted ubuntu-latest. On
 # those public runners, skip the SSH tunnel and let the Dagger CLI start a
 # local engine via the runner's Docker daemon — ubuntu-latest pre-installs
 # Docker, so this works out of the box. The shared cache is lost, but each

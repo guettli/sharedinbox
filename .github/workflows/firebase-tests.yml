@@ -11,6 +11,8 @@ jobs:
     runs-on: sharedinbox-arc
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
+    permissions:
+      issues: write
 
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +20,7 @@ jobs:
           fetch-depth: 1
       - name: Print runner wait time
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
@@ -32,16 +33,16 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      # PLAY_STORE_CONFIG_JSON and FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY are
-      # exported into GITHUB_ENV by the Setup Dagger Remote Engine step above
+      # PLAY_STORE_CONFIG_JSON, FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY and GITHUB_TOKEN
+      # are exported into GITHUB_ENV by the Setup Dagger Remote Engine step above
       # (decrypted from secrets.enc.yaml). Do not re-declare them as step env —
-      # ${{ secrets.* }} resolves to empty in Gitea Actions and would overwrite
-      # the SOPS-decrypted value, causing the Taskfile precondition to fail.
+      # ${{ secrets.* }} would overwrite the SOPS-decrypted value, and re-declaring
+      # GITHUB_TOKEN with the weak github.token would break the version-code cache
+      # write (only the SOPS PAT can manage Actions variables). GITHUB_API_URL and
+      # GITHUB_REPOSITORY are provided automatically by the runner.
       - name: Run Android Tests on Firebase Test Lab
         env:
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-          FORGEJO_TOKEN: ${{ github.token }}
-          FORGEJO_URL: ${{ github.server_url }}
           DAGGER_NO_NAG: "1"
           OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
           OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
@@ -51,35 +52,30 @@ jobs:
       - name: Create issue on test failure
         if: failure()
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          FORGEJO_URL: ${{ github.server_url }}
+          GITHUB_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - << 'PYEOF'
           import os, json, urllib.request, urllib.error
 
-          token = os.environ["FORGEJO_TOKEN"]
-          url_base = os.environ["FORGEJO_URL"].rstrip("/")
+          token = os.environ["GITHUB_TOKEN"]
+          api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+          repo = os.environ["GITHUB_REPOSITORY"]
           run_url = os.environ["RUN_URL"]
 
-          headers = {"Authorization": f"token {token}", "Content-Type": "application/json"}
-          api = f"{url_base}/api/v1/repos/guettli/sharedinbox"
-
-          def api_get(path):
-              req = urllib.request.Request(f"{api}{path}", headers=headers)
-              with urllib.request.urlopen(req) as r:
-                  return json.loads(r.read())
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+          api = f"{api_base}/repos/{repo}"
 
           def api_post(path, body):
               data = json.dumps(body).encode()
               req = urllib.request.Request(f"{api}{path}", data=data, headers=headers, method="POST")
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
-
-          repo_labels = api_get("/labels")
-          label_map = {l["name"]: l["id"] for l in repo_labels}
-
-          label_ids = [label_map["loop/code"]] if "loop/code" in label_map else []
 
           title = "Firebase Tests failed — find root cause and fix"
           body = (
@@ -94,7 +90,7 @@ jobs:
           issue = api_post("/issues", {
               "title": title,
               "body": body,
-              "labels": label_ids,
+              "labels": ["loop/code"],
           })
           print(f"Created issue #{issue['number']}: {issue['html_url']}")
           PYEOF

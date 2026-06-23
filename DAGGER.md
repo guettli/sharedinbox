@@ -107,7 +107,7 @@ If Codeberg is compromised, both categories are leaked. The Dagger TLS certifica
 
 ### Option 1: Runner-level environment variables
 
-Store production secrets as environment variables in the Forgejo runner's systemd service (e.g., via a `EnvironmentFile=` in the service override). The runner injects host env vars into job processes automatically. CI workflows drop the `${{ secrets.XYZ }}` references for production secrets entirely — the variables are already present in the job environment.
+Store production secrets as environment variables in the self-hosted runner's systemd service (e.g., via a `EnvironmentFile=` in the service override). The runner injects host env vars into job processes automatically. CI workflows drop the `${{ secrets.XYZ }}` references for production secrets entirely — the variables are already present in the job environment.
 
 **Pro:**
 - No new infrastructure required.
@@ -122,7 +122,7 @@ Store production secrets as environment variables in the Forgejo runner's system
 
 ### Option 2: Secret files on the CI host with restricted permissions
 
-Store production secrets as files owned by the runner user with mode `600` (e.g., `/home/forgejo-runner/secrets/play_store.json`). A small setup script reads the files and either exports them as env vars or passes them directly as file-type arguments to `dagger call --progress=plain`. CI workflows contain no secret references at all.
+Store production secrets as files owned by the runner user with mode `600` (e.g., `/home/actions-runner/secrets/play_store.json`). A small setup script reads the files and either exports them as env vars or passes them directly as file-type arguments to `dagger call --progress=plain`. CI workflows contain no secret references at all.
 
 **Pro:**
 - OS-level file permissions limit access to the runner user.

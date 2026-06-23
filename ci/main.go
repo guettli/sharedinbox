@@ -1092,11 +1092,11 @@ flowchart TD
         integration --> check
     end
 
-    subgraph forgejo_ci ["Codeberg CI · ci.yml (push/PR, source paths only)"]
+    subgraph gh_ci ["GitHub Actions · ci.yml (push/PR, source paths only)"]
         ciCheck["check"]
     end
 
-    subgraph forgejo_deploy ["Codeberg CI · deploy.yml (hourly schedule + workflow_dispatch)"]
+    subgraph gh_deploy ["GitHub Actions · deploy.yml (hourly schedule + workflow_dispatch)"]
         detectChanges["check-changes\ndetect android / linux diff"]
         buildLinux["build-linux\n(linux changed)"]
         deployPS["deploy-playstore\n(android changed)"]
@@ -1111,7 +1111,7 @@ flowchart TD
         deployApk   --> pubWeb
     end
 
-    subgraph forgejo_firebase ["Codeberg CI · firebase-tests.yml (daily cron + workflow_dispatch)"]
+    subgraph gh_firebase ["GitHub Actions · firebase-tests.yml (daily cron + workflow_dispatch)"]
         fbTest["test-android-firebase\n(alpha versionCode changed)"]
     end
 
