@@ -21,7 +21,7 @@ String buildAboutMarkdown({
   final physH = (size.height * pixelRatio).toInt();
   final version = pkg != null ? '${pkg.version}+${pkg.buildNumber}' : 'unknown';
   final versionDisplay = _gitHash.isNotEmpty
-      ? '[$version](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$_gitHash)'
+      ? '[$version](https://github.com/guettli/sharedinbox/commit/$_gitHash)'
       : version;
   final osName = _capitalize(Platform.operatingSystem);
   final isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
@@ -31,7 +31,7 @@ String buildAboutMarkdown({
   ).textScaler.scale(1.0).toStringAsFixed(1);
 
   final gitCommitLine = _gitHash.isNotEmpty
-      ? '| Git Commit | [$_gitHash](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/$_gitHash) |\n'
+      ? '| Git Commit | [$_gitHash](https://github.com/guettli/sharedinbox/commit/$_gitHash) |\n'
       : '';
   final deviceModelLine =
       deviceModel != null ? '| Device Model | $deviceModel |\n' : '';

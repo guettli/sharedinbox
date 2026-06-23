@@ -70,7 +70,7 @@ tasks:
     desc: Generate assets/changelog.txt from git history
     cmds:
       - mkdir -p assets
-      - 'git log -n 50 --pretty=format:"* %ad [%h](https://sialoop.thomas-guettler.de/guettli/sharedinbox/commit/%H): %s" --date=short > assets/changelog.txt'
+      - 'git log -n 50 --pretty=format:"* %ad [%h](https://github.com/guettli/sharedinbox/commit/%H): %s" --date=short > assets/changelog.txt'
 
   _pub-get:
     internal: true
@@ -341,15 +341,11 @@ tasks:
   renovate:
     desc: Run Renovate bot against the repository via Dagger
     preconditions:
-      - sh: test -n "$RENOVATE_FORGEJO_TOKEN"
-        msg: "RENOVATE_FORGEJO_TOKEN is not set"
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN is not set"
     cmds:
       - |
-        ARGS="--renovate-token env:RENOVATE_FORGEJO_TOKEN"
-        if [ -n "${GITHUB_TOKEN:-}" ]; then
-          ARGS="$ARGS --github-token env:GITHUB_TOKEN"
-        fi
-        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate $ARGS
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate --github-token env:GITHUB_TOKEN
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
@@ -425,7 +421,7 @@ tasks:
         echo "Uploaded $TARBALL and updated latest.json"
 
   deploy-bugreport:
-    desc: Deploy the Go bugreport server by restarting the systemd service (it pulls latest code from sialoop)
+    desc: Deploy the Go bugreport server by restarting the systemd service (it pulls latest code from GitHub)
     preconditions:
       - sh: test -n "$SSH_USER"
         msg: "SSH_USER is not set"
@@ -438,7 +434,7 @@ tasks:
         mkdir -p ~/.ssh
         printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
         ssh "root@$SSH_HOST" "systemctl restart bugreport"
-        echo "Restarted bugreport service on $SSH_HOST to pull latest code from sialoop"
+        echo "Restarted bugreport service on $SSH_HOST to pull latest code from GitHub"
 
   build-windows-release:
     desc: Build the Windows desktop app (release) — must run on a Windows machine with MSVC
@@ -732,7 +728,7 @@ tasks:
       - task: integration-ui
 
   ci-logs:
-    desc: "Fetch latest CI job logs from sialoop. Usage: task ci-logs [RUN=8] [JOB=0]"
+    desc: "Fetch latest CI job logs from GitHub. Usage: task ci-logs [RUN=<id>] [JOB=<name>]"
     cmds:
       - scripts/ci_logs.sh "{{.RUN}}" "{{.JOB}}"
 

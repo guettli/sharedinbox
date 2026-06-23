@@ -28,4 +28,5 @@ jobs:
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ secrets.RENOVATE_TOKEN || github.token }}
         run: task renovate

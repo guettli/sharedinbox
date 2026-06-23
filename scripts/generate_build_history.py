@@ -3,7 +3,7 @@
 
 Reads build artifacts under public_html/builds/ on the deployment server via SSH,
 parses the git hash from each filename, fetches the commit title from the
-Codeberg API, then writes Hugo content pages to website/content/builds/.
+GitHub API, then writes Hugo content pages to website/content/builds/.
 
 Covers two platforms:
   - Linux:   sharedinbox-linux-amd64-<hash>.tar.gz
@@ -21,11 +21,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-SIALOOP_REPO = "guettli/sharedinbox"
+GITHUB_REPO = "guettli/sharedinbox"
 REMOTE_BUILDS_DIR = "public_html/builds"
 CONTENT_DIR = Path("website/content/builds")
 BASE_URL = "https://sharedinbox.de"
-SIALOOP_BASE = "https://sialoop.thomas-guettler.de"
+GITHUB_BASE = "https://github.com"
 MAX_BUILDS_PER_PLATFORM = 30
 
 
@@ -52,13 +52,19 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
 
 def get_commit_info(hash_val: str) -> tuple[str, str]:
     """Return (title, datetime_iso) for the given commit hash."""
-    url = f"https://sialoop.thomas-guettler.de/api/v1/repos/{SIALOOP_REPO}/git/commits/{hash_val}"
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{hash_val}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sharedinbox-ci"})
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "sharedinbox-ci",
+                "Accept": "application/vnd.github+json",
+            },
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
         title = data.get("commit", {}).get("message", "").split("\n")[0]
-        dt = data.get("commit", {}).get("committer", {}).get("date", "")
+        dt = data.get("commit", {}).get("author", {}).get("date", "")
         return title, dt
     except Exception as exc:
         print(f"  warning: could not fetch commit info for {hash_val}: {exc}", file=sys.stderr)
@@ -91,7 +97,7 @@ def render_entries(
 ) -> str:
     lines = []
     for hash_val, download_url, commit_title, commit_dt in entries:
-        commit_url = f"{SIALOOP_BASE}/{SIALOOP_REPO}/commit/{hash_val}"
+        commit_url = f"{GITHUB_BASE}/{GITHUB_REPO}/commit/{hash_val}"
         dt_str = f" · {commit_dt}" if commit_dt else ""
         lines.append(
             f"- [{commit_title}]({commit_url}){dt_str}  \n"

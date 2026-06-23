@@ -1,10 +1,10 @@
 # SharedInbox — Development Guide
 
-## Sialoop
+## GitHub
 
-We use Sialoop: https://sialoop.thomas-guettler.de/guettli/sharedinbox/
+We use GitHub: https://github.com/guettli/sharedinbox/
 
-CLI tool `fj` is available to query issues/PRs/actions.
+The `gh` CLI is available to query issues/PRs/actions.
 
 ## Issue Label Workflow
 

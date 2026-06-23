@@ -1031,34 +1031,18 @@ func (m *Ci) PublishAndroid(
 	return m.UploadToPlayStore(ctx, signed, playStoreConfig, mapping)
 }
 
-// Renovate runs Renovate bot against the repository on the sialoop Gitea instance.
+// Renovate runs Renovate bot against the repository on GitHub.
 func (m *Ci) Renovate(
 	ctx context.Context,
-	renovateToken *dagger.Secret,
-	// +optional
+	// githubToken authenticates Renovate against the GitHub platform.
 	githubToken *dagger.Secret,
 ) (string, error) {
-	// Codeberg's GET /pulls?state=all&limit=100 times out with a 504, but limit=10
-	// completes in ~9 s. Patch the compiled pr-cache.js to use 10 instead of the
-	// hardcoded 20/100 values before launching renovate.
-	const patchCmd = `for f in \
-			/usr/local/renovate/dist/modules/platform/forgejo/pr-cache.js \
-			/usr/local/renovate/dist/modules/platform/gitea/pr-cache.js; do \
-		sed -i 's/limit: this\.items\.length ? 20 : 100/limit: this.items.length ? 10 : 10/' "$f" && echo "patched $f"; \
-		done`
-	container := dag.Container().
+	return dag.Container().
 		From("renovate/renovate:43").
-		WithSecretVariable("RENOVATE_TOKEN", renovateToken)
-	if githubToken != nil {
-		container = container.WithSecretVariable("GITHUB_COM_TOKEN", githubToken)
-	}
-	return container.
-		WithEnvVariable("RENOVATE_PLATFORM", "gitea").
-		WithEnvVariable("RENOVATE_ENDPOINT", "https://sialoop.thomas-guettler.de").
+		WithSecretVariable("RENOVATE_TOKEN", githubToken).
+		WithEnvVariable("RENOVATE_PLATFORM", "github").
 		WithEnvVariable("RENOVATE_REPOSITORIES", "guettli/sharedinbox").
 		WithEnvVariable("LOG_LEVEL", "info").
-		WithUser("root").
-		WithExec([]string{"/bin/sh", "-c", patchCmd}).
 		WithUser("ubuntu").
 		WithExec([]string{"renovate"}).
 		Stdout(ctx)

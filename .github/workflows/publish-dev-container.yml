@@ -15,29 +15,18 @@ jobs:
     runs-on: sharedinbox-arc
     timeout-minutes: 30
     if: github.server_url == 'https://github.com'
-    # The auto-provisioned github.token does not authenticate against sialoop's
-    # container registry. REGISTRY_TOKEN is read from secrets.enc.yaml (decrypted
-    # at runtime with SOPS_AGE_KEY) and belongs to guettlibot.
     permissions:
       packages: write
     env:
-      REGISTRY: sialoop.thomas-guettler.de
-      IMAGE: sialoop.thomas-guettler.de/guettlibot/sharedinbox-dev
+      REGISTRY: ghcr.io
+      IMAGE: ghcr.io/guettli/sharedinbox-dev
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install sops
+      - name: Log in to GitHub Container Registry
         run: |
-          curl -sSfL https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
-            -o /usr/local/bin/sops && chmod +x /usr/local/bin/sops
-
-      - name: Log in to sialoop container registry
-        env:
-          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
-        run: |
-          REGISTRY_TOKEN=$(sops -d --extract '["REGISTRY_TOKEN"]' secrets.enc.yaml)
-          echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u guettlibot --password-stdin
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build image
         run: |
