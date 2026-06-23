@@ -56,6 +56,15 @@ if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=
     echo "ERROR: dagger fetch-play-store-apks failed" >&2
     exit 1
 fi
+# fetch_playstore_apks.py writes this marker (instead of erroring) when Play
+# is still processing the latest alpha and every older bundle has aged past
+# Play's ~60-day generatedApks retention. Skip the run in that case so the
+# daily cron does not file a noisy issue against a transient Play state.
+if [ -f "$APK_DIR/no_apks_available" ]; then
+    echo "::notice::[firebase] $(cat "$APK_DIR/no_apks_available")" >&2
+    echo "::notice::[firebase] skipping run — no Play-generated APKs available yet" >&2
+    exit 0
+fi
 if [ ! -f "$APK_DIR/versionCode" ]; then
     echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
     exit 1

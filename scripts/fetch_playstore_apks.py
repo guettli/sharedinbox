@@ -195,10 +195,20 @@ def main():
                 version_code = candidate
                 break
         else:
-            raise RuntimeError(
+            # Play retains generatedApks for ~60 days after a bundle's release
+            # ends, so when the latest alpha is still processing AND every
+            # older bundle has aged past that retention window, no APKs are
+            # available anywhere. That is a transient Play state, not a bug
+            # in our binary — emit a marker so the shell wrapper can skip
+            # the run instead of opening a daily noisy issue.
+            marker_msg = (
                 "No uploaded bundle has generated APKs available "
                 f"(checked versionCode {version_code} plus all older bundles)"
             )
+            with open(os.path.join(dest_dir, "no_apks_available"), "w") as f:
+                f.write(f"{marker_msg}\n")
+            print(marker_msg, file=sys.stderr)
+            return
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:

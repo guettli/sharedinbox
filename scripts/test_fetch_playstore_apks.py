@@ -142,7 +142,13 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             vc_path = Path(dest_dir) / "versionCode"
             self.assertEqual(vc_path.read_text().strip(), "150")
 
-    def test_raises_when_no_bundle_has_generated_apks(self):
+    def test_writes_marker_when_no_bundle_has_generated_apks(self):
+        """Regression for #80: when Play is still processing the latest alpha
+        AND every older bundle has aged past Play's ~60-day generatedApks
+        retention, no APK set is downloadable. The script must signal this
+        with a ``no_apks_available`` marker (and skip writing ``versionCode``)
+        so the shell wrapper can skip the Firebase run instead of opening a
+        daily noisy issue against a transient Play state."""
         with tempfile.TemporaryDirectory() as dest_dir:
             session = MagicMock()
             with patch.dict(
@@ -158,8 +164,14 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             ), patch(
                 "fetch_playstore_apks._list_bundles", return_value=[200, 150]
             ):
-                with self.assertRaises(RuntimeError):
-                    fetch_playstore_apks.main()
+                fetch_playstore_apks.main()
+
+            marker = Path(dest_dir) / "no_apks_available"
+            self.assertTrue(marker.is_file(), f"{marker} not created")
+            self.assertIn("200", marker.read_text())
+            # versionCode must NOT be written — the shell wrapper relies on
+            # the combination (marker present, versionCode absent) to skip.
+            self.assertFalse((Path(dest_dir) / "versionCode").exists())
 
 
 class TestEnumerateDownloads(unittest.TestCase):
