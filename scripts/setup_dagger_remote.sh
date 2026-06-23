@@ -70,9 +70,18 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts
+# Add remote host to known_hosts. Don't suppress stderr — the host name itself
+# is registered with ::add-mask:: above, so messages like
+#   "getaddrinfo *** ... Name or service not known"
+# stay redacted while still telling us *why* a probe failed.
 _t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+keyscan_log=$(mktemp)
+trap 'rm -f "$SECRETS_JSON" "$keyscan_log"' EXIT
+if ! timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>"$keyscan_log"; then
+    echo "ssh-keyscan failed; stderr follows:"
+    sed 's/^/  /' "$keyscan_log"
+    exit 1
+fi
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
