@@ -194,23 +194,37 @@ def main():
                 )
                 version_code = candidate
                 break
-        else:
-            raise RuntimeError(
-                "No uploaded bundle has generated APKs available "
-                f"(checked versionCode {version_code} plus all older bundles)"
-            )
+
+    # Always persist the versionCode next to the APKs so callers that cannot
+    # capture stdout (e.g. `dagger call --progress=plain ... -o <dir>`) can
+    # still recover it. Written before any download so it is also available
+    # when we soft-skip below.
+    with open(os.path.join(dest_dir, "versionCode"), "w") as f:
+        f.write(f"{version_code}\n")
+
+    if listing is None:
+        # Neither the latest release nor any older bundle has split APKs
+        # generated yet. Play APK generation can take an hour or more after
+        # an upload, and the bundles list returned by the edits API does not
+        # always include older releases as fallbacks. Treat this as a soft
+        # skip rather than a hard failure: the next daily cron will retry
+        # once Play has caught up. Callers detect the skip by the absence of
+        # *.apk files in the destination directory.
+        print(
+            "No uploaded bundle has generated APKs available yet "
+            f"(checked versionCode {version_code} plus all older bundles); "
+            "skipping APK download.",
+            file=sys.stderr,
+        )
+        print(version_code)
+        return
+
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:
         dest = os.path.join(dest_dir, name)
         print(f"Downloading {name}…", file=sys.stderr)
         _download(session, PACKAGE_NAME, version_code, download_id, dest)
-
-    # Also persist the versionCode next to the APKs so callers that cannot
-    # capture stdout (e.g. `dagger call --progress=plain ... -o <dir>`) can
-    # still recover it.
-    with open(os.path.join(dest_dir, "versionCode"), "w") as f:
-        f.write(f"{version_code}\n")
 
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)

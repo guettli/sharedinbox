@@ -65,6 +65,17 @@ if [ -z "$VERSION_CODE" ]; then
     echo "ERROR: $APK_DIR/versionCode is empty" >&2
     exit 1
 fi
+
+# fetch-play-store-apks writes versionCode but no *.apk files when Play has not
+# yet generated split APKs for the alpha release and no older bundle has them
+# either. Treat this as a soft skip — the next daily cron will retry once
+# Play catches up. Without this guard we would error inside the test step,
+# which spams the repo with false-positive "Firebase Tests failed" issues.
+if ! ls "$APK_DIR"/*.apk >/dev/null 2>&1; then
+    echo "::notice::[firebase] alpha versionCode=$VERSION_CODE has no generated APKs yet — skipping" >&2
+    exit 0
+fi
+
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2
 

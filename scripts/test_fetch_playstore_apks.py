@@ -142,9 +142,14 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             vc_path = Path(dest_dir) / "versionCode"
             self.assertEqual(vc_path.read_text().strip(), "150")
 
-    def test_raises_when_no_bundle_has_generated_apks(self):
+    def test_soft_skips_when_no_bundle_has_generated_apks(self):
+        """Regression for #75: when neither the latest release nor any older
+        bundle has split APKs ready, the script must exit cleanly without
+        downloading anything so the daily Firebase cron can be retried
+        tomorrow rather than failing and creating a false-positive issue."""
         with tempfile.TemporaryDirectory() as dest_dir:
             session = MagicMock()
+            download_mock = MagicMock()
             with patch.dict(
                 os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
             ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
@@ -157,9 +162,53 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
                 "fetch_playstore_apks._list_generated_apks", return_value=None
             ), patch(
                 "fetch_playstore_apks._list_bundles", return_value=[200, 150]
+            ), patch(
+                "fetch_playstore_apks._download", download_mock
             ):
-                with self.assertRaises(RuntimeError):
-                    fetch_playstore_apks.main()
+                fetch_playstore_apks.main()
+
+            download_mock.assert_not_called()
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertTrue(vc_path.is_file(), f"{vc_path} not created")
+            # The latest versionCode is written even when no APKs were ready,
+            # so callers see which alpha release was skipped.
+            self.assertEqual(vc_path.read_text().strip(), "200")
+            apks = list(Path(dest_dir).glob("*.apk"))
+            self.assertEqual(
+                apks,
+                [],
+                f"expected no APK files in {dest_dir}, found {apks}",
+            )
+
+    def test_soft_skips_when_bundles_list_is_empty(self):
+        """Regression for #75: in the failing daily run the bundles list
+        returned via the edits API was empty (or contained only the latest
+        ungenerated versionCode), so the fallback for-loop never executed.
+        The script must still exit cleanly in that case."""
+        with tempfile.TemporaryDirectory() as dest_dir:
+            session = MagicMock()
+            download_mock = MagicMock()
+            with patch.dict(
+                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
+                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession", return_value=session
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=200
+            ), patch(
+                "fetch_playstore_apks._list_generated_apks", return_value=None
+            ), patch(
+                "fetch_playstore_apks._list_bundles", return_value=[]
+            ), patch(
+                "fetch_playstore_apks._download", download_mock
+            ):
+                fetch_playstore_apks.main()
+
+            download_mock.assert_not_called()
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertEqual(vc_path.read_text().strip(), "200")
+            self.assertEqual(list(Path(dest_dir).glob("*.apk")), [])
 
 
 class TestEnumerateDownloads(unittest.TestCase):
