@@ -106,13 +106,22 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080" >> "$GITHUB_ENV"
 fi
 
-# Verify the connection
-echo "Verifying connection to Dagger engine via SSH tunnel..."
-# Use a simple command that doesn't require complex GraphQL operations.
-if ! timeout 45 dagger core --help >/dev/null 2>&1 ; then
-    echo "Error: Dagger engine unreachable via tunnel at localhost:8080"
-    # Debug
-    ps aux | grep ssh
+# Verify the connection AND that the runner's Dagger CLI matches the engine.
+# The Dagger CLI and engine must run the exact same version. When they differ,
+# the engine looks "unreachable" even though the SSH tunnel itself is healthy
+# (it authenticated and the forward is up) — the failure is the CLI/engine
+# protocol handshake, not the network. Surface that explicitly so the fix is
+# obvious: bump the pinned engine on the host (see gitops ansible/p16) to match.
+CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VERSION:-unknown})..."
+# `dagger core` forces a real engine connection without a complex GraphQL query.
+if ! verify_out=$(timeout 45 dagger core --help 2>&1); then
+    echo "::error::Dagger engine unreachable via tunnel at localhost:8080."
+    echo "::error::The SSH tunnel authenticated, so this is almost certainly a CLI/engine version mismatch."
+    echo "::error::Runner Dagger CLI is ${CLI_VERSION:-unknown}. ACTION: update the Dagger SERVER (engine) on the engine host to ${CLI_VERSION:-the runner CLI version} so it matches — it is pinned in gitops at ansible/p16/systemd/system/dagger-engine.service. See DAGGER.md."
+    echo "--- diagnostics ---"
+    printf '%s\n' "$verify_out" | tail -8
+    ps aux | grep -F ssh | grep -v grep || true
     exit 1
 fi
-echo "Dagger connection verified successfully."
+echo "Dagger connection verified successfully (CLI ${CLI_VERSION:-unknown})."
