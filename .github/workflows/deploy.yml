@@ -8,7 +8,7 @@ on:
 jobs:
   check-changes:
     name: Detect Changed Files
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 5
     if: github.server_url == 'https://github.com'
     outputs:
@@ -125,7 +125,7 @@ jobs:
 
   deploy-playstore:
     name: Build & Deploy to Play Store
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.android == 'true'
@@ -164,7 +164,7 @@ jobs:
 
   deploy-apk:
     name: Build & Deploy APK to Server
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.android == 'true'
@@ -197,7 +197,7 @@ jobs:
 
   build-linux:
     name: Build Linux Release
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.linux == 'true'
@@ -230,7 +230,7 @@ jobs:
 
   label-deploy-health:
     name: Update Deploy Health Label
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     needs: [deploy-playstore, deploy-apk, build-linux]
     if: |
       always() && github.server_url == 'https://github.com' && vars.DEPLOY_HEALTH_ISSUE != '' && (

@@ -8,7 +8,7 @@ on:
 jobs:
   chaos-monkey-backend:
     name: Chaos Monkey (backend)
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
     steps:
