@@ -164,9 +164,8 @@ class SieveParser {
     if (word == 'not') {
       s.readWord();
       s.skipWhitespaceAndComments();
-      // Negation is not represented in the flat rule model; the caller
-      // should handle the negated condition separately. For now we parse
-      // and return the inner condition unchanged (best-effort for this subset).
+      // Negation is not represented in the flat rule model; the `not` operator is
+      // dropped and the inner condition is returned unchanged (best-effort for this subset).
       return _parseSingleTest(s);
     }
 
