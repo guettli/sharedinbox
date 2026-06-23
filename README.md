@@ -1,4 +1,4 @@
-# SharedInbox [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](packages/enough_mail/LICENSE)
+# SharedInbox ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
 IMAP/SMTP email client written in [Flutter](https://flutter.dev).
 
@@ -187,9 +187,6 @@ lib/
     router.dart      — go_router route tree
   di.dart            — Riverpod providers
   main.dart          — entry point
-
-packages/
-  enough_mail/       — vendored IMAP/SMTP library (editable)
 
 stalwart-dev/        — local mail server config + start/test scripts
 test/
