@@ -121,7 +121,10 @@ class _FakeEmails implements EmailRepository {
   @override
   Future<Email?> getEmail(String id) async => null;
   @override
-  Future<EmailBody> getEmailBody(String id) async =>
+  Future<EmailBody> getEmailBody(
+    String id, {
+    bool forceRefresh = false,
+  }) async =>
       const EmailBody(emailId: '', attachments: []);
   @override
   Future<SyncEmailsResult> syncEmails(String a, String m) async =>

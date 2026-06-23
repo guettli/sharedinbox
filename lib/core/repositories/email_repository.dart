@@ -29,7 +29,11 @@ abstract class EmailRepository {
 
   Future<Email?> getEmail(String emailId);
 
-  Future<EmailBody> getEmailBody(String emailId);
+  /// Returns the body for [emailId], using the local cache when fresh.
+  ///
+  /// When [forceRefresh] is true, the cache is bypassed and a network fetch
+  /// is performed. The result is then written back to the cache.
+  Future<EmailBody> getEmailBody(String emailId, {bool forceRefresh = false});
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged});
   Future<void> markAllAsRead(String accountId, String mailboxPath);

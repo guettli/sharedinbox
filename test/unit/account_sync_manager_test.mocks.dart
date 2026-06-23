@@ -352,17 +352,22 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
       ) as _i5.Future<_i3.Email?>);
 
   @override
-  _i5.Future<_i3.EmailBody> getEmailBody(String? emailId) =>
+  _i5.Future<_i3.EmailBody> getEmailBody(
+    String? emailId, {
+    bool? forceRefresh = false,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #getEmailBody,
           [emailId],
+          {#forceRefresh: forceRefresh},
         ),
         returnValue: _i5.Future<_i3.EmailBody>.value(_FakeEmailBody_1(
           this,
           Invocation.method(
             #getEmailBody,
             [emailId],
+            {#forceRefresh: forceRefresh},
           ),
         )),
       ) as _i5.Future<_i3.EmailBody>);

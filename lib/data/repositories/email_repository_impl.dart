@@ -228,17 +228,28 @@ class EmailRepositoryImpl implements EmailRepository {
   static const _bodyCacheTtl = Duration(days: 7);
 
   @override
-  Future<model.EmailBody> getEmailBody(String emailId) async {
+  Future<model.EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async {
     final cached = await (_db.select(
       _db.emailBodies,
     )..where((t) => t.emailId.equals(emailId)))
         .getSingleOrNull();
-    if (cached != null) {
+    if (cached != null && !forceRefresh) {
       // Re-fetch if cachedAt is null (legacy row) or older than the TTL.
       final age = cached.cachedAt == null
           ? _bodyCacheTtl + const Duration(seconds: 1)
           : DateTime.now().difference(cached.cachedAt!);
-      if (age <= _bodyCacheTtl) return _bodyRowToModel(cached);
+      // Also re-fetch when mimeTreeJson/headersJson are missing: such rows
+      // were cached before the structure fetch existed (or before the server
+      // returned bodyStructure). Without this, "Show Mail Structure" stays
+      // empty for up to 7 days even after we start asking for it.
+      final isMissingExtras =
+          cached.mimeTreeJson == null || cached.headersJson == null;
+      if (age <= _bodyCacheTtl && !isMissingExtras) {
+        return _bodyRowToModel(cached);
+      }
     }
 
     final emailRow = await (_db.select(

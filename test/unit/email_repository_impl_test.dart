@@ -351,6 +351,10 @@ void main() {
               emailId: 'acc-1:1',
               textBody: const Value('Hello'),
               htmlBody: const Value('<p>Hello</p>'),
+              // Populate the metadata fields so the cache hit logic
+              // doesn't treat the row as a legacy entry and refetch.
+              headersJson: const Value('[]'),
+              mimeTreeJson: const Value('{"type":"text/plain"}'),
               cachedAt: Value(DateTime.now()),
             ),
           );
@@ -2879,6 +2883,8 @@ void main() {
             EmailBodiesCompanion.insert(
               emailId: 'acc-1:1',
               textBody: const Value('cached text'),
+              headersJson: const Value('[]'),
+              mimeTreeJson: const Value('{"type":"text/plain"}'),
               cachedAt: Value(DateTime.now()),
             ),
           );
@@ -2886,6 +2892,72 @@ void main() {
       final body = await r.emails.getEmailBody('acc-1:1');
 
       expect(body.textBody, 'cached text');
+    });
+
+    test(
+      'self-heals a cached row that has null mimeTreeJson by refetching',
+      () async {
+        // A row written before the structure-fetch existed: textBody is
+        // present and cachedAt is fresh, but mimeTreeJson is null. The
+        // cache should be treated as stale and trigger a network call.
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+              EmailBodiesCompanion.insert(
+                emailId: 'acc-1:1',
+                textBody: const Value('legacy text'),
+                cachedAt: Value(DateTime.now()),
+              ),
+            );
+
+        // _makeRepos wires an IMAP connect that throws UnsupportedError, so
+        // the cache-bypass attempt surfaces as that error rather than
+        // returning the stale row.
+        expect(
+          () => r.emails.getEmailBody('acc-1:1'),
+          throwsA(isA<UnsupportedError>()),
+        );
+      },
+    );
+
+    test('forceRefresh: true bypasses an otherwise-fresh cached row', () async {
+      // A fully-populated, fresh cache row would normally be returned. With
+      // forceRefresh: true the repo must skip it and attempt a network
+      // fetch, which _makeRepos surfaces as UnsupportedError.
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('cached text'),
+              headersJson: const Value('[]'),
+              mimeTreeJson: const Value('{"type":"text/plain"}'),
+              cachedAt: Value(DateTime.now()),
+            ),
+          );
+
+      expect(
+        () => r.emails.getEmailBody('acc-1:1', forceRefresh: true),
+        throwsA(isA<UnsupportedError>()),
+      );
     });
   });
 

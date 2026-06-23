@@ -177,9 +177,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 await repo.setFlag(widget.emailId, seen: false);
                 if (context.mounted) _navigateTo(context, header, nextEmailId);
               } else if (value == 'headers' && body != null) {
-                _showHeaders(context, body);
+                unawaited(_showHeaders(context, body));
               } else if (value == 'structure' && body != null) {
-                _showStructure(context, body);
+                unawaited(_showStructure(context, body));
               } else if (value == 'rfc') {
                 unawaited(_showRaw(context, header));
               } else if (value == 'bug_report') {
@@ -967,35 +967,92 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return '$clipped.eml';
   }
 
-  void _showHeaders(BuildContext context, EmailBody body) {
-    if (body.headers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('No headers available. Try re-syncing the email.'),
+  /// Forces a fresh fetch of the body from the server, bypassing the local
+  /// cache. Used when the cached row is missing fields (headers, mimeTree)
+  /// that earlier sync versions did not store. Shows a progress snackbar
+  /// while the fetch is in flight and returns null on error.
+  Future<EmailBody?> _refetchBody(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final controller = messenger.showSnackBar(
+      const SnackBar(
+        duration: Duration(minutes: 1),
+        content: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: AppSpacing.sm),
+            Text('Fetching mail details…'),
+          ],
         ),
-      );
-      return;
+      ),
+    );
+    try {
+      return await ref
+          .read(emailRepositoryProvider)
+          .getEmailBody(widget.emailId, forceRefresh: true);
+    } catch (e) {
+      if (context.mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to fetch mail details: $e')),
+        );
+      }
+      return null;
+    } finally {
+      controller.close();
+    }
+  }
+
+  Future<void> _showHeaders(BuildContext context, EmailBody body) async {
+    var effective = body;
+    if (effective.headers.isEmpty) {
+      effective = await _refetchBody(context) ?? effective;
+      if (!context.mounted) return;
+      if (effective.headers.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 5),
+            content: Text('Server did not return headers for this message.'),
+          ),
+        );
+        return;
+      }
     }
 
     unawaited(
       showDialog<void>(
         context: context,
-        builder: (ctx) => EmailHeadersDialog(headers: body.headers),
+        builder: (ctx) => EmailHeadersDialog(headers: effective.headers),
       ),
     );
   }
 
-  void _showStructure(BuildContext context, EmailBody body) {
-    final tree = body.mimeTree;
+  Future<void> _showStructure(BuildContext context, EmailBody body) async {
+    var effective = body;
+    var tree = effective.mimeTree;
     if (tree == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('Structure not available. Try re-syncing the email.'),
-        ),
-      );
-      return;
+      effective = await _refetchBody(context) ?? effective;
+      if (!context.mounted) return;
+      tree = effective.mimeTree;
+      if (tree == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 5),
+            content: const Text(
+              'Server did not return MIME structure for this message.',
+            ),
+            action: SnackBarAction(
+              label: 'View raw email',
+              onPressed: () {
+                unawaited(_showRaw(context, null));
+              },
+            ),
+          ),
+        );
+        return;
+      }
     }
 
     final rows = <_MimeRow>[];

@@ -230,6 +230,7 @@ class FakeEmailRepository implements EmailRepository {
     List<Email>? emails,
     Email? emailDetail,
     EmailBody? emailBody,
+    EmailBody? refreshedEmailBody,
     List<Email>? searchResults,
     String rawRfc822 = '',
     this.onSearch,
@@ -237,7 +238,16 @@ class FakeEmailRepository implements EmailRepository {
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
         _rawRfc822 = rawRfc822,
+        _refreshedEmailBody = refreshedEmailBody,
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
+
+  /// Returned when [getEmailBody] is called with `forceRefresh: true`. Falls
+  /// back to [_emailBody] when null, so existing tests stay unaffected.
+  final EmailBody? _refreshedEmailBody;
+
+  /// Forced-refresh call counter, asserted in tests that exercise the
+  /// "self-heal" path triggered by the structure / headers menu items.
+  int getEmailBodyForceRefreshCalls = 0;
 
   @override
   Stream<List<Email>> observeEmails(
@@ -296,7 +306,16 @@ class FakeEmailRepository implements EmailRepository {
   }
 
   @override
-  Future<EmailBody> getEmailBody(String emailId) async => _emailBody;
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async {
+    if (forceRefresh) {
+      getEmailBodyForceRefreshCalls++;
+      return _refreshedEmailBody ?? _emailBody;
+    }
+    return _emailBody;
+  }
 
   @override
   Future<SyncEmailsResult> syncEmails(

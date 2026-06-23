@@ -750,31 +750,106 @@ void main() {
       expect(find.textContaining('application/pdf'), findsOneWidget);
     });
 
-    testWidgets('Show Mail Structure shows snackbar when mimeTree is absent', (
-      tester,
-    ) async {
-      const body = EmailBody(
-        emailId: 'acc-1:42',
-        textBody: 'Hello',
-        attachments: [],
-        // mimeTree is null — not yet cached or not available.
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-          overrides: _overrides(body: body),
-        ),
-      );
-      await tester.pumpAndSettle();
+    testWidgets(
+      'Show Mail Structure auto-refetches body when mimeTree is absent',
+      (tester) async {
+        // Initially cached body has no mimeTree. A forced refetch returns a
+        // body that does, so the dialog opens after the auto-refresh.
+        const cachedBody = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Hello',
+          attachments: [],
+        );
+        const refreshedBody = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Hello',
+          attachments: [],
+          mimeTree: MimePart(
+            contentType: 'multipart/mixed',
+            children: [
+              MimePart(contentType: 'text/plain', size: 100),
+            ],
+          ),
+        );
+        final repo = FakeEmailRepository(
+          emailDetail: testEmail(),
+          emailBody: cachedBody,
+          refreshedEmailBody: refreshedBody,
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository()),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(PopupMenuButton<String>));
-      await tester.pumpAndSettle();
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Show Mail Structure'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Show Mail Structure'));
+        await tester.pumpAndSettle();
 
-      expect(find.textContaining('Structure not available'), findsOneWidget);
-    });
+        expect(repo.getEmailBodyForceRefreshCalls, 1);
+        expect(find.text('Mail Structure'), findsOneWidget);
+        expect(find.textContaining('multipart/mixed'), findsOneWidget);
+        expect(find.textContaining('text/plain'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'Show Mail Structure shows snackbar when refetched body still lacks mimeTree',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Hello',
+          attachments: [],
+        );
+        final repo = FakeEmailRepository(
+          emailDetail: testEmail(),
+          emailBody: body,
+          // refreshedEmailBody omitted -> forced refresh returns the same
+          // mimeTree-less body, simulating a server that doesn't provide it.
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository()),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Show Mail Structure'));
+        await tester.pumpAndSettle();
+
+        expect(repo.getEmailBodyForceRefreshCalls, 1);
+        expect(
+          find.textContaining(
+            'Server did not return MIME structure for this message.',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets(
       'Load remote images snack bar auto-dismisses after 3 seconds',
@@ -835,6 +910,6 @@ class _NeverEmailRepository extends FakeEmailRepository {
   Future<Email?> getEmail(String emailId) => Completer<Email?>().future;
 
   @override
-  Future<EmailBody> getEmailBody(String emailId) =>
+  Future<EmailBody> getEmailBody(String emailId, {bool forceRefresh = false}) =>
       Completer<EmailBody>().future;
 }
