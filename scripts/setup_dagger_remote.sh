@@ -74,15 +74,29 @@ chmod 600 ~/.ssh/dagger_key
 # is registered with ::add-mask:: above, so messages like
 #   "getaddrinfo *** ... Name or service not known"
 # stay redacted while still telling us *why* a probe failed.
+if [ -z "$DAGGER_ENGINE_HOST" ] || [ "$DAGGER_ENGINE_HOST" = "null" ]; then
+    echo "Error: DAGGER_ENGINE_HOST is empty (jq returned ${DAGGER_ENGINE_HOST:-<empty>}); check secrets.enc.yaml."
+    exit 1
+fi
+echo "DAGGER_ENGINE_HOST length: ${#DAGGER_ENGINE_HOST}"
 _t0=$SECONDS
 keyscan_log=$(mktemp)
 trap 'rm -f "$SECRETS_JSON" "$keyscan_log"' EXIT
-if ! timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>"$keyscan_log"; then
-    echo "ssh-keyscan failed; stderr follows:"
-    sed 's/^/  /' "$keyscan_log"
+set +e
+timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>"$keyscan_log"
+keyscan_rc=$?
+set -e
+_elapsed=$(( SECONDS - _t0 ))
+if [ "$keyscan_rc" -ne 0 ]; then
+    echo "ssh-keyscan failed: exit=$keyscan_rc elapsed=${_elapsed}s"
+    echo "stderr:"
+    if [ -s "$keyscan_log" ]; then sed 's/^/  /' "$keyscan_log"; else echo "  (empty)"; fi
+    # Best-effort DNS probe so the operator can tell name resolution apart
+    # from a TCP/SSH-level failure. Host name stays redacted via ::add-mask::.
+    echo "getent hosts probe:"
+    getent hosts "$DAGGER_ENGINE_HOST" 2>&1 | sed 's/^/  /' || true
     exit 1
 fi
-_elapsed=$(( SECONDS - _t0 ))
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
