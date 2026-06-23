@@ -12,7 +12,7 @@ on:
 jobs:
   publish:
     name: Build & Push sharedinbox-dev
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 30
     if: github.server_url == 'https://github.com'
     # The auto-provisioned github.token does not authenticate against sialoop's

@@ -14,7 +14,7 @@ on:
 jobs:
   check-changes:
     name: Detect Website Changes
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 5
     if: github.server_url == 'https://github.com'
     outputs:
@@ -106,7 +106,7 @@ jobs:
 
   deploy:
     name: Build & Update Website
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.has_changes == 'true'

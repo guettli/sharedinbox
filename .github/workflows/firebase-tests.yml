@@ -8,7 +8,7 @@ on:
 jobs:
   test-android-firebase:
     name: Android Robo Crawl (Firebase Test Lab) — Play Store alpha
-    runs-on: ubuntu-latest
+    runs-on: sharedinbox-arc
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
 
