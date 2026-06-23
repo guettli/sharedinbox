@@ -40,27 +40,35 @@ jobs:
 
           HEAD_SHA=$(git rev-parse HEAD)
 
-          # Find the most recent successful "Build & Deploy to Play Store" task. Forgejo's API
-          # does not expose per-run jobs (/runs/{id}/jobs returns 404), so query /actions/tasks
-          # (per-job records) directly and filter for the task we care about. Filtering at the
-          # task level also distinguishes runs where the Play Store job actually ran from runs
-          # where it was skipped — at the run level both show status=success.
+          # Find the most recent run where the "Build & Deploy to Play Store" job
+          # actually deployed (conclusion=success). Runs where the job was skipped
+          # also report status=success at the run level, so we have to inspect each
+          # run's jobs to distinguish a real deploy from a skipped one.
           LAST_DEPLOYED_SHA=$(python3 - << 'PYEOF'
           import json, os, sys, urllib.request
           token = os.environ.get("FORGEJO_TOKEN", "")
-          server = os.environ.get("GITHUB_SERVER_URL", "").rstrip("/")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
-          url = f"{server}/api/v1/repos/{repo}/actions/tasks?status=success&limit=100"
-          req = urllib.request.Request(url, headers={"Authorization": f"token {token}"})
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          runs_url = f"{api}/repos/{repo}/actions/workflows/deploy.yml/runs?status=success&per_page=50"
           try:
+              req = urllib.request.Request(runs_url, headers=headers)
               with urllib.request.urlopen(req, timeout=60) as r:
-                  data = json.loads(r.read())
-              for t in data.get("workflow_runs", []):
-                  if (t.get("workflow_id") == "deploy.yml"
-                      and t.get("name") == "Build & Deploy to Play Store"
-                      and t.get("status") == "success"):
-                      print(t.get("head_sha") or "")
-                      sys.exit(0)
+                  runs = json.loads(r.read()).get("workflow_runs", [])
+              for run in runs:
+                  jobs_url = f"{api}/repos/{repo}/actions/runs/{run['id']}/jobs"
+                  jreq = urllib.request.Request(jobs_url, headers=headers)
+                  with urllib.request.urlopen(jreq, timeout=60) as jr:
+                      jobs = json.loads(jr.read()).get("jobs", [])
+                  for job in jobs:
+                      if (job.get("name") == "Build & Deploy to Play Store"
+                          and job.get("conclusion") == "success"):
+                          print(run.get("head_sha") or "")
+                          sys.exit(0)
               print("")
           except Exception as e:
               print(f"::error::LAST_DEPLOYED_SHA lookup failed ({type(e).__name__}: {e})")
@@ -157,17 +165,23 @@ jobs:
 
       - name: Verify Play Store deployment
         run: |
-          python3 -m venv /tmp/playstore-venv
-          /tmp/playstore-venv/bin/pip install google-auth requests --quiet
-          /tmp/playstore-venv/bin/python3 scripts/verify_playstore_deploy.py
+          # The sharedinbox-arc runner image does not ship python3-venv, so install
+          # google-auth/requests directly with --break-system-packages instead.
+          python3 -m pip install --user --break-system-packages --quiet google-auth requests
+          python3 scripts/verify_playstore_deploy.py
 
 
   deploy-apk:
     name: Build & Deploy APK to Server
     runs-on: sharedinbox-arc
     timeout-minutes: 60
-    needs: [check-changes]
-    if: needs.check-changes.outputs.android == 'true'
+    # Wait for deploy-playstore (success or failure) before running so the two
+    # Gradle invocations don't fight over the shared gradle-cache journal lock.
+    needs: [check-changes, deploy-playstore]
+    if: |
+      always()
+      && needs.check-changes.result == 'success'
+      && needs.check-changes.outputs.android == 'true'
 
     steps:
       - uses: actions/checkout@v4
