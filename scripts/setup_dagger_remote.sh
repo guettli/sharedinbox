@@ -10,7 +10,7 @@ fi
 echo "Decrypting secrets with SOPS..."
 export SOPS_AGE_KEY="$SOPS_AGE_KEY"
 SECRETS_JSON=$(mktemp)
-trap "rm -f $SECRETS_JSON" EXIT
+trap 'rm -f "$SECRETS_JSON"' EXIT
 
 sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
