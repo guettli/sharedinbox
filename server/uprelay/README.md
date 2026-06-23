@@ -91,7 +91,7 @@ relay without changing the public API.
   contents of any message.
 * Wake-ups carry no payload, so even a compromised relay cannot leak mail.
 * Run behind TLS. Add basic auth on `/trigger` if you can — there's no
-  build-in auth because deployments vary widely.
+  built-in auth because deployments vary widely.
 
 ## Coverage / CI
 
