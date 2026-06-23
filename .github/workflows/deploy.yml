@@ -10,7 +10,7 @@ jobs:
     name: Detect Changed Files
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.server_url != 'https://github.com'
+    if: github.server_url == 'https://github.com'
     outputs:
       android: ${{ steps.diff.outputs.android }}
       linux: ${{ steps.diff.outputs.linux }}
@@ -233,7 +233,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [deploy-playstore, deploy-apk, build-linux]
     if: |
-      always() && github.server_url != 'https://github.com' && vars.DEPLOY_HEALTH_ISSUE != '' && (
+      always() && github.server_url == 'https://github.com' && vars.DEPLOY_HEALTH_ISSUE != '' && (
         needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'failure' ||
         needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'failure' ||
         needs.build-linux.result == 'success' || needs.build-linux.result == 'failure'

@@ -10,7 +10,7 @@ jobs:
     name: Chaos Monkey (backend)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: github.server_url != 'https://github.com'
+    if: github.server_url == 'https://github.com'
     steps:
       - uses: actions/checkout@v4
       - name: Setup Dagger Remote Engine

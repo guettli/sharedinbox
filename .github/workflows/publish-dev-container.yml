@@ -14,7 +14,7 @@ jobs:
     name: Build & Push sharedinbox-dev
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.server_url != 'https://github.com'
+    if: github.server_url == 'https://github.com'
     # The auto-provisioned github.token does not authenticate against sialoop's
     # container registry. REGISTRY_TOKEN is read from secrets.enc.yaml (decrypted
     # at runtime with SOPS_AGE_KEY) and belongs to guettlibot.
