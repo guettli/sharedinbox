@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 43);
+      expect(db.schemaVersion, 44);
       await db.close();
     });
 
@@ -193,6 +193,8 @@ void main() {
         'sync_log_mailboxes',
       );
       expect(syncLogMailboxColumns, contains('duration_ms'));
+      // v44: mailbox_name column on sync_log_mailboxes.
+      expect(syncLogMailboxColumns, contains('mailbox_name'));
 
       // v32: local_sieve_applied table.
       await db.customSelect('SELECT count(*) FROM local_sieve_applied').get();
@@ -402,6 +404,8 @@ void main() {
           'sync_log_mailboxes',
         );
         expect(syncLogMailboxColumns, contains('duration_ms'));
+        // v44: mailbox_name column on sync_log_mailboxes.
+        expect(syncLogMailboxColumns, contains('mailbox_name'));
 
         // v33: error_stack_trace and is_permanent columns on sync_logs.
         final syncLogColumns = await _tableColumns(db, 'sync_logs');
@@ -558,6 +562,19 @@ void main() {
           imap_server_id TEXT NULL
         )
       ''');
+      // sync_log_mailboxes was created at v12; v44 addColumn for mailbox_name
+      // needs this table to exist on the upgrade path.
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NULL
+        )
+      ''');
 
       // Insert an IMAP account.
       rawDb.execute(
@@ -643,7 +660,7 @@ void main() {
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
-    test('fresh install creates all tables at schemaVersion 43', () async {
+    test('fresh install creates all tables at schemaVersion 44', () async {
       final db = AppDatabase(NativeDatabase.memory());
       await db.select(db.accounts).get();
 
@@ -692,6 +709,8 @@ void main() {
         'sync_log_mailboxes',
       );
       expect(syncLogMailboxColumns, contains('duration_ms'));
+      // v44: mailbox_name column on sync_log_mailboxes.
+      expect(syncLogMailboxColumns, contains('mailbox_name'));
 
       // v33: error_stack_trace and is_permanent columns on sync_logs.
       final syncLogColumns = await _tableColumns(db, 'sync_logs');
@@ -818,6 +837,19 @@ void main() {
           imap_server_id TEXT NULL
         )
       ''');
+      // sync_log_mailboxes was created at v12; v44 addColumn for mailbox_name
+      // needs this table to exist on the upgrade path.
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NULL
+        )
+      ''');
 
       // Pre-existing note row that the v42 backfill must index.
       rawDb.execute(
@@ -860,6 +892,105 @@ void main() {
           )
           .get();
       expect(matches, hasLength(1));
+
+      await db.close();
+      if (dbFile.existsSync()) dbFile.deleteSync();
+    });
+
+    test('v43→v44: sync_log_mailboxes gains mailbox_name column', () async {
+      final dbFile = File('test_migration_v43_to_v44.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+
+      // Build a minimal v43 schema with sync_logs + sync_log_mailboxes and a
+      // pre-existing row so the migration must add the column without losing
+      // data. Tables that other migrations touch (drafts, email_notes, …) are
+      // not relevant past v43, so we keep this slim.
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        CREATE TABLE accounts (
+          id TEXT NOT NULL PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          imap_host TEXT NOT NULL DEFAULT '',
+          imap_port INTEGER NOT NULL DEFAULT 993,
+          imap_ssl INTEGER NOT NULL DEFAULT 1,
+          smtp_host TEXT NOT NULL DEFAULT '',
+          smtp_port INTEGER NOT NULL DEFAULT 465,
+          smtp_ssl INTEGER NOT NULL DEFAULT 1,
+          account_type TEXT NOT NULL DEFAULT 'jmap',
+          jmap_url TEXT NULL,
+          username TEXT NOT NULL DEFAULT '',
+          verbose INTEGER NOT NULL DEFAULT 0,
+          manage_sieve_host TEXT NOT NULL DEFAULT '',
+          manage_sieve_port INTEGER NOT NULL DEFAULT 4190,
+          manage_sieve_ssl INTEGER NOT NULL DEFAULT 1,
+          manage_sieve_available INTEGER NULL
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE sync_logs (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          result TEXT NOT NULL,
+          error_message TEXT NULL,
+          protocol TEXT NOT NULL DEFAULT '',
+          items_synced INTEGER NOT NULL DEFAULT 0,
+          mailboxes_synced INTEGER NOT NULL DEFAULT 0,
+          pending_flushed INTEGER NOT NULL DEFAULT 0,
+          emails_skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER NOT NULL,
+          finished_at INTEGER NOT NULL,
+          protocol_log TEXT NULL,
+          error_stack_trace TEXT NULL,
+          is_permanent INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      rawDb.execute('''
+        CREATE TABLE sync_log_mailboxes (
+          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          sync_log_id INTEGER NOT NULL REFERENCES sync_logs (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          fetched INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          bytes_transferred INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NULL
+        )
+      ''');
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      rawDb.execute(
+        'INSERT INTO accounts (id, display_name, email) '
+        "VALUES ('acc-1', 'Alice', 'alice@example.com')",
+      );
+      rawDb.execute(
+        'INSERT INTO sync_logs (id, account_id, result, protocol, '
+        'started_at, finished_at) '
+        "VALUES (1, 'acc-1', 'ok', 'jmap', $now, $now)",
+      );
+      // A JMAP row mimicking the bug: opaque id as path, no display name.
+      rawDb.execute(
+        'INSERT INTO sync_log_mailboxes '
+        '(sync_log_id, mailbox_path, fetched, skipped, bytes_transferred, duration_ms) '
+        "VALUES (1, 'a', 0, 0, 0, 510)",
+      );
+
+      rawDb.execute('PRAGMA user_version = 43');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      // Trigger migration.
+      await db.select(db.accounts).get();
+
+      // The new column must exist.
+      final cols = await _tableColumns(db, 'sync_log_mailboxes');
+      expect(cols, contains('mailbox_name'));
+
+      // The pre-existing row must survive the migration and have a null name.
+      final rows = await db.select(db.syncLogMailboxes).get();
+      expect(rows, hasLength(1));
+      expect(rows.first.mailboxPath, 'a');
+      expect(rows.first.mailboxName, isNull);
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();

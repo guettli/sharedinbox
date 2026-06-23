@@ -57,7 +57,8 @@ String _buildSyncEntryMarkdown(SyncLogEntry entry) {
     buf.writeln('|---------|---------|------------|----------|');
     for (final m in entry.mailboxStats) {
       final dur = m.duration != null ? _fmtDuration(m.duration!) : '-';
-      buf.writeln('| ${m.mailboxPath} | ${m.fetched} | ${m.skipped} | $dur |');
+      final label = m.mailboxName ?? m.mailboxPath;
+      buf.writeln('| $label | ${m.fetched} | ${m.skipped} | $dur |');
     }
   }
   if (entry.errorMessage != null) {
@@ -281,7 +282,7 @@ class _SyncLogTile extends StatelessWidget {
                 for (final m in entry.mailboxStats)
                   _row(
                     context,
-                    '  ${m.mailboxPath}',
+                    '  ${m.mailboxName ?? m.mailboxPath}',
                     [
                       '${m.fetched} new · ${m.skipped} up-to-date',
                       if (m.duration != null) _fmtDuration(m.duration!),
