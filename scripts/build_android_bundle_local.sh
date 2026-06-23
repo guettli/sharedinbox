@@ -2,7 +2,7 @@
 set -euo pipefail
 
 tmp=$(mktemp /dev/shm/keystore.XXXXXX.jks)
-trap "rm -f $tmp" EXIT
+trap 'rm -f "$tmp"' EXIT
 
 printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$tmp"
 
