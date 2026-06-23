@@ -19,7 +19,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
-      # sops, dagger and task are baked into the sialoop self-hosted runner
+      # sops, dagger and task are baked into the sharedinbox-arc self-hosted runner
       # image but are absent from GitHub-hosted ubuntu-latest. Install them with
       # the same versions pinned in Dockerfile.dev (dagger/task) and
       # publish-dev-container.yml (sops).
