@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/data/platform/raw_email_downloader.dart';
+import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
