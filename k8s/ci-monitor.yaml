@@ -102,18 +102,15 @@ data:
         echo U
     }
 
-    # Locate the workflow file that defines the failing job. Tries the three
-    # conventional directories in priority order. Echoes the matching path or
-    # nothing if not found.
+    # Locate the workflow file that defines the failing job. Echoes the matching
+    # path or nothing if not found.
     locate_workflow_file() {
-        local root="$1" name="$2" dir candidate
-        for dir in .gitea/workflows .forgejo/workflows .github/workflows; do
-            for candidate in "$root/$dir/$name.yml" "$root/$dir/$name.yaml"; do
-                if [ -f "$candidate" ]; then
-                    echo "$candidate"
-                    return
-                fi
-            done
+        local root="$1" name="$2" candidate
+        for candidate in "$root/.github/workflows/$name.yml" "$root/.github/workflows/$name.yaml"; do
+            if [ -f "$candidate" ]; then
+                echo "$candidate"
+                return
+            fi
         done
     }
 

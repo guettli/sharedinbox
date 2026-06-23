@@ -21,15 +21,14 @@ jobs:
           fetch-depth: 0
       - name: Print runner wait time
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
 
       - name: Detect Android and Linux changes
         id: diff
         shell: bash
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # On workflow_dispatch always build everything
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -46,7 +45,7 @@ jobs:
           # run's jobs to distinguish a real deploy from a skipped one.
           LAST_DEPLOYED_SHA=$(python3 - << 'PYEOF'
           import json, os, sys, urllib.request
-          token = os.environ.get("FORGEJO_TOKEN", "")
+          token = os.environ.get("GITHUB_TOKEN", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
           headers = {
@@ -144,8 +143,7 @@ jobs:
           fetch-depth: 100
       - name: Print runner wait time
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
@@ -189,8 +187,7 @@ jobs:
           fetch-depth: 100
       - name: Print runner wait time
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
@@ -222,8 +219,7 @@ jobs:
           fetch-depth: 100
       - name: Print runner wait time
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
 
       - name: Check runner tools
@@ -253,58 +249,56 @@ jobs:
         needs.build-linux.result == 'success' || needs.build-linux.result == 'failure'
       )
     timeout-minutes: 5
+    permissions:
+      issues: write
 
     steps:
       - name: Set CI/Full-Pass or CI/Full-Fail label on tracking issue
         env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          FORGEJO_URL: ${{ github.server_url }}
+          GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_HEALTH_ISSUE: ${{ vars.DEPLOY_HEALTH_ISSUE }}
           ALL_SUCCEEDED: ${{ (needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'skipped') && (needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'skipped') && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') }}
         run: |
           python3 - << 'PYEOF'
-          import os, json, urllib.request, urllib.error
+          import os, json, urllib.parse, urllib.request, urllib.error
 
           issue = os.environ.get("DEPLOY_HEALTH_ISSUE", "").strip()
           if not issue:
               print("DEPLOY_HEALTH_ISSUE not set; skipping")
               raise SystemExit(0)
 
-          token = os.environ["FORGEJO_TOKEN"]
-          url_base = os.environ["FORGEJO_URL"].rstrip("/")
+          token = os.environ["GITHUB_TOKEN"]
+          api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+          repo = os.environ["GITHUB_REPOSITORY"]
           succeeded = os.environ.get("ALL_SUCCEEDED", "false").lower() == "true"
           add_label = "CI/Full-Pass" if succeeded else "CI/Full-Fail"
           remove_label = "CI/Full-Fail" if succeeded else "CI/Full-Pass"
 
-          headers = {"Authorization": f"token {token}", "Content-Type": "application/json"}
-          api = f"{url_base}/api/v1/repos/guettli/sharedinbox"
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+          api = f"{api_base}/repos/{repo}"
 
-          def api_get(path):
-              req = urllib.request.Request(f"{api}{path}", headers=headers)
+          def call(method, path, body=None):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(f"{api}{path}", data=data, headers=headers, method=method)
               with urllib.request.urlopen(req) as r:
-                  return json.loads(r.read())
+                  return json.loads(r.read() or "null")
 
-          def api_put(path, body):
-              data = json.dumps(body).encode()
-              req = urllib.request.Request(f"{api}{path}", data=data, headers=headers, method="PUT")
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      return json.loads(r.read())
-              except urllib.error.HTTPError as e:
-                  print(f"PUT {path} failed: {e.read().decode()}")
-                  raise
-
-          repo_labels = api_get("/labels")
-          label_map = {l["name"]: l["id"] for l in repo_labels}
-
-          if add_label not in label_map:
+          repo_labels = {l["name"] for l in call("GET", "/labels?per_page=100")}
+          if add_label not in repo_labels:
               print(f"Label '{add_label}' not found in repo — create it first")
               raise SystemExit(1)
 
-          current = api_get(f"/issues/{issue}/labels")
-          keep_ids = [l["id"] for l in current if l["name"] not in ("CI/Full-Pass", "CI/Full-Fail")]
-          keep_ids.append(label_map[add_label])
-
-          api_put(f"/issues/{issue}/labels", {"labels": keep_ids})
+          # Drop the stale opposite label (404 if it wasn't set), then add ours.
+          try:
+              call("DELETE", f"/issues/{issue}/labels/{urllib.parse.quote(remove_label)}")
+          except urllib.error.HTTPError as e:
+              if e.code != 404:
+                  raise
+          call("POST", f"/issues/{issue}/labels", {"labels": [add_label]})
           print(f"Set '{add_label}' on issue #{issue}")
           PYEOF

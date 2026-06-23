@@ -69,11 +69,11 @@ exceptions to its subtree instead of escalating to the global crash screen.
 
 ## Tasks (2026-05-26)
 
-- **Renovate Bot (Issue #257)**: Renovate Bot runs daily via Forgejo Actions to keep
+- **Renovate Bot (Issue #257)**: Renovate Bot runs daily via GitHub Actions to keep
   dependencies up to date. All required components are in main:
-  - `renovate.json` — Renovate configuration covering pub, Dockerfile, and Forgejo Actions
-  - `ci/main.go` — `Renovate()` Dagger function using Forgejo platform and Codeberg endpoint
-  - `.forgejo/workflows/renovate.yml` — daily cron (06:00 UTC) workflow
+  - `renovate.json` — Renovate configuration covering pub, Dockerfile, and GitHub Actions
+  - `ci/main.go` — `Renovate()` Dagger function using the GitHub platform
+  - `.github/workflows/renovate.yml` — daily cron (06:00 UTC) workflow
   - `Taskfile.yml` — `renovate` task
   - Issue #257 closed.
 

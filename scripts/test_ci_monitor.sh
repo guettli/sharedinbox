@@ -59,23 +59,11 @@ _assert "B before C precedence" B \
 tmp_root=$(mktemp -d)
 trap 'rm -rf "$tmp_root"' EXIT
 
-mkdir -p "$tmp_root/.gitea/workflows" "$tmp_root/.forgejo/workflows" "$tmp_root/.github/workflows"
+mkdir -p "$tmp_root/.github/workflows"
 
-# Priority 1: .gitea wins when all three present.
-: >"$tmp_root/.gitea/workflows/ci.yml"
-: >"$tmp_root/.forgejo/workflows/ci.yml"
+# .yml is found.
 : >"$tmp_root/.github/workflows/ci.yml"
-_assert "locate: gitea wins" "$tmp_root/.gitea/workflows/ci.yml" \
-    "$(locate_workflow_file "$tmp_root" ci)"
-
-# Priority 2: .forgejo wins when .gitea missing.
-rm "$tmp_root/.gitea/workflows/ci.yml"
-_assert "locate: forgejo wins" "$tmp_root/.forgejo/workflows/ci.yml" \
-    "$(locate_workflow_file "$tmp_root" ci)"
-
-# Priority 3: .github used as final fallback.
-rm "$tmp_root/.forgejo/workflows/ci.yml"
-_assert "locate: github fallback" "$tmp_root/.github/workflows/ci.yml" \
+_assert "locate: github yml" "$tmp_root/.github/workflows/ci.yml" \
     "$(locate_workflow_file "$tmp_root" ci)"
 
 # .yaml extension also recognised.

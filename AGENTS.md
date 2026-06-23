@@ -31,7 +31,7 @@ loop/merge →  loop/merge-in-process →  loop/merge-done
 
 **Rules:**
 
-- Only issues authored by allowed users are picked up (guettli, guettlibot, guettlibot2, forgejo-actions).
+- Only issues authored by allowed users are picked up (guettli, guettlibot, guettlibot2, github-actions[bot]).
 - An issue with `NeedSupervisor` needs human attention — investigate, fix, then re-label.
 - The merge agent merges the PR automatically once CI is green. A human still reviews the PR before it merges if branch protection requires a review.
 - Planning agents only post a comment — they do NOT write code or open PRs.

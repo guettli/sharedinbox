@@ -3,9 +3,12 @@
 # via the Dagger pipeline. The Play artefact is what users actually install,
 # so any launch-time crash visible in production shows up here too.
 #
-# Caches the last successfully-tested versionCode in the Gitea Actions repo
+# Caches the last successfully-tested versionCode in the GitHub Actions repo
 # variable LAST_TESTED_ALPHA_VERSION_CODE so the daily cron is cheap when
-# nothing has shipped. Retries up to 3 times on transient Dagger engine
+# nothing has shipped. The variable write needs a token with Variables:write
+# (the default GITHUB_TOKEN cannot manage variables), so the cache is best
+# effort and silently degrades to "always run" when the write is rejected.
+# Retries up to 3 times on transient Dagger engine
 # connectivity errors, and on "No space left on device" after pruning the
 # Dagger cache.
 set -uo pipefail
@@ -65,20 +68,26 @@ fi
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2
 
-# Cache check: if the Gitea repo variable LAST_TESTED_ALPHA_VERSION_CODE matches,
+# Cache check: if the GitHub repo variable LAST_TESTED_ALPHA_VERSION_CODE matches,
 # the alpha hasn't shipped a new build since last success, so skip the test.
-_gitea_cache_lookup() {
-    if [ -z "${FORGEJO_TOKEN:-}" ] || [ -z "${FORGEJO_URL:-}" ]; then
+_gh_cache_lookup() {
+    if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
         echo ""
         return 0
     fi
-    FORGEJO_TOKEN="$FORGEJO_TOKEN" FORGEJO_URL="$FORGEJO_URL" python3 - <<'PYEOF'
+    python3 - <<'PYEOF'
 import json, os, urllib.error, urllib.request
 
-token = os.environ["FORGEJO_TOKEN"]
-url_base = os.environ["FORGEJO_URL"].rstrip("/")
-api = f"{url_base}/api/v1/repos/guettli/sharedinbox/actions/variables/LAST_TESTED_ALPHA_VERSION_CODE"
-req = urllib.request.Request(api, headers={"Authorization": f"token {token}"})
+token = os.environ["GITHUB_TOKEN"]
+api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+repo = os.environ["GITHUB_REPOSITORY"]
+api = f"{api_base}/repos/{repo}/actions/variables/LAST_TESTED_ALPHA_VERSION_CODE"
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+req = urllib.request.Request(api, headers=headers)
 try:
     with urllib.request.urlopen(req) as r:
         print(json.loads(r.read()).get("value", ""))
@@ -87,47 +96,54 @@ except urllib.error.HTTPError as e:
         print("")
     else:
         # Don't fail the whole job on a cache lookup error; treat as a miss.
-        print("", file=__import__("sys").stderr)
         print(f"[firebase] cache lookup HTTP {e.code}: {e.reason}", file=__import__("sys").stderr)
         print("")
 PYEOF
 }
 
-_gitea_cache_write() {
+_gh_cache_write() {
     local value="$1"
-    if [ -z "${FORGEJO_TOKEN:-}" ] || [ -z "${FORGEJO_URL:-}" ]; then
+    if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
         return 0
     fi
-    FORGEJO_TOKEN="$FORGEJO_TOKEN" FORGEJO_URL="$FORGEJO_URL" VALUE="$value" python3 - <<'PYEOF'
+    VALUE="$value" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.request
 
-token = os.environ["FORGEJO_TOKEN"]
-url_base = os.environ["FORGEJO_URL"].rstrip("/")
+token = os.environ["GITHUB_TOKEN"]
+api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+repo = os.environ["GITHUB_REPOSITORY"]
 value = os.environ["VALUE"]
-api = f"{url_base}/api/v1/repos/guettli/sharedinbox/actions/variables/LAST_TESTED_ALPHA_VERSION_CODE"
-headers = {"Authorization": f"token {token}", "Content-Type": "application/json"}
+name = "LAST_TESTED_ALPHA_VERSION_CODE"
+base = f"{api_base}/repos/{repo}/actions/variables"
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+}
 
-def request(method, body):
-    return urllib.request.Request(api, data=json.dumps(body).encode(), headers=headers, method=method)
+def request(url, method, body):
+    return urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method=method)
 
+# GitHub: PATCH an existing variable, POST to create a missing one.
 try:
-    with urllib.request.urlopen(request("PUT", {"name": "LAST_TESTED_ALPHA_VERSION_CODE", "value": value})) as r:
+    with urllib.request.urlopen(request(f"{base}/{name}", "PATCH", {"name": name, "value": value})) as r:
         r.read()
-    print(f"[firebase] updated LAST_TESTED_ALPHA_VERSION_CODE={value}", file=sys.stderr)
+    print(f"[firebase] updated {name}={value}", file=sys.stderr)
     sys.exit(0)
 except urllib.error.HTTPError as e:
     if e.code != 404:
-        print(f"[firebase] PUT cache failed HTTP {e.code}: {e.reason} — trying POST", file=sys.stderr)
+        print(f"[firebase] PATCH cache failed HTTP {e.code}: {e.reason} — trying POST", file=sys.stderr)
 try:
-    with urllib.request.urlopen(request("POST", {"name": "LAST_TESTED_ALPHA_VERSION_CODE", "value": value})) as r:
+    with urllib.request.urlopen(request(base, "POST", {"name": name, "value": value})) as r:
         r.read()
-    print(f"[firebase] created LAST_TESTED_ALPHA_VERSION_CODE={value}", file=sys.stderr)
+    print(f"[firebase] created {name}={value}", file=sys.stderr)
 except urllib.error.HTTPError as e:
     print(f"[firebase] WARNING: cache write failed HTTP {e.code}: {e.reason}", file=sys.stderr)
 PYEOF
 }
 
-CACHED=$(_gitea_cache_lookup)
+CACHED=$(_gh_cache_lookup)
 if [ -n "$CACHED" ] && [ "$CACHED" = "$VERSION_CODE" ]; then
     echo "::notice::[firebase] alpha unchanged (versionCode=$VERSION_CODE) — skipping" >&2
     exit 0
@@ -170,6 +186,6 @@ done
 
 FINAL_RC=$(cat "$RC_FILE" 2>/dev/null || echo 0)
 if [ "$FINAL_RC" -eq 0 ]; then
-    _gitea_cache_write "$VERSION_CODE"
+    _gh_cache_write "$VERSION_CODE"
 fi
 exit "$FINAL_RC"
