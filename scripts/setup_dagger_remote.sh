@@ -7,18 +7,6 @@ if [ -z "${SOPS_AGE_KEY:-}" ]; then
     exit 1
 fi
 
-# Install sops on the runner if it's missing. github.com-hosted runners do not
-# ship with sops (the sialoop/Forgejo runner image did), so workflows that
-# previously relied on a pre-installed sops fail with "command not found" after
-# the migration. Self-install here so every caller of this script benefits.
-if ! command -v sops >/dev/null 2>&1; then
-    echo "sops not found on PATH — installing v3.13.1..."
-    SOPS_BIN=/usr/local/bin/sops
-    curl -sSfL https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
-        -o "$SOPS_BIN"
-    chmod +x "$SOPS_BIN"
-fi
-
 echo "Decrypting secrets with SOPS..."
 export SOPS_AGE_KEY="$SOPS_AGE_KEY"
 SECRETS_JSON=$(mktemp)
