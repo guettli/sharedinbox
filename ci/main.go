@@ -824,24 +824,29 @@ func (m *Ci) DeployApk(
 // reports anything other than "Passed", if the output mentions known crash
 // markers (FATAL EXCEPTION / "has died" / "Crashed"), or if gcloud itself
 // returns a Robo-specific failure string.
+//
+// The Firebase project ID is read from the service account JSON's project_id
+// field so callers do not need to plumb it separately (the SA can only target
+// the project that issued it anyway).
 func (m *Ci) TestAndroidFirebase(
 	ctx context.Context,
 	// Directory containing the Play Store split APKs. Must include a
 	// base-master.apk; everything else is forwarded as --additional-apks.
 	apks *dagger.Directory,
 	serviceAccountKey *dagger.Secret,
-	projectID string,
 ) (string, error) {
 	return dag.Container().
 		From("google/cloud-sdk:slim").
 		WithDirectory("/apks", apks).
 		WithSecretVariable("FIREBASE_SA_KEY", serviceAccountKey).
-		WithEnvVariable("FIREBASE_PROJECT_ID", projectID).
 		WithUser("cloudsdk").
 		WithExec([]string{"/bin/bash", "-c",
 			`auth_err=$(mktemp); trap 'rm -f "$auth_err"' EXIT; \
 			 gcloud auth activate-service-account --key-file=<(echo "$FIREBASE_SA_KEY") 2>"$auth_err" \
 			   || { cat "$auth_err"; exit 1; }; \
+			 FIREBASE_PROJECT_ID=$(python3 -c 'import json,os; print(json.loads(os.environ["FIREBASE_SA_KEY"])["project_id"])') \
+			   || { echo "ERROR: could not extract project_id from FIREBASE_SA_KEY"; exit 1; }; \
+			 [ -n "$FIREBASE_PROJECT_ID" ] || { echo "ERROR: project_id missing from FIREBASE_SA_KEY"; exit 1; }; \
 			 gcloud config set project "$FIREBASE_PROJECT_ID" 2>>"$auth_err" \
 			   || { cat "$auth_err"; exit 1; }; \
 			 unknown=$(grep -vF "Activated service account credentials for:" "$auth_err" \

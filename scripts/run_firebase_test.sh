@@ -159,8 +159,7 @@ _run() {
     {
         timeout --kill-after=10 2400 dagger call --progress=plain -q -m ci --source=. test-android-firebase \
             --apks "$APK_DIR" \
-            --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY \
-            --project-id "$FIREBASE_PROJECT_ID"
+            --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY
         echo $? > "$RC_FILE"
     } 2>&1 | tee "$OUT" | _strip_ansi | _filter_noise
 }
