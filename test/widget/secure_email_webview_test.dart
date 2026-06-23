@@ -60,6 +60,80 @@ void main() {
     });
   });
 
+  group('buildLinkDialogSpans', () {
+    // Verifies that the registered domain (last two DNS labels) is rendered in
+    // a bold span while the rest of the URL stays plain — that is what makes
+    // a phishing host like `evil.com/login.bank.com` visually distinguishable.
+    List<TextSpan> spansFor(String url) =>
+        buildLinkDialogSpans(url, Uri.parse(url));
+
+    void expectSplit(
+      String url, {
+      required String before,
+      required String bold,
+      required String after,
+    }) {
+      final spans = spansFor(url);
+      expect(spans, hasLength(3));
+      expect(spans[0].text, before);
+      expect(spans[1].text, bold);
+      expect(spans[1].style?.fontWeight, FontWeight.bold);
+      expect(spans[2].text, after);
+    }
+
+    test('bolds registered domain within a typical https URL', () {
+      expectSplit(
+        'https://www.example.com/path?q=1',
+        before: 'https://www.',
+        bold: 'example.com',
+        after: '/path?q=1',
+      );
+    });
+
+    test('bolds the whole host when there is no subdomain', () {
+      expectSplit(
+        'https://example.com/',
+        before: 'https://',
+        bold: 'example.com',
+        after: '/',
+      );
+    });
+
+    test('preserves the original URL casing', () {
+      expectSplit(
+        'HTTPS://WWW.Example.COM/Path',
+        before: 'HTTPS://WWW.',
+        bold: 'Example.COM',
+        after: '/Path',
+      );
+    });
+
+    test('handles deep subdomains by bolding only the last two labels', () {
+      expectSplit(
+        'https://a.b.c.example.co/x',
+        before: 'https://a.b.c.',
+        bold: 'example.co',
+        after: '/x',
+      );
+    });
+
+    test('handles URLs with a port', () {
+      expectSplit(
+        'http://example.com:8080/x',
+        before: 'http://',
+        bold: 'example.com',
+        after: ':8080/x',
+      );
+    });
+
+    test('returns the URL as a single plain span when there is no host', () {
+      final spans = spansFor('mailto:alice@example.com');
+      expect(spans, hasLength(1));
+      expect(spans.single.text, 'mailto:alice@example.com');
+      expect(spans.single.style?.fontWeight, isNull);
+    });
+  });
+
   // On Linux (the test host) the widget falls back to plain text extracted via
   // htmlToPlain().  These tests exercise that path.
   group('SecureEmailWebView (Linux plain-text fallback)', () {
