@@ -1,13 +1,18 @@
 class MailboxSyncStats {
   const MailboxSyncStats({
     required this.mailboxPath,
+    this.mailboxName,
     required this.fetched,
     required this.skipped,
     required this.bytesTransferred,
     this.duration,
   });
 
+  // Stable identifier: folder path for IMAP, opaque JMAP mailbox id for JMAP.
   final String mailboxPath;
+  // Human-readable display name; null for pre-v44 rows (renderer falls back
+  // to mailboxPath).
+  final String? mailboxName;
   final int fetched;
   final int skipped;
   final int bytesTransferred;

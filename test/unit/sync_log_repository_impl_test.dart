@@ -76,6 +76,7 @@ void main() {
       mailboxStats: const [
         MailboxSyncStats(
           mailboxPath: 'INBOX',
+          mailboxName: 'INBOX',
           fetched: 2,
           skipped: 1,
           bytesTransferred: 512,
@@ -83,6 +84,7 @@ void main() {
         ),
         MailboxSyncStats(
           mailboxPath: 'Sent',
+          mailboxName: 'Sent',
           fetched: 1,
           skipped: 0,
           bytesTransferred: 512,
@@ -94,9 +96,78 @@ void main() {
     final latest = entries.first;
     expect(latest.mailboxStats, hasLength(2));
     expect(latest.mailboxStats[0].mailboxPath, 'INBOX');
+    expect(latest.mailboxStats[0].mailboxName, 'INBOX');
     expect(latest.mailboxStats[0].duration, const Duration(milliseconds: 3200));
     expect(latest.mailboxStats[1].mailboxPath, 'Sent');
+    expect(latest.mailboxStats[1].mailboxName, 'Sent');
     expect(latest.mailboxStats[1].duration, isNull);
+  });
+
+  test('stores and retrieves JMAP-style mailbox name', () async {
+    final repo = SyncLogRepositoryImpl(db);
+    final start = DateTime(2024, 4, 1, 10);
+    final end = DateTime(2024, 4, 1, 10, 0, 2);
+
+    await repo.log(
+      accountId: 'acc1',
+      success: true,
+      protocol: 'jmap',
+      emailsFetched: 0,
+      emailsSkipped: 0,
+      mailboxesSynced: 1,
+      pendingFlushed: 0,
+      bytesTransferred: 0,
+      startedAt: start,
+      finishedAt: end,
+      mailboxStats: const [
+        // JMAP: mailboxPath holds the opaque server id, mailboxName the label.
+        MailboxSyncStats(
+          mailboxPath: 'a',
+          mailboxName: 'Inbox',
+          fetched: 0,
+          skipped: 0,
+          bytesTransferred: 0,
+          duration: Duration(milliseconds: 510),
+        ),
+      ],
+    );
+
+    final entries = await repo.observeSyncLogs('acc1').first;
+    final entry = entries.firstWhere((e) => e.startedAt == start);
+    expect(entry.mailboxStats, hasLength(1));
+    expect(entry.mailboxStats.first.mailboxPath, 'a');
+    expect(entry.mailboxStats.first.mailboxName, 'Inbox');
+  });
+
+  test('mailboxName is null when not provided (legacy rows)', () async {
+    final repo = SyncLogRepositoryImpl(db);
+    final start = DateTime(2024, 5, 1, 10);
+    final end = DateTime(2024, 5, 1, 10, 0, 1);
+
+    await repo.log(
+      accountId: 'acc1',
+      success: true,
+      protocol: 'imap',
+      emailsFetched: 0,
+      emailsSkipped: 0,
+      mailboxesSynced: 1,
+      pendingFlushed: 0,
+      bytesTransferred: 0,
+      startedAt: start,
+      finishedAt: end,
+      mailboxStats: const [
+        MailboxSyncStats(
+          mailboxPath: 'INBOX',
+          fetched: 0,
+          skipped: 0,
+          bytesTransferred: 0,
+        ),
+      ],
+    );
+
+    final entries = await repo.observeSyncLogs('acc1').first;
+    final entry = entries.firstWhere((e) => e.startedAt == start);
+    expect(entry.mailboxStats.first.mailboxName, isNull);
   });
 
   test('logs error entry with message', () async {

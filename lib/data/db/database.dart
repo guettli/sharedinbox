@@ -216,6 +216,11 @@ class SyncLogMailboxes extends Table {
   IntColumn get bytesTransferred => integer().withDefault(const Constant(0))();
   // Added in schema v30: how long this mailbox took to sync, in milliseconds.
   IntColumn get durationMs => integer().nullable()();
+  // Added in schema v44: human-readable mailbox name for display.
+  // For JMAP accounts mailboxPath holds the opaque server id (e.g. "a"),
+  // so this holds the label (e.g. "Inbox"). Nullable so pre-v44 rows still
+  // load — the UI falls back to mailboxPath when this is null.
+  TextColumn get mailboxName => text().nullable()();
 }
 
 /// Stores the result of the periodic "ground truth" verification.
@@ -863,6 +868,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 43) {
             await m.createTable(draftTombstones);
+          }
+          if (from >= 12 && from < 44) {
+            await m.addColumn(syncLogMailboxes, syncLogMailboxes.mailboxName);
           }
         },
       );
