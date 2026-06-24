@@ -321,6 +321,28 @@ func (m *Ci) androidBase() *dagger.Container {
 		WithEnvVariable("GRADLE_OPTS", "-Dorg.gradle.daemon=false")
 }
 
+// emulatorBase extends the Flutter/Android toolchain with everything needed to
+// boot a headless emulator: platform-tools (adb), the emulator package, and an
+// x86_64 google_apis system image, plus a pre-created AVD. Each WithExec is a
+// distinct Dagger execution-cache layer, so the multi-GB system-image download
+// and AVD creation happen only on the first run and are reused thereafter (#99).
+//
+// Everything here runs as the unprivileged ci user so the AVD lands in ci's
+// HOME (~/.android/avd) — the emulator refuses to run as root, and
+// SmokeTestRelease drops back to ci before booting it.
+func (m *Ci) emulatorBase() *dagger.Container {
+	return m.toolchain().
+		WithUser("ci").
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`yes | sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" >"$tmp" 2>&1 ` +
+				`|| { cat "$tmp"; exit 1; }`}).
+		WithExec([]string{"/bin/bash", "-c",
+			`echo no | avdmanager create avd -n smoke -k "system-images;android-34;google_apis;x86_64" --force`}).
+		WithEnvVariable("PATH", "${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${PATH}",
+			dagger.ContainerWithEnvVariableOpts{Expand: true})
+}
+
 // linuxSrc is the source subset for Linux builds and integration tests.
 func (m *Ci) linuxSrc() *dagger.Directory {
 	return m.Source.Filter(dagger.DirectoryFilterOpts{
@@ -874,6 +896,106 @@ func (m *Ci) TestAndroidFirebase(
 			   echo "ERROR: robo crawl reported Failed/Inconclusive outcome"; exit 1; \
 			 fi; \
 			 echo "$out" | grep "│" | grep -q "Passed" || { echo "ERROR: no Passed outcome — alpha APK did not survive robo crawl"; exit 1; }`}).
+		Stdout(ctx)
+}
+
+// smokeTestScript drives the emulator inside the SmokeTestRelease container. It
+// is kept as a file (rather than an inline `-c` string) to avoid nested-quote
+// fragility and because it runs via `su ci` — the emulator refuses to run as
+// root and the AVD lives in ci's HOME. It boots the AVD cold, waits for a full
+// boot, installs the release APK, launches MainActivity and fails if the app
+// crashes (FATAL EXCEPTION / process death) or is not running after launch.
+const smokeTestScript = `#!/usr/bin/env bash
+set -euo pipefail
+export HOME=/home/ci
+export ANDROID_HOME="${ANDROID_HOME:?ANDROID_HOME not set}"
+export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:/usr/local/bin:/usr/bin:/bin"
+PACKAGE="de.sharedinbox.mua"
+
+echo "Booting KVM-accelerated emulator (cold)…"
+emulator -avd smoke -no-window -no-audio -no-boot-anim -no-snapshot \
+    -gpu swiftshader_indirect -accel on -netdelay none -netspeed full \
+    > /tmp/emulator.log 2>&1 &
+EMU_PID=$!
+
+adb start-server >/dev/null 2>&1 || true
+for _i in $(seq 1 60); do
+    adb get-state 2>/dev/null | grep -q device && break
+    kill -0 "$EMU_PID" 2>/dev/null || { echo "ERROR: emulator exited early"; tail -50 /tmp/emulator.log; exit 1; }
+    sleep 2
+done
+adb wait-for-device
+
+BOOT=0
+for _i in $(seq 1 90); do
+    BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+    [ "$BOOT" = "1" ] && break
+    kill -0 "$EMU_PID" 2>/dev/null || { echo "ERROR: emulator exited during boot"; tail -50 /tmp/emulator.log; exit 1; }
+    sleep 2
+done
+[ "$BOOT" = "1" ] || { echo "ERROR: Android boot did not complete in time"; tail -50 /tmp/emulator.log; exit 1; }
+echo "Emulator booted."
+
+echo "Installing release APK…"
+adb install -r /tmp/app-release.apk
+
+echo "Clearing crash logcat buffer…"
+adb logcat -b crash -c
+
+echo "Launching $PACKAGE/.MainActivity…"
+adb shell am start -W -n "$PACKAGE/.MainActivity"
+
+WATCH=20
+echo "Watching crash logcat for ${WATCH}s…"
+sleep "$WATCH"
+CRASH=$(adb logcat -b crash -d 2>/dev/null || true)
+if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
+    echo "----- CRASH DETECTED -----"
+    echo "$CRASH"
+    echo "--------------------------"
+    exit 1
+fi
+# Belt-and-suspenders: a launch crash kills the process even if the crash
+# buffer detection above misses it. NoClassDefFoundError lands here.
+if ! adb shell pidof "$PACKAGE" >/dev/null 2>&1; then
+    echo "ERROR: $PACKAGE is not running ${WATCH}s after launch — it crashed on startup."
+    echo "--- crash buffer ---"; echo "$CRASH"
+    echo "--- last main log ---"; adb logcat -d -t 200 2>/dev/null | grep -iE "$PACKAGE|AndroidRuntime|NoClassDefFound|flutter" || true
+    exit 1
+fi
+echo "OK — $PACKAGE launched and survived ${WATCH}s with no crash signal."
+`
+
+// SmokeTestRelease boots the signed release APK on a KVM-accelerated, headless
+// emulator inside Dagger and fails if the app crashes on launch. This catches
+// the class of release-only crashes — R8 stripping, NoClassDefFoundError from
+// compileOnly libraries — that debug builds and `flutter build` never exercise,
+// which is exactly how a crashing build reached Play Store (#99, root cause #100).
+//
+// It must run on a Dagger engine that has /dev/kvm (the p16 bare-metal engine):
+// the cloud ARC runners have no KVM, so pure software emulation is unusably slow.
+// The emulator exec uses InsecureRootCapabilities so the container can open
+// /dev/kvm — the #99 spike confirmed KVM_GET_API_VERSION works there with no
+// engine config change. The release APK is built with the same R8/minify config
+// as the shipped artifact (via BuildAndroidApk), so it reproduces the crash.
+func (m *Ci) SmokeTestRelease(
+	ctx context.Context,
+	keystoreBase64 *dagger.Secret,
+	keystorePassword *dagger.Secret,
+	// Git commit hash injected as GIT_HASH dart-define (matches BuildAndroidApk).
+	// +optional
+	commitHash string,
+) (string, error) {
+	apk := m.BuildAndroidApk(keystoreBase64, keystorePassword, "1", commitHash)
+	return m.emulatorBase().
+		WithFile("/tmp/app-release.apk", apk).
+		WithNewFile("/tmp/smoke.sh", smokeTestScript).
+		WithUser("root").
+		WithExec([]string{"/bin/bash", "-c",
+			`[ -e /dev/kvm ] || { echo "ERROR: /dev/kvm absent — SmokeTestRelease must run on the p16 KVM engine"; exit 1; }; ` +
+				`chmod 0666 /dev/kvm; chown ci /dev/kvm 2>/dev/null || true; ` +
+				`exec su ci -c "ANDROID_HOME=$ANDROID_HOME bash /tmp/smoke.sh"`},
+			dagger.ContainerWithExecOpts{InsecureRootCapabilities: true}).
 		Stdout(ctx)
 }
 
