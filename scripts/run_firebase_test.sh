@@ -65,6 +65,16 @@ if [ -z "$VERSION_CODE" ]; then
     echo "ERROR: $APK_DIR/versionCode is empty" >&2
     exit 1
 fi
+# fetch_playstore_apks.py writes a skip-reason marker (and no APKs) when
+# Play hasn't yet generated split APKs for the latest alpha bundle and no
+# older bundle has them either. That gap is transient (Play generates APKs
+# asynchronously after upload, sometimes taking hours), so treat it as a
+# graceful no-op rather than a red daily cron.
+if [ -f "$APK_DIR/skip-reason" ]; then
+    REASON=$(tr -d '\n' < "$APK_DIR/skip-reason")
+    echo "::notice::[firebase] skipping test for versionCode=$VERSION_CODE: $REASON" >&2
+    exit 0
+fi
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2
 

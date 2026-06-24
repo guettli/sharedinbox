@@ -142,7 +142,13 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
             vc_path = Path(dest_dir) / "versionCode"
             self.assertEqual(vc_path.read_text().strip(), "150")
 
-    def test_raises_when_no_bundle_has_generated_apks(self):
+    def test_writes_skip_marker_when_no_bundle_has_generated_apks(self):
+        """Regression for #87: when Play hasn't generated APKs for the latest
+        alpha bundle and no older bundle has them either, the script must
+        write a ``skip-reason`` marker and exit 0 instead of raising. The
+        gap between AAB upload and Play's APK generation can be many hours,
+        so a hard failure here just turns the daily cron perma-red until a
+        human intervenes."""
         with tempfile.TemporaryDirectory() as dest_dir:
             session = MagicMock()
             with patch.dict(
@@ -157,9 +163,17 @@ class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
                 "fetch_playstore_apks._list_generated_apks", return_value=None
             ), patch(
                 "fetch_playstore_apks._list_bundles", return_value=[200, 150]
-            ):
-                with self.assertRaises(RuntimeError):
-                    fetch_playstore_apks.main()
+            ), patch(
+                "fetch_playstore_apks._download"
+            ) as mock_download:
+                fetch_playstore_apks.main()
+                mock_download.assert_not_called()
+
+            skip_path = Path(dest_dir) / "skip-reason"
+            self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
+            self.assertIn("200", skip_path.read_text())
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertEqual(vc_path.read_text().strip(), "200")
 
 
 class TestEnumerateDownloads(unittest.TestCase):

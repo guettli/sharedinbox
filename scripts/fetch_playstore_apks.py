@@ -195,10 +195,23 @@ def main():
                 version_code = candidate
                 break
         else:
-            raise RuntimeError(
-                "No uploaded bundle has generated APKs available "
-                f"(checked versionCode {version_code} plus all older bundles)"
+            # No testable APK is available right now: Play hasn't generated
+            # split APKs for the latest alpha bundle yet AND no older bundle
+            # has them either. Generation can take many hours, so this is a
+            # transient state — exit 0 with a skip marker so the daily cron
+            # is not perma-red. The caller (run_firebase_test.sh) checks for
+            # ``skip-reason`` and treats it as "no test ran today".
+            reason = (
+                f"Play has not generated split APKs for versionCode "
+                f"{version_code} yet, and no older bundle has them either"
             )
+            print(f"Skipping Firebase test: {reason}", file=sys.stderr)
+            with open(os.path.join(dest_dir, "skip-reason"), "w") as f:
+                f.write(f"{reason}\n")
+            with open(os.path.join(dest_dir, "versionCode"), "w") as f:
+                f.write(f"{version_code}\n")
+            print(version_code)
+            return
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:
