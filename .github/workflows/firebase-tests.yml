@@ -2,8 +2,18 @@ name: Firebase Tests
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # once per day at 3 AM
+    - cron: '0 * * * *'   # hourly; the script exits early when the last green
+                          # run is within 12h, when the latest alpha was
+                          # already tested, or when its split APKs are not
+                          # generated yet — so most ticks are nearly free
   workflow_dispatch:
+
+# Hourly schedule + a 60-minute timeout means runs could overlap while a real
+# test is in flight. Queue rather than cancel so we don't kill a Firebase Test
+# Lab job halfway through.
+concurrency:
+  group: firebase-tests
+  cancel-in-progress: false
 
 jobs:
   test-android-firebase:
@@ -72,6 +82,11 @@ jobs:
           }
           api = f"{api_base}/repos/{repo}"
 
+          def api_get(path):
+              req = urllib.request.Request(f"{api}{path}", headers=headers, method="GET")
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
           def api_post(path, body):
               data = json.dumps(body).encode()
               req = urllib.request.Request(f"{api}{path}", data=data, headers=headers, method="POST")
@@ -79,19 +94,31 @@ jobs:
                   return json.loads(r.read())
 
           title = "Firebase Tests failed — find root cause and fix"
-          body = (
-              "Firebase robo crawl of the Play Store **alpha** APK failed in the daily run.\n\n"
-              f"**Failed run:** {run_url}\n\n"
-              "## Steps to resolve\n\n"
-              "1. **Find the root cause**: Check the test run logs linked above. The job runs `gcloud firebase test android run --type robo` against the split APKs downloaded from the alpha track, so a failure means the production binary either crashed (look for `FATAL EXCEPTION` / `Process … has died`) or the robo crawl reported `Failed`/`Inconclusive`.\n"
-              "2. **Fix if possible**: If the failure is caused by a code bug, create a fix. If it is a flaky or infrastructure issue, document the findings.\n"
-              "3. Close this issue once the root cause is resolved and the tests pass.\n"
-          )
 
-          issue = api_post("/issues", {
-              "title": title,
-              "body": body,
-              "labels": ["loop/code"],
-          })
-          print(f"Created issue #{issue['number']}: {issue['html_url']}")
+          # Hourly runs would otherwise pile up duplicate failure issues until
+          # a fix lands; only open a new one when no open issue carries this
+          # title. The list endpoint returns both issues and PRs — filter PRs.
+          existing = [
+              i for i in api_get("/issues?state=open&labels=loop/code&per_page=100")
+              if i["title"] == title and not i.get("pull_request")
+          ]
+          if existing:
+              print(f"Existing open issue #{existing[0]['number']} — not creating duplicate")
+          else:
+              body = (
+                  "Firebase robo crawl of the Play Store **alpha** APK failed in the hourly run.\n\n"
+                  f"**Failed run:** {run_url}\n\n"
+                  "## Steps to resolve\n\n"
+                  "1. **Find the root cause**: Check the test run logs linked above. The job runs `gcloud firebase test android run --type robo` against the split APKs downloaded from the alpha track, so a failure means the production binary either crashed (look for `FATAL EXCEPTION` / `Process … has died`) or the robo crawl reported `Failed`/`Inconclusive`.\n"
+                  "2. **Fix if possible**: If the failure is caused by a code bug, create a fix. If it is a flaky or infrastructure issue, document the findings.\n"
+                  "3. Close this issue once the root cause is resolved and the tests pass.\n"
+              )
+              # `automerge` so once the agentloop ships a fix and CI is green
+              # on the PR, it lands without a human round-trip.
+              issue = api_post("/issues", {
+                  "title": title,
+                  "body": body,
+                  "labels": ["loop/code", "automerge"],
+              })
+              print(f"Created issue #{issue['number']}: {issue['html_url']}")
           PYEOF

@@ -64,8 +64,9 @@ def _list_generated_apks(session, package, version_code):
 
     Play returns 404 until it has finished generating the downloadable split
     APKs for an uploaded AAB. Generation can take an hour or more after the
-    AAB upload completes (occasionally much longer), so callers must be
-    prepared to fall back to an older bundle whose APKs are already ready.
+    AAB upload completes (occasionally much longer); the caller treats
+    ``None`` as a transient "not ready yet" state and skips the run cleanly
+    — the next hourly cron will retry once Play catches up.
     """
     url = f"{_BASE}/{package}/generatedApks/{version_code}/downloads"
     resp = session.get(url, timeout=60)
@@ -73,34 +74,6 @@ def _list_generated_apks(session, package, version_code):
         return None
     resp.raise_for_status()
     return resp.json()
-
-
-def _list_bundles(session, package):
-    """Return all uploaded bundle versionCodes, newest first.
-
-    Bundles can only be enumerated through the edits API; there is no
-    top-level ``applications/{package}/bundles`` resource. Used to fall
-    back to an older bundle when ``generatedApks`` 404s for the most
-    recent release.
-    """
-    edit_resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
-    edit_resp.raise_for_status()
-    edit_id = edit_resp.json()["id"]
-    try:
-        resp = session.get(
-            f"{_BASE}/{package}/edits/{edit_id}/bundles", timeout=30
-        )
-        resp.raise_for_status()
-        bundles = resp.json().get("bundles") or []
-    finally:
-        try:
-            session.delete(f"{_BASE}/{package}/edits/{edit_id}", timeout=30)
-        except Exception:
-            pass
-    return sorted(
-        (int(b["versionCode"]) for b in bundles if "versionCode" in b),
-        reverse=True,
-    )
 
 
 def _download(session, package, version_code, download_id, dest):
@@ -175,30 +148,29 @@ def main():
 
     listing = _list_generated_apks(session, PACKAGE_NAME, version_code)
     if listing is None:
-        # Play has not yet generated split APKs for the latest release. Fall
-        # back to the most recent older bundle whose APKs are available so
-        # the Firebase test still has something to crawl.
-        print(
+        # Play has not yet generated split APKs for the latest release.
+        # Generation can take an hour or more after upload; skip cleanly
+        # and let the next hourly cron retry. We deliberately do NOT fall
+        # back to an older bundle — Firebase Test Lab should only exercise
+        # the binary users actually install.
+        _write_skip(
+            dest_dir,
             f"Play has not yet generated split APKs for versionCode "
-            f"{version_code}; falling back to an older bundle…",
-            file=sys.stderr,
+            f"{version_code} (generation can take an hour or more after upload)",
         )
-        for candidate in _list_bundles(session, PACKAGE_NAME):
-            if candidate == version_code:
-                continue
-            listing = _list_generated_apks(session, PACKAGE_NAME, candidate)
-            if listing is not None:
-                print(
-                    f"Using fallback versionCode {candidate}",
-                    file=sys.stderr,
-                )
-                version_code = candidate
-                break
-        else:
-            raise RuntimeError(
-                "No uploaded bundle has generated APKs available "
-                f"(checked versionCode {version_code} plus all older bundles)"
-            )
+        return
+
+    # Skip if the latest alpha matches the versionCode of the last green run.
+    # The shell wrapper passes that through ALREADY_TESTED_VERSION_CODE; no
+    # point in retesting the same binary on every hourly tick.
+    already_tested = os.environ.get("ALREADY_TESTED_VERSION_CODE", "").strip()
+    if already_tested and already_tested == str(version_code):
+        _write_skip(
+            dest_dir,
+            f"versionCode {version_code} already tested green — skipping",
+        )
+        return
+
     downloads = _enumerate_downloads(listing)
 
     for download_id, name in downloads:
@@ -214,6 +186,19 @@ def main():
 
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)
+
+
+def _write_skip(dest_dir, reason):
+    """Drop a ``.skip`` sentinel so the shell wrapper exits 0 with a notice.
+
+    Used for transient/expected states (Play APKs not generated yet, latest
+    versionCode already tested) that should not surface as a workflow
+    failure. The wrapper distinguishes "skip cleanly" from "real error" by
+    the presence of this file.
+    """
+    print(f"Skipping: {reason}", file=sys.stderr)
+    with open(os.path.join(dest_dir, ".skip"), "w") as f:
+        f.write(reason + "\n")
 
 
 if __name__ == "__main__":
