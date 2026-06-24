@@ -40,7 +40,7 @@ RUN curl -fsSL https://taskfile.dev/install.sh \
 
 # Install Dagger CLI
 RUN curl -fsSL https://dl.dagger.io/dagger/install.sh \
-    | DAGGER_VERSION=0.21.6 BIN_DIR=/usr/local/bin sh
+    | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
 
 # Install python packages (Play Store API clients + pre-commit)
 RUN pip install --break-system-packages --no-cache-dir \
