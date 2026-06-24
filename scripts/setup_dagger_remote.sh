@@ -111,8 +111,27 @@ echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VER
 # `dagger core` forces a real engine connection without a complex GraphQL query.
 # Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
 # which would mask the timeout (exit 124) vs version-mismatch distinction below.
+#
+# Retry transient failures. The engine occasionally rejects new connections for
+# a few seconds during restarts or under load — a single 45s timeout used to
+# fail the whole job (see issue #103). Retry on exit 124 (timeout) or 255 (ssh
+# transport dropped the forward) only; a real version-mismatch error returns
+# something else and should fail loudly on the first attempt.
 verify_rc=0
-verify_out=$(timeout 45 dagger core --help 2>&1) || verify_rc=$?
+verify_out=""
+for attempt in 1 2 3; do
+    verify_rc=0
+    verify_out=$(timeout 20 dagger core --help 2>&1) || verify_rc=$?
+    if [ "$verify_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -lt 3 ] && { [ "$verify_rc" = 124 ] || [ "$verify_rc" = 255 ]; }; then
+        echo "::warning::Dagger verify attempt $attempt/3 failed (rc=$verify_rc), retrying in 5s..."
+        sleep 5
+        continue
+    fi
+    break
+done
 if [ "$verify_rc" -ne 0 ]; then
     # Dagger's handshake error usually names the engine version it found; surface
     # it so the mismatch is concrete (CLI X vs engine Y) instead of a guess.
@@ -123,11 +142,12 @@ if [ "$verify_rc" -ne 0 ]; then
     ENGINE_VERSION=$(printf '%s' "$verify_out" \
         | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+' \
         | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-    # Exit 124 from `timeout` means the engine never answered within 45s. That is
-    # almost always transient (network blip, engine restart) rather than a
-    # version mismatch, so word the error accordingly.
-    if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
-        echo "::error::Dagger engine did not respond within 45s via the SSH tunnel."
+    # Exit 124 (timeout) or 255 (ssh transport) with no parseable engine version
+    # means the engine never answered the handshake. After 3 retries that points
+    # to a real outage rather than a version mismatch, so word the error so the
+    # reader looks at the engine host first, not the lock-step CLI/engine pin.
+    if { [ "$verify_rc" = 124 ] || [ "$verify_rc" = 255 ]; } && [ -z "$ENGINE_VERSION" ]; then
+        echo "::error::Dagger engine did not respond after 3 attempts (20s each) via the SSH tunnel."
         echo "::error::The tunnel authenticated and the port forward is up, but"
         echo "::error::\`dagger core --help\` timed out before the engine replied."
         echo "::error::This is usually transient (engine restart, network blip);"
