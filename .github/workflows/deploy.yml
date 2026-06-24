@@ -156,6 +156,17 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
+      # Gate the release on a KVM launch smoke test BEFORE uploading to Play
+      # Store: boot the signed release APK on an emulator inside Dagger (p16
+      # engine) and fail if it crashes on launch. Catches release-only R8 /
+      # NoClassDefFound / NoSuchMethod crashes (e.g. #100) before users can
+      # install. Runs here at deploy time — not on every PR — so merges to main
+      # stay fast; only the few changes that actually ship a release pay for it.
+      - name: Smoke-test release build (KVM launch test)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: task smoke-test-release
+
       - name: Publish Android to Play Store
         env:
           DAGGER_NO_NAG: "1"
