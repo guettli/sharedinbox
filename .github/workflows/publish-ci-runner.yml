@@ -1,0 +1,48 @@
+name: Publish CI Runner Image
+
+# Builds the sharedinbox-arc runner image (arc-runner-image/Dockerfile) and
+# pushes it to ghcr.io/guettli/sharedinbox-ci-runner. This image is the single
+# source of truth for the CI toolchain (sops/dagger/task): CI workflows rely on
+# the baked versions and never reinstall them at job time. See guettli/otelhouse#33.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'arc-runner-image/Dockerfile'
+      - '.github/workflows/publish-ci-runner.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Push sharedinbox-ci-runner
+    runs-on: sharedinbox-arc
+    timeout-minutes: 30
+    if: github.server_url == 'https://github.com'
+    permissions:
+      packages: write
+
+    env:
+      IMAGE: ghcr.io/guettli/sharedinbox-ci-runner
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build image
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          docker build \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:$SHORT_SHA" \
+            -f arc-runner-image/Dockerfile \
+            arc-runner-image
+
+      - name: Push image
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:$SHORT_SHA"
