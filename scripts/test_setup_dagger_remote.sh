@@ -78,9 +78,18 @@ chmod +x "$SCRATCH/sleep"
 #   DAGGER_CORE_OUTPUT      — text emitted by `dagger core --help`
 #   DAGGER_CORE_SUCCEED_ON  — attempt number on which to flip to rc=0 (optional)
 # The attempts counter is reset before each call; read it via $SCRATCH/attempts.
+#
+# We pin DAGGER_VERIFY_MAX_ATTEMPTS=3 (the production default is 5) and the
+# per-attempt timeout to 45s so the assertion strings below stay stable; the
+# script's behavior — retry, distinguish 124 from non-124, surface the count
+# in the error — is identical at any budget.
 run_verify() {
     echo 0 >"$SCRATCH/attempts"
-    PATH="$SCRATCH:$PATH" bash -c "$_verify_snippet" 2>&1
+    PATH="$SCRATCH:$PATH" \
+        DAGGER_VERIFY_MAX_ATTEMPTS=3 \
+        DAGGER_VERIFY_TIMEOUT_S=45 \
+        DAGGER_VERIFY_RETRY_WAIT_S=0 \
+        bash -c "$_verify_snippet" 2>&1
 }
 
 # --- Empty verify_out after 3 timeouts prints engine-down error ----------------

@@ -111,23 +111,28 @@ echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VER
 # `dagger core` forces a real engine connection without a complex GraphQL query.
 # Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
 # which would hide the timeout (124) vs mismatch distinction the retry depends on.
-# The remote engine occasionally fails to answer within 45s due to a transient
-# blip (engine restart, network); retry the verify before failing the job. Real
-# CLI/engine version mismatches are consistent and won't recover from waiting,
-# so we retry only on timeout (exit 124).
+# The remote engine occasionally fails to answer in time due to a transient
+# blip (engine restart, network, queue backlog); retry the verify before failing
+# the job. Real CLI/engine version mismatches are consistent and won't recover
+# from waiting, so we retry only on timeout (exit 124).
+# Budget: 5 × 60s timeout + 4 × 15s wait ≈ 6 min — generous because the engine
+# occasionally takes minutes to recover from a restart, and a re-run costs more.
+VERIFY_TIMEOUT_S="${DAGGER_VERIFY_TIMEOUT_S:-60}"
+VERIFY_MAX_ATTEMPTS="${DAGGER_VERIFY_MAX_ATTEMPTS:-5}"
+VERIFY_RETRY_WAIT_S="${DAGGER_VERIFY_RETRY_WAIT_S:-15}"
 verify_rc=0
 verify_out=""
-for attempt in 1 2 3; do
+for attempt in $(seq 1 "$VERIFY_MAX_ATTEMPTS"); do
     verify_rc=0
-    verify_out=$(timeout 45 dagger core --help 2>&1) || verify_rc=$?
+    verify_out=$(timeout "$VERIFY_TIMEOUT_S" dagger core --help 2>&1) || verify_rc=$?
     if [ "$verify_rc" -eq 0 ]; then
         break
     fi
-    if [ "$attempt" -eq 3 ] || [ "$verify_rc" -ne 124 ]; then
+    if [ "$attempt" -eq "$VERIFY_MAX_ATTEMPTS" ] || [ "$verify_rc" -ne 124 ]; then
         break
     fi
-    echo "::warning::Dagger verify attempt $attempt/3 timed out after 45s; retrying in 10s..."
-    sleep 10
+    echo "::warning::Dagger verify attempt ${attempt}/${VERIFY_MAX_ATTEMPTS} timed out after ${VERIFY_TIMEOUT_S}s; retrying in ${VERIFY_RETRY_WAIT_S}s..."
+    sleep "$VERIFY_RETRY_WAIT_S"
 done
 if [ "$verify_rc" -ne 0 ]; then
     # Dagger's handshake error usually names the engine version it found; surface
@@ -139,7 +144,7 @@ if [ "$verify_rc" -ne 0 ]; then
         | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+' \
         | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
-        echo "::error::Dagger engine did not respond within 45s on 3 attempts via the SSH tunnel."
+        echo "::error::Dagger engine did not respond within ${VERIFY_TIMEOUT_S}s on ${VERIFY_MAX_ATTEMPTS} attempts via the SSH tunnel."
         echo "::error::The tunnel authenticated and the port forward is up, but"
         echo "::error::\`dagger core --help\` timed out before the engine replied."
         echo "::error::This usually means the engine is down or unreachable; check"
