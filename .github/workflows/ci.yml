@@ -32,7 +32,7 @@ jobs:
           curl -fsSL https://taskfile.dev/install.sh \
             | sudo sh -s -- -b /usr/local/bin v3.48.0
           curl -fsSL https://dl.dagger.io/dagger/install.sh \
-            | sudo DAGGER_VERSION=0.21.6 BIN_DIR=/usr/local/bin sh
+            | sudo DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
