@@ -945,6 +945,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          // SnackBar defaults to persist=true when an action is set, which
+          // disables the auto-dismiss timer. Explicitly opt back into
+          // duration-based dismiss so the "Saved" snack bar slides away on
+          // its own while the Open/Share action button still works.
+          persist: false,
           content: Text('Saved ${saved.displayLocation}'),
           action: action,
         ),
