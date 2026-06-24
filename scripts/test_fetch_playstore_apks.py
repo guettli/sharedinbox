@@ -55,10 +55,10 @@ class TestResolveVersionCode(unittest.TestCase):
 
 class TestListGeneratedApks(unittest.TestCase):
     def test_returns_none_on_404(self):
-        """Regression for #668: Play returns 404 until it has finished
-        generating split APKs for a freshly uploaded AAB. The helper must
-        signal this with ``None`` rather than raising, so callers can fall
-        back to an older bundle."""
+        """Play returns 404 until it has finished generating split APKs for a
+        freshly uploaded AAB. The helper signals this with ``None`` so the
+        caller can skip the run cleanly — there is no fallback to older
+        bundles (we only ever exercise the binary users actually install)."""
         session = MagicMock()
         resp = MagicMock(status_code=404)
         session.get.return_value = resp
@@ -78,132 +78,150 @@ class TestListGeneratedApks(unittest.TestCase):
             fetch_playstore_apks._list_generated_apks(session, "pkg", 42)
 
 
-class TestListBundles(unittest.TestCase):
-    def test_returns_version_codes_descending(self):
-        session = MagicMock()
-        edit_resp = MagicMock()
-        edit_resp.json.return_value = {"id": "edit-1"}
-        session.post.return_value = edit_resp
-        bundles_resp = MagicMock()
-        bundles_resp.json.return_value = {
-            "bundles": [
-                {"versionCode": 100},
-                {"versionCode": 200},
-                {"versionCode": 150},
-            ]
-        }
-        session.get.return_value = bundles_resp
+def _patches(dest_dir, *, version_code, list_apks, env=None):
+    """Common patch stack used by the main() tests.
 
-        self.assertEqual(
-            fetch_playstore_apks._list_bundles(session, "pkg"),
-            [200, 150, 100],
-        )
-        # Must list via an edit and clean it up.
-        self.assertIn("/edits/edit-1/bundles", session.get.call_args[0][0])
-        session.delete.assert_called_once()
+    Stubs out the network-y bits (auth, session) so the test exercises only
+    the policy in ``main()`` (skip vs. download)."""
+    env_vars = {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+    if env:
+        env_vars.update(env)
+    return [
+        patch.dict(os.environ, env_vars, clear=False),
+        patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]),
+        patch(
+            "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
+        ),
+        patch("fetch_playstore_apks.AuthorizedSession", return_value=MagicMock()),
+        patch(
+            "fetch_playstore_apks._resolve_version_code", return_value=version_code
+        ),
+        patch(
+            "fetch_playstore_apks._list_generated_apks",
+            return_value=list_apks,
+        ),
+        patch(
+            "fetch_playstore_apks._enumerate_downloads",
+            return_value=[("dl-1", "base-master.apk")],
+        ),
+        patch("fetch_playstore_apks._download"),
+    ]
 
 
-class TestMainFallsBackWhenLatestNotReady(unittest.TestCase):
-    """Regression for #668: when Play has not yet generated split APKs for
-    the alpha release (the new endpoint 404s), the script must fall back to
-    the most recent older bundle whose APKs are available instead of
-    aborting the Firebase test."""
+def _with_patches(patches, fn):
+    if not patches:
+        return fn()
+    with patches[0]:
+        return _with_patches(patches[1:], fn)
 
-    def test_uses_next_older_bundle_when_latest_404s(self):
+
+class TestMainSkipsWhenPlayNotReady(unittest.TestCase):
+    """Regression for #83: when Play has not generated split APKs for the
+    latest alpha, write a ``.skip`` sentinel in the dest dir and return
+    cleanly. The shell wrapper treats ``.skip`` as a transient state (Play
+    APK generation can take an hour or more after upload) and skips the run
+    instead of opening a spurious failure issue. No fallback to older
+    bundles — the next hourly cron will pick it up."""
+
+    def test_skips_when_latest_has_no_apks(self):
         with tempfile.TemporaryDirectory() as dest_dir:
-            session = MagicMock()
-            calls = []
-
-            def list_apks(_session, _package, vc):
-                calls.append(vc)
-                return None if vc == 200 else {"generatedApks": []}
-
-            with patch.dict(
-                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
-            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
-                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
-            ), patch(
-                "fetch_playstore_apks.AuthorizedSession", return_value=session
-            ), patch(
-                "fetch_playstore_apks._resolve_version_code", return_value=200
-            ), patch(
-                "fetch_playstore_apks._list_generated_apks", side_effect=list_apks
-            ), patch(
-                "fetch_playstore_apks._list_bundles", return_value=[200, 150, 100]
-            ), patch(
-                "fetch_playstore_apks._enumerate_downloads",
-                return_value=[("dl-1", "base-master.apk")],
-            ), patch(
-                "fetch_playstore_apks._download"
-            ):
-                fetch_playstore_apks.main()
-
-            self.assertEqual(calls, [200, 150])
-            vc_path = Path(dest_dir) / "versionCode"
-            self.assertEqual(vc_path.read_text().strip(), "150")
-
-    def test_skips_when_no_bundle_has_generated_apks(self):
-        """Regression for #83: when Play has not generated APKs for the latest
-        alpha and no older bundle has APKs to fall back to, write a ``.skip``
-        sentinel in the dest dir and return cleanly. The daily Firebase CI
-        treats ``.skip`` as a transient infrastructure state (Play APK
-        generation can take an hour or more after upload) and skips the run
-        instead of opening a spurious failure issue."""
-        with tempfile.TemporaryDirectory() as dest_dir:
-            session = MagicMock()
-            with patch.dict(
-                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
-            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
-                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
-            ), patch(
-                "fetch_playstore_apks.AuthorizedSession", return_value=session
-            ), patch(
-                "fetch_playstore_apks._resolve_version_code", return_value=200
-            ), patch(
-                "fetch_playstore_apks._list_generated_apks", return_value=None
-            ), patch(
-                "fetch_playstore_apks._list_bundles", return_value=[200, 150]
-            ):
-                fetch_playstore_apks.main()
+            _with_patches(
+                _patches(dest_dir, version_code=200, list_apks=None),
+                fetch_playstore_apks.main,
+            )
 
             skip_path = Path(dest_dir) / ".skip"
             vc_path = Path(dest_dir) / "versionCode"
             self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
             self.assertIn("split APKs", skip_path.read_text())
+            self.assertIn("200", skip_path.read_text())
             self.assertFalse(
                 vc_path.is_file(),
                 "versionCode must not be written when skipping — otherwise the "
                 "CI cache would treat the untested versionCode as 'tested'.",
             )
 
-    def test_skip_message_includes_latest_versioncode(self):
+    def test_skip_message_is_single_line(self):
         """The skip reason is surfaced as a ``::notice::`` line in the CI log,
-        so include the resolved versionCode so the operator sees which build
-        Play is still processing."""
+        so it must be a single line so the notice stays on one row."""
         with tempfile.TemporaryDirectory() as dest_dir:
-            session = MagicMock()
-            with patch.dict(
-                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
-            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
-                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
-            ), patch(
-                "fetch_playstore_apks.AuthorizedSession", return_value=session
-            ), patch(
-                "fetch_playstore_apks._resolve_version_code", return_value=1782243611
-            ), patch(
-                "fetch_playstore_apks._list_generated_apks", return_value=None
-            ), patch(
-                "fetch_playstore_apks._list_bundles", return_value=[1782243611]
-            ):
-                fetch_playstore_apks.main()
+            _with_patches(
+                _patches(dest_dir, version_code=1782243611, list_apks=None),
+                fetch_playstore_apks.main,
+            )
 
             skip_text = (Path(dest_dir) / ".skip").read_text()
             self.assertIn("1782243611", skip_text)
             self.assertEqual(
                 skip_text.count("\n"), 1,
-                "skip message must be a single line (plus trailing newline) so "
-                "the ::notice:: line stays on one row in the Actions log",
+                "skip message must be a single line (plus trailing newline)",
             )
+
+
+class TestMainSkipsWhenAlreadyTested(unittest.TestCase):
+    """Skip Firebase Test Lab when the latest alpha matches the versionCode
+    of the last green run — the same binary doesn't need to be exercised
+    twice. The shell wrapper passes the cached versionCode via the
+    ``ALREADY_TESTED_VERSION_CODE`` env var; the script writes a ``.skip``
+    sentinel and downloads nothing."""
+
+    def test_skips_when_latest_matches_already_tested_env(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            _with_patches(
+                _patches(
+                    dest_dir,
+                    version_code=200,
+                    list_apks={"generatedApks": []},
+                    env={"ALREADY_TESTED_VERSION_CODE": "200"},
+                ),
+                fetch_playstore_apks.main,
+            )
+
+            skip_path = Path(dest_dir) / ".skip"
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
+            self.assertIn("already tested", skip_path.read_text())
+            self.assertIn("200", skip_path.read_text())
+            self.assertFalse(
+                vc_path.is_file(),
+                "versionCode is only written when the binary is actually being "
+                "exercised — the cache must not move forward on a skip.",
+            )
+
+    def test_runs_when_latest_differs_from_already_tested(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            _with_patches(
+                _patches(
+                    dest_dir,
+                    version_code=200,
+                    list_apks={"generatedApks": []},
+                    env={"ALREADY_TESTED_VERSION_CODE": "150"},
+                ),
+                fetch_playstore_apks.main,
+            )
+
+            skip_path = Path(dest_dir) / ".skip"
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertFalse(skip_path.is_file(), "must not skip when versions differ")
+            self.assertTrue(vc_path.is_file())
+            self.assertEqual(vc_path.read_text().strip(), "200")
+
+    def test_runs_when_already_tested_env_is_empty(self):
+        """An empty ``ALREADY_TESTED_VERSION_CODE`` env var means the cache
+        is missing (first run, or token couldn't read it). Treat it as
+        "nothing tested yet" — exercise the latest alpha."""
+        with tempfile.TemporaryDirectory() as dest_dir:
+            _with_patches(
+                _patches(
+                    dest_dir,
+                    version_code=200,
+                    list_apks={"generatedApks": []},
+                    env={"ALREADY_TESTED_VERSION_CODE": ""},
+                ),
+                fetch_playstore_apks.main,
+            )
+            self.assertFalse((Path(dest_dir) / ".skip").is_file())
+            self.assertTrue((Path(dest_dir) / "versionCode").is_file())
 
 
 class TestEnumerateDownloads(unittest.TestCase):
@@ -233,25 +251,10 @@ class TestMainWritesVersionCodeFile(unittest.TestCase):
 
     def test_writes_versioncode_file(self):
         with tempfile.TemporaryDirectory() as dest_dir:
-            session = MagicMock()
-
-            with patch.dict(
-                os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
-            ), patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]), patch(
-                "fetch_playstore_apks.service_account.Credentials.from_service_account_info"
-            ), patch(
-                "fetch_playstore_apks.AuthorizedSession", return_value=session
-            ), patch(
-                "fetch_playstore_apks._resolve_version_code", return_value=42
-            ), patch(
-                "fetch_playstore_apks._list_generated_apks", return_value={}
-            ), patch(
-                "fetch_playstore_apks._enumerate_downloads",
-                return_value=[("dl-1", "base-master.apk")],
-            ), patch(
-                "fetch_playstore_apks._download"
-            ):
-                fetch_playstore_apks.main()
+            _with_patches(
+                _patches(dest_dir, version_code=42, list_apks={}),
+                fetch_playstore_apks.main,
+            )
 
             vc_path = Path(dest_dir) / "versionCode"
             self.assertTrue(vc_path.is_file(), f"{vc_path} not created")

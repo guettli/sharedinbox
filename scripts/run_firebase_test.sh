@@ -3,15 +3,30 @@
 # via the Dagger pipeline. The Play artefact is what users actually install,
 # so any launch-time crash visible in production shows up here too.
 #
-# Caches the last successfully-tested versionCode in the GitHub Actions repo
-# variable LAST_TESTED_ALPHA_VERSION_CODE so the daily cron is cheap when
-# nothing has shipped. The variable write needs a token with Variables:write
-# (the default GITHUB_TOKEN cannot manage variables), so the cache is best
-# effort and silently degrades to "always run" when the write is rejected.
-# Retries up to 3 times on transient Dagger engine
-# connectivity errors, and on "No space left on device" after pruning the
-# Dagger cache.
+# Cron policy (see .github/workflows/firebase-tests.yml — fires hourly):
+#   1. If LAST_SUCCESSFUL_FIREBASE_RUN was less than SKIP_WINDOW_SECONDS ago
+#      (any versionCode), skip. Keeps hourly polling cheap on a stable alpha.
+#   2. Resolve the latest alpha versionCode. If Play has not yet generated
+#      split APKs for it, skip — no fallback to older bundles, the next
+#      cron tick will retry. (Generation can take an hour or more after
+#      upload.)
+#   3. If that versionCode equals LAST_TESTED_ALPHA_VERSION_CODE, skip — the
+#      build was already exercised, no point retesting the same binary.
+#   4. Otherwise download the APKs and run Firebase Test Lab.
+#   5. On success, update both repo variables. Only an actual test failure
+#      propagates to the workflow so an issue can be opened.
+#
+# Both repo variables are written best-effort: GITHUB_TOKEN needs
+# Variables:write (the default workflow token cannot manage variables) so a
+# 403 silently degrades to "always run". Retries up to 3 times on transient
+# Dagger engine connectivity errors, and on "No space left on device" after
+# pruning the Dagger cache.
 set -uo pipefail
+
+# Hourly polling is cheap when broken (catches a fix within ~1h); the 12h
+# window gates the real Firebase Test Lab spend on a stable alpha to ~2
+# runs/day even if no new build ships.
+SKIP_WINDOW_SECONDS=$((12 * 60 * 60))
 
 OUT=$(mktemp)
 RC_FILE=$(mktemp)
@@ -47,50 +62,21 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
     exit 1
 fi
 
-echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&2
-# Run inside a Dagger container so the runner host does not need google-auth /
-# requests installed. The Dagger function writes the resolved versionCode to
-# <dest>/versionCode in addition to the APKs.
-if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
-        --play-store-config env:PLAY_STORE_CONFIG_JSON -o "$APK_DIR"; then
-    echo "ERROR: dagger fetch-play-store-apks failed" >&2
-    exit 1
-fi
-# The fetch script writes a .skip sentinel when no uploaded bundle has Play-
-# generated split APKs yet (generation can take an hour or more after upload).
-# Don't fail the daily run in that case — let tomorrow's cron retry once Play
-# catches up. Skip BEFORE the versionCode check so the cache stays untouched.
-if [ -f "$APK_DIR/.skip" ]; then
-    reason=$(tr -d '\n' < "$APK_DIR/.skip")
-    echo "::notice::[firebase] skipping: $reason" >&2
-    exit 0
-fi
-if [ ! -f "$APK_DIR/versionCode" ]; then
-    echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
-    exit 1
-fi
-VERSION_CODE=$(tr -d '[:space:]' < "$APK_DIR/versionCode")
-if [ -z "$VERSION_CODE" ]; then
-    echo "ERROR: $APK_DIR/versionCode is empty" >&2
-    exit 1
-fi
-echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
-ls -1 "$APK_DIR" >&2
+# === GitHub Actions repo-variables helpers (best effort) ========================
 
-# Cache check: if the GitHub repo variable LAST_TESTED_ALPHA_VERSION_CODE matches,
-# the alpha hasn't shipped a new build since last success, so skip the test.
-_gh_cache_lookup() {
+_gh_var_get() {
+    local name="$1"
     if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
         echo ""
         return 0
     fi
-    python3 - <<'PYEOF'
-import json, os, urllib.error, urllib.request
-
+    NAME="$name" python3 - <<'PYEOF'
+import json, os, sys, urllib.error, urllib.request
+name = os.environ["NAME"]
 token = os.environ["GITHUB_TOKEN"]
 api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 repo = os.environ["GITHUB_REPOSITORY"]
-api = f"{api_base}/repos/{repo}/actions/variables/LAST_TESTED_ALPHA_VERSION_CODE"
+api = f"{api_base}/repos/{repo}/actions/variables/{name}"
 headers = {
     "Authorization": f"Bearer {token}",
     "Accept": "application/vnd.github+json",
@@ -104,25 +90,26 @@ except urllib.error.HTTPError as e:
     if e.code == 404:
         print("")
     else:
-        # Don't fail the whole job on a cache lookup error; treat as a miss.
-        print(f"[firebase] cache lookup HTTP {e.code}: {e.reason}", file=__import__("sys").stderr)
+        # Don't fail the whole job on a lookup error; treat as a miss.
+        print(f"[firebase] {name} lookup HTTP {e.code}: {e.reason}", file=sys.stderr)
         print("")
 PYEOF
 }
 
-_gh_cache_write() {
-    local value="$1"
+_gh_var_set() {
+    local name="$1"
+    local value="$2"
     if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
         return 0
     fi
-    VALUE="$value" python3 - <<'PYEOF'
+    NAME="$name" VALUE="$value" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.request
 
+name = os.environ["NAME"]
+value = os.environ["VALUE"]
 token = os.environ["GITHUB_TOKEN"]
 api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 repo = os.environ["GITHUB_REPOSITORY"]
-value = os.environ["VALUE"]
-name = "LAST_TESTED_ALPHA_VERSION_CODE"
 base = f"{api_base}/repos/{repo}/actions/variables"
 headers = {
     "Authorization": f"Bearer {token}",
@@ -142,26 +129,63 @@ try:
     sys.exit(0)
 except urllib.error.HTTPError as e:
     if e.code != 404:
-        print(f"[firebase] PATCH cache failed HTTP {e.code}: {e.reason} — trying POST", file=sys.stderr)
+        print(f"[firebase] PATCH {name} failed HTTP {e.code}: {e.reason} — trying POST", file=sys.stderr)
 try:
     with urllib.request.urlopen(request(base, "POST", {"name": name, "value": value})) as r:
         r.read()
     print(f"[firebase] created {name}={value}", file=sys.stderr)
 except urllib.error.HTTPError as e:
-    print(f"[firebase] WARNING: cache write failed HTTP {e.code}: {e.reason}", file=sys.stderr)
+    print(f"[firebase] WARNING: {name} write failed HTTP {e.code}: {e.reason}", file=sys.stderr)
 PYEOF
 }
 
-CACHED=$(_gh_cache_lookup)
-if [ -n "$CACHED" ] && [ "$CACHED" = "$VERSION_CODE" ]; then
-    echo "::notice::[firebase] alpha unchanged (versionCode=$VERSION_CODE) — skipping" >&2
+# === Step 1: early skip when a successful run is recent =========================
+
+NOW=$(date +%s)
+LAST_OK=$(_gh_var_get "LAST_SUCCESSFUL_FIREBASE_RUN")
+if [ -n "$LAST_OK" ] && [ "$LAST_OK" -eq "$LAST_OK" ] 2>/dev/null; then
+    AGE=$(( NOW - LAST_OK ))
+    if [ "$AGE" -ge 0 ] && [ "$AGE" -lt "$SKIP_WINDOW_SECONDS" ]; then
+        printf '::notice::[firebase] last successful run %dh%02dm ago — skipping (window=%dh)\n' \
+            $((AGE / 3600)) $(((AGE % 3600) / 60)) $((SKIP_WINDOW_SECONDS / 3600)) >&2
+        exit 0
+    fi
+fi
+
+# === Steps 2–3: fetch (or skip when not ready / already tested) =================
+
+ALREADY_TESTED_VERSION_CODE=$(_gh_var_get "LAST_TESTED_ALPHA_VERSION_CODE")
+
+echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&2
+# The Dagger function writes <dest>/versionCode and the APKs when there is
+# work to do, or <dest>/.skip when the latest alpha is not ready yet or has
+# already been tested. No fallback to older bundles — the next cron tick
+# picks up whichever build Play has finished processing.
+if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+        --play-store-config env:PLAY_STORE_CONFIG_JSON \
+        --already-tested-version-code "$ALREADY_TESTED_VERSION_CODE" \
+        -o "$APK_DIR"; then
+    echo "ERROR: dagger fetch-play-store-apks failed" >&2
+    exit 1
+fi
+if [ -f "$APK_DIR/.skip" ]; then
+    reason=$(tr -d '\n' < "$APK_DIR/.skip")
+    echo "::notice::[firebase] skipping: $reason" >&2
     exit 0
 fi
-if [ -n "$CACHED" ]; then
-    echo "[firebase] cached versionCode=$CACHED differs from current $VERSION_CODE — running" >&2
-else
-    echo "[firebase] no cached versionCode found — running" >&2
+if [ ! -f "$APK_DIR/versionCode" ]; then
+    echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
+    exit 1
 fi
+VERSION_CODE=$(tr -d '[:space:]' < "$APK_DIR/versionCode")
+if [ -z "$VERSION_CODE" ]; then
+    echo "ERROR: $APK_DIR/versionCode is empty" >&2
+    exit 1
+fi
+echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
+ls -1 "$APK_DIR" >&2
+
+# === Step 4: run Firebase Test Lab ==============================================
 
 _run() {
     : > "$OUT" ; : > "$RC_FILE"
@@ -192,8 +216,11 @@ for attempt in 1 2 3; do
     fi
 done
 
+# === Step 5: on success, update both repo variables =============================
+
 FINAL_RC=$(cat "$RC_FILE" 2>/dev/null || echo 0)
 if [ "$FINAL_RC" -eq 0 ]; then
-    _gh_cache_write "$VERSION_CODE"
+    _gh_var_set "LAST_TESTED_ALPHA_VERSION_CODE" "$VERSION_CODE"
+    _gh_var_set "LAST_SUCCESSFUL_FIREBASE_RUN" "$NOW"
 fi
 exit "$FINAL_RC"
