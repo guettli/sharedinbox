@@ -486,6 +486,67 @@ void main() {
       expect(find.text('Share'), findsOneWidget);
     });
 
+    testWidgets('Download Raw Email snack bar auto-dismisses', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(
+                emailDetail: testEmail(),
+                emailBody: const EmailBody(
+                  emailId: 'acc-1:42',
+                  attachments: [],
+                ),
+                rawRfc822: 'Subject: test\r\n\r\nBody',
+              ),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Show Raw Email'));
+      await tester.pumpAndSettle();
+
+      final prevPathProvider = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _FakePathProviderPlatform();
+      IOOverrides.global = _FakeIOOverrides();
+      addTearDown(() {
+        PathProviderPlatform.instance = prevPathProvider;
+        IOOverrides.global = null;
+      });
+
+      await tester.tap(find.text('Download'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(Duration.zero);
+      }
+      // Settle the snack bar enter animation.
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Snack bar with the Share action must be visible.
+      expect(find.text('Share'), findsOneWidget);
+
+      // After the snack bar's duration plus the reverse animation, the snack
+      // bar must be gone on its own.
+      // Regression test for #113: SnackBar with an action defaults to
+      // persist=true, which disables auto-dismiss — explicit persist:false
+      // restores duration-based dismissal.
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Share'), findsNothing);
+    });
+
     testWidgets(
       'Download Raw Email on Android writes via MediaStore and shows Open',
       (tester) async {
