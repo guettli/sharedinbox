@@ -163,9 +163,9 @@ jobs:
 
       - name: Verify Play Store deployment
         run: |
-          # The sharedinbox-arc runner image does not ship python3-venv, so install
-          # google-auth/requests directly with --break-system-packages instead.
-          python3 -m pip install --user --break-system-packages --quiet google-auth requests
+          # google-auth/requests are baked into the sharedinbox-arc runner image
+          # (arc-runner-image/Dockerfile) — not installed per job. If they are
+          # missing, this fails loudly rather than papering over a bad image.
           python3 scripts/verify_playstore_deploy.py
 
 
