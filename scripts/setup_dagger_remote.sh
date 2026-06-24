@@ -109,19 +109,56 @@ fi
 CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VERSION:-unknown})..."
 # `dagger core` forces a real engine connection without a complex GraphQL query.
-if ! verify_out=$(timeout 45 dagger core --help 2>&1); then
+# Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
+# which would hide the timeout (124) vs mismatch distinction the retry depends on.
+# The remote engine occasionally fails to answer within 45s due to a transient
+# blip (engine restart, network); retry the verify before failing the job. Real
+# CLI/engine version mismatches are consistent and won't recover from waiting,
+# so we retry only on timeout (exit 124).
+verify_rc=0
+verify_out=""
+for attempt in 1 2 3; do
+    verify_rc=0
+    verify_out=$(timeout 45 dagger core --help 2>&1) || verify_rc=$?
+    if [ "$verify_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq 3 ] || [ "$verify_rc" -ne 124 ]; then
+        break
+    fi
+    echo "::warning::Dagger verify attempt $attempt/3 timed out after 45s; retrying in 10s..."
+    sleep 10
+done
+if [ "$verify_rc" -ne 0 ]; then
     # Dagger's handshake error usually names the engine version it found; surface
     # it so the mismatch is concrete (CLI X vs engine Y) instead of a guess.
+    # `|| true` keeps the diagnostics below running even when verify_out is empty
+    # (the engine-timeout case) — otherwise set -e + pipefail exits silently the
+    # moment grep returns "no match" and the user sees nothing.
     ENGINE_VERSION=$(printf '%s' "$verify_out" \
         | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+' \
-        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
-    echo "::error::and the port forward is up, so this is NOT a network problem."
-    echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
-    echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
-    echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
+        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
+        echo "::error::Dagger engine did not respond within 45s on 3 attempts via the SSH tunnel."
+        echo "::error::The tunnel authenticated and the port forward is up, but"
+        echo "::error::\`dagger core --help\` timed out before the engine replied."
+        echo "::error::This usually means the engine is down or unreachable; check"
+        echo "::error::the engine on the remote host (gitops:"
+        echo "::error::ansible/p16/systemd/system/dagger-engine.service)."
+    else
+        echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
+        echo "::error::and the port forward is up, so this is NOT a network problem."
+        echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
+        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
+        echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
+    fi
     echo "--- diagnostics ---"
-    printf '%s\n' "$verify_out" | tail -8
+    echo "verify exit code: $verify_rc"
+    if [ -n "$verify_out" ]; then
+        printf '%s\n' "$verify_out" | tail -8
+    else
+        echo "(no output captured from \`dagger core --help\`)"
+    fi
     ps aux | grep -F ssh | grep -v grep || true
     exit 1
 fi
