@@ -10,6 +10,10 @@
 # every change to this file. The package is private; arc-runners pulls it via
 # the `ghcr-pull` secret (gitops: task k8s-create-arc-secret).
 FROM ghcr.io/actions/actions-runner:latest
+# `org.opencontainers.image.source` tells GHCR which repo owns this package, so
+# the first push auto-links it (and inherits the repo's access controls). Without
+# this label, the initial push can fail with `403 Forbidden` on a HEAD blob check.
+LABEL org.opencontainers.image.source="https://github.com/guettli/sharedinbox"
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       jq python3 openssh-client ca-certificates curl git \
