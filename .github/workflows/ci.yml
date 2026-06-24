@@ -34,3 +34,30 @@ jobs:
           OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
           OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task check-dagger
+
+  smoke-test-release:
+    name: Android Release Launch Smoke Test (KVM)
+    runs-on: sharedinbox-arc
+    timeout-minutes: 60
+    if: github.server_url == 'https://github.com'
+    # Boots the signed release APK on a KVM-accelerated emulator inside Dagger
+    # (on the p16 engine — the ARC runner has no /dev/kvm) and fails if the app
+    # crashes on launch. Catches release-only R8/NoClassDefFound/NoSuchMethod
+    # crashes that debug builds never exercise, before they can reach users (#101).
+    steps:
+      - uses: actions/checkout@v5
+      - name: Print runner wait time
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/print_runner_wait.sh
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
+      - name: Run release launch smoke test
+        env:
+          DAGGER_NO_NAG: "1"
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
+          OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+        run: task smoke-test-release
