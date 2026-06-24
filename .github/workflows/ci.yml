@@ -19,20 +19,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/print_runner_wait.sh
-      # sops, dagger and task are baked into the sharedinbox-arc self-hosted runner
-      # image but are absent from GitHub-hosted ubuntu-latest. Install them with
-      # the same versions pinned in Dockerfile.dev (dagger/task) and
-      # publish-dev-container.yml (sops).
-      - name: Install runner tools
-        run: |
-          sudo curl -fsSL \
-            https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
-            -o /usr/local/bin/sops
-          sudo chmod +x /usr/local/bin/sops
-          curl -fsSL https://taskfile.dev/install.sh \
-            | sudo sh -s -- -b /usr/local/bin v3.48.0
-          curl -fsSL https://dl.dagger.io/dagger/install.sh \
-            | sudo DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # sops, dagger and task come from the sharedinbox-arc runner image
+      # (arc-runner-image/Dockerfile), which is the single source of truth for
+      # their versions. We deliberately do NOT reinstall them here: if the
+      # runner image is wrong, CI must fail loudly rather than be silently
+      # patched at job time. See guettli/otelhouse#33.
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}

@@ -62,17 +62,11 @@ export_secret "FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY"
 export_secret "GITHUB_TOKEN"
 export_secret "AGENTLOOP_OTEL_TOKEN"
 
-# The Dagger remote engine lives on a private network reachable from the
-# self-hosted runners but not from GitHub-hosted ubuntu-latest. On
-# those public runners, skip the SSH tunnel and let the Dagger CLI start a
-# local engine via the runner's Docker daemon — ubuntu-latest pre-installs
-# Docker, so this works out of the box. The shared cache is lost, but each
-# ephemeral runner has no cache to share anyway.
-if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
-    echo "GitHub-hosted runner detected; skipping remote Dagger engine SSH setup."
-    echo "Dagger will start a local engine via the runner's Docker daemon."
-    exit 0
-fi
+# The Dagger remote engine lives on a private network reachable only from the
+# self-hosted sharedinbox-arc runners. There is deliberately no github-hosted
+# escape hatch: every workflow pins `runs-on: sharedinbox-arc`, so if this ever
+# runs anywhere else the SSH tunnel below must fail loudly rather than silently
+# fall back to a local engine. See guettli/otelhouse#33.
 
 # Setup SSH directory and keys
 mkdir -p ~/.ssh
