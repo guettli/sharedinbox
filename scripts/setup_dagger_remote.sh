@@ -106,22 +106,48 @@ fi
 # (it authenticated and the forward is up) — the failure is the CLI/engine
 # protocol handshake, not the network. There is deliberately no fallback: a
 # mismatch must fail the job loudly rather than silently degrade.
-CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
 echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VERSION:-unknown})..."
 # `dagger core` forces a real engine connection without a complex GraphQL query.
-if ! verify_out=$(timeout 45 dagger core --help 2>&1); then
+# Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
+# which would mask the timeout (exit 124) vs version-mismatch distinction below.
+verify_rc=0
+verify_out=$(timeout 45 dagger core --help 2>&1) || verify_rc=$?
+if [ "$verify_rc" -ne 0 ]; then
     # Dagger's handshake error usually names the engine version it found; surface
     # it so the mismatch is concrete (CLI X vs engine Y) instead of a guess.
+    # `|| true` keeps the diagnostics below running even when verify_out is empty
+    # or has no parseable engine version — without it, set -e + pipefail exit
+    # silently the moment grep returns "no match" and the user sees nothing but
+    # "Process completed with exit code 1". See issue #103.
     ENGINE_VERSION=$(printf '%s' "$verify_out" \
         | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+' \
-        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
-    echo "::error::and the port forward is up, so this is NOT a network problem."
-    echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
-    echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
-    echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
+        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    # Exit 124 from `timeout` means the engine never answered within 45s. That is
+    # almost always transient (network blip, engine restart) rather than a
+    # version mismatch, so word the error accordingly.
+    if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
+        echo "::error::Dagger engine did not respond within 45s via the SSH tunnel."
+        echo "::error::The tunnel authenticated and the port forward is up, but"
+        echo "::error::\`dagger core --help\` timed out before the engine replied."
+        echo "::error::This is usually transient (engine restart, network blip);"
+        echo "::error::re-running the workflow is the right first step. If it keeps"
+        echo "::error::failing, check the engine on the remote host (gitops:"
+        echo "::error::ansible/p16/systemd/system/dagger-engine.service)."
+    else
+        echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
+        echo "::error::and the port forward is up, so this is NOT a network problem."
+        echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
+        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
+        echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
+    fi
     echo "--- diagnostics ---"
-    printf '%s\n' "$verify_out" | tail -8
+    echo "verify exit code: $verify_rc"
+    if [ -n "$verify_out" ]; then
+        printf '%s\n' "$verify_out" | tail -8
+    else
+        echo "(no output captured from \`dagger core --help\`)"
+    fi
     ps aux | grep -F ssh | grep -v grep || true
     exit 1
 fi
