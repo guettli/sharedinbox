@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/utils/received_header.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Full-screen dialog for browsing email headers, organised into groups.
@@ -134,7 +134,7 @@ class _ReceivedSection extends StatelessWidget {
 
   static List<_ReceivedEntry> _buildEntries(List<EmailHeader> headers) {
     final timestamps =
-        headers.map((h) => _parseReceivedTimestamp(h.value)).toList();
+        headers.map((h) => parseReceivedTimestamp(h.value)).toList();
     return [
       for (var i = 0; i < headers.length; i++)
         _ReceivedEntry(
@@ -220,34 +220,6 @@ class _DelayRow extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Parses the RFC 2822 timestamp from a Received header value.
-///
-/// Received headers end with `; date`, e.g.:
-///   by mx.example.com; Mon, 1 Jan 2024 12:00:00 +0000 (UTC)
-DateTime? _parseReceivedTimestamp(String value) {
-  final semiIndex = value.lastIndexOf(';');
-  if (semiIndex < 0) return null;
-  var s = value.substring(semiIndex + 1).trim();
-  // Strip parenthesised comments like (UTC).
-  s = s.replaceAll(RegExp(r'\([^)]*\)'), ' ').trim();
-  // Strip leading day-of-week abbreviation like "Mon, ".
-  s = s.replaceFirst(RegExp(r'^[A-Za-z]{2,4},\s*'), '');
-  // Collapse runs of whitespace.
-  s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
-
-  for (final fmt in [
-    DateFormat('dd MMM yyyy HH:mm:ss Z', 'en_US'),
-    DateFormat('d MMM yyyy HH:mm:ss Z', 'en_US'),
-    DateFormat('dd MMM yyyy HH:mm:ss', 'en_US'),
-    DateFormat('d MMM yyyy HH:mm:ss', 'en_US'),
-  ]) {
-    try {
-      return fmt.parse(s);
-    } catch (_) {}
-  }
-  return null;
 }
 
 String _formatDuration(Duration d) {
