@@ -213,6 +213,79 @@ void main() {
       expect(find.text('To'), findsOneWidget);
     });
 
+    testWidgets(
+      'AppBar shows mailbox name instead of JMAP id path (issue #115)',
+      (tester) async {
+        // JMAP accounts store the opaque server id in Mailbox.path (e.g. "a"),
+        // while Mailbox.name holds the human-readable label ("Inbox"). The
+        // title must show the name so users don't see a bare single-letter id.
+        const jmapMailbox = Mailbox(
+          id: 'acc-1:a',
+          accountId: 'acc-1',
+          path: 'a',
+          name: 'Inbox',
+          unreadCount: 0,
+          totalCount: 0,
+          role: 'inbox',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/a/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([jmapMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.descendant(
+              of: find.byType(AppBar), matching: find.text('Inbox')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: find.byType(AppBar), matching: find.text('a')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'AppBar falls back to mailbox path when mailbox is not yet cached',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              // Empty mailbox repo — name lookup misses, must fall back to path.
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.descendant(
+            of: find.byType(AppBar),
+            matching: find.text('INBOX'),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('SearchBar is always visible in the AppBar', (tester) async {
       await tester.pumpWidget(
         buildApp(

@@ -163,9 +163,15 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return buildSelectionAppBar(_selection);
     }
 
+    // For JMAP accounts the mailboxPath stores the opaque server id (e.g. "a"),
+    // so resolve to the human-readable name when the mailbox is cached locally.
+    final mailbox = ref
+        .watch(mailboxByPathProvider((widget.accountId, widget.mailboxPath)))
+        .value;
+    final title = mailbox?.name ?? widget.mailboxPath;
     return AppBar(
       automaticallyImplyLeading: !menuAtBottom,
-      title: Text(widget.mailboxPath),
+      title: Text(title),
       actions: [
         accountAsync.when(
           loading: () => const SizedBox.shrink(),

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
@@ -90,6 +91,21 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
   );
+});
+
+/// Streams the [Mailbox] for `(accountId, path)`, or `null` if not yet synced.
+/// Used to resolve the human-readable name for a mailbox referenced by path —
+/// JMAP accounts store the opaque server id (e.g. "a") as `path`, so anything
+/// rendering the path directly would otherwise show the bare id.
+final mailboxByPathProvider =
+    StreamProvider.autoDispose.family<Mailbox?, (String, String)>((ref, key) {
+  final (accountId, path) = key;
+  return ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId).map(
+        (mailboxes) => mailboxes.cast<Mailbox?>().firstWhere(
+              (m) => m?.path == path,
+              orElse: () => null,
+            ),
+      );
 });
 
 final draftRepositoryProvider = Provider<DraftRepository>((ref) {
