@@ -13,7 +13,11 @@ FROM ghcr.io/actions/actions-runner:latest
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       jq python3 openssh-client ca-certificates curl git \
+      python3-google-auth python3-requests \
     && rm -rf /var/lib/apt/lists/*
+# python3-google-auth / python3-requests are baked here (not pip-installed per
+# job) for scripts/verify_playstore_deploy.py — see deploy.yml. Add new Python
+# deps here too; the runner intentionally ships no pip so deps can't drift.
 # Keep this in sync with the version CI relies on (no per-job reinstall).
 RUN curl -fsSL -o /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
     && chmod +x /usr/local/bin/sops
