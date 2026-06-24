@@ -246,7 +246,9 @@ void main() {
 
         expect(
           find.descendant(
-              of: find.byType(AppBar), matching: find.text('Inbox')),
+            of: find.byType(AppBar),
+            matching: find.text('Inbox'),
+          ),
           findsOneWidget,
         );
         expect(
