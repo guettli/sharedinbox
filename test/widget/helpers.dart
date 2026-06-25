@@ -360,8 +360,15 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<int> flushPendingChanges(String accountId, String password) async => 0;
 
+  /// Records the most recent [sendEmail] call so tests can assert on it.
+  String? sentEmailAccountId;
+  EmailDraft? sentEmailDraft;
+
   @override
-  Future<void> sendEmail(String accountId, EmailDraft draft) async {}
+  Future<void> sendEmail(String accountId, EmailDraft draft) async {
+    sentEmailAccountId = accountId;
+    sentEmailDraft = draft;
+  }
 
   @override
   Future<String> downloadAttachment(

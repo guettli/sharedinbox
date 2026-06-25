@@ -501,7 +501,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         if (email.listUnsubscribeHeader != null)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
-            child: _UnsubscribeChip(header: email.listUnsubscribeHeader!),
+            child: _UnsubscribeChip(email: email),
           ),
       ],
     );
@@ -1206,9 +1206,16 @@ void _flattenMimeTree(MimePart part, int depth, List<_MimeRow> out) {
   }
 }
 
-class _UnsubscribeChip extends StatelessWidget {
-  const _UnsubscribeChip({required this.header});
-  final String header;
+class _UnsubscribeChip extends ConsumerStatefulWidget {
+  const _UnsubscribeChip({required this.email});
+  final Email email;
+
+  @override
+  ConsumerState<_UnsubscribeChip> createState() => _UnsubscribeChipState();
+}
+
+class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
+  bool _sending = false;
 
   Future<void> _onTap(BuildContext context, Uri uri) async {
     final isMailto = uri.scheme == 'mailto';
@@ -1235,6 +1242,12 @@ class _UnsubscribeChip extends StatelessWidget {
     );
     if (confirmed != true) return;
     if (!context.mounted) return;
+
+    if (isMailto) {
+      await _sendUnsubscribeEmail(context, uri);
+      return;
+    }
+
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1243,16 +1256,63 @@ class _UnsubscribeChip extends StatelessWidget {
     }
   }
 
+  Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _sending = true);
+    try {
+      final accountId = widget.email.accountId;
+      final account =
+          await ref.read(accountRepositoryProvider).getAccount(accountId);
+      if (account == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Account not found')),
+        );
+        return;
+      }
+      final recipients = uri.path
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .map((e) => EmailAddress(email: e))
+          .toList();
+      final draft = EmailDraft(
+        from: EmailAddress(name: account.displayName, email: account.email),
+        to: recipients,
+        cc: const [],
+        subject: uri.queryParameters['subject'] ?? 'unsubscribe',
+        body: uri.queryParameters['body'] ?? '',
+      );
+      await ref.read(emailRepositoryProvider).sendEmail(accountId, draft);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Unsubscribe email sent')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to send unsubscribe: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final uri = parseListUnsubscribeUri(header);
+    final uri = parseListUnsubscribeUri(widget.email.listUnsubscribeHeader);
     if (uri == null) return const SizedBox.shrink();
     return Tooltip(
       message: uri.toString(),
       child: ActionChip(
-        avatar: const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
+        avatar: _sending
+            ? const SizedBox(
+                width: AppIconSize.sm,
+                height: AppIconSize.sm,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
         label: const Text('Unsubscribe'),
-        onPressed: () => _onTap(context, uri),
+        onPressed: _sending ? null : () => _onTap(context, uri),
       ),
     );
   }
