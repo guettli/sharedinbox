@@ -141,15 +141,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         title: Text(widget.isLocal ? 'Local Filters' : 'Remote Filters'),
       ),
       body: _buildBody(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await context.push(_editRoute);
-          await _load();
-        },
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: _canAdd
+          ? FloatingActionButton(
+              onPressed: () async {
+                await context.push(_editRoute);
+                await _load();
+              },
+              child: const Icon(Icons.add),
+            )
+          : null,
     );
   }
+
+  // Hide "+" while loading or when listScripts failed: adding a filter on
+  // top of an unreachable server (e.g. TLS error) would just fail on save.
+  bool get _canAdd => !_loading && _error == null;
 
   Widget _buildBody() {
     if (_loading) {
