@@ -25,8 +25,13 @@ bool _hasWordPrefix(String text, String query) =>
     RegExp(r'\b' + RegExp.escape(query), caseSensitive: false).hasMatch(text);
 
 class SearchScreen extends ConsumerStatefulWidget {
-  const SearchScreen({super.key, this.accountId});
+  const SearchScreen({super.key, this.accountId, this.initialFilter});
   final String? accountId;
+
+  /// When non-null, the screen opens in advanced mode with this filter
+  /// pre-loaded and runs the structured search immediately. Used by the
+  /// "Find similar emails" action.
+  final FilterGroup? initialFilter;
 
   @override
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
@@ -50,6 +55,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _focusNode.addListener(() {
       if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
     });
+    if (widget.initialFilter != null && !widget.initialFilter!.isEmpty) {
+      _advancedMode = true;
+      _filterGroup = widget.initialFilter!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_searchStructured());
+      });
+    }
   }
 
   @override

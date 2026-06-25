@@ -8,9 +8,10 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -809,6 +810,85 @@ void main() {
         expect(results, hasLength(2));
         expect(results[0].subject, 'Newer invoice');
         expect(results[1].subject, 'Older invoice');
+      },
+    );
+
+    test(
+      'searchEmailsStructured with similarFilterFor finds near-duplicate spam',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        const spammerFrom = '[{"name":"Spam","email":"spam@bad.com"}]';
+        const otherFrom = '[{"name":"Bob","email":"bob@example.com"}]';
+
+        // Three messages from spam@bad.com with the same subject "core",
+        // differing only by Re:/Fwd:/ticket noise, plus one decoy from Bob.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('You won a prize!'),
+                receivedAt: DateTime(2026),
+                fromJson: const Value(spammerFrom),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:2',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                subject: const Value('Re: You won a prize!'),
+                receivedAt: DateTime(2026, 2),
+                fromJson: const Value(spammerFrom),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:3',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 3,
+                subject: const Value('Fwd: [TKT-9] You won a prize!'),
+                receivedAt: DateTime(2026, 3),
+                fromJson: const Value(spammerFrom),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:4',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 4,
+                subject: const Value('You won a prize!'),
+                receivedAt: DateTime(2026, 4),
+                fromJson: const Value(otherFrom),
+              ),
+            );
+
+        final seed = Email(
+          id: 'seed',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 99,
+          subject: 'Re: You won a prize!',
+          receivedAt: DateTime(2026),
+          from: const [EmailAddress(email: 'spam@bad.com')],
+          to: const [],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final filter = similarFilterFor(seed);
+        final results = await r.emails.searchEmailsStructured('acc-1', filter);
+
+        // All three spam variants match; Bob's decoy does not.
+        expect(results.map((e) => e.id),
+            unorderedEquals(['acc-1:1', 'acc-1:2', 'acc-1:3']));
       },
     );
 

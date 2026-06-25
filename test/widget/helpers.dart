@@ -232,14 +232,18 @@ class FakeEmailRepository implements EmailRepository {
     EmailBody? emailBody,
     EmailBody? refreshedEmailBody,
     List<Email>? searchResults,
+    List<Email>? structuredSearchResults,
     String rawRfc822 = '',
     this.onSearch,
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
+        _structuredSearchResults = structuredSearchResults ?? const [],
         _rawRfc822 = rawRfc822,
         _refreshedEmailBody = refreshedEmailBody,
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
+
+  final List<Email> _structuredSearchResults;
 
   /// Returned when [getEmailBody] is called with `forceRefresh: true`. Falls
   /// back to [_emailBody] when null, so existing tests stay unaffected.
@@ -395,7 +399,7 @@ class FakeEmailRepository implements EmailRepository {
     String? accountId,
     FilterGroup filter,
   ) async =>
-      [];
+      List.of(_structuredSearchResults);
 
   @override
   Future<List<Email>> getEmailsByAddress(

@@ -387,6 +387,25 @@ void main() {
       expect(find.text('Mark as unread'), findsOneWidget);
     });
 
+    testWidgets('Find similar emails entry appears in popup menu', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Find similar emails'), findsOneWidget);
+    });
+
     testWidgets('Show Raw Email dialog shows size of email', (tester) async {
       // 'A' * 2048 → fmtSize(2048) == '2.0 KB'
       final rawContent = 'A' * 2048;
