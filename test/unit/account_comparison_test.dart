@@ -5,7 +5,7 @@ import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
-import '../unit/db_test_helper.dart';
+import 'db_test_helper.dart';
 
 void main() {
   setUpAll(configureSqliteForTests);
