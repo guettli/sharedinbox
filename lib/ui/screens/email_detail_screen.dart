@@ -1217,17 +1217,31 @@ class _UnsubscribeChip extends ConsumerStatefulWidget {
 class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   bool _sending = false;
 
-  Future<void> _onTap(BuildContext context, Uri uri) async {
-    final isMailto = uri.scheme == 'mailto';
+  Future<void> _onTap(BuildContext context, List<Uri> uris) async {
+    final chosen = uris.length == 1
+        ? await _confirmSingle(context, uris.single)
+        : await _chooseFromMany(context, uris);
+    if (chosen == null) return;
+    if (!context.mounted) return;
+
+    if (chosen.scheme == 'mailto') {
+      await _sendUnsubscribeEmail(context, chosen);
+      return;
+    }
+
+    final ok = await launchUrl(chosen, mode: LaunchMode.externalApplication);
+    if (ok || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not open unsubscribe link')),
+    );
+  }
+
+  Future<Uri?> _confirmSingle(BuildContext context, Uri uri) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Unsubscribe?'),
-        content: Text(
-          isMailto
-              ? 'Send an unsubscribe email to:\n${uri.path}'
-              : 'Open the unsubscribe page:\n$uri',
-        ),
+        content: Text(_describe(uri)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -1240,21 +1254,56 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
         ],
       ),
     );
-    if (confirmed != true) return;
-    if (!context.mounted) return;
-
-    if (isMailto) {
-      await _sendUnsubscribeEmail(context, uri);
-      return;
-    }
-
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open unsubscribe link')),
-      );
-    }
+    return confirmed == true ? uri : null;
   }
+
+  Future<Uri?> _chooseFromMany(BuildContext context, List<Uri> uris) {
+    return showDialog<Uri>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsubscribe?'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final uri in uris)
+                ListTile(
+                  leading: Icon(_iconFor(uri)),
+                  title: Text(_actionLabel(uri)),
+                  subtitle: Text(_target(uri)),
+                  onTap: () => Navigator.pop(ctx, uri),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _describe(Uri uri) {
+    return uri.scheme == 'mailto'
+        ? 'Send an unsubscribe email to:\n${uri.path}'
+        : 'Open the unsubscribe page:\n$uri';
+  }
+
+  static String _actionLabel(Uri uri) {
+    return uri.scheme == 'mailto'
+        ? 'Send unsubscribe email'
+        : 'Open unsubscribe page';
+  }
+
+  static String _target(Uri uri) =>
+      uri.scheme == 'mailto' ? uri.path : uri.toString();
+
+  static IconData _iconFor(Uri uri) =>
+      uri.scheme == 'mailto' ? Icons.email_outlined : Icons.open_in_new;
 
   Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -1299,10 +1348,10 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
 
   @override
   Widget build(BuildContext context) {
-    final uri = parseListUnsubscribeUri(widget.email.listUnsubscribeHeader);
-    if (uri == null) return const SizedBox.shrink();
+    final uris = parseListUnsubscribeUris(widget.email.listUnsubscribeHeader);
+    if (uris.isEmpty) return const SizedBox.shrink();
     return Tooltip(
-      message: uri.toString(),
+      message: uris.map((u) => u.toString()).join('\n'),
       child: ActionChip(
         avatar: _sending
             ? const SizedBox(
@@ -1312,7 +1361,7 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
               )
             : const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
         label: const Text('Unsubscribe'),
-        onPressed: _sending ? null : () => _onTap(context, uri),
+        onPressed: _sending ? null : () => _onTap(context, uris),
       ),
     );
   }

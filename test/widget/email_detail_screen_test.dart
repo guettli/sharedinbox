@@ -851,6 +851,119 @@ void main() {
       },
     );
 
+    testWidgets(
+      'multiple unsubscribe options show a chooser before launching',
+      (tester) async {
+        // Header advertises both a mailto and an https option — the user
+        // should be asked which one to use instead of one being picked
+        // silently.
+        final email = testEmail(
+          listUnsubscribeHeader:
+              '<mailto:unsub@example.com>, <https://example.com/unsubscribe>',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsOneWidget);
+        // Both options are offered with their action label and target.
+        expect(find.text('Send unsubscribe email'), findsOneWidget);
+        expect(find.text('unsub@example.com'), findsOneWidget);
+        expect(find.text('Open unsubscribe page'), findsOneWidget);
+        expect(find.text('https://example.com/unsubscribe'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'chooser Cancel dismisses the dialog without launching anything',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader:
+              '<mailto:unsub@example.com>, <https://example.com/unsubscribe>',
+        );
+        final repo = FakeEmailRepository(
+          emailDetail: email,
+          emailBody: const EmailBody(emailId: 'acc-1:42', attachments: []),
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository()),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe?'), findsNothing);
+        expect(repo.sentEmailDraft, isNull);
+      },
+    );
+
+    testWidgets(
+      'picking mailto from the chooser sends via sendEmail',
+      (tester) async {
+        final email = testEmail(
+          listUnsubscribeHeader:
+              '<mailto:unsub@example.com>, <https://example.com/unsubscribe>',
+        );
+        final repo = FakeEmailRepository(
+          emailDetail: email,
+          emailBody: const EmailBody(emailId: 'acc-1:42', attachments: []),
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository()),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Send unsubscribe email'));
+        await tester.pumpAndSettle();
+
+        expect(repo.sentEmailDraft, isNotNull);
+        expect(repo.sentEmailDraft!.to.first.email, 'unsub@example.com');
+        expect(find.text('Unsubscribe email sent'), findsOneWidget);
+      },
+    );
+
     testWidgets('Show Mail Structure opens dialog with MIME parts', (
       tester,
     ) async {
