@@ -262,7 +262,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
 
   publish-website:
     desc: Build and publish website via Dagger
