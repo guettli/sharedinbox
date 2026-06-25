@@ -441,23 +441,18 @@ class _FolderField extends ConsumerWidget {
       builder: (ctx, snap) {
         final mailboxes = snap.data ?? const <Mailbox>[];
         final match = _findByPath(mailboxes, value);
-        final label = value.isEmpty
-            ? 'Select folder…'
-            : (match?.name ?? value);
+        final label = value.isEmpty ? 'Select folder…' : (match?.name ?? value);
         final isUnknown = value.isNotEmpty && match == null;
         return OutlinedButton.icon(
-          onPressed: mailboxes.isEmpty
-              ? null
-              : () => _pick(context, mailboxes),
+          onPressed: mailboxes.isEmpty ? null : () => _pick(context, mailboxes),
           icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
           label: Align(
             alignment: AlignmentDirectional.centerStart,
             child: Text(
               label,
               overflow: TextOverflow.ellipsis,
-              style: isUnknown
-                  ? TextStyle(color: theme.colorScheme.error)
-                  : null,
+              style:
+                  isUnknown ? TextStyle(color: theme.colorScheme.error) : null,
             ),
           ),
           style: OutlinedButton.styleFrom(

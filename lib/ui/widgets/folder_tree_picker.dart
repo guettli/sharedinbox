@@ -142,8 +142,7 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
           ),
         ),
         if (hasChildren && isExpanded)
-          for (final child in node.children)
-            _buildRow(child, depth: depth + 1),
+          for (final child in node.children) _buildRow(child, depth: depth + 1),
       ],
     );
   }
