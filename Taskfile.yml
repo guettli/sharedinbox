@@ -272,7 +272,7 @@ tasks:
       - sh: test -n "$SSH_KNOWN_HOSTS"
         msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   check-dagger:
     desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
