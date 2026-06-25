@@ -256,13 +256,13 @@ void main() {
 /// `Taskfile.yml` ends up SIGKILL'ing it (exit 124) with the buffered
 /// failure message lost. Writing to stderr (typically unbuffered) and
 /// calling `exit(1)` guarantees CI sees a useful diagnostic.
-Future<Never> _abortOnTimeout(String message) async {
+///
+/// Stay fully synchronous — any `await` here would re-enter the same event
+/// loop that's already wedged on the hung action's socket, and could delay
+/// `exit(1)` long enough for the outer `timeout` to win and drop the
+/// stderr line. The per-round `await stdout.flush()` already drained the
+/// `round=N action=M` progress line, so there's nothing left to flush.
+Never _abortOnTimeout(String message) {
   stderr.writeln('chaos-monkey: $message');
-  try {
-    await stdout.flush().timeout(const Duration(seconds: 2));
-  } catch (_) {}
-  try {
-    await stderr.flush().timeout(const Duration(seconds: 2));
-  } catch (_) {}
   exit(1);
 }
