@@ -170,6 +170,7 @@ void main() {
     for (var round = 0; round < rounds; round++) {
       final action = rng.nextInt(8);
       stdout.writeln('chaos-monkey: round=$round action=$action');
+      await stdout.flush();
 
       Future<void> runAction() async {
         switch (action) {
@@ -225,10 +226,8 @@ void main() {
 
       await runAction().timeout(
         actionTimeout,
-        onTimeout: () => throw TimeoutException(
-          'chaos-monkey action hung '
-          '(seed=$seed round=$round action=$action)',
-          actionTimeout,
+        onTimeout: () => _abortOnTimeout(
+          'action hung (seed=$seed round=$round action=$action)',
         ),
       );
     }
@@ -237,19 +236,33 @@ void main() {
     final flushed =
         await emails.flushPendingChanges(account.id, userPass).timeout(
               actionTimeout,
-              onTimeout: () => throw TimeoutException(
-                'chaos-monkey final flush hung (seed=$seed)',
-                actionTimeout,
-              ),
+              onTimeout: () => _abortOnTimeout('final flush hung (seed=$seed)'),
             );
     stdout.writeln('chaos-monkey: final flush flushed=$flushed');
     final result = await emails.syncEmails(account.id, 'INBOX').timeout(
           actionTimeout,
-          onTimeout: () => throw TimeoutException(
-            'chaos-monkey final sync hung (seed=$seed)',
-            actionTimeout,
-          ),
+          onTimeout: () => _abortOnTimeout('final sync hung (seed=$seed)'),
         );
     stdout.writeln('chaos-monkey: final sync fetched=${result.fetched}');
   });
+}
+
+/// Abort the test process immediately with a clear stderr diagnostic.
+///
+/// `.timeout(onTimeout: () => throw ...)` would normally propagate a
+/// TimeoutException and let the test framework report the failure. But hung
+/// `enough_mail` sockets keep the Dart isolate alive past test teardown, so
+/// the process never exits on its own and the outer `timeout 600` in
+/// `Taskfile.yml` ends up SIGKILL'ing it (exit 124) with the buffered
+/// failure message lost. Writing to stderr (typically unbuffered) and
+/// calling `exit(1)` guarantees CI sees a useful diagnostic.
+Future<Never> _abortOnTimeout(String message) async {
+  stderr.writeln('chaos-monkey: $message');
+  try {
+    await stdout.flush().timeout(const Duration(seconds: 2));
+  } catch (_) {}
+  try {
+    await stderr.flush().timeout(const Duration(seconds: 2));
+  } catch (_) {}
+  exit(1);
 }
