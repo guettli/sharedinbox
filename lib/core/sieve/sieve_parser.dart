@@ -335,8 +335,7 @@ class SieveParser {
       }
       if (flags.any(
         (f) =>
-            f.toLowerCase() == r'\flagged' ||
-            f.toLowerCase() == r'\\flagged',
+            f.toLowerCase() == r'\flagged' || f.toLowerCase() == r'\\flagged',
       )) {
         return StarMessageAction();
       }

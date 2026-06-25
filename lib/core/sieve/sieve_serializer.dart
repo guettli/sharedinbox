@@ -32,9 +32,8 @@ class SieveSerializer {
     final req = <String>[];
     for (final a in actions) {
       if (a is FileIntoAction && !req.contains('fileinto')) req.add('fileinto');
-      final usesFlags = a is FlagAction ||
-          a is MarkAsSeenAction ||
-          a is StarMessageAction;
+      final usesFlags =
+          a is FlagAction || a is MarkAsSeenAction || a is StarMessageAction;
       if (usesFlags && !req.contains('imap4flags')) {
         req.add('imap4flags');
       }
