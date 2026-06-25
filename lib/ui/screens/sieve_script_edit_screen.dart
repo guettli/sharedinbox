@@ -5,12 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/filter_sieve_converter.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
+import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 
 class SieveScriptEditScreen extends ConsumerStatefulWidget {
   const SieveScriptEditScreen({
@@ -259,6 +261,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
           ),
           const SizedBox(height: AppSpacing.md),
           _ActionEditor(
+            accountId: widget.accountId,
             actions: _actions,
             onChanged: (a) => setState(() => _actions = a),
           ),
@@ -291,8 +294,13 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
 enum _ActionType { keep, discard, markAsRead, fileInto }
 
 class _ActionEditor extends StatelessWidget {
-  const _ActionEditor({required this.actions, required this.onChanged});
+  const _ActionEditor({
+    required this.accountId,
+    required this.actions,
+    required this.onChanged,
+  });
 
+  final String accountId;
   final List<SieveAction> actions;
   final void Function(List<SieveAction>) onChanged;
 
@@ -387,6 +395,7 @@ class _ActionEditor extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: _FolderField(
+                accountId: accountId,
                 value: (action as FileIntoAction).folder,
                 onChanged: (v) => _changeFolder(i, v),
               ),
@@ -404,47 +413,71 @@ class _ActionEditor extends StatelessWidget {
   }
 }
 
-class _FolderField extends StatefulWidget {
-  const _FolderField({required this.value, required this.onChanged});
+class _FolderField extends ConsumerWidget {
+  const _FolderField({
+    required this.accountId,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String accountId;
   final String value;
   final void Function(String) onChanged;
 
-  @override
-  State<_FolderField> createState() => _FolderFieldState();
-}
-
-class _FolderFieldState extends State<_FolderField> {
-  late final TextEditingController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.value);
-  }
-
-  @override
-  void didUpdateWidget(_FolderField old) {
-    super.didUpdateWidget(old);
-    if (widget.value != _ctrl.text) _ctrl.text = widget.value;
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: _ctrl,
-      onChanged: widget.onChanged,
-      decoration: const InputDecoration(
-        hintText: 'folder',
-        isDense: true,
-        border: OutlineInputBorder(),
-        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      ),
+  Future<void> _pick(BuildContext context, List<Mailbox> mailboxes) async {
+    final picked = await showFolderTreePicker(
+      context,
+      mailboxes: mailboxes,
+      initialPath: value.isEmpty ? null : value,
     );
+    if (picked != null) onChanged(picked);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return StreamBuilder<List<Mailbox>>(
+      stream: ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId),
+      builder: (ctx, snap) {
+        final mailboxes = snap.data ?? const <Mailbox>[];
+        final match = _findByPath(mailboxes, value);
+        final label = value.isEmpty
+            ? 'Select folder…'
+            : (match?.name ?? value);
+        final isUnknown = value.isNotEmpty && match == null;
+        return OutlinedButton.icon(
+          onPressed: mailboxes.isEmpty
+              ? null
+              : () => _pick(context, mailboxes),
+          icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
+          label: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: isUnknown
+                  ? TextStyle(color: theme.colorScheme.error)
+                  : null,
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            alignment: AlignmentDirectional.centerStart,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xs,
+            ),
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        );
+      },
+    );
+  }
+
+  static Mailbox? _findByPath(List<Mailbox> mailboxes, String path) {
+    for (final m in mailboxes) {
+      if (m.path == path) return m;
+    }
+    return null;
   }
 }
