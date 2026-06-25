@@ -1,0 +1,246 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:sharedinbox/core/sync/account_comparison.dart';
+import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
+import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
+
+class AccountCompareScreen extends ConsumerWidget {
+  const AccountCompareScreen({
+    super.key,
+    required this.accountIdA,
+    required this.accountIdB,
+  });
+
+  final String accountIdA;
+  final String accountIdB;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final result =
+        ref.watch(accountComparisonProvider((accountIdA, accountIdB)));
+    final accountA = ref.watch(accountByIdProvider(accountIdA)).value;
+    final accountB = ref.watch(accountByIdProvider(accountIdB)).value;
+    final labelA = accountA == null
+        ? accountIdA
+        : '${accountA.displayName} '
+            '(${accountA.type.name.toUpperCase()})';
+    final labelB = accountB == null
+        ? accountIdB
+        : '${accountB.displayName} '
+            '(${accountB.type.name.toUpperCase()})';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Compare accounts'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Re-run comparison',
+            onPressed: () => ref.invalidate(
+              accountComparisonProvider((accountIdA, accountIdB)),
+            ),
+          ),
+        ],
+      ),
+      body: result.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Comparison failed: $e')),
+        data: (data) => _CompareBody(
+          result: data,
+          labelA: labelA,
+          labelB: labelB,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompareBody extends StatelessWidget {
+  const _CompareBody({
+    required this.result,
+    required this.labelA,
+    required this.labelB,
+  });
+
+  final AccountComparisonResult result;
+  final String labelA;
+  final String labelB;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final children = <Widget>[
+      Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('A: $labelA', style: theme.textTheme.bodyMedium),
+            Text('B: $labelB', style: theme.textTheme.bodyMedium),
+            const SizedBox(height: AppSpacing.sm),
+            if (result.isIdentical)
+              Row(
+                children: [
+                  const Icon(Icons.verified, color: Colors.green),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(
+                    'Local DBs are identical',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ],
+              )
+            else
+              Text(
+                '${result.diffCount} difference(s) found',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(color: theme.colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+      const Divider(height: 1),
+    ];
+
+    if (result.mailboxes.isNotEmpty) {
+      children.add(_section('Mailboxes', context));
+      children.addAll(
+        result.mailboxes.map((d) => _MailboxDiffTile(diff: d)),
+      );
+    }
+    if (result.emails.isNotEmpty) {
+      children.add(_section('Emails', context));
+      children.addAll(result.emails.map((d) => _EmailDiffTile(diff: d)));
+    }
+    if (result.bodies.isNotEmpty) {
+      children.add(_section('Bodies', context));
+      children.addAll(result.bodies.map((d) => _BodyDiffTile(diff: d)));
+    }
+    if (result.unmatchable.isNotEmpty) {
+      children.add(_section('Skipped (no Message-ID)', context));
+      children
+          .addAll(result.unmatchable.map((u) => _UnmatchableTile(entry: u)));
+    }
+
+    return ListView(children: children);
+  }
+
+  Widget _section(String title, BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        AppSpacing.xs,
+      ),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+    );
+  }
+}
+
+class _MailboxDiffTile extends StatelessWidget {
+  const _MailboxDiffTile({required this.diff});
+
+  final MailboxDiff diff;
+
+  @override
+  Widget build(BuildContext context) {
+    final String title;
+    final String subtitle;
+    switch (diff.kind) {
+      case MailboxDiffKind.missingInA:
+        title = 'Missing in A: ${diff.b?.name ?? diff.key}';
+        subtitle =
+            'Present in B only (unread ${diff.b?.unreadCount}, total ${diff.b?.totalCount})';
+        break;
+      case MailboxDiffKind.missingInB:
+        title = 'Missing in B: ${diff.a?.name ?? diff.key}';
+        subtitle =
+            'Present in A only (unread ${diff.a?.unreadCount}, total ${diff.a?.totalCount})';
+        break;
+      case MailboxDiffKind.countMismatch:
+        title = 'Count mismatch: ${diff.a?.name ?? diff.key}';
+        subtitle =
+            'A unread=${diff.a?.unreadCount} total=${diff.a?.totalCount} · '
+            'B unread=${diff.b?.unreadCount} total=${diff.b?.totalCount}';
+        break;
+    }
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.folder_outlined),
+      title: Text(title),
+      subtitle: Text(subtitle),
+    );
+  }
+}
+
+class _EmailDiffTile extends StatelessWidget {
+  const _EmailDiffTile({required this.diff});
+
+  final EmailDiff diff;
+
+  @override
+  Widget build(BuildContext context) {
+    final String title;
+    final String subtitle;
+    switch (diff.kind) {
+      case EmailDiffKind.missingInA:
+        title = 'Missing in A: ${diff.b?.subject ?? '(no subject)'}';
+        subtitle = '${diff.mailboxKey} · ${diff.messageId}';
+        break;
+      case EmailDiffKind.missingInB:
+        title = 'Missing in B: ${diff.a?.subject ?? '(no subject)'}';
+        subtitle = '${diff.mailboxKey} · ${diff.messageId}';
+        break;
+      case EmailDiffKind.fieldMismatch:
+        final fields = diff.fields.map((f) => f.name).join(', ');
+        title =
+            'Fields differ ($fields): ${diff.a?.subject ?? diff.b?.subject ?? '(no subject)'}';
+        subtitle = '${diff.mailboxKey} · ${diff.messageId}';
+        break;
+    }
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.email_outlined),
+      title: Text(title),
+      subtitle: Text(subtitle),
+    );
+  }
+}
+
+class _BodyDiffTile extends StatelessWidget {
+  const _BodyDiffTile({required this.diff});
+
+  final BodyDiff diff;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.description_outlined),
+      title: Text('Body differs: ${diff.a.subject ?? '(no subject)'}'),
+      subtitle: Text(diff.messageId),
+    );
+  }
+}
+
+class _UnmatchableTile extends StatelessWidget {
+  const _UnmatchableTile({required this.entry});
+
+  final UnmatchableEmail entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final side = entry.side == ComparisonSide.a ? 'A' : 'B';
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.help_outline),
+      title: Text('$side · ${entry.subject ?? '(no subject)'}'),
+      subtitle: Text(entry.mailboxKey),
+    );
+  }
+}

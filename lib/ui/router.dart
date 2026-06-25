@@ -4,6 +4,7 @@ import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 
 import 'package:sharedinbox/ui/screens/about_screen.dart';
+import 'package:sharedinbox/ui/screens/account_compare_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
@@ -99,6 +100,13 @@ final router = GoRouter(
               path: ':accountId/sync-log',
               builder: (ctx, state) =>
                   SyncLogScreen(accountId: state.pathParameters['accountId']!),
+            ),
+            GoRoute(
+              path: ':accountId/compare/:otherId',
+              builder: (ctx, state) => AccountCompareScreen(
+                accountIdA: state.pathParameters['accountId']!,
+                accountIdB: state.pathParameters['otherId']!,
+              ),
             ),
             GoRoute(
               path: ':accountId/sieve',

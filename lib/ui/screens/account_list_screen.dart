@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/update_service.dart';
+import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -122,6 +123,9 @@ class _AccountTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(accountConnectionStatusProvider(account.id));
     final health = ref.watch(syncHealthProvider(account.id));
+    final counterparts =
+        ref.watch(comparableCounterpartsProvider(account.id)).value ??
+            const <Account>[];
     final typeLabel = account.type == AccountType.jmap ? 'JMAP' : 'IMAP';
 
     return Column(
@@ -148,41 +152,49 @@ class _AccountTile extends ConsumerWidget {
                   child: const Icon(Icons.error_outline, color: Colors.red),
                 ),
               ),
-              PopupMenuButton<_AccountAction>(
-                onSelected: (action) => _onAction(context, action),
+              PopupMenuButton<String>(
+                onSelected: (value) => _onAction(context, value),
                 itemBuilder: (_) => [
                   const PopupMenuItem(
-                    value: _AccountAction.syncLog,
+                    value: 'syncLog',
                     child: Text('Sync log'),
                   ),
                   const PopupMenuItem(
-                    value: _AccountAction.verifySync,
+                    value: 'verifySync',
                     child: Text('Verify sync health'),
                   ),
                   const PopupMenuItem(
-                    value: _AccountAction.forceSync,
+                    value: 'forceSync',
                     child: Text('Force full sync'),
                   ),
                   const PopupMenuItem(
-                    value: _AccountAction.edit,
+                    value: 'edit',
                     child: Text('Edit'),
                   ),
                   if (_sieveSupported(account))
                     const PopupMenuItem(
-                      value: _AccountAction.emailFiltersRemote,
+                      value: 'emailFiltersRemote',
                       child: Text('Server email filters'),
                     ),
                   const PopupMenuItem(
-                    value: _AccountAction.emailFiltersLocal,
+                    value: 'emailFiltersLocal',
                     child: Text('Local email filters'),
                   ),
                   const PopupMenuItem(
-                    value: _AccountAction.send,
+                    value: 'send',
                     child: Text('Send accounts'),
                   ),
+                  for (final other in counterparts)
+                    PopupMenuItem(
+                      value: 'compare:${other.id}',
+                      child: Text(
+                        'Compare to ${other.displayName} '
+                        '(${other.type == AccountType.jmap ? 'JMAP' : 'IMAP'})',
+                      ),
+                    ),
                   const PopupMenuDivider(),
                   const PopupMenuItem(
-                    value: _AccountAction.delete,
+                    value: 'delete',
                     child: Text('Delete'),
                   ),
                 ],
@@ -231,7 +243,13 @@ class _AccountTile extends ConsumerWidget {
     );
   }
 
-  Future<void> _onAction(BuildContext context, _AccountAction action) async {
+  Future<void> _onAction(BuildContext context, String value) async {
+    if (value.startsWith('compare:')) {
+      final otherId = value.substring('compare:'.length);
+      await context.push('/accounts/${account.id}/compare/$otherId');
+      return;
+    }
+    final action = _AccountAction.values.byName(value);
     switch (action) {
       case _AccountAction.syncLog:
         await context.push('/accounts/${account.id}/sync-log');
