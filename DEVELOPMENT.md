@@ -189,4 +189,18 @@ Using SSH to `localhost` is preferred over complex X11/Wayland permission hacks.
 
 Refer to the [README.md](./README.md#daily-workflow) for common development tasks and commands.
 
+## Smoke-testing the Android mail-handler registration
+
+After `task build-android` + install, you can verify the app appears as a
+`mailto:` handler from the command line:
+
+```bash
+adb shell am start -a android.intent.action.SENDTO \
+    -d 'mailto:foo@example.com?subject=Hi&body=Hello'
+```
+
+SharedInbox should appear in the resulting chooser (or open directly if it
+is the system default email app). Selecting it lands on the Compose screen
+with `To`, `Subject` and `Body` prefilled.
+
 <!-- agentloop code test passed -->
