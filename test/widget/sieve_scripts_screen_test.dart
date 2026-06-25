@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,10 +14,16 @@ import '../unit/db_test_helper.dart';
 import 'helpers.dart';
 
 class _FakeSieveRepository extends SieveRepository {
-  _FakeSieveRepository() : super(FakeAccountRepository(), http.Client());
+  _FakeSieveRepository({this.error})
+      : super(FakeAccountRepository(), http.Client());
+
+  final Object? error;
 
   @override
-  Future<List<SieveScript>> listScripts(String accountId) async => [];
+  Future<List<SieveScript>> listScripts(String accountId) async {
+    if (error != null) throw error!;
+    return [];
+  }
 }
 
 void main() {
@@ -40,6 +48,30 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Local Filters'), findsOneWidget);
+  });
+
+  testWidgets('Remote Filters hides the "+" FAB when listScripts fails', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith(
+            (ref) => _FakeSieveRepository(
+              error: const HandshakeException(
+                'Handshake error in client',
+              ),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('HandshakeException'), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Retry'), findsOneWidget);
   });
 
   testWidgets('Local Filters page shows correct title and banner', (
