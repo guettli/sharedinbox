@@ -1069,16 +1069,33 @@ class EmailRepositoryImpl implements EmailRepository {
     final storedState = await _loadSyncState(account.id, 'Email');
 
     if (storedState == null) {
-      return _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
-    } else {
-      return _jmapIncrementalEmailSync(account.id, jmap, storedState);
+      return _jmapFullEmailSync(account.id, jmap);
+    }
+    try {
+      return await _jmapIncrementalEmailSync(account.id, jmap, storedState);
+    } on JmapException catch (e) {
+      // RFC 8620 §5.2: when the server can no longer compute the diff from
+      // the supplied sinceState ("cannotCalculateChanges"), the client must
+      // discard the state and re-fetch from scratch.
+      if (e.message.contains('cannotCalculateChanges')) {
+        await _clearSyncState(account.id, 'Email');
+        return _jmapFullEmailSync(account.id, jmap);
+      }
+      rethrow;
     }
   }
 
+  /// Initial JMAP sync: pulls every email in the account in one pass.
+  ///
+  /// JMAP Email state is per-account, not per-mailbox: the state token
+  /// returned by `Email/get` represents the entire account's email set. If we
+  /// only fetched emails for one mailbox here, the subsequent state token
+  /// would not match the (smaller) set of emails actually in the local DB,
+  /// and `Email/changes` calls for the other mailboxes would return zero
+  /// changes — leaving them perpetually empty.
   Future<model.SyncEmailsResult> _jmapFullEmailSync(
     String accountId,
     JmapClient jmap,
-    String mailboxJmapId,
   ) async {
     int position = 0;
     String? firstState;
@@ -1091,7 +1108,7 @@ class EmailRepositoryImpl implements EmailRepository {
           'Email/query',
           {
             'accountId': jmap.accountId,
-            'filter': {'inMailbox': mailboxJmapId},
+            // No `filter` — fetch every email in the account.
             'sort': [
               {'property': 'receivedAt', 'isAscending': false},
             ],
@@ -1140,59 +1157,83 @@ class EmailRepositoryImpl implements EmailRepository {
     JmapClient jmap,
     String sinceState,
   ) async {
-    final responses = await jmap.call([
-      [
-        'Email/changes',
-        {'accountId': jmap.accountId, 'sinceState': sinceState},
-        '0',
-      ],
-    ]);
-
-    final changes = _responseArgs(responses, 0, 'Email/changes');
-    final newState = changes['newState'] as String;
-    final created = List<String>.from(changes['created'] as List? ?? []);
-    final updated = List<String>.from(changes['updated'] as List? ?? []);
-    final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
-
     var fetched = 0;
     var bytes = 0;
-    final toFetch = [...created, ...updated];
-    if (toFetch.isNotEmpty) {
-      final getResponses = await jmap.call([
+    var currentState = sinceState;
+    String? lastNewState;
+
+    // RFC 8620 §5.2: when `hasMoreChanges` is true the server truncated the
+    // diff. Loop with the returned `newState` until the server is fully
+    // caught up, otherwise destroyed/updated IDs past the first batch (e.g.
+    // a Thunderbird user expunging hundreds of messages) would be missed.
+    while (true) {
+      final responses = await jmap.call([
         [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            'ids': toFetch,
-            'properties': _emailProperties,
-            ..._emailGetBodyOptions,
-          },
-          '1',
+          'Email/changes',
+          {'accountId': jmap.accountId, 'sinceState': currentState},
+          '0',
         ],
       ]);
-      final getResult = _responseArgs(getResponses, 0, 'Email/get');
-      final list = getResult['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(accountId, list);
-      fetched += list.length;
-    }
 
-    for (final jmapId in destroyed) {
-      final dbId = '$accountId:$jmapId';
-      final email = await getEmail(dbId);
-      if (email != null) {
-        final tid = email.threadId ?? dbId;
-        final mailbox = email.mailboxPath;
-        await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
-        await _updateThread(accountId, mailbox, tid);
+      final changes = _responseArgs(responses, 0, 'Email/changes');
+      final newState = changes['newState'] as String;
+      final hasMore = (changes['hasMoreChanges'] as bool?) ?? false;
+      final created = List<String>.from(changes['created'] as List? ?? []);
+      final updated = List<String>.from(changes['updated'] as List? ?? []);
+      final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
+
+      final toFetch = [...created, ...updated];
+      if (toFetch.isNotEmpty) {
+        final getResponses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': toFetch,
+              'properties': _emailProperties,
+              ..._emailGetBodyOptions,
+            },
+            '1',
+          ],
+        ]);
+        final getResult = _responseArgs(getResponses, 0, 'Email/get');
+        final list = getResult['list'] as List<dynamic>;
+        bytes += await _upsertJmapEmails(accountId, list);
+        fetched += list.length;
       }
+
+      for (final jmapId in destroyed) {
+        final dbId = '$accountId:$jmapId';
+        final email = await getEmail(dbId);
+        if (email != null) {
+          final tid = email.threadId ?? dbId;
+          final mailbox = email.mailboxPath;
+          await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
+          await _updateThread(accountId, mailbox, tid);
+        }
+      }
+
+      lastNewState = newState;
+      if (!hasMore || newState == currentState) break;
+      currentState = newState;
     }
 
-    await _saveSyncState(accountId, 'Email', newState);
+    await _saveSyncState(accountId, 'Email', lastNewState);
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
       bytesTransferred: bytes,
     );
+  }
+
+  Future<void> _clearSyncState(String accountId, String resourceType) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
+        .go();
   }
 
   // Returns total bytes transferred (sum of JMAP `size` fields).

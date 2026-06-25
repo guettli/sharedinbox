@@ -1994,6 +1994,184 @@ void main() {
       final states = await r.db.select(r.db.syncStates).get();
       expect(states.first.state, 'est1');
     });
+
+    test(
+      'full sync does not filter Email/query by mailbox (issue #145)',
+      () async {
+        // Regression: a per-mailbox `inMailbox` filter saved an Email state
+        // token that only matched one mailbox's worth of emails. Subsequent
+        // Email/changes calls (account-wide) then reported no changes for
+        // emails in every other mailbox, so they were never fetched.
+        final capturedBodies = <Map<String, dynamic>>[];
+        final mockClient = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          capturedBodies.add(jsonDecode(req.body) as Map<String, dynamic>);
+          return http.Response(
+            jsonEncode(
+              _emailGetResponse(
+                state: 'est1',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'Inbox-A'),
+                  _jmapEmail(
+                    id: 'e2',
+                    mailboxId: 'mbx2',
+                    subject: 'Archive-A',
+                  ),
+                ],
+              ),
+            ),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: mockClient);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final queryCall =
+            (capturedBodies.first['methodCalls'] as List<dynamic>)[0]
+                as List<dynamic>;
+        expect(queryCall[0], 'Email/query');
+        final args = queryCall[1] as Map<String, dynamic>;
+        expect(
+          args.containsKey('filter'),
+          isFalse,
+          reason:
+              'Initial JMAP sync must be account-wide; a mailbox filter would '
+              'leave the saved Email state out of sync with the local DB.',
+        );
+
+        // Both mailboxes' emails should be in the local DB after the first
+        // sync, even though it was triggered by mbx1.
+        expect(await r.emails.getEmail('jmap-1:e1'), isNotNull);
+        expect(await r.emails.getEmail('jmap-1:e2'), isNotNull);
+      },
+    );
+
+    test('incremental sync loops while hasMoreChanges is true', () async {
+      // RFC 8620 §5.2: when the server truncates Email/changes (e.g. a user
+      // expunges hundreds of messages via Thunderbird), the response sets
+      // hasMoreChanges=true. The client must keep calling Email/changes
+      // with the returned newState or it will miss the rest of the diff.
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          apiResponses: [
+            {
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/changes',
+                  {
+                    'accountId': 'acct1',
+                    'oldState': 'est1',
+                    'newState': 'est2',
+                    'hasMoreChanges': true,
+                    'created': <String>[],
+                    'updated': <String>[],
+                    'destroyed': ['e1'],
+                  },
+                  '0',
+                ],
+              ],
+            },
+            _emailChangesResponse(
+              oldState: 'est2',
+              newState: 'est3',
+              destroyed: ['e2'],
+            ),
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      for (final id in ['e1', 'e2']) {
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:$id',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'Email',
+              state: 'est1',
+              syncedAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      expect(await r.emails.getEmail('jmap-1:e1'), isNull);
+      expect(await r.emails.getEmail('jmap-1:e2'), isNull);
+      final state = (await r.db.select(r.db.syncStates).get()).first.state;
+      expect(state, 'est3');
+    });
+
+    test(
+      'cannotCalculateChanges clears state and falls back to a full sync',
+      () async {
+        // RFC 8620 §5.2: when the server returns cannotCalculateChanges the
+        // client must discard sinceState and re-fetch the resource fully.
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'error',
+                    {'type': 'cannotCalculateChanges'},
+                    '0',
+                  ],
+                ],
+              },
+              _emailGetResponse(
+                state: 'estFresh',
+                list: [
+                  _jmapEmail(id: 'eNew', mailboxId: 'mbx1', subject: 'Fresh'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est-stale',
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(await r.emails.getEmail('jmap-1:eNew'), isNotNull);
+        final state = (await r.db.select(r.db.syncStates).get()).first.state;
+        expect(state, 'estFresh');
+      },
+    );
   });
 
   group('JMAP setFlag / moveEmail / deleteEmail enqueue pending_changes', () {

@@ -137,7 +137,11 @@ void main() {
     return row.path;
   }
 
-  Future<void> appendToInbox(String subject, {String body = 'Body'}) async {
+  Future<void> appendToMailbox(
+    String subject, {
+    String body = 'Body',
+    required String mailboxPath,
+  }) async {
     final client = await _imapConnect(
       host: imapHost,
       port: imapPort,
@@ -152,11 +156,15 @@ void main() {
         ..text = body;
       await client.appendMessage(
         msg.buildMimeMessage(),
-        targetMailboxPath: 'INBOX',
+        targetMailboxPath: mailboxPath,
       );
     } finally {
       await client.logout();
     }
+  }
+
+  Future<void> appendToInbox(String subject, {String body = 'Body'}) async {
+    await appendToMailbox(subject, body: body, mailboxPath: 'INBOX');
   }
 
   test('syncEmails full sync fetches messages and stores in DB', () async {
@@ -191,6 +199,66 @@ void main() {
       final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
       expect(emails, hasLength(2));
       expect(emails.map((e) => e.subject).toSet(), {'first', 'second'});
+    },
+  );
+
+  test(
+    'initial JMAP sync covers every mailbox, not just the triggering one '
+    '(issue #145)',
+    () async {
+      // Regression: a per-mailbox `inMailbox` filter on the first sync left
+      // every other mailbox empty locally because the saved Email state
+      // matched the (smaller) per-mailbox set, so subsequent Email/changes
+      // calls reported no diff.
+      final inboxSubject = 'inbox-${DateTime.now().millisecondsSinceEpoch}';
+      final archiveSubject = 'archive-${DateTime.now().millisecondsSinceEpoch}';
+      await appendToInbox(inboxSubject);
+
+      // Ensure the Archive mailbox exists and is empty before appending.
+      final client = await _imapConnect(
+        host: imapHost,
+        port: imapPort,
+        user: userEmail,
+        pass: userPass,
+      );
+      try {
+        try {
+          await client.createMailbox('Archive');
+        } catch (_) {/* already exists */}
+        await _clearMailbox(client, mailboxPath: 'Archive');
+      } finally {
+        await client.logout();
+      }
+      await appendToMailbox(archiveSubject, mailboxPath: 'Archive');
+
+      final r = makeRepo();
+      await r.accounts.addAccount(account, userPass);
+      await r.mailboxes.syncMailboxes('test-jmap');
+
+      final inboxRow = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals('test-jmap') & t.role.equals('inbox'),
+            )
+            ..limit(1))
+          .getSingle();
+      final archiveRow = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) =>
+                  t.accountId.equals('test-jmap') & t.role.equals('archive'),
+            )
+            ..limit(1))
+          .getSingle();
+
+      // Trigger the first sync from the Inbox only. The fix makes this an
+      // account-wide pull, so Archive emails should land locally too.
+      await r.emails.syncEmails('test-jmap', inboxRow.path);
+
+      final inboxEmails =
+          await r.emails.observeEmails('test-jmap', inboxRow.path).first;
+      final archiveEmails =
+          await r.emails.observeEmails('test-jmap', archiveRow.path).first;
+      expect(inboxEmails.map((e) => e.subject), contains(inboxSubject));
+      expect(archiveEmails.map((e) => e.subject), contains(archiveSubject));
     },
   );
 
