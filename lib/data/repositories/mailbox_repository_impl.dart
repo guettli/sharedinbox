@@ -310,12 +310,49 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   /// Maps enough_mail special-use flags (RFC 6154) to JMAP role strings (RFC 8621).
   static String? _imapRole(imap.Mailbox mb) {
-    if (mb.isInbox) return 'inbox';
-    if (mb.isArchive) return 'archive';
-    if (mb.isTrash) return 'trash';
-    if (mb.isSent) return 'sent';
-    if (mb.isDrafts) return 'drafts';
-    if (mb.isJunk) return 'junk';
+    if (mb.isInbox) {
+      return 'inbox';
+    }
+    if (mb.isArchive) {
+      return 'archive';
+    }
+    if (mb.isTrash) {
+      return 'trash';
+    }
+    if (mb.isSent) {
+      return 'sent';
+    }
+    if (mb.isDrafts) {
+      return 'drafts';
+    }
+    if (mb.isJunk) {
+      return 'junk';
+    }
+
+    // Name-based fallback for servers that do not support special-use flags
+    final name = mb.name.toLowerCase();
+    if (name == 'inbox') {
+      return 'inbox';
+    }
+    if (name == 'archive') {
+      return 'archive';
+    }
+    if (name == 'drafts' || name == 'draft') {
+      return 'drafts';
+    }
+    if (name == 'trash' ||
+        name == 'deleted items' ||
+        name == 'deleted messages' ||
+        name == 'bin') {
+      return 'trash';
+    }
+    if (name == 'sent' || name == 'sent items' || name == 'sent messages') {
+      return 'sent';
+    }
+    if (name == 'junk' || name == 'junk mail' || name == 'spam') {
+      return 'junk';
+    }
+
     return null;
   }
 

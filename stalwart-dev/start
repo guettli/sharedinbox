@@ -52,10 +52,10 @@ export STALWART_URL=${STALWART_URL}
 EOF
 
 # Find a container runtime
-if command -v podman >/dev/null 2>&1; then
-    RUNTIME="podman"
-elif command -v docker >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1; then
     RUNTIME="docker"
+elif command -v podman >/dev/null 2>&1; then
+    RUNTIME="podman"
 else
     echo "No container runtime (podman or docker) found" >&2
     exit 1
