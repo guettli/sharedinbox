@@ -139,3 +139,13 @@ Thread view (group by References / In-Reply-To)
 Search (IMAP SEARCH command)
 
 ---
+
+Mail-handler registration on iOS and Linux desktop (#130 only covered Android):
+
+- iOS: add `LSApplicationQueriesSchemes` with `mailto` and a CFBundleURLTypes
+  entry for the `mailto` scheme in `ios/Runner/Info.plist`, once the `ios/`
+  directory is scaffolded via `flutter create --platforms=ios .`.
+- Linux: add `MimeType=x-scheme-handler/mailto;` to the `.desktop` file so
+  `xdg-mime default sharedinbox.desktop x-scheme-handler/mailto` picks the app.
+
+---

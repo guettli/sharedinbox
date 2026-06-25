@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
@@ -131,6 +132,8 @@ class SharedInboxApp extends ConsumerStatefulWidget {
 const _kGitHash = String.fromEnvironment('GIT_HASH');
 
 class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
+  late final MailIntentHandler _mailIntentHandler;
+
   @override
   void initState() {
     super.initState();
@@ -140,11 +143,21 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Resume any saved UnifiedPush distributor registration so push wake-ups
     // start arriving again as soon as possible after launch.
     unawaited(ref.read(unifiedPushServiceProvider).initialize());
+    // Handle "compose email" intents (mailto: links, Share → Email) by
+    // pushing /compose onto the running router. No-op on non-Android.
+    _mailIntentHandler = MailIntentHandler(router: router);
+    unawaited(_mailIntentHandler.initialize());
     if (_kGitHash.isNotEmpty) {
       unawaited(
         ref.read(dbProvider).recordInstalledVersionIfNew(_kGitHash),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _mailIntentHandler.dispose();
+    super.dispose();
   }
 
   @override
