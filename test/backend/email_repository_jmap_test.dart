@@ -243,8 +243,7 @@ void main() {
           .getSingle();
       final archiveRow = await (r.db.select(r.db.mailboxes)
             ..where(
-              (t) =>
-                  t.accountId.equals('test-jmap') & t.role.equals('archive'),
+              (t) => t.accountId.equals('test-jmap') & t.role.equals('archive'),
             )
             ..limit(1))
           .getSingle();

@@ -2045,9 +2045,8 @@ void main() {
         await r.accounts.addAccount(_jmapAccount, 'pw');
         await r.emails.syncEmails('jmap-1', 'mbx1');
 
-        final queryCall =
-            (capturedBodies.first['methodCalls'] as List<dynamic>)[0]
-                as List<dynamic>;
+        final queryCall = (capturedBodies.first['methodCalls']
+            as List<dynamic>)[0] as List<dynamic>;
         expect(queryCall[0], 'Email/query');
         final args = queryCall[1] as Map<String, dynamic>;
         expect(
