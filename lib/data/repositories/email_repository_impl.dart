@@ -629,9 +629,9 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$mailboxPath:$uid';
-        final msgId = envelope.messageId?.trim();
-        final inReplyTo = envelope.inReplyTo?.trim();
-        final refs = msg.getHeaderValue('References')?.trim();
+        final msgId = _cleanMessageId(envelope.messageId);
+        final inReplyTo = _cleanMessageId(envelope.inReplyTo);
+        final refs = _cleanReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
         final threadId = _computeThreadId(
               emailId: emailId,
@@ -3424,6 +3424,24 @@ class EmailRepositoryImpl implements EmailRepository {
     if (list == null || list.isEmpty) return null;
     final joined = list.cast<String>().join(' ');
     return joined.isEmpty ? null : joined;
+  }
+
+  static String? _cleanMessageId(String? mid) {
+    if (mid == null) return null;
+    var s = mid.trim();
+    if (s.startsWith('<') && s.endsWith('>')) {
+      s = s.substring(1, s.length - 1);
+    }
+    return s.isEmpty ? null : s;
+  }
+
+  static String? _cleanReferences(String? refs) {
+    if (refs == null) return null;
+    final cleanTokens = refs
+        .split(RegExp(r'\s+'))
+        .map((t) => _cleanMessageId(t))
+        .whereType<String>();
+    return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
   }
 
   static String? _computeThreadId({
