@@ -76,6 +76,55 @@ void main() {
       );
       expect(AccountComparison.isComparablePair(imapAuth, jmapAuth), isTrue);
     });
+
+    test('rejects pairs when JMAP url is missing', () {
+      const jmapNoUrl = model.Account(
+        id: 'j3',
+        displayName: 'Alice (JMAP no url)',
+        email: 'alice@example.com',
+        type: model.AccountType.jmap,
+      );
+      expect(AccountComparison.isComparablePair(imap, jmapNoUrl), isFalse);
+    });
+
+    test('rejects same-id self comparison', () {
+      expect(AccountComparison.isComparablePair(imap, imap), isFalse);
+    });
+  });
+
+  group('AccountComparison.counterpartsOf', () {
+    const imap = model.Account(
+      id: 'i',
+      displayName: 'Alice (IMAP)',
+      email: 'alice@example.com',
+      imapHost: 'mail.example.com',
+    );
+    const jmap = model.Account(
+      id: 'j',
+      displayName: 'Alice (JMAP)',
+      email: 'alice@example.com',
+      type: model.AccountType.jmap,
+      jmapUrl: 'https://mail.example.com/.well-known/jmap',
+    );
+    const unrelated = model.Account(
+      id: 'u',
+      displayName: 'Bob',
+      email: 'bob@example.com',
+      imapHost: 'mail.other.com',
+    );
+
+    test('returns every comparable counterpart', () {
+      final all = [imap, jmap, unrelated];
+      final counterparts = AccountComparison.counterpartsOf(imap, all);
+      expect(counterparts.map((a) => a.id), ['j']);
+    });
+
+    test('returns empty when no counterparts exist', () {
+      expect(
+        AccountComparison.counterpartsOf(imap, [imap, unrelated]),
+        isEmpty,
+      );
+    });
   });
 
   group('AccountComparison.compare', () {
@@ -206,7 +255,282 @@ void main() {
       // when the other side also has no matching Message-ID.
       expect(result.emails, isEmpty);
     });
+
+    test('reports side-B emails without Message-ID as unmatchable', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:1',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: null,
+        subject: 'No id (B)',
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.unmatchable, hasLength(1));
+      expect(result.unmatchable.single.side, ComparisonSide.b);
+      expect(result.emails, isEmpty);
+    });
+
+    test('detects mailbox count mismatches', () async {
+      await _seedMailbox(
+        db,
+        'imap-1',
+        path: 'INBOX',
+        role: 'inbox',
+        unread: 2,
+        total: 5,
+      );
+      await _seedMailbox(
+        db,
+        'jmap-1',
+        path: 'a',
+        role: 'inbox',
+        total: 5,
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.mailboxes, hasLength(1));
+      expect(result.mailboxes.single.kind, MailboxDiffKind.countMismatch);
+      expect(result.mailboxes.single.a, isNotNull);
+      expect(result.mailboxes.single.b, isNotNull);
+    });
+
+    test('detects mailbox missing on side A', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'b', role: 'archive');
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.mailboxes, hasLength(1));
+      final diff = result.mailboxes.single;
+      expect(diff.kind, MailboxDiffKind.missingInA);
+      expect(diff.key, 'role:archive');
+      expect(diff.a, isNull);
+      expect(diff.b, isNotNull);
+    });
+
+    test('detects an email missing on side A', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:1',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: '<only-in-b@example.com>',
+        subject: 'Solo B',
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.emails, hasLength(1));
+      expect(result.emails.single.kind, EmailDiffKind.missingInA);
+      expect(result.emails.single.messageId, '<only-in-b@example.com>');
+    });
+
+    test('detects flagged/subject/sentAt mismatches', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Hello',
+        sentAt: DateTime.utc(2026, 1, 1, 12),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Hello (edited)',
+        isFlagged: true,
+        sentAt: DateTime.utc(2026, 1, 1, 13),
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.emails, hasLength(1));
+      final diff = result.emails.single;
+      expect(diff.kind, EmailDiffKind.fieldMismatch);
+      expect(
+        diff.fields,
+        containsAll([
+          EmailFieldMismatch.flagged,
+          EmailFieldMismatch.subject,
+          EmailFieldMismatch.sentAt,
+        ]),
+      );
+    });
+
+    test('sentAt within one second is not a mismatch', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Hi',
+        sentAt: DateTime.utc(2026, 1, 1, 12),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Hi',
+        sentAt: DateTime.utc(2026, 1, 1, 12, 0, 1),
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.isIdentical, isTrue);
+    });
+
+    test('reports differing cached bodies as BodyDiff', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedBody(db, emailId: 'imap-1:1', textBody: 'first body');
+      await _seedBody(db, emailId: 'jmap-1:X', textBody: 'a different body');
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.bodies, hasLength(1));
+      expect(result.bodies.single.messageId, messageId);
+    });
+
+    test('ignores whitespace-only body differences', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedBody(db, emailId: 'imap-1:1', textBody: 'hello  world\n');
+      await _seedBody(db, emailId: 'jmap-1:X', textBody: '  hello world  ');
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.bodies, isEmpty);
+    });
+
+    test('skips body comparison when only one side has a cached body',
+        () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedBody(db, emailId: 'imap-1:1', textBody: 'only A');
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.bodies, isEmpty);
+    });
+
+    test('treats two null text bodies as equal', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      const messageId = '<m1@example.com>';
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:1',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:X',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: messageId,
+        subject: 'Body',
+      );
+      await _seedBody(db, emailId: 'imap-1:1', textBody: null);
+      await _seedBody(db, emailId: 'jmap-1:X', textBody: null);
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.bodies, isEmpty);
+    });
   });
+}
+
+Future<void> _seedBody(
+  AppDatabase db, {
+  required String emailId,
+  required String? textBody,
+}) async {
+  await db.into(db.emailBodies).insert(
+        EmailBodiesCompanion.insert(
+          emailId: emailId,
+          textBody: Value(textBody),
+        ),
+      );
 }
 
 Future<void> _seedAccount(
