@@ -248,7 +248,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/bug-reports", bugReportHandler(storageDir))
 
-	addr := net.JoinHostPort("127.0.0.1", port)
+	addr := net.JoinHostPort("0.0.0.0", port)
 	log.Printf("Bug report server starting on %s...", addr)
 	log.Printf("Reports storage directory: %s", storageDir)
 
