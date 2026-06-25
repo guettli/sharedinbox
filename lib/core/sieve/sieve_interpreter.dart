@@ -122,6 +122,8 @@ class SieveInterpreter {
           ctx.keepInInbox = true;
         case MarkAsSeenAction():
           ctx.flagsToAdd.add(r'\Seen');
+        case StarMessageAction():
+          ctx.flagsToAdd.add(r'\Flagged');
         case final FlagAction a:
           ctx.flagsToAdd.addAll(a.flags);
       }

@@ -245,6 +245,20 @@ void main() {
     });
   });
 
+  group('StarMessageAction', () {
+    test('adds \\Flagged flag', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: const [],
+          actions: [StarMessageAction()],
+        ),
+      ];
+      final ctx = interp.execute(rules, _email());
+      expect(ctx.flagsToAdd, contains(r'\Flagged'));
+    });
+  });
+
   group('if/elsif/else branch groups', () {
     final rules = [
       SieveRule(

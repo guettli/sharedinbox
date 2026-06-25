@@ -183,6 +183,25 @@ void main() {
       expect(script, contains(r'\Seen'));
     });
 
+    test('star-message action emits setflag \\Flagged with imap4flags require',
+        () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.from_,
+            comparison: FilterComparison.contains,
+            value: 'boss',
+          ),
+        ],
+      );
+      final script = ser.serialize(group, [StarMessageAction()]);
+      expect(script, contains('require'));
+      expect(script, contains('imap4flags'));
+      expect(script, contains('setflag'));
+      expect(script, contains(r'\Flagged'));
+    });
+
     test('escapes quotes in values', () {
       final group = FilterGroup(
         operator: FilterOperator.and_,
@@ -286,6 +305,34 @@ if header :contains "subject" "newsletter" {
       final result = conv.parse(script);
       expect(result, isNotNull);
       expect(result!.actions.first, isA<MarkAsSeenAction>());
+    });
+
+    test('parses setflag \\\\Flagged as StarMessageAction', () {
+      const script = r'''
+if address :contains "from" "boss@example.com" {
+  setflag "\\Flagged";
+}''';
+      final result = conv.parse(script);
+      expect(result, isNotNull);
+      expect(result!.actions.first, isA<StarMessageAction>());
+    });
+
+    test('star-message round-trips through serializer', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.subject,
+            comparison: FilterComparison.contains,
+            value: 'invoice',
+          ),
+        ],
+      );
+      final script = SieveSerializer().serialize(group, [StarMessageAction()]);
+      final result = conv.parse(script);
+      expect(result, isNotNull);
+      expect(result!.actions, hasLength(1));
+      expect(result.actions.first, isA<StarMessageAction>());
     });
 
     test('returns null for unsupported test', () {

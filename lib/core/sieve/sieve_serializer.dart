@@ -32,8 +32,10 @@ class SieveSerializer {
     final req = <String>[];
     for (final a in actions) {
       if (a is FileIntoAction && !req.contains('fileinto')) req.add('fileinto');
-      if ((a is FlagAction || a is MarkAsSeenAction) &&
-          !req.contains('imap4flags')) {
+      final usesFlags = a is FlagAction ||
+          a is MarkAsSeenAction ||
+          a is StarMessageAction;
+      if (usesFlags && !req.contains('imap4flags')) {
         req.add('imap4flags');
       }
     }
@@ -92,6 +94,7 @@ class SieveSerializer {
         KeepAction() => 'keep;',
         DiscardAction() => 'discard;',
         MarkAsSeenAction() => r'setflag "\\Seen";',
+        StarMessageAction() => r'setflag "\\Flagged";',
         final FlagAction a =>
           'addflag [${a.flags.map((f) => '"${_esc(f)}"').join(', ')}];',
       };

@@ -11,6 +11,8 @@ final class DiscardAction extends SieveAction {}
 
 final class MarkAsSeenAction extends SieveAction {}
 
+final class StarMessageAction extends SieveAction {}
+
 final class FlagAction extends SieveAction {
   FlagAction(this.flags);
   final List<String> flags;
