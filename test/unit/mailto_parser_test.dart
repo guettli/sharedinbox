@@ -83,7 +83,9 @@ void main() {
     test('omits null fields so existing prefill semantics are preserved', () {
       const intent = MailIntent(to: 'a@b', subject: 'S');
       expect(
-          intent.toComposeExtra(), {'prefillTo': 'a@b', 'prefillSubject': 'S'});
+        intent.toComposeExtra(),
+        {'prefillTo': 'a@b', 'prefillSubject': 'S'},
+      );
     });
 
     test('includes every populated field', () {
