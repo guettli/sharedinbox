@@ -887,8 +887,10 @@ void main() {
         final results = await r.emails.searchEmailsStructured('acc-1', filter);
 
         // All three spam variants match; Bob's decoy does not.
-        expect(results.map((e) => e.id),
-            unorderedEquals(['acc-1:1', 'acc-1:2', 'acc-1:3']));
+        expect(
+          results.map((e) => e.id),
+          unorderedEquals(['acc-1:1', 'acc-1:2', 'acc-1:3']),
+        );
       },
     );
 

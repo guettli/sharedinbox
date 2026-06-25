@@ -44,7 +44,9 @@ void main() {
 
     test('strips ticket-style #1234 tokens', () {
       expect(
-          normalizedSubject('Bug #1234 — login broken'), 'bug — login broken');
+        normalizedSubject('Bug #1234 — login broken'),
+        'bug — login broken',
+      );
     });
 
     test('strips bracketed and parenthesised tokens', () {
