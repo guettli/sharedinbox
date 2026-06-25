@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/search_screen.dart';
 
 import 'helpers.dart';
 
@@ -368,6 +371,50 @@ void main() {
       expect(find.text('beta'), findsOneWidget);
       expect(await history.getRecentSearches(), ['beta']);
     });
+
+    testWidgets(
+      'initialFilter opens advanced mode and auto-runs structured search',
+      (tester) async {
+        final hit = testEmail(subject: 'You won a prize!');
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.from_,
+              comparison: FilterComparison.is_,
+              value: 'spam@bad.com',
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(structuredSearchResults: [hit]),
+              ),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+            child: MaterialApp(
+              home: SearchScreen(initialFilter: filter),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Advanced-mode AppBar title and result are visible.
+        expect(find.text('Advanced Search'), findsOneWidget);
+        expect(find.text('You won a prize!'), findsOneWidget);
+      },
+    );
 
     testWidgets('tapping Clear empties the recent searches panel', (
       tester,

@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 
@@ -138,8 +139,10 @@ final router = GoRouter(
             ),
             GoRoute(
               path: ':accountId/search',
-              builder: (ctx, state) =>
-                  SearchScreen(accountId: state.pathParameters['accountId']!),
+              builder: (ctx, state) => SearchScreen(
+                accountId: state.pathParameters['accountId']!,
+                initialFilter: state.extra as FilterGroup?,
+              ),
             ),
             GoRoute(
               path: ':accountId/emails/by-address/:address',
@@ -185,7 +188,12 @@ final router = GoRouter(
             ),
           ],
         ),
-        GoRoute(path: '/search', builder: (ctx, state) => const SearchScreen()),
+        GoRoute(
+          path: '/search',
+          builder: (ctx, state) => SearchScreen(
+            initialFilter: state.extra as FilterGroup?,
+          ),
+        ),
         GoRoute(
           path: '/compose',
           builder: (ctx, state) {
