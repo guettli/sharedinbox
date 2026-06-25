@@ -8,116 +8,16 @@ on:
     paths:
       - 'website/**'
       - 'scripts/website-verify.sh'
+      - 'scripts/generate_build_history.py'
       - '.github/workflows/website.yml'
   workflow_dispatch:
 
 jobs:
-  check-changes:
-    name: Detect Website Changes
-    runs-on: sharedinbox-arc
-    timeout-minutes: 5
-    if: github.server_url == 'https://github.com'
-    outputs:
-      has_changes: ${{ steps.diff.outputs.has_changes }}
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Detect website changes since last deploy
-        id: diff
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          # On push or workflow_dispatch always deploy
-          if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          HEAD_SHA=$(git rev-parse HEAD)
-
-          # Find the most recent run where the "Build & Update Website" job actually
-          # ran (conclusion=success). Runs where the deploy job was skipped also report
-          # status=success at the run level, so inspect each run's jobs to tell a real
-          # deploy from a skipped one.
-          LAST_DEPLOYED_SHA=$(python3 - << 'PYEOF'
-          import json, os, sys, urllib.request
-          token = os.environ.get("GITHUB_TOKEN", "")
-          repo = os.environ.get("GITHUB_REPOSITORY", "")
-          api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-          runs_url = f"{api}/repos/{repo}/actions/workflows/website.yml/runs?status=success&per_page=50"
-          try:
-              req = urllib.request.Request(runs_url, headers=headers)
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  runs = json.loads(r.read()).get("workflow_runs", [])
-              for run in runs:
-                  jobs_url = f"{api}/repos/{repo}/actions/runs/{run['id']}/jobs"
-                  jreq = urllib.request.Request(jobs_url, headers=headers)
-                  with urllib.request.urlopen(jreq, timeout=60) as jr:
-                      jobs = json.loads(jr.read()).get("jobs", [])
-                  for job in jobs:
-                      if (job.get("name") == "Build & Update Website"
-                          and job.get("conclusion") == "success"):
-                          print(run.get("head_sha") or "")
-                          sys.exit(0)
-              print("")
-          except Exception as e:
-              print(f"::error::LAST_DEPLOYED_SHA lookup failed ({type(e).__name__}: {e})")
-              print("")
-          PYEOF
-          )
-
-          if [ -z "$LAST_DEPLOYED_SHA" ]; then
-            echo "::warning::Could not determine last successfully deployed SHA — deploying as a precaution"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "$HEAD_SHA" = "$LAST_DEPLOYED_SHA" ]; then
-            echo "::notice::Website deploy SKIPPED — HEAD $HEAD_SHA was already successfully deployed"
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Diff from last successfully deployed commit to catch all changes since
-          # that deploy, not just the most recent commit.
-          if git cat-file -e "$LAST_DEPLOYED_SHA" 2>/dev/null; then
-            echo "Diffing from last deployed SHA $LAST_DEPLOYED_SHA"
-            CHANGED=$(git diff --name-only "$LAST_DEPLOYED_SHA" HEAD 2>/dev/null \
-              || git show --name-only --format= HEAD)
-          else
-            echo "::warning::Last deployed SHA $LAST_DEPLOYED_SHA not in local history — deploying as a precaution"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          website_re='^(website/|scripts/website-verify\.sh|\.github/workflows/website\.yml)'
-
-          if echo "$CHANGED" | grep -qE "$website_re"; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Website deploy TRIGGERED — website-relevant files changed since $LAST_DEPLOYED_SHA"
-          else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Website deploy SKIPPED — diff $LAST_DEPLOYED_SHA..HEAD has no website-relevant changes"
-          fi
-
   deploy:
     name: Build & Update Website
     runs-on: sharedinbox-arc
     timeout-minutes: 60
-    needs: [check-changes]
-    if: needs.check-changes.outputs.has_changes == 'true'
+    if: github.server_url == 'https://github.com'
 
     steps:
       - uses: actions/checkout@v5
