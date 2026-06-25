@@ -291,7 +291,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
 // Action editor
 // ---------------------------------------------------------------------------
 
-enum _ActionType { keep, discard, markAsRead, fileInto }
+enum _ActionType { keep, discard, markAsRead, starMessage, fileInto }
 
 class _ActionEditor extends StatelessWidget {
   const _ActionEditor({
@@ -308,6 +308,7 @@ class _ActionEditor extends StatelessWidget {
         KeepAction() => _ActionType.keep,
         DiscardAction() => _ActionType.discard,
         MarkAsSeenAction() => _ActionType.markAsRead,
+        StarMessageAction() => _ActionType.starMessage,
         FileIntoAction() => _ActionType.fileInto,
         FlagAction() => _ActionType.keep,
       };
@@ -316,6 +317,7 @@ class _ActionEditor extends StatelessWidget {
         _ActionType.keep => KeepAction(),
         _ActionType.discard => DiscardAction(),
         _ActionType.markAsRead => MarkAsSeenAction(),
+        _ActionType.starMessage => StarMessageAction(),
         _ActionType.fileInto => FileIntoAction(''),
       };
 
@@ -384,6 +386,10 @@ class _ActionEditor extends StatelessWidget {
               DropdownMenuItem(
                 value: _ActionType.markAsRead,
                 child: Text('Mark as read'),
+              ),
+              DropdownMenuItem(
+                value: _ActionType.starMessage,
+                child: Text('Star message'),
               ),
               DropdownMenuItem(
                 value: _ActionType.fileInto,

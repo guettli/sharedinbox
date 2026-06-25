@@ -333,6 +333,12 @@ class SieveParser {
       )) {
         return MarkAsSeenAction();
       }
+      if (flags.any(
+        (f) =>
+            f.toLowerCase() == r'\flagged' || f.toLowerCase() == r'\\flagged',
+      )) {
+        return StarMessageAction();
+      }
       return FlagAction(flags);
     }
     if (word == 'mark') {

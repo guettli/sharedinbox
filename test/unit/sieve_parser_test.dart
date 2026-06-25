@@ -203,6 +203,31 @@ if header :contains "From" "boss@" {
     });
   });
 
+  group('SieveParser — setflag', () {
+    test('setflag \\Flagged is parsed as StarMessageAction', () {
+      const script = r'''
+require ["imap4flags"];
+if header :contains "Subject" "hi" {
+  setflag "\\Flagged";
+}
+''';
+      final rules = parser.parse(script);
+      expect(rules, hasLength(1));
+      expect(rules.first.actions.first, isA<StarMessageAction>());
+    });
+
+    test('setflag \\Flagged adds the \\Flagged flag when executed', () {
+      const script = r'''
+require ["imap4flags"];
+if header :contains "Subject" "hi" {
+  setflag "\\Flagged";
+}
+''';
+      final ctx = run(script, _email(subject: 'hi there'));
+      expect(ctx.flagsToAdd, contains(r'\Flagged'));
+    });
+  });
+
   group('SieveParser — keep and stop', () {
     test('keep action keeps inbox', () {
       const script = 'keep;';
