@@ -13,6 +13,7 @@
 @Tags(['nightly'])
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -160,65 +161,95 @@ void main() {
     }
     await emails.syncEmails(account.id, 'INBOX');
 
+    // Per-action timeout so a single hung IMAP/SMTP call fails fast with the
+    // seed/round/action instead of running out the CI wall clock. Normal
+    // actions take well under a second against a local Stalwart; 60s is
+    // generous headroom for unusual cases.
+    const actionTimeout = Duration(seconds: 60);
+
     for (var round = 0; round < rounds; round++) {
       final action = rng.nextInt(8);
       stdout.writeln('chaos-monkey: round=$round action=$action');
 
-      switch (action) {
-        case 0: // sync INBOX
-          await emails.syncEmails(account.id, 'INBOX');
+      Future<void> runAction() async {
+        switch (action) {
+          case 0: // sync INBOX
+            await emails.syncEmails(account.id, 'INBOX');
 
-        case 1: // sync Sent
-          await emails.syncEmails(account.id, 'Sent');
+          case 1: // sync Sent
+            await emails.syncEmails(account.id, 'Sent');
 
-        case 2: // send email to self
-          final subject = 'chaos-$round-${rng.nextInt(9999)}';
-          await emails.sendEmail(
-            account.id,
-            email_model.EmailDraft(
-              from: email_model.EmailAddress(name: 'Chaos', email: userEmail),
-              to: [email_model.EmailAddress(email: userEmail)],
-              cc: [],
-              subject: subject,
-              body: 'Round $round. Value: ${rng.nextInt(1000000)}.',
-            ),
-          );
+          case 2: // send email to self
+            final subject = 'chaos-$round-${rng.nextInt(9999)}';
+            await emails.sendEmail(
+              account.id,
+              email_model.EmailDraft(
+                from: email_model.EmailAddress(name: 'Chaos', email: userEmail),
+                to: [email_model.EmailAddress(email: userEmail)],
+                cc: [],
+                subject: subject,
+                body: 'Round $round. Value: ${rng.nextInt(1000000)}.',
+              ),
+            );
 
-        case 3: // mark random email seen
-          final inbox = await emails.observeEmails(account.id, 'INBOX').first;
-          if (inbox.isEmpty) break;
-          final e = inbox[rng.nextInt(inbox.length)];
-          await emails.setFlag(e.id, seen: true);
+          case 3: // mark random email seen
+            final inbox = await emails.observeEmails(account.id, 'INBOX').first;
+            if (inbox.isEmpty) break;
+            final e = inbox[rng.nextInt(inbox.length)];
+            await emails.setFlag(e.id, seen: true);
 
-        case 4: // mark random email unseen
-          final inbox = await emails.observeEmails(account.id, 'INBOX').first;
-          if (inbox.isEmpty) break;
-          final e = inbox[rng.nextInt(inbox.length)];
-          await emails.setFlag(e.id, seen: false);
+          case 4: // mark random email unseen
+            final inbox = await emails.observeEmails(account.id, 'INBOX').first;
+            if (inbox.isEmpty) break;
+            final e = inbox[rng.nextInt(inbox.length)];
+            await emails.setFlag(e.id, seen: false);
 
-        case 5: // toggle flagged on random email
-          final inbox = await emails.observeEmails(account.id, 'INBOX').first;
-          if (inbox.isEmpty) break;
-          final e = inbox[rng.nextInt(inbox.length)];
-          await emails.setFlag(e.id, flagged: !e.isFlagged);
+          case 5: // toggle flagged on random email
+            final inbox = await emails.observeEmails(account.id, 'INBOX').first;
+            if (inbox.isEmpty) break;
+            final e = inbox[rng.nextInt(inbox.length)];
+            await emails.setFlag(e.id, flagged: !e.isFlagged);
 
-        case 6: // flush pending changes to server
-          final flushed =
-              await emails.flushPendingChanges(account.id, userPass);
-          stdout.writeln('chaos-monkey: flushed $flushed pending changes');
+          case 6: // flush pending changes to server
+            final flushed =
+                await emails.flushPendingChanges(account.id, userPass);
+            stdout.writeln('chaos-monkey: flushed $flushed pending changes');
 
-        case 7: // delete random email
-          final inbox = await emails.observeEmails(account.id, 'INBOX').first;
-          if (inbox.isEmpty) break;
-          final e = inbox[rng.nextInt(inbox.length)];
-          await emails.deleteEmail(e.id);
+          case 7: // delete random email
+            final inbox = await emails.observeEmails(account.id, 'INBOX').first;
+            if (inbox.isEmpty) break;
+            final e = inbox[rng.nextInt(inbox.length)];
+            await emails.deleteEmail(e.id);
+        }
       }
+
+      await runAction().timeout(
+        actionTimeout,
+        onTimeout: () => throw TimeoutException(
+          'chaos-monkey action hung '
+          '(seed=$seed round=$round action=$action)',
+          actionTimeout,
+        ),
+      );
     }
 
     // Final flush and sync to confirm the server is in a consistent state.
-    final flushed = await emails.flushPendingChanges(account.id, userPass);
+    final flushed =
+        await emails.flushPendingChanges(account.id, userPass).timeout(
+              actionTimeout,
+              onTimeout: () => throw TimeoutException(
+                'chaos-monkey final flush hung (seed=$seed)',
+                actionTimeout,
+              ),
+            );
     stdout.writeln('chaos-monkey: final flush flushed=$flushed');
-    final result = await emails.syncEmails(account.id, 'INBOX');
+    final result = await emails.syncEmails(account.id, 'INBOX').timeout(
+          actionTimeout,
+          onTimeout: () => throw TimeoutException(
+            'chaos-monkey final sync hung (seed=$seed)',
+            actionTimeout,
+          ),
+        );
     stdout.writeln('chaos-monkey: final sync fetched=${result.fetched}');
   });
 }
