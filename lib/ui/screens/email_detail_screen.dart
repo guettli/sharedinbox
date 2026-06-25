@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -146,6 +147,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               const PopupMenuItem(value: 'move', child: Text('Move to folder')),
               const PopupMenuItem(value: 'snooze', child: Text('Snooze')),
               const PopupMenuItem(
+                value: 'find_similar',
+                child: Text('Find similar emails'),
+              ),
+              const PopupMenuItem(
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
               ),
@@ -172,6 +177,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 unawaited(_moveTo(context, header));
               } else if (value == 'snooze' && header != null) {
                 unawaited(_snooze(context, header));
+              } else if (value == 'find_similar' && header != null) {
+                unawaited(
+                  context.push('/search', extra: similarFilterFor(header)),
+                );
               } else if (value == 'mark_unread') {
                 final nextEmailId = await _getNextEmailIdIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
