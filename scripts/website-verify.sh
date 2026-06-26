@@ -25,8 +25,8 @@ for i in $(seq 1 6); do
             echo \"\$HTTP\"
             cat /tmp/website-verify.html 2>/dev/null || true
         " || true)
-        HTTP=$(echo "$OUT" | head -n 1)
-        HTML=$(echo "$OUT" | tail -n +2)
+        HTTP=$(head -n 1 <<<"$OUT")
+        HTML=$(tail -n +2 <<<"$OUT")
     else
         HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}" 2>/dev/null || true)
         HTML=$(cat /tmp/website-verify.html 2>/dev/null || true)
