@@ -35,6 +35,7 @@ import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/data/db/database.dart'
     show AppDatabase, SyncHealthRow;
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/account_home_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
@@ -527,6 +528,12 @@ Widget buildApp({
             path: 'trusted-senders',
             builder: (ctx, state) => TrustedImageSendersScreen(
               highlightedSender: state.extra as String?,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId',
+            builder: (ctx, state) => AccountHomeScreen(
+              accountId: state.pathParameters['accountId']!,
             ),
           ),
           GoRoute(

@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 
 import 'package:sharedinbox/ui/screens/about_screen.dart';
 import 'package:sharedinbox/ui/screens/account_compare_screen.dart';
+import 'package:sharedinbox/ui/screens/account_home_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
@@ -89,6 +90,12 @@ final router = GoRouter(
               path: 'trusted-senders',
               builder: (ctx, state) => TrustedImageSendersScreen(
                 highlightedSender: state.extra as String?,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId',
+              builder: (ctx, state) => AccountHomeScreen(
+                accountId: state.pathParameters['accountId']!,
               ),
             ),
             GoRoute(
