@@ -178,6 +178,121 @@ else
     _pass
 fi
 
+# -----------------------------------------------------------------------------
+# Tests for the ssh-keyscan retry block.
+# Mirrors the verify-block strategy: extract just the keyscan section of
+# setup_dagger_remote.sh and drive it with stubbed `ssh-keyscan`/`timeout`/
+# `sleep` binaries on PATH. See issue #171 — the original keyscan call sent
+# stderr to /dev/null, so a transient failure exited the script with no log.
+# -----------------------------------------------------------------------------
+_keyscan_snippet=$(awk '/^# Add remote host to known_hosts/{flag=1} /^# Create a background SSH tunnel/{flag=0} flag' "$SCRIPT")
+if [ -z "$_keyscan_snippet" ]; then
+    echo "FAIL: could not locate keyscan block in $SCRIPT"
+    exit 1
+fi
+
+# Stub ssh-keyscan. Behavior is controlled by env vars set by the caller:
+#   KEYSCAN_RC          — exit code to return
+#   KEYSCAN_STDOUT      — text to write to stdout (host keys)
+#   KEYSCAN_STDERR      — text to write to stderr
+#   KEYSCAN_SUCCEED_ON  — attempt number on which to flip to rc=0+keys (optional)
+# Each invocation increments an attempts counter at $SCRATCH/keyscan_attempts.
+cat >"$SCRATCH/ssh-keyscan" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$SCRATCH/keyscan_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/keyscan_attempts"
+if [ -n "\${KEYSCAN_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$KEYSCAN_SUCCEED_ON" ]; then
+    printf '%s\n' "\${KEYSCAN_SUCCEED_STDOUT:-host ssh-ed25519 AAAAFAKE}"
+    exit 0
+fi
+[ -n "\${KEYSCAN_STDOUT:-}" ] && printf '%s\n' "\$KEYSCAN_STDOUT"
+[ -n "\${KEYSCAN_STDERR:-}" ] && printf '%s\n' "\$KEYSCAN_STDERR" >&2
+exit "\${KEYSCAN_RC:-0}"
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+
+# Run the keyscan snippet with the stubs above. Pin the budget to keep
+# assertion strings stable; the script behaves identically with the
+# production defaults (3 attempts, 5s wait, 30s per attempt).
+run_keyscan() {
+    echo 0 >"$SCRATCH/keyscan_attempts"
+    # The snippet appends to ~/.ssh/known_hosts; redirect HOME to a scratch
+    # dir so the test does not touch the real known_hosts.
+    fake_home="$SCRATCH/home"
+    mkdir -p "$fake_home/.ssh"
+    PATH="$SCRATCH:$PATH" \
+        HOME="$fake_home" \
+        SECRETS_JSON=/dev/null \
+        DAGGER_ENGINE_HOST=engine.test \
+        DAGGER_KEYSCAN_MAX_ATTEMPTS=3 \
+        DAGGER_KEYSCAN_TIMEOUT_S=5 \
+        DAGGER_KEYSCAN_RETRY_WAIT_S=0 \
+        bash -c "$_keyscan_snippet" 2>&1
+}
+
+# --- All attempts return rc!=0 + stderr: snippet exits with diagnostics --------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR='getaddrinfo engine.test: Name or service not known' run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "keyscan-fail: should exit non-zero" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "keyscan-fail: should retry to 3 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "ssh-keyscan failed to fetch SSH host keys"; then
+    _fail "keyscan-fail: should print final-failure error" "$out"
+elif ! printf '%s' "$out" | grep -q "getaddrinfo engine.test"; then
+    _fail "keyscan-fail: should replay captured stderr in diagnostics" "$out"
+else
+    _pass
+fi
+
+# --- rc=0 but empty stdout still counts as failure (host refused mid-handshake)
+out=$(KEYSCAN_RC=0 KEYSCAN_STDOUT='' run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "keyscan-empty: should exit non-zero on empty output" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "keyscan-empty: should retry empty-output attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "ssh-keyscan failed to fetch SSH host keys"; then
+    _fail "keyscan-empty: should print final-failure error" "$out"
+else
+    _pass
+fi
+
+# --- Transient failure that recovers on attempt 2 succeeds silently ------------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR='connection refused' KEYSCAN_SUCCEED_ON=2 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan-transient: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "keyscan-transient: expected 2 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan-transient: should not print ::error:: after recovery" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 1/3 failed"; then
+    _fail "keyscan-transient: should warn about the failed first attempt" "$out"
+else
+    _pass
+fi
+
+# --- Success on first attempt: silent + appends key to known_hosts -------------
+out=$(KEYSCAN_RC=0 KEYSCAN_STDOUT='host ssh-ed25519 AAAAREAL' run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan-success: should exit 0" "$out"
+elif [ "$attempts" -ne 1 ]; then
+    _fail "keyscan-success: should not retry (got $attempts attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::warning::"; then
+    _fail "keyscan-success: should not print ::warning::" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan-success: should not print ::error::" "$out"
+elif ! grep -q "AAAAREAL" "$SCRATCH/home/.ssh/known_hosts"; then
+    _fail "keyscan-success: should append captured key to ~/.ssh/known_hosts" "$out"
+else
+    _pass
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

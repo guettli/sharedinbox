@@ -75,9 +75,51 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts
+# Add remote host to known_hosts. ssh-keyscan occasionally fails transiently
+# (DNS hiccup, brief packet loss on the path to the engine host); retry rather
+# than fail the whole job on the first blip. Capture stderr to a tempfile so
+# the normal "got keys for ..." chatter stays out of CI logs on success but
+# is surfaced when every attempt has failed — without it the script used to
+# exit silently under `set -e` and the only signal was the missing
+# "Establishing SSH tunnel" line further down. See issue #171.
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-5}"
+keyscan_out=$(mktemp)
+keyscan_err=$(mktemp)
+trap 'rm -f "$SECRETS_JSON" "$keyscan_out" "$keyscan_err"' EXIT
 _t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+keyscan_rc=0
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    : > "$keyscan_out"
+    : > "$keyscan_err"
+    keyscan_rc=0
+    timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" \
+        >"$keyscan_out" 2>"$keyscan_err" || keyscan_rc=$?
+    # ssh-keyscan can report rc=0 even when it produced no keys (e.g. host
+    # reachable but refused the connection mid-handshake), so require both a
+    # clean exit AND non-empty output before accepting the result.
+    if [ "$keyscan_rc" -eq 0 ] && [ -s "$keyscan_out" ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed for $DAGGER_ENGINE_HOST (rc=${keyscan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
+if [ "$keyscan_rc" -ne 0 ] || ! [ -s "$keyscan_out" ]; then
+    echo "::error::ssh-keyscan failed to fetch SSH host keys for $DAGGER_ENGINE_HOST after ${KEYSCAN_MAX_ATTEMPTS} attempts (rc=${keyscan_rc})."
+    echo "::error::Without the host key the SSH tunnel to the Dagger engine cannot be established."
+    echo "--- ssh-keyscan stderr ---"
+    if [ -s "$keyscan_err" ]; then
+        cat "$keyscan_err"
+    else
+        echo "(no stderr captured)"
+    fi
+    exit 1
+fi
+cat "$keyscan_out" >> ~/.ssh/known_hosts
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
