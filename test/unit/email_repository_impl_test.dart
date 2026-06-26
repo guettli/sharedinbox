@@ -3196,6 +3196,73 @@ void main() {
     });
   });
 
+  group('IMAP folder deleted on server', () {
+    test(
+      'syncEmails prunes local mailbox when SELECT raises NONEXISTENT',
+      () async {
+        final r = _makeRepos(
+          imapConnect: (Account _, String __, String ___) async =>
+              _NonExistentSelectImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+
+        // Seed a local mailbox + email + checkpoint + pending change.
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Old',
+                accountId: 'acc-1',
+                path: 'Old',
+                name: 'Old',
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:Old:1',
+                accountId: 'acc-1',
+                mailboxPath: 'Old',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'IMAP:Old',
+                state: '{"uidValidity":1,"lastUid":1}',
+                syncedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'email',
+                resourceId: 'acc-1:Old:1',
+                changeType: 'flag_seen',
+                payload: jsonEncode({
+                  'uid': 1,
+                  'mailboxPath': 'Old',
+                  'seen': true,
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        // Must return zero, not throw.
+        final result = await r.emails.syncEmails('acc-1', 'Old');
+        expect(result.fetched, 0);
+
+        final mailboxes = await r.db.select(r.db.mailboxes).get();
+        expect(mailboxes, isEmpty);
+        final emails = await r.db.select(r.db.emails).get();
+        expect(emails, isEmpty);
+        final states = await r.db.select(r.db.syncStates).get();
+        expect(states.where((s) => s.resourceType == 'IMAP:Old'), isEmpty);
+        final pending = await r.db.select(r.db.pendingChanges).get();
+        expect(pending, isEmpty);
+      },
+    );
+  });
+
   group('IMAP UID validity change', () {
     test('full re-sync wipes stale emails when uidValidity changes', () async {
       final r = _makeRepos(
@@ -3254,6 +3321,20 @@ void main() {
       expect(state['uidValidity'], 456);
     });
   });
+}
+
+// ── Additional fake IMAP client for "folder deleted" tests ───────────────────
+
+class _NonExistentSelectImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async {
+    // Mimic enough_mail's `Mailbox does not exist` / `[NONEXISTENT]` failure.
+    throw imap.ImapException(this, 'NO [NONEXISTENT] Mailbox does not exist');
+  }
 }
 
 // ── Additional fake IMAP client for UID-validity tests ───────────────────────

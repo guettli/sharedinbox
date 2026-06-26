@@ -22,7 +22,10 @@ import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
+    show removeLocalMailbox;
 
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
   account_model.Account account,
@@ -444,10 +447,26 @@ class EmailRepositoryImpl implements EmailRepository {
       // support the extension may reject SELECT with (CONDSTORE) with BAD.
       final supportsCondStore = client.serverInfo.supports('CONDSTORE') ||
           client.serverInfo.supports('QRESYNC');
-      final selectedMailbox = await client.selectMailboxByPath(
-        mailboxPath,
-        enableCondStore: supportsCondStore,
-      );
+      final imap.Mailbox selectedMailbox;
+      try {
+        selectedMailbox = await client.selectMailboxByPath(
+          mailboxPath,
+          enableCondStore: supportsCondStore,
+        );
+      } catch (e) {
+        if (isImapMailboxNotFound(e)) {
+          // The folder was deleted on the server between mailbox-sync and
+          // email-sync of this cycle. Drop the local cache so subsequent
+          // syncs don't keep retrying the same SELECT.
+          log(
+            'IMAP SELECT failed for "$mailboxPath" (folder deleted on '
+            'server) — pruning local cache: $e',
+          );
+          await removeLocalMailbox(_db, account.id, mailboxPath);
+          return model.SyncEmailsResult.zero;
+        }
+        rethrow;
+      }
       final uidValidity = selectedMailbox.uidValidity ?? 0;
       final serverModSeq = selectedMailbox.highestModSequence;
       final resourceType = 'IMAP:$mailboxPath';
@@ -2309,7 +2328,7 @@ class EmailRepositoryImpl implements EmailRepository {
               .go();
           applied++;
         } catch (e) {
-          if (_isImapNotFoundError(e)) {
+          if (isImapMailboxNotFound(e)) {
             // Email already gone on the server — treat as success so the
             // pending change doesn't accumulate or block future changes.
             await (_db.delete(
@@ -2327,11 +2346,6 @@ class EmailRepositoryImpl implements EmailRepository {
       await client.logout();
     }
     return applied;
-  }
-
-  bool _isImapNotFoundError(Object e) {
-    final s = e.toString().toLowerCase();
-    return s.contains('nonexistent') || s.contains('not found');
   }
 
   Future<void> _applyPendingChangeImap(
