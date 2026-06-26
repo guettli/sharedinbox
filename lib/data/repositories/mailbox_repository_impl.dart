@@ -228,6 +228,27 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return toFetch.length + destroyed.length;
   }
 
+  static String? _fallbackJmapRole(String? name) {
+    if (name == null) return null;
+    final lowerName = name.toLowerCase();
+    if (lowerName == 'inbox') return 'inbox';
+    if (lowerName == 'archive') return 'archive';
+    if (lowerName == 'drafts' || lowerName == 'draft') return 'drafts';
+    if (lowerName == 'trash' ||
+        lowerName == 'deleted items' ||
+        lowerName == 'deleted messages' ||
+        lowerName == 'bin') {
+      return 'trash';
+    }
+    if (lowerName == 'sent' || lowerName == 'sent items' || lowerName == 'sent messages') {
+      return 'sent';
+    }
+    if (lowerName == 'junk' || lowerName == 'junk mail' || lowerName == 'spam') {
+      return 'junk';
+    }
+    return null;
+  }
+
   Future<void> _upsertJmapMailboxes(
     String accountId,
     List<dynamic> mailboxes,
@@ -238,15 +259,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final dbId = '$accountId:$jmapId';
       // For JMAP accounts, path stores the JMAP mailbox ID so that
       // Email rows can reference it via mailboxPath.
+      final name = m['name'] as String? ?? jmapId;
+      final role = m['role'] as String? ?? _fallbackJmapRole(name);
       await _db.into(_db.mailboxes).insertOnConflictUpdate(
             MailboxesCompanion.insert(
               id: dbId,
               accountId: accountId,
               path: jmapId,
-              name: m['name'] as String? ?? jmapId,
+              name: name,
               unreadCount: Value((m['unreadEmails'] as int?) ?? 0),
               totalCount: Value((m['totalEmails'] as int?) ?? 0),
-              role: Value(m['role'] as String?),
+              role: Value(role),
             ),
           );
     }
