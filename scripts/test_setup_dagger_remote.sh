@@ -185,7 +185,7 @@ fi
 # `sleep` binaries on PATH. See issue #171 — the original keyscan call sent
 # stderr to /dev/null, so a transient failure exited the script with no log.
 # -----------------------------------------------------------------------------
-_keyscan_snippet=$(awk '/^# Add remote host to known_hosts/{flag=1} /^# Create a background SSH tunnel/{flag=0} flag' "$SCRIPT")
+_keyscan_snippet=$(awk '/^# Try to pre-populate known_hosts via ssh-keyscan/{flag=1} /^# Create a background SSH tunnel/{flag=0} flag' "$SCRIPT")
 if [ -z "$_keyscan_snippet" ]; then
     echo "FAIL: could not locate keyscan block in $SCRIPT"
     exit 1
@@ -229,32 +229,39 @@ run_keyscan() {
         bash -c "$_keyscan_snippet" 2>&1
 }
 
-# --- All attempts return rc!=0 + stderr: snippet exits with diagnostics --------
+# --- All attempts return rc!=0 + stderr: snippet warns but does NOT abort ------
+# The ssh tunnel further down uses `-o StrictHostKeyChecking=no`, so a failed
+# probe is non-fatal. We still surface the diagnostic so the underlying probe
+# failure stays visible if the tunnel itself later fails.
 out=$(KEYSCAN_RC=1 KEYSCAN_STDERR='getaddrinfo engine.test: Name or service not known' run_keyscan)
 rc=$?
 attempts=$(cat "$SCRATCH/keyscan_attempts")
-if [ "$rc" -eq 0 ]; then
-    _fail "keyscan-fail: should exit non-zero" "$out"
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan-fail: should NOT abort (StrictHostKeyChecking=no handles it)" "$out"
 elif [ "$attempts" -ne 3 ]; then
     _fail "keyscan-fail: should retry to 3 attempts (got $attempts)" "$out"
-elif ! printf '%s' "$out" | grep -q "ssh-keyscan failed to fetch SSH host keys"; then
-    _fail "keyscan-fail: should print final-failure error" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan-fail: should not print ::error:: — failure is non-fatal" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan could not fetch a host key"; then
+    _fail "keyscan-fail: should warn that probe failed but continuing" "$out"
+elif ! printf '%s' "$out" | grep -q "StrictHostKeyChecking=no"; then
+    _fail "keyscan-fail: warning should mention the StrictHostKeyChecking=no fallback" "$out"
 elif ! printf '%s' "$out" | grep -q "getaddrinfo engine.test"; then
-    _fail "keyscan-fail: should replay captured stderr in diagnostics" "$out"
+    _fail "keyscan-fail: should replay captured stderr for diagnostics" "$out"
 else
     _pass
 fi
 
-# --- rc=0 but empty stdout still counts as failure (host refused mid-handshake)
+# --- rc=0 but empty stdout: same non-fatal warning path (host refused handshake)
 out=$(KEYSCAN_RC=0 KEYSCAN_STDOUT='' run_keyscan)
 rc=$?
 attempts=$(cat "$SCRATCH/keyscan_attempts")
-if [ "$rc" -eq 0 ]; then
-    _fail "keyscan-empty: should exit non-zero on empty output" "$out"
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan-empty: should NOT abort on empty output" "$out"
 elif [ "$attempts" -ne 3 ]; then
     _fail "keyscan-empty: should retry empty-output attempts (got $attempts)" "$out"
-elif ! printf '%s' "$out" | grep -q "ssh-keyscan failed to fetch SSH host keys"; then
-    _fail "keyscan-empty: should print final-failure error" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan could not fetch a host key"; then
+    _fail "keyscan-empty: should warn that probe returned no keys" "$out"
 else
     _pass
 fi

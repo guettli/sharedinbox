@@ -75,13 +75,15 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts. ssh-keyscan occasionally fails transiently
-# (DNS hiccup, brief packet loss on the path to the engine host); retry rather
-# than fail the whole job on the first blip. Capture stderr to a tempfile so
-# the normal "got keys for ..." chatter stays out of CI logs on success but
-# is surfaced when every attempt has failed — without it the script used to
-# exit silently under `set -e` and the only signal was the missing
-# "Establishing SSH tunnel" line further down. See issue #171.
+# Try to pre-populate known_hosts via ssh-keyscan. This is best-effort: the
+# actual SSH tunnel below uses `-o StrictHostKeyChecking=no`, so a missing
+# known_hosts entry is not blocking — ssh will accept the host key on first
+# connection and append it to known_hosts itself. We still attempt ssh-keyscan
+# (with retries and stderr capture) because populating known_hosts up front
+# keeps the connection log tidy and makes later runs in the same job re-use the
+# same pinned key. Previously this call silently aborted the whole script when
+# the engine host refused a probe (rc=1, empty stderr) — see issue #171 and
+# run 28249726890.
 KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
 KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
 KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-5}"
@@ -108,21 +110,21 @@ for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
     echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed for $DAGGER_ENGINE_HOST (rc=${keyscan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
     sleep "$KEYSCAN_RETRY_WAIT_S"
 done
-if [ "$keyscan_rc" -ne 0 ] || ! [ -s "$keyscan_out" ]; then
-    echo "::error::ssh-keyscan failed to fetch SSH host keys for $DAGGER_ENGINE_HOST after ${KEYSCAN_MAX_ATTEMPTS} attempts (rc=${keyscan_rc})."
-    echo "::error::Without the host key the SSH tunnel to the Dagger engine cannot be established."
-    echo "--- ssh-keyscan stderr ---"
-    if [ -s "$keyscan_err" ]; then
-        cat "$keyscan_err"
-    else
-        echo "(no stderr captured)"
+if [ "$keyscan_rc" -eq 0 ] && [ -s "$keyscan_out" ]; then
+    cat "$keyscan_out" >> ~/.ssh/known_hosts
+    _elapsed=$(( SECONDS - _t0 ))
+    if [ "$_elapsed" -gt 10 ]; then
+        echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
     fi
-    exit 1
-fi
-cat "$keyscan_out" >> ~/.ssh/known_hosts
-_elapsed=$(( SECONDS - _t0 ))
-if [ "$_elapsed" -gt 10 ]; then
-    echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
+else
+    # Don't abort: the ssh command below uses StrictHostKeyChecking=no and will
+    # accept the host key on first connection. Surface the diagnostic so the
+    # underlying probe failure stays visible if the tunnel itself also fails.
+    echo "::warning::ssh-keyscan could not fetch a host key for $DAGGER_ENGINE_HOST after ${KEYSCAN_MAX_ATTEMPTS} attempts (rc=${keyscan_rc}); continuing — the SSH tunnel below uses StrictHostKeyChecking=no and will accept the host key on first connection."
+    if [ -s "$keyscan_err" ]; then
+        echo "--- ssh-keyscan stderr ---"
+        cat "$keyscan_err"
+    fi
 fi
 
 # Create a background SSH tunnel to the Dagger engine Unix socket.
