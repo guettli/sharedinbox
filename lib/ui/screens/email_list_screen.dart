@@ -10,8 +10,8 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
-import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -166,9 +166,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       appBar: _buildAppBar(repo, accountAsync, menuAtBottom: menuAtBottom),
       drawer: selecting
           ? null
-          : FolderDrawer(
-              accountId: widget.accountId,
-              currentMailboxPath: widget.mailboxPath,
+          : AppDrawer(
+              current: AppDrawerSelection.mailbox(
+                widget.accountId,
+                widget.mailboxPath,
+              ),
             ),
       bottomNavigationBar: selecting
           ? buildSelectionBottomBar(

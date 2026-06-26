@@ -8,7 +8,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
-import 'package:sharedinbox/ui/widgets/folder_drawer.dart';
+import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 
 class MailboxListScreen extends ConsumerWidget {
   const MailboxListScreen({super.key, required this.accountId});
@@ -47,7 +47,7 @@ class MailboxListScreen extends ConsumerWidget {
           ),
         ],
       ),
-      drawer: FolderDrawer(accountId: accountId),
+      drawer: AppDrawer(current: AppDrawerSelection.account(accountId)),
       bottomNavigationBar: menuAtBottom
           ? BottomAppBar(
               child: Row(

@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 
 class CombinedInboxScreen extends ConsumerStatefulWidget {
@@ -71,7 +70,9 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
           appBar: selecting
               ? buildSelectionAppBar(_selection)
               : _buildAppBar(accounts),
-          drawer: selecting ? null : _buildDrawer(context, accounts),
+          drawer: selecting
+              ? null
+              : const AppDrawer(current: AppDrawerSelection.combinedInbox()),
           bottomNavigationBar: selecting
               ? buildSelectionBottomBar(context, ref, _selection)
               : null,
@@ -106,75 +107,6 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
           },
         ),
       ],
-    );
-  }
-
-  Widget _buildDrawer(BuildContext context, List<Account> accounts) {
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          const DrawerHeader(
-            decoration: BoxDecoration(color: Colors.blueGrey),
-            child: Text(
-              'sharedinbox.de',
-              style: TextStyle(color: Colors.white, fontSize: 24),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.manage_accounts),
-            title: const Text('Accounts'),
-            onTap: () {
-              Navigator.pop(context);
-              context.go('/accounts');
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.person_add),
-            title: const Text('Add account'),
-            onTap: () {
-              Navigator.pop(context);
-              unawaited(context.push('/accounts/add'));
-            },
-          ),
-          const Divider(),
-          for (final account in accounts)
-            ListTile(
-              leading: const Icon(Icons.inbox),
-              title: Text(account.displayName),
-              subtitle: Text(account.email),
-              onTap: () {
-                Navigator.pop(context);
-                unawaited(context.push('/accounts/${account.id}/mailboxes'));
-              },
-            ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.settings),
-            title: const Text('Preferences'),
-            onTap: () {
-              Navigator.pop(context);
-              unawaited(context.push('/accounts/preferences'));
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.history),
-            title: const Text('Undo Log'),
-            onTap: () {
-              Navigator.pop(context);
-              unawaited(context.push('/accounts/undo-log'));
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.info_outline),
-            title: const Text('About'),
-            onTap: () {
-              Navigator.pop(context);
-              unawaited(context.push('/accounts/about'));
-            },
-          ),
-        ],
-      ),
     );
   }
 

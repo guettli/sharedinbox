@@ -8,7 +8,9 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/account_actions.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AccountListScreen extends ConsumerWidget {
@@ -27,62 +29,7 @@ class AccountListScreen extends ConsumerWidget {
           ),
         ],
       ),
-      drawer: Drawer(
-        child: ListView(
-          children: [
-            DrawerHeader(
-              decoration: const BoxDecoration(color: Colors.blueGrey),
-              child: Text(
-                'sharedinbox.de',
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
-                    ?.copyWith(color: Colors.white),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.qr_code_scanner),
-              title: const Text('Receive accounts'),
-              onTap: () {
-                Navigator.pop(context);
-                unawaited(context.push('/accounts/receive'));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Undo Log'),
-              onTap: () {
-                Navigator.pop(context); // Close drawer
-                unawaited(context.push('/accounts/undo-log'));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.update),
-              title: const Text('ChangeLog'),
-              onTap: () {
-                Navigator.pop(context); // Close drawer
-                unawaited(context.push('/accounts/changelog'));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('About'),
-              onTap: () {
-                Navigator.pop(context); // Close drawer
-                unawaited(context.push('/accounts/about'));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text('Preferences'),
-              onTap: () {
-                Navigator.pop(context); // Close drawer
-                unawaited(context.push('/accounts/preferences'));
-              },
-            ),
-          ],
-        ),
-      ),
+      drawer: const AppDrawer(current: AppDrawerSelection.manageAccounts()),
       body: Column(
         children: [
           const _UpdateBanner(),
@@ -153,7 +100,7 @@ class _AccountTile extends ConsumerWidget {
                 ),
               ),
               PopupMenuButton<String>(
-                onSelected: (value) => _onAction(context, value),
+                onSelected: (value) => _onAction(context, ref, value),
                 itemBuilder: (_) => [
                   const PopupMenuItem(
                     value: 'syncLog',
@@ -171,7 +118,7 @@ class _AccountTile extends ConsumerWidget {
                     value: 'edit',
                     child: Text('Edit'),
                   ),
-                  if (_sieveSupported(account))
+                  if (sieveSupported(account))
                     const PopupMenuItem(
                       value: 'emailFiltersRemote',
                       child: Text('Server email filters'),
@@ -243,98 +190,18 @@ class _AccountTile extends ConsumerWidget {
     );
   }
 
-  Future<void> _onAction(BuildContext context, String value) async {
+  Future<void> _onAction(
+    BuildContext context,
+    WidgetRef ref,
+    String value,
+  ) async {
     if (value.startsWith('compare:')) {
       final otherId = value.substring('compare:'.length);
-      await context.push('/accounts/${account.id}/compare/$otherId');
+      await openAccountCompare(context, account.id, otherId);
       return;
     }
-    final action = _AccountAction.values.byName(value);
-    switch (action) {
-      case _AccountAction.syncLog:
-        await context.push('/accounts/${account.id}/sync-log');
-        break;
-      case _AccountAction.verifySync:
-        unawaited(
-          ProviderScope.containerOf(
-            context,
-          ).read(reliabilityRunnerProvider).checkNow(),
-        );
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Starting sync verification...'),
-            ),
-          );
-        }
-        break;
-      case _AccountAction.forceSync:
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Force full sync?'),
-            content: const Text(
-              'This clears all locally-cached emails and mailboxes for this '
-              'account and immediately re-downloads everything from the server. '
-              'Previously viewed email content will not need to be re-downloaded.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('Force sync'),
-              ),
-            ],
-          ),
-        );
-        if (confirmed == true && context.mounted) {
-          await ProviderScope.containerOf(
-            context,
-          ).read(syncManagerProvider).forceResync(account.id);
-        }
-        break;
-      case _AccountAction.edit:
-        await context.push('/accounts/${account.id}/edit');
-        break;
-      case _AccountAction.emailFiltersRemote:
-        await context.push('/accounts/${account.id}/sieve');
-        break;
-      case _AccountAction.emailFiltersLocal:
-        await context.push('/accounts/${account.id}/sieve/local');
-        break;
-      case _AccountAction.send:
-        await context.push('/accounts/send');
-        break;
-      case _AccountAction.delete:
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Delete account'),
-            content: Text(
-              'Remove "${account.displayName}" (${account.email})? This cannot be undone.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete'),
-              ),
-            ],
-          ),
-        );
-        if ((confirmed ?? false) && context.mounted) {
-          await ProviderScope.containerOf(
-            context,
-          ).read(accountRepositoryProvider).removeAccount(account.id);
-        }
-    }
+    final action = AccountAction.values.byName(value);
+    await runAccountAction(context, ref, account, action);
   }
 }
 
@@ -466,28 +333,6 @@ class _Step extends StatelessWidget {
       ),
     );
   }
-}
-
-enum _AccountAction {
-  syncLog,
-  verifySync,
-  forceSync,
-  edit,
-  emailFiltersRemote,
-  emailFiltersLocal,
-  send,
-  delete,
-}
-
-/// Whether to surface the "Email filters" (Sieve) entry for [account].
-///
-/// JMAP accounts always show it (Sieve over JMAP, no separate probe).
-/// IMAP accounts hide it only when a previous ManageSieve probe failed
-/// (manageSieveAvailable == false). Null means "not yet probed" — we
-/// optimistically show it and let the menu disappear once the probe lands.
-bool _sieveSupported(Account account) {
-  if (account.type == AccountType.jmap) return true;
-  return account.manageSieveAvailable != false;
 }
 
 /// Shown on Linux desktop when a newer build is available on the server.
