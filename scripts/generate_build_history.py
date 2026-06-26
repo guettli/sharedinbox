@@ -30,6 +30,14 @@ MAX_BUILDS_PER_PLATFORM = 30
 
 
 def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
+    # `mkdir -p` makes the empty-server case legitimate (find then exits 0 with
+    # no output) without masking real failures. We do NOT pipe to `sort` on the
+    # remote side — a pipeline would hide a failing `find` behind `sort`'s exit
+    # code — and instead sort locally.
+    remote_cmd = (
+        f"mkdir -p {REMOTE_BUILDS_DIR} && "
+        f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f"
+    )
     result = subprocess.run(
         [
             "ssh",
@@ -38,31 +46,21 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
             "-o",
             "ConnectTimeout=15",
             f"{ssh_user}@{ssh_host}",
-            f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f | sort",
+            remote_cmd,
         ],
         capture_output=True,
         text=True,
     )
-    # Exit 255 is an ssh-level failure (connection refused, auth/key rejected,
-    # host-key mismatch). Treating that as "no builds" is what previously made
-    # the page silently render "No builds yet" while the workflow stayed green.
-    # Fail loudly instead so a broken SSH setup turns the workflow red.
-    if result.returncode == 255:
-        raise RuntimeError(
-            f"ssh connection to {ssh_user}@{ssh_host} failed (exit 255) while "
-            f"listing {pattern}: {result.stderr.strip()}"
-        )
-    # Any other non-zero is the remote `find` failing — e.g. the builds dir does
-    # not exist yet on a fresh server. That genuinely means zero builds.
+    # Never swallow errors: any non-zero exit (ssh-level failure such as a
+    # rejected key or host-key mismatch — exit 255 — or a failing remote
+    # command) is fatal. Silently returning [] here is what made the builds
+    # page render "No builds yet" while the workflow stayed green.
     if result.returncode != 0:
-        print(
-            f"WARNING: remote find exit {result.returncode} listing {pattern} on "
-            f"{ssh_user}@{ssh_host} — treating as zero builds for this pattern",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"listing {pattern} on {ssh_user}@{ssh_host} failed "
+            f"(exit {result.returncode}): {result.stderr.strip()}"
         )
-        print(result.stderr, file=sys.stderr)
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
 def get_commit_info(hash_val: str) -> tuple[str, str]:
