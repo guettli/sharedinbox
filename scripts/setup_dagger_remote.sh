@@ -75,13 +75,25 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts
+# Add remote host to known_hosts. A failure here is non-fatal: the ssh tunnel
+# below uses `StrictHostKeyChecking=no`, so the connection still succeeds even
+# without a pinned host key. Surface the keyscan stderr as a warning instead
+# of silently dying — a hard exit here was the root cause of #172, where a
+# transient keyscan failure killed the script with no diagnostic.
+_keyscan_err=$(mktemp)
 _t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+keyscan_rc=0
+timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>"$_keyscan_err" || keyscan_rc=$?
 _elapsed=$(( SECONDS - _t0 ))
-if [ "$_elapsed" -gt 10 ]; then
+if [ "$keyscan_rc" -ne 0 ]; then
+    echo "::warning::ssh-keyscan for $DAGGER_ENGINE_HOST failed (exit ${keyscan_rc}) after ${_elapsed}s — continuing with StrictHostKeyChecking=no"
+    if [ -s "$_keyscan_err" ]; then
+        sed 's/^/  ssh-keyscan: /' "$_keyscan_err"
+    fi
+elif [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
+rm -f "$_keyscan_err"
 
 # Create a background SSH tunnel to the Dagger engine Unix socket.
 # Forwards local TCP port 8080 directly to /run/dagger/engine.sock on the remote host,

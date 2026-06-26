@@ -178,6 +178,80 @@ else
     _pass
 fi
 
+# Drive the keyscan block in isolation so we can simulate transient
+# ssh-keyscan failures. This block populates known_hosts as a convenience —
+# the SSH tunnel below uses StrictHostKeyChecking=no, so a keyscan failure
+# must not kill the script. Without this guarantee, a transient DNS or
+# network hiccup silently exits with code 1 (see issue #172).
+_keyscan_snippet=$(awk '/^# Add remote host to known_hosts/,/^# Create a background SSH tunnel/' "$SCRIPT")
+if [ -z "$_keyscan_snippet" ]; then
+    echo "FAIL: could not locate keyscan block in $SCRIPT"
+    exit 1
+fi
+
+run_keyscan() {
+    rm -f "$SCRATCH/known_hosts"
+    PATH="$SCRATCH:$PATH" \
+        HOME="$SCRATCH" \
+        DAGGER_ENGINE_HOST="dagger.example.test" \
+        bash -c "set -euo pipefail; mkdir -p \"\$HOME/.ssh\"; $_keyscan_snippet" 2>&1
+}
+
+# --- ssh-keyscan success: no warning, known_hosts populated --------------------
+cat >"$SCRATCH/ssh-keyscan" <<'EOF'
+#!/usr/bin/env bash
+echo "# example.test:22 SSH-2.0-OpenSSH"
+echo "dagger.example.test ssh-ed25519 AAAA..."
+exit 0
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+out=$(run_keyscan)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan success: should exit 0" "$out"
+elif printf '%s' "$out" | grep -q "::warning::"; then
+    _fail "keyscan success: should not warn" "$out"
+elif ! grep -q "dagger.example.test" "$SCRATCH/.ssh/known_hosts" 2>/dev/null; then
+    _fail "keyscan success: known_hosts should contain scanned host" "$out"
+else
+    _pass
+fi
+
+# --- ssh-keyscan failure: warn, surface stderr, continue (non-fatal) -----------
+cat >"$SCRATCH/ssh-keyscan" <<'EOF'
+#!/usr/bin/env bash
+echo "getaddrinfo dagger.example.test: Temporary failure in name resolution" >&2
+exit 1
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+out=$(run_keyscan)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan failure: should be non-fatal (got exit $rc)" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan for dagger.example.test failed"; then
+    _fail "keyscan failure: should warn about the failure" "$out"
+elif ! printf '%s' "$out" | grep -q "Temporary failure in name resolution"; then
+    _fail "keyscan failure: should surface ssh-keyscan stderr in diagnostics" "$out"
+else
+    _pass
+fi
+
+# --- ssh-keyscan empty stderr on failure: warn without stderr block ------------
+cat >"$SCRATCH/ssh-keyscan" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+out=$(run_keyscan)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan empty-err: should be non-fatal (got exit $rc)" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan for dagger.example.test failed (exit 2)"; then
+    _fail "keyscan empty-err: should warn with the exit code" "$out"
+else
+    _pass
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
