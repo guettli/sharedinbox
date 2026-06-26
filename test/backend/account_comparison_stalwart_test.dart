@@ -12,7 +12,6 @@
 
 import 'dart:io';
 
-import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/sync/account_comparison.dart';

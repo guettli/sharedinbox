@@ -88,8 +88,8 @@ void main() {
     await client.logout();
   });
 
-  tearDown(() {
-    db.close();
+  tearDown(() async {
+    await db.close();
     httpClient.close();
   });
 

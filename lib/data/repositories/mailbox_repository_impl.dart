@@ -240,10 +240,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
         lowerName == 'bin') {
       return 'trash';
     }
-    if (lowerName == 'sent' || lowerName == 'sent items' || lowerName == 'sent messages') {
+    if (lowerName == 'sent' ||
+        lowerName == 'sent items' ||
+        lowerName == 'sent messages') {
       return 'sent';
     }
-    if (lowerName == 'junk' || lowerName == 'junk mail' || lowerName == 'spam') {
+    if (lowerName == 'junk' ||
+        lowerName == 'junk mail' ||
+        lowerName == 'spam') {
       return 'junk';
     }
     return null;

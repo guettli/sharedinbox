@@ -75,9 +75,9 @@ class AccountComparison {
     // 1. Match by exact (role, name) case-insensitive
     for (int i = unmatchedA.length - 1; i >= 0; i--) {
       final a = unmatchedA[i];
-      final bIdx = unmatchedB.indexWhere((b) =>
-          a.role == b.role &&
-          a.name.toLowerCase() == b.name.toLowerCase());
+      final bIdx = unmatchedB.indexWhere(
+        (b) => a.role == b.role && a.name.toLowerCase() == b.name.toLowerCase(),
+      );
       if (bIdx != -1) {
         paired.add((a, unmatchedB.removeAt(bIdx)));
         unmatchedA.removeAt(i);
@@ -98,8 +98,8 @@ class AccountComparison {
     // 3. Match by name case-insensitive
     for (int i = unmatchedA.length - 1; i >= 0; i--) {
       final a = unmatchedA[i];
-      final bIdx = unmatchedB.indexWhere((b) =>
-          a.name.toLowerCase() == b.name.toLowerCase());
+      final bIdx = unmatchedB
+          .indexWhere((b) => a.name.toLowerCase() == b.name.toLowerCase());
       if (bIdx != -1) {
         paired.add((a, unmatchedB.removeAt(bIdx)));
         unmatchedA.removeAt(i);
