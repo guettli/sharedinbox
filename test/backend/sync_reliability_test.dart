@@ -11,6 +11,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import 'localhost_mapping_client.dart';
 
 String _env(String key, [String fallback = '']) =>
     Platform.environment[key] ?? fallback;
@@ -60,12 +61,20 @@ void main() {
     );
   });
 
+  late LocalhostMappingClient httpClient;
+
   setUp(() async {
     db = openTestDatabase();
     secureStorage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, secureStorage);
     await accounts.addAccount(account, userPass);
-    repo = EmailRepositoryImpl(db, accounts, imapConnect: _imapConnectPlain);
+    httpClient = LocalhostMappingClient();
+    repo = EmailRepositoryImpl(
+      db,
+      accounts,
+      imapConnect: _imapConnectPlain,
+      httpClient: httpClient,
+    );
 
     final client = await _imapConnectPlain(account, userEmail, userPass);
     await client.selectMailboxByPath('INBOX');
@@ -79,7 +88,10 @@ void main() {
     await client.logout();
   });
 
-  tearDown(() => db.close());
+  tearDown(() async {
+    await db.close();
+    httpClient.close();
+  });
 
   test('verifySyncReliability identifies missing local emails', () async {
     // 1. Inject an email directly into the server via IMAP
@@ -196,6 +208,7 @@ void main() {
       final mailboxRepo = MailboxRepositoryImpl(
         db,
         AccountRepositoryImpl(db, secureStorage),
+        httpClient: httpClient,
       );
       await mailboxRepo.syncMailboxes('test-jmap');
       final mailboxes = await mailboxRepo.observeMailboxes('test-jmap').first;

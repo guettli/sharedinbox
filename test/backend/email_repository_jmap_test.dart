@@ -21,6 +21,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import 'localhost_mapping_client.dart';
 
 String _env(String key, [String fallback = '']) =>
     Platform.environment[key] ?? fallback;
@@ -110,12 +111,15 @@ void main() {
   }) makeRepo() {
     final db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+    final httpClient = LocalhostMappingClient();
     final emails = EmailRepositoryImpl(
       db,
       accounts,
       getCacheDir: () async => cacheDir,
+      httpClient: httpClient,
     );
-    final mailboxes = MailboxRepositoryImpl(db, accounts);
+    final mailboxes =
+        MailboxRepositoryImpl(db, accounts, httpClient: httpClient);
     return (db: db, accounts: accounts, emails: emails, mailboxes: mailboxes);
   }
 

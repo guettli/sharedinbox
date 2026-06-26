@@ -23,6 +23,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import 'localhost_mapping_client.dart';
 
 String _env(String key, [String fallback = '']) =>
     Platform.environment[key] ?? fallback;
@@ -161,16 +162,20 @@ void main() {
     await accounts.addAccount(imapAccount, userPass);
     await accounts.addAccount(jmapAccount, userPass);
 
+    final httpClient = LocalhostMappingClient();
+    addTearDown(httpClient.close);
     final emailRepo = EmailRepositoryImpl(
       db,
       accounts,
       imapConnect: _imapConnectPlain,
       getCacheDir: () async => cacheDir,
+      httpClient: httpClient,
     );
     final mailboxRepo = MailboxRepositoryImpl(
       db,
       accounts,
       imapConnect: _imapConnectPlain,
+      httpClient: httpClient,
     );
 
     // Seed two emails via IMAP APPEND so both protocols see the same data.

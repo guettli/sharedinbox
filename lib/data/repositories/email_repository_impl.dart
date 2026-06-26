@@ -1085,12 +1085,28 @@ class EmailRepositoryImpl implements EmailRepository {
       password: password,
     );
 
-    final storedState = await _loadSyncState(account.id, 'Email');
+    final mailboxResourceType = 'JMAP:Email:$mailboxJmapId';
+    var storedMailboxState =
+        await _loadSyncState(account.id, mailboxResourceType);
 
-    if (storedState == null) {
+    if (storedMailboxState == null) {
+      // Fallback to global 'Email' state
+      final globalState = await _loadSyncState(account.id, 'Email');
+      if (globalState != null) {
+        storedMailboxState = globalState;
+        await _saveSyncState(account.id, mailboxResourceType, globalState);
+      }
+    }
+
+    if (storedMailboxState == null) {
       return _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
     } else {
-      return _jmapIncrementalEmailSync(account.id, jmap, storedState);
+      return _jmapIncrementalEmailSync(
+        account.id,
+        jmap,
+        storedMailboxState,
+        mailboxJmapId: mailboxJmapId,
+      );
     }
   }
 
@@ -1146,7 +1162,7 @@ class EmailRepositoryImpl implements EmailRepository {
       if (ids.isEmpty || total == null || position >= total) break;
     }
 
-    await _saveSyncState(accountId, 'Email', firstState);
+    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', firstState);
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -1157,8 +1173,9 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<model.SyncEmailsResult> _jmapIncrementalEmailSync(
     String accountId,
     JmapClient jmap,
-    String sinceState,
-  ) async {
+    String sinceState, {
+    String? mailboxJmapId,
+  }) async {
     final responses = await jmap.call([
       [
         'Email/changes',
@@ -1207,6 +1224,9 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     await _saveSyncState(accountId, 'Email', newState);
+    if (mailboxJmapId != null) {
+      await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', newState);
+    }
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -1409,6 +1429,36 @@ class EmailRepositoryImpl implements EmailRepository {
             syncedAt: DateTime.now(),
           ),
         );
+  }
+
+  Future<String?> _loadLatestJmapState(String accountId) async {
+    final rows = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.resourceType.equals('Email') |
+                    t.resourceType.like('JMAP:Email:%')),
+          ))
+        .get();
+    if (rows.isEmpty) return null;
+    rows.sort((a, b) => b.syncedAt.compareTo(a.syncedAt));
+    return rows.first.state;
+  }
+
+  Future<void> _updateAllJmapStates(String accountId, String newState) async {
+    await (_db.update(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.resourceType.equals('Email') |
+                    t.resourceType.like('JMAP:Email:%')),
+          ))
+        .write(
+      SyncStatesCompanion(
+        state: Value(newState),
+        syncedAt: Value(DateTime.now()),
+      ),
+    );
   }
 
   // ── JMAP push ────────────────────────────────────────────────────────────
@@ -2247,7 +2297,8 @@ class EmailRepositoryImpl implements EmailRepository {
       password: password,
     );
 
-    final ifInState = await _loadSyncState(account.id, 'Email');
+    final ifInState = await _loadSyncState(account.id, 'Email') ??
+        await _loadLatestJmapState(account.id);
     var applied = 0;
 
     for (final row in rows) {
@@ -2265,6 +2316,7 @@ class EmailRepositoryImpl implements EmailRepository {
         // Keep our checkpoint in sync with whatever the server returned.
         if (newState != null) {
           await _saveSyncState(account.id, 'Email', newState);
+          await _updateAllJmapStates(account.id, newState);
         }
       } on JmapStateMismatchException {
         // Server rejected the mutation because our state token is stale.
@@ -2274,7 +2326,8 @@ class EmailRepositoryImpl implements EmailRepository {
               ..where(
                 (t) =>
                     t.accountId.equals(account.id) &
-                    t.resourceType.equals('Email'),
+                    (t.resourceType.equals('Email') |
+                        t.resourceType.like('JMAP:Email:%')),
               ))
             .go();
         await _recordChangeError(

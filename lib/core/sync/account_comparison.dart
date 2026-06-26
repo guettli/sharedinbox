@@ -67,24 +67,48 @@ class AccountComparison {
     final mailboxesA = await _mailboxesFor(accountIdA);
     final mailboxesB = await _mailboxesFor(accountIdB);
     final mailboxDiffs = <MailboxDiff>[];
-    final pairedByKey = <String, (MailboxRow, MailboxRow)>{};
-    final unmatchedB = {for (final m in mailboxesB) _mailboxKey(m): m};
 
-    for (final a in mailboxesA) {
-      final key = _mailboxKey(a);
-      final b = unmatchedB.remove(key);
-      if (b == null) {
-        mailboxDiffs.add(
-          MailboxDiff(
-            kind: MailboxDiffKind.missingInB,
-            key: key,
-            a: a,
-            b: null,
-          ),
-        );
-        continue;
+    final unmatchedA = [...mailboxesA];
+    final unmatchedB = [...mailboxesB];
+    final paired = <(MailboxRow, MailboxRow)>[];
+
+    // 1. Match by exact (role, name) case-insensitive
+    for (int i = unmatchedA.length - 1; i >= 0; i--) {
+      final a = unmatchedA[i];
+      final bIdx = unmatchedB.indexWhere(
+        (b) => a.role == b.role && a.name.toLowerCase() == b.name.toLowerCase(),
+      );
+      if (bIdx != -1) {
+        paired.add((a, unmatchedB.removeAt(bIdx)));
+        unmatchedA.removeAt(i);
       }
-      pairedByKey[key] = (a, b);
+    }
+
+    // 2. Match by role (when both have the same non-null role)
+    for (int i = unmatchedA.length - 1; i >= 0; i--) {
+      final a = unmatchedA[i];
+      if (a.role == null || a.role!.isEmpty) continue;
+      final bIdx = unmatchedB.indexWhere((b) => b.role == a.role);
+      if (bIdx != -1) {
+        paired.add((a, unmatchedB.removeAt(bIdx)));
+        unmatchedA.removeAt(i);
+      }
+    }
+
+    // 3. Match by name case-insensitive
+    for (int i = unmatchedA.length - 1; i >= 0; i--) {
+      final a = unmatchedA[i];
+      final bIdx = unmatchedB
+          .indexWhere((b) => a.name.toLowerCase() == b.name.toLowerCase());
+      if (bIdx != -1) {
+        paired.add((a, unmatchedB.removeAt(bIdx)));
+        unmatchedA.removeAt(i);
+      }
+    }
+
+    // Process matched pairs
+    for (final (a, b) in paired) {
+      final key = _mailboxKey(a);
       if (a.unreadCount != b.unreadCount || a.totalCount != b.totalCount) {
         mailboxDiffs.add(
           MailboxDiff(
@@ -96,7 +120,19 @@ class AccountComparison {
         );
       }
     }
-    for (final b in unmatchedB.values) {
+
+    // Unmatched remaining
+    for (final a in unmatchedA) {
+      mailboxDiffs.add(
+        MailboxDiff(
+          kind: MailboxDiffKind.missingInB,
+          key: _mailboxKey(a),
+          a: a,
+          b: null,
+        ),
+      );
+    }
+    for (final b in unmatchedB) {
       mailboxDiffs.add(
         MailboxDiff(
           kind: MailboxDiffKind.missingInA,
@@ -111,10 +147,10 @@ class AccountComparison {
     final bodyDiffs = <BodyDiff>[];
     final unmatchable = <UnmatchableEmail>[];
 
-    for (final entry in pairedByKey.entries) {
-      final (a, b) = entry.value;
+    for (final (a, b) in paired) {
+      final key = _mailboxKey(a);
       await _compareMailboxEmails(
-        entry.key,
+        key,
         a,
         b,
         emailDiffs,
