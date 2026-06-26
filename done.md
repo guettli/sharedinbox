@@ -4,6 +4,38 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Folder Deleted on Server (Issue #158)
+
+`syncMailboxes` previously upserted mailboxes returned by the server but never
+removed local rows for folders that had disappeared upstream. The next
+`syncEmails` cycle would then `SELECT` the stale path and crash with
+`Mailbox does not exist`, re-surfacing the error every sync cycle forever.
+
+- **`lib/data/imap/imap_errors.dart`**: new shared `isImapMailboxNotFound`
+  helper used by both the pending-change flush path and the new
+  mailbox-deletion handling.
+- **`MailboxRepositoryImpl`** (`lib/data/repositories/mailbox_repository_impl.dart`):
+  IMAP `_syncMailboxesImap` and JMAP `_jmapFullMailboxSync` now diff the
+  server's mailbox list against the local DB and prune missing folders. A
+  shared `removeLocalMailbox(db, accountId, path)` helper cascade-deletes the
+  related `emails`, `threads`, IMAP per-mailbox `sync_states`, and any
+  `pending_changes` whose JSON payload references the gone path. The JMAP
+  incremental `destroyed` loop reuses the same helper, so it now also wipes
+  related rows instead of just the mailbox row.
+- **`EmailRepositoryImpl._syncEmailsImap`** (`lib/data/repositories/email_repository_impl.dart`):
+  catches `NONEXISTENT` from `selectMailboxByPath` (race between mailbox-sync
+  and email-sync within the same cycle), prunes the local mailbox and
+  returns zero instead of throwing.
+- **`EmailListScreen`** (`lib/ui/screens/email_list_screen.dart`): tracks
+  whether the currently open mailbox is still present; if it disappears from
+  the local cache (i.e. the server deleted it), shows a SnackBar and routes
+  the user back to the account's folder list.
+- **Tests**: `test/unit/mailbox_repository_impl_test.dart` covers IMAP and
+  JMAP reconciliation including cascading cleanup of emails and
+  `sync_states`; `test/unit/email_repository_impl_test.dart` covers the
+  defensive `syncEmails` path that handles a folder deleted between the two
+  sync steps.
+
 ## Advanced Error Boundaries (Issue #583)
 
 Added a reusable `ErrorBoundary` widget that contains build- and paint-time

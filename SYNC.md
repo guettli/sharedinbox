@@ -81,6 +81,14 @@ start()
 On each run, only UIDs greater than `lastUid` are fetched. If `uidValidity` changes the full
 folder is re-scanned and the checkpoint is reset.
 
+**Mailbox deletion reconciliation** — mailboxes absent from `LIST` (IMAP) or the
+`Mailbox/get` response (JMAP full sync) are removed locally, along with their cached
+emails, threads, IMAP sync checkpoint and any queued pending changes that referenced them.
+If a folder is deleted between mailbox-sync and the per-mailbox email-sync of the same
+cycle, `SELECT` fails with `NO [NONEXISTENT]`; the email loop catches that, prunes the
+local cache, and returns zero instead of surfacing an error. The UI's email list bounces
+the user back to the account's folder list when the currently open folder disappears.
+
 **IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
 its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the local row
 id (`accountId:mailboxPath:uid`) is rewritten in place to point at the new UID. The new

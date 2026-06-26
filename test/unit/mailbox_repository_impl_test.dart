@@ -533,6 +533,153 @@ void main() {
       });
     });
 
+    group('syncMailboxes IMAP reconciles deleted folders', () {
+      test(
+        'mailbox removed on server is pruned locally along with cached emails',
+        () async {
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+
+          // Server only lists INBOX. The locally cached "Old" folder used to
+          // exist and now does not, so it must be pruned along with its
+          // emails, sync state, and pending changes.
+          final fakeClient = _InboxOnlyImapClient();
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => fakeClient,
+          );
+          await accounts.addAccount(_account, 'pw');
+
+          // Pre-seed both mailboxes.
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:INBOX',
+                  accountId: 'acc-1',
+                  path: 'INBOX',
+                  name: 'Inbox',
+                ),
+              );
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Old',
+                  accountId: 'acc-1',
+                  path: 'Old',
+                  name: 'Old',
+                ),
+              );
+          // An email + IMAP checkpoint for the now-deleted folder.
+          await db.into(db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'acc-1:Old:1',
+                  accountId: 'acc-1',
+                  mailboxPath: 'Old',
+                  uid: 1,
+                  receivedAt: DateTime.now(),
+                ),
+              );
+          await db.into(db.syncStates).insert(
+                SyncStatesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'IMAP:Old',
+                  state: jsonEncode({'uidValidity': 1, 'lastUid': 1}),
+                  syncedAt: DateTime.now(),
+                ),
+              );
+          // Pending change for the now-deleted folder.
+          await db.into(db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'email',
+                  resourceId: 'acc-1:Old:1',
+                  changeType: 'flag_seen',
+                  payload: jsonEncode({
+                    'uid': 1,
+                    'mailboxPath': 'Old',
+                    'seen': true,
+                  }),
+                  createdAt: DateTime.now(),
+                ),
+              );
+
+          await mailboxes.syncMailboxes('acc-1');
+
+          final remaining = await mailboxes.observeMailboxes('acc-1').first;
+          expect(remaining.map((m) => m.path).toList(), ['INBOX']);
+
+          final emails = await db.select(db.emails).get();
+          expect(emails, isEmpty);
+
+          final states = await db.select(db.syncStates).get();
+          expect(states.where((s) => s.resourceType == 'IMAP:Old'), isEmpty);
+
+          final pending = await db.select(db.pendingChanges).get();
+          expect(pending, isEmpty);
+        },
+      );
+    });
+
+    group('syncMailboxes JMAP reconciles deleted folders', () {
+      test(
+        'full sync prunes locally cached mailboxes missing from the response',
+        () async {
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                _mailboxGetResponse(
+                  state: 'st1',
+                  list: [
+                    {
+                      'id': 'mbx1',
+                      'name': 'Inbox',
+                      'unreadEmails': 0,
+                      'totalEmails': 0,
+                    },
+                  ],
+                ),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+
+          // Pre-seed two mailboxes; only mbx1 will come back from the server.
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'jmap-1:mbx1',
+                  accountId: 'jmap-1',
+                  path: 'mbx1',
+                  name: 'Inbox',
+                ),
+              );
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'jmap-1:mbx-gone',
+                  accountId: 'jmap-1',
+                  path: 'mbx-gone',
+                  name: 'Old',
+                ),
+              );
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'jmap-1:e1',
+                  accountId: 'jmap-1',
+                  mailboxPath: 'mbx-gone',
+                  uid: 0,
+                  receivedAt: DateTime.now(),
+                ),
+              );
+
+          await r.mailboxes.syncMailboxes('jmap-1');
+
+          final remaining = await r.mailboxes.observeMailboxes('jmap-1').first;
+          expect(remaining.map((m) => m.path).toList(), ['mbx1']);
+
+          final emails = await r.db.select(r.db.emails).get();
+          expect(emails, isEmpty);
+        },
+      );
+    });
+
     group('syncMailboxes IMAP preserves manually-set role', () {
       test(
         'existing role is kept when server returns no special-use flag',
@@ -577,6 +724,37 @@ void main() {
       );
     });
   });
+}
+
+/// Fake IMAP client whose `listMailboxes` returns only INBOX. Used to drive
+/// the "folder deleted on server" reconciliation tests.
+class _InboxOnlyImapClient extends SnoozeSpyImapClient {
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [
+        imap.Mailbox(
+          encodedName: 'INBOX',
+          encodedPath: 'INBOX',
+          pathSeparator: '/',
+          flags: const [imap.MailboxFlag.inbox],
+        ),
+      ];
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox mailbox,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      mailbox;
+
+  @override
+  Future<dynamic> logout() async {}
 }
 
 /// Fake IMAP client that lists one mailbox named 'Archive' without any

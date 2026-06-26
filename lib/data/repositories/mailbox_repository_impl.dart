@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
@@ -88,6 +90,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
           .get();
       final existingRoles = {for (final r in existingRows) r.id: r.role};
 
+      // Reconcile server-side deletions: any locally cached mailbox that the
+      // server no longer lists has been deleted upstream, so drop it (and its
+      // cached emails / sync state) before upserting the survivors.
+      final serverPaths = mailboxes.map((mb) => mb.path).toSet();
+      await pruneLocalMailboxes(account.id, serverPaths);
+
       for (final mb in mailboxes) {
         final path = mb.path;
         final id = '${account.id}:$path';
@@ -170,6 +178,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final mailboxes = result['list'] as List<dynamic>;
     final newState = result['state'] as String;
 
+    // Reconcile server-side deletions: for JMAP, `path` stores the opaque
+    // server mailbox id, so we filter against the ids in the returned list.
+    final serverIds = {
+      for (final mb in mailboxes) (mb as Map<String, dynamic>)['id'] as String,
+    };
+    await pruneLocalMailboxes(accountId, serverIds);
+
     await _upsertJmapMailboxes(accountId, mailboxes);
     await _saveSyncState(accountId, 'Mailbox', newState);
     log(
@@ -212,12 +227,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
       await _upsertJmapMailboxes(accountId, getResult['list'] as List<dynamic>);
     }
 
-    // Remove destroyed mailboxes
+    // Remove destroyed mailboxes (and their cached emails / sync state).
     for (final jmapId in destroyed) {
-      await (_db.delete(
-        _db.mailboxes,
-      )..where((t) => t.id.equals('$accountId:$jmapId')))
-          .go();
+      await removeLocalMailbox(_db, accountId, jmapId);
     }
 
     await _saveSyncState(accountId, 'Mailbox', newState);
@@ -387,6 +399,26 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .go();
   }
 
+  /// Removes any locally cached mailbox for [accountId] whose `path` is not
+  /// in [keepPaths] (paths the server still advertises). Cascade-deletes the
+  /// related emails, threads, sync checkpoints, and queued pending changes.
+  ///
+  /// Public so [EmailRepositoryImpl] can call it when a `SELECT` blows up with
+  /// `NONEXISTENT` between mailbox-sync and email-sync of the same cycle.
+  Future<void> pruneLocalMailboxes(
+    String accountId,
+    Set<String> keepPaths,
+  ) async {
+    final existing = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in existing) {
+      if (keepPaths.contains(row.path)) continue;
+      log('Mailbox "${row.path}" deleted on server — removing local cache');
+      await removeLocalMailbox(_db, accountId, row.path);
+    }
+  }
+
   @override
   Future<model.Mailbox> createMailboxWithRole(
     String accountId,
@@ -504,4 +536,63 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .getSingle();
     return _toModel(row);
   }
+}
+
+/// Deletes the local cache rows that belong to a single mailbox that no
+/// longer exists on the server.
+///
+/// Removes the row in `mailboxes`, every `emails` row whose `mailboxPath`
+/// matches (which cascades into `email_bodies`), every `threads` row, the
+/// IMAP per-mailbox checkpoint in `sync_states`, and any `pending_changes`
+/// rows whose JSON payload references the path as `mailboxPath`, `src` or
+/// `dest`. Idempotent — safe to call when nothing matches.
+Future<void> removeLocalMailbox(
+  AppDatabase db,
+  String accountId,
+  String path,
+) async {
+  await db.transaction(() async {
+    await (db.delete(db.emails)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),
+          ))
+        .go();
+    await (db.delete(db.threads)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),
+          ))
+        .go();
+    await (db.delete(db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals('IMAP:$path'),
+          ))
+        .go();
+
+    // pending_changes payloads are protocol-specific JSON; drop any row
+    // referring to the gone path so the queue doesn't keep retrying.
+    final pending = await (db.select(db.pendingChanges)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in pending) {
+      Map<String, dynamic> payload;
+      try {
+        payload = jsonDecode(row.payload) as Map<String, dynamic>;
+      } catch (_) {
+        continue;
+      }
+      final refs = [payload['mailboxPath'], payload['src'], payload['dest']];
+      if (refs.contains(path)) {
+        await (db.delete(db.pendingChanges)..where((t) => t.id.equals(row.id)))
+            .go();
+      }
+    }
+
+    await (db.delete(db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.path.equals(path),
+          ))
+        .go();
+  });
 }
