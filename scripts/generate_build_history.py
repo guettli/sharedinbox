@@ -30,24 +30,37 @@ MAX_BUILDS_PER_PLATFORM = 30
 
 
 def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
+    # `mkdir -p` makes the empty-server case legitimate (find then exits 0 with
+    # no output) without masking real failures. We do NOT pipe to `sort` on the
+    # remote side — a pipeline would hide a failing `find` behind `sort`'s exit
+    # code — and instead sort locally.
+    remote_cmd = (
+        f"mkdir -p {REMOTE_BUILDS_DIR} && "
+        f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f"
+    )
     result = subprocess.run(
         [
             "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
             f"{ssh_user}@{ssh_host}",
-            f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f | sort",
+            remote_cmd,
         ],
         capture_output=True,
         text=True,
     )
+    # Never swallow errors: any non-zero exit (ssh-level failure such as a
+    # rejected key or host-key mismatch — exit 255 — or a failing remote
+    # command) is fatal. Silently returning [] here is what made the builds
+    # page render "No builds yet" while the workflow stayed green.
     if result.returncode != 0:
-        print(
-            f"WARNING: ssh exit {result.returncode} listing {pattern} on {ssh_user}@{ssh_host}"
-            " — build history will be empty for this pattern",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"listing {pattern} on {ssh_user}@{ssh_host} failed "
+            f"(exit {result.returncode}): {result.stderr.strip()}"
         )
-        print(result.stderr, file=sys.stderr)
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
 def get_commit_info(hash_val: str) -> tuple[str, str]:
