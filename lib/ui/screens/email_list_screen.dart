@@ -36,6 +36,13 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // Error banner — tracks the last error message that the user dismissed.
   String? _dismissedError;
 
+  // Once the mailbox has been observed at least once, we treat a later
+  // transition to "not found locally" as a server-side deletion and bounce
+  // the user back to the account's folder list. The flag prevents an early
+  // null (before mailboxes have streamed in) from triggering the redirect.
+  bool _mailboxSeen = false;
+  bool _gonePending = false;
+
   late final EmailThreadListController _selection;
 
   // Pagination: number of threads currently requested from the DB.
@@ -116,6 +123,34 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
   }
 
+  /// Watches the cached mailbox for the current folder and, if it disappears
+  /// after having been observed at least once (i.e. it was deleted on the
+  /// server and pruned from the local DB), bounces the user back to the
+  /// account's mailbox list with a one-shot snackbar.
+  void _watchForMailboxDeletion() {
+    final mailboxAsync = ref.watch(
+      mailboxByPathProvider((widget.accountId, widget.mailboxPath)),
+    );
+    final mailbox = mailboxAsync.value;
+    if (mailbox != null) {
+      _mailboxSeen = true;
+      return;
+    }
+    if (!_mailboxSeen || _gonePending || !mailboxAsync.hasValue) return;
+    _gonePending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Folder "${widget.mailboxPath}" was deleted on the server.',
+          ),
+        ),
+      );
+      context.go('/accounts/${widget.accountId}/mailboxes');
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
@@ -124,6 +159,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         ref.watch(userPreferencesProvider).value ?? const UserPreferences();
     final menuAtBottom = prefs.menuPosition == MenuPosition.bottom;
     final selecting = _selection.isSelecting;
+
+    _watchForMailboxDeletion();
 
     return Scaffold(
       appBar: _buildAppBar(repo, accountAsync, menuAtBottom: menuAtBottom),
