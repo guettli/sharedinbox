@@ -213,7 +213,7 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithUser("ci").
 		WithExec([]string{"/bin/sh", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
+				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" "platforms;android-35" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
 		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"}).
 		// libssl-dev — sqlcipher_flutter_libs compiles SQLCipher against OpenSSL
 		// on the Linux desktop integration_test build; its CMake
