@@ -33,16 +33,31 @@ def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
     result = subprocess.run(
         [
             "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
             f"{ssh_user}@{ssh_host}",
             f"find {REMOTE_BUILDS_DIR} -name '{pattern}' -type f | sort",
         ],
         capture_output=True,
         text=True,
     )
+    # Exit 255 is an ssh-level failure (connection refused, auth/key rejected,
+    # host-key mismatch). Treating that as "no builds" is what previously made
+    # the page silently render "No builds yet" while the workflow stayed green.
+    # Fail loudly instead so a broken SSH setup turns the workflow red.
+    if result.returncode == 255:
+        raise RuntimeError(
+            f"ssh connection to {ssh_user}@{ssh_host} failed (exit 255) while "
+            f"listing {pattern}: {result.stderr.strip()}"
+        )
+    # Any other non-zero is the remote `find` failing — e.g. the builds dir does
+    # not exist yet on a fresh server. That genuinely means zero builds.
     if result.returncode != 0:
         print(
-            f"WARNING: ssh exit {result.returncode} listing {pattern} on {ssh_user}@{ssh_host}"
-            " — build history will be empty for this pattern",
+            f"WARNING: remote find exit {result.returncode} listing {pattern} on "
+            f"{ssh_user}@{ssh_host} — treating as zero builds for this pattern",
             file=sys.stderr,
         )
         print(result.stderr, file=sys.stderr)

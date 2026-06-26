@@ -677,18 +677,18 @@ func (m *Ci) GenerateBuildHistory(
 		Include: []string{"scripts/generate_build_history.py", "website/"},
 	})
 
-	return dag.Container().
-		From("python:3.12-alpine").
-		WithExec([]string{"apk", "add", "--no-cache", "openssh-client"}).
-		WithExec([]string{"adduser", "-D", "-s", "/bin/sh", "deploy"}).
-		WithExec([]string{"sh", "-c", "mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh && chown deploy:deploy /home/deploy/.ssh"}).
-		WithMountedSecret("/home/deploy/.ssh/id_ed25519", sshKey, dagger.ContainerWithMountedSecretOpts{Mode: 0600}).
-		WithMountedSecret("/home/deploy/.ssh/known_hosts", knownHosts, dagger.ContainerWithMountedSecretOpts{Mode: 0644}).
+	// Reuse the Deployer container so the SSH key is owned by (and readable
+	// as) the unprivileged "deploy" user and CRLF-normalised — exactly like
+	// the upload path. A hand-rolled container that mounts the key root-owned
+	// 0600 leaves it unreadable by "deploy", so every `ssh … find` in the
+	// script fails, list_remote_files() returns [] and the page silently
+	// renders "No builds yet" even though artifacts are on the server.
+	// Deployer is alpine with python3 + openssh-client already installed.
+	return m.Deployer(sshKey, knownHosts).
 		WithEnvVariable("SSH_USER", sshUser).
 		WithEnvVariable("SSH_HOST", sshHost).
 		WithDirectory("/src", scriptSource, dagger.ContainerWithDirectoryOpts{Owner: "deploy"}).
 		WithWorkdir("/src").
-		WithUser("deploy").
 		WithExec([]string{"/bin/sh", "-c", "python3 scripts/generate_build_history.py"}).
 		Directory("website/content/builds")
 }
