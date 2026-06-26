@@ -118,7 +118,8 @@ void main() {
       getCacheDir: () async => cacheDir,
       httpClient: httpClient,
     );
-    final mailboxes = MailboxRepositoryImpl(db, accounts, httpClient: httpClient);
+    final mailboxes =
+        MailboxRepositoryImpl(db, accounts, httpClient: httpClient);
     return (db: db, accounts: accounts, emails: emails, mailboxes: mailboxes);
   }
 

@@ -1086,7 +1086,8 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final mailboxResourceType = 'JMAP:Email:$mailboxJmapId';
-    var storedMailboxState = await _loadSyncState(account.id, mailboxResourceType);
+    var storedMailboxState =
+        await _loadSyncState(account.id, mailboxResourceType);
 
     if (storedMailboxState == null) {
       // Fallback to global 'Email' state
@@ -1100,7 +1101,12 @@ class EmailRepositoryImpl implements EmailRepository {
     if (storedMailboxState == null) {
       return _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
     } else {
-      return _jmapIncrementalEmailSync(account.id, jmap, storedMailboxState, mailboxJmapId: mailboxJmapId);
+      return _jmapIncrementalEmailSync(
+        account.id,
+        jmap,
+        storedMailboxState,
+        mailboxJmapId: mailboxJmapId,
+      );
     }
   }
 
@@ -1156,9 +1162,7 @@ class EmailRepositoryImpl implements EmailRepository {
       if (ids.isEmpty || total == null || position >= total) break;
     }
 
-    if (firstState != null) {
-      await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', firstState);
-    }
+    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', firstState);
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -1429,7 +1433,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<String?> _loadLatestJmapState(String accountId) async {
     final rows = await (_db.select(_db.syncStates)
-          ..where((t) => t.accountId.equals(accountId) & (t.resourceType.equals('Email') | t.resourceType.like('JMAP:Email:%'))))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.resourceType.equals('Email') |
+                    t.resourceType.like('JMAP:Email:%')),
+          ))
         .get();
     if (rows.isEmpty) return null;
     rows.sort((a, b) => b.syncedAt.compareTo(a.syncedAt));
@@ -1438,11 +1447,18 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<void> _updateAllJmapStates(String accountId, String newState) async {
     await (_db.update(_db.syncStates)
-          ..where((t) => t.accountId.equals(accountId) & (t.resourceType.equals('Email') | t.resourceType.like('JMAP:Email:%'))))
-        .write(SyncStatesCompanion(
-          state: Value(newState),
-          syncedAt: Value(DateTime.now()),
-        ));
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.resourceType.equals('Email') |
+                    t.resourceType.like('JMAP:Email:%')),
+          ))
+        .write(
+      SyncStatesCompanion(
+        state: Value(newState),
+        syncedAt: Value(DateTime.now()),
+      ),
+    );
   }
 
   // ── JMAP push ────────────────────────────────────────────────────────────
@@ -2281,7 +2297,8 @@ class EmailRepositoryImpl implements EmailRepository {
       password: password,
     );
 
-    final ifInState = await _loadSyncState(account.id, 'Email') ?? await _loadLatestJmapState(account.id);
+    final ifInState = await _loadSyncState(account.id, 'Email') ??
+        await _loadLatestJmapState(account.id);
     var applied = 0;
 
     for (final row in rows) {
@@ -2309,7 +2326,8 @@ class EmailRepositoryImpl implements EmailRepository {
               ..where(
                 (t) =>
                     t.accountId.equals(account.id) &
-                    (t.resourceType.equals('Email') | t.resourceType.like('JMAP:Email:%')),
+                    (t.resourceType.equals('Email') |
+                        t.resourceType.like('JMAP:Email:%')),
               ))
             .go();
         await _recordChangeError(
