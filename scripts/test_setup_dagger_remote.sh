@@ -178,6 +178,108 @@ else
     _pass
 fi
 
+# --- ssh-keyscan retry block ---------------------------------------------------
+# The keyscan block (above the verify block) used to swallow stderr and exit
+# silently on any non-zero rc, so a transient DNS/network blip surfaced as a
+# bare `Process completed with exit code 1.` and aborted the whole job. It
+# is now non-fatal (StrictHostKeyChecking=no on the tunnel makes the entry
+# optional) and surfaces stderr in the diagnostics. See issue #174.
+_keyscan_snippet=$(awk '/^# Pre-populate known_hosts/{p=1} /^# Create a background SSH tunnel/{p=0} p' "$SCRIPT")
+if [ -z "$_keyscan_snippet" ]; then
+    echo "FAIL: could not locate ssh-keyscan block in $SCRIPT"
+    exit 1
+fi
+
+# Stub ssh-keyscan: configurable rc / stderr / "succeed on attempt N". The
+# attempts counter lives in $SCRATCH/keyscan_attempts so the caller can read
+# back how many tries the script made.
+cat >"$SCRATCH/ssh-keyscan" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$SCRATCH/keyscan_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/keyscan_attempts"
+if [ -n "\${KEYSCAN_STDERR:-}" ]; then
+    printf '%s\n' "\$KEYSCAN_STDERR" >&2
+fi
+if [ -n "\${KEYSCAN_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$KEYSCAN_SUCCEED_ON" ]; then
+    echo "|1|hashed-host-line"
+    exit 0
+fi
+rc="\${KEYSCAN_RC:-0}"
+[ "\$rc" -eq 0 ] && echo "|1|hashed-host-line"
+exit "\$rc"
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+
+run_keyscan() {
+    echo 0 >"$SCRATCH/keyscan_attempts"
+    local keyscan_err home_dir
+    keyscan_err=$(mktemp)
+    home_dir=$(mktemp -d)
+    mkdir -p "$home_dir/.ssh"
+    PATH="$SCRATCH:$PATH" \
+        DAGGER_ENGINE_HOST="dagger.example.invalid" \
+        DAGGER_KEYSCAN_MAX_ATTEMPTS=3 \
+        DAGGER_KEYSCAN_RETRY_WAIT_S=0 \
+        KEYSCAN_ERR="$keyscan_err" \
+        HOME="$home_dir" \
+        bash -c "$_keyscan_snippet" 2>&1
+    local rc=$?
+    rm -f "$keyscan_err"
+    rm -rf "$home_dir"
+    return $rc
+}
+
+# --- keyscan succeeds on first attempt: silent, no warnings, exit 0 ------------
+out=$(KEYSCAN_RC=0 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan success: should exit 0" "$out"
+elif [ "$attempts" -ne 1 ]; then
+    _fail "keyscan success: should not retry (got $attempts attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan success: should not print ::error:: lines" "$out"
+elif printf '%s' "$out" | grep -q "::warning::"; then
+    _fail "keyscan success: should not print ::warning:: lines" "$out"
+else
+    _pass
+fi
+
+# --- keyscan fails 3 times: non-fatal, warns with stderr, exits 0 --------------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="getaddrinfo dagger.example.invalid: Name or service not known" run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan fail: should be non-fatal (exit 0) — StrictHostKeyChecking=no makes the entry optional" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "keyscan fail: should retry to 3 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan fail: should warn (not error) so the job keeps going" "$out"
+elif ! printf '%s' "$out" | grep -q "failed after 3 attempts"; then
+    _fail "keyscan fail: should mention the attempt count in the warning" "$out"
+elif ! printf '%s' "$out" | grep -q "Name or service not known"; then
+    _fail "keyscan fail: should surface captured stderr in diagnostics" "$out"
+elif ! printf '%s' "$out" | grep -q "StrictHostKeyChecking=no"; then
+    _fail "keyscan fail: should explain why this is non-fatal" "$out"
+else
+    _pass
+fi
+
+# --- keyscan recovers on attempt 2: warning printed, exits 0 -------------------
+out=$(KEYSCAN_RC=1 KEYSCAN_SUCCEED_ON=2 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan transient: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "keyscan transient: expected 2 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan transient: should not print ::error:: lines after recovery" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 1/3 failed"; then
+    _fail "keyscan transient: should warn about the failed first attempt" "$out"
+else
+    _pass
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

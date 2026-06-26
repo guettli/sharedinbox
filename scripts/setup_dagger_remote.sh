@@ -10,7 +10,8 @@ fi
 echo "Decrypting secrets with SOPS..."
 export SOPS_AGE_KEY="$SOPS_AGE_KEY"
 SECRETS_JSON=$(mktemp)
-trap 'rm -f "$SECRETS_JSON"' EXIT
+KEYSCAN_ERR=$(mktemp)
+trap 'rm -f "$SECRETS_JSON" "$KEYSCAN_ERR"' EXIT
 
 sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
@@ -75,10 +76,46 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts
-_t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-_elapsed=$(( SECONDS - _t0 ))
+# Pre-populate known_hosts with the Dagger engine's SSH key. This is purely
+# defensive — the SSH tunnel below uses `StrictHostKeyChecking=no`, so the
+# tunnel works even without this entry. ssh-keyscan failures are therefore
+# downgraded to warnings; previously a transient DNS/network blip aborted the
+# whole job (stderr was sent to /dev/null and `set -e` exited silently). See
+# issue #174. Retry a couple of times to absorb the cheapest blips, then move
+# on and let the real connection attempts (the SSH tunnel and the Dagger
+# verify) report their own — much more informative — errors if the host is
+# genuinely unreachable.
+echo "Probing $DAGGER_ENGINE_HOST with ssh-keyscan..."
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-5}"
+keyscan_rc=0
+keyscan_out=""
+_elapsed=0
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    keyscan_rc=0
+    _t0=$SECONDS
+    keyscan_out=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>"$KEYSCAN_ERR") || keyscan_rc=$?
+    _elapsed=$(( SECONDS - _t0 ))
+    if [ "$keyscan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (rc=${keyscan_rc}, ${_elapsed}s); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
+if [ "$keyscan_rc" -ne 0 ]; then
+    echo "::warning::ssh-keyscan ${DAGGER_ENGINE_HOST} failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (last rc=${keyscan_rc}, ${_elapsed}s) — continuing (StrictHostKeyChecking=no on the tunnel makes this entry optional)."
+    if [ -s "$KEYSCAN_ERR" ]; then
+        echo "::warning::--- ssh-keyscan stderr ---"
+        while IFS= read -r line; do
+            [ -n "$line" ] && echo "::warning::  $line"
+        done < "$KEYSCAN_ERR"
+    fi
+elif [ -n "$keyscan_out" ]; then
+    printf '%s\n' "$keyscan_out" >> ~/.ssh/known_hosts
+fi
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
