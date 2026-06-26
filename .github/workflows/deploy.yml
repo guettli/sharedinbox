@@ -5,6 +5,15 @@ on:
     - cron: '0 * * * *'   # every hour on the hour
   workflow_dispatch:
 
+# Serialize Deploy runs so the next hourly cron queues behind any still-running
+# run instead of starting in parallel. Two concurrent Deploy runs share the
+# gradle-cache Dagger volume and race on /home/ci/.gradle/caches/journal-1.lock,
+# which aborts whichever Gradle invocation can't acquire the lock within 60s
+# (see #151 — a 1h9m run still held the lock when the next hourly cron fired).
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 jobs:
   check-changes:
     name: Detect Changed Files
