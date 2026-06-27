@@ -5,10 +5,12 @@ import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
@@ -27,10 +29,12 @@ class AccountSyncManager {
     this._emails, {
     ImapConnectFn imapConnect = connectImap,
     SyncLogRepository syncLog = const NoOpSyncLogRepository(),
+    AppLogger? appLogger,
     DraftRepository? drafts,
     OnNewMailCallback? onNewMail,
   })  : _imapConnect = imapConnect,
         _syncLog = syncLog,
+        _appLogger = appLogger ?? AppLogger(const NoOpAppLogRepository()),
         _drafts = drafts,
         _onNewMail = onNewMail;
 
@@ -39,6 +43,7 @@ class AccountSyncManager {
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
+  final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final OnNewMailCallback? _onNewMail;
 
@@ -75,6 +80,7 @@ class AccountSyncManager {
               _emails,
               _imapConnect,
               _syncLog,
+              _appLogger,
               _drafts,
               _onNewMail,
               onSyncStart: () => _emitSyncing(id, syncing: true),
@@ -86,6 +92,7 @@ class AccountSyncManager {
               _emails,
               _accounts,
               _syncLog,
+              _appLogger,
               _drafts,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
@@ -152,6 +159,7 @@ class AccountSyncManager {
           _emails,
           _imapConnect,
           _syncLog,
+          _appLogger,
           _drafts,
           _onNewMail,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
@@ -163,6 +171,7 @@ class AccountSyncManager {
           _emails,
           _accounts,
           _syncLog,
+          _appLogger,
           _drafts,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
@@ -191,6 +200,7 @@ class _AccountSync implements _SyncLoop {
     this._emails,
     this._imapConnect,
     this._syncLog,
+    this._appLogger,
     this._drafts,
     this._onNewMail, {
     void Function()? onSyncStart,
@@ -204,6 +214,7 @@ class _AccountSync implements _SyncLoop {
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
   final SyncLogRepository _syncLog;
+  final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
@@ -246,7 +257,7 @@ class _AccountSync implements _SyncLoop {
         final (_SyncStats stats, String? capturedLog) = await _runSync(
           account.verbose,
         );
-        await _syncLog.log(
+        final syncLogId = await _syncLog.log(
           accountId: account.id,
           success: true,
           protocol: 'imap',
@@ -260,14 +271,32 @@ class _AccountSync implements _SyncLoop {
           mailboxStats: stats.mailboxStats,
           protocolLog: capturedLog,
         );
+        unawaited(
+          _appLogger.info(
+            'sync.cycle.complete',
+            'IMAP sync ok: ${stats.emailsFetched} new, '
+                '${stats.mailboxesSynced} mailboxes',
+            accountId: account.id,
+            syncLogId: syncLogId == 0 ? null : syncLogId,
+            data: {
+              'protocol': 'imap',
+              'emailsFetched': stats.emailsFetched,
+              'emailsSkipped': stats.emailsSkipped,
+              'mailboxesSynced': stats.mailboxesSynced,
+              'pendingFlushed': stats.pendingFlushed,
+              'bytesTransferred': stats.bytesTransferred,
+            },
+          ),
+        );
         _backoffSeconds = 5;
         _onSyncEnd?.call();
         await _idle();
       } catch (e, st) {
         _onSyncEnd?.call();
         final isPermanent = _isPermanentError(e);
+        var syncLogId = 0;
         try {
-          await _syncLog.log(
+          syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
             errorMessage: e.toString(),
@@ -285,6 +314,17 @@ class _AccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write IMAP sync log entry: $logErr');
         }
+        unawaited(
+          _appLogger.error(
+            'sync.cycle.failed',
+            'IMAP sync failed: $e',
+            accountId: account.id,
+            syncLogId: syncLogId == 0 ? null : syncLogId,
+            data: {'protocol': 'imap', 'permanent': isPermanent},
+            error: e,
+            stack: st,
+          ),
+        );
 
         if (isPermanent) {
           log(
@@ -453,6 +493,7 @@ class _JmapAccountSync implements _SyncLoop {
     this._emails,
     this._accounts,
     this._syncLog,
+    this._appLogger,
     this._drafts, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
@@ -464,6 +505,7 @@ class _JmapAccountSync implements _SyncLoop {
   final EmailRepository _emails;
   final AccountRepository _accounts;
   final SyncLogRepository _syncLog;
+  final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
@@ -504,7 +546,7 @@ class _JmapAccountSync implements _SyncLoop {
         final (_SyncStats stats, String? capturedLog) = await _runSync(
           account.verbose,
         );
-        await _syncLog.log(
+        final syncLogId = await _syncLog.log(
           accountId: account.id,
           success: true,
           protocol: 'jmap',
@@ -518,14 +560,32 @@ class _JmapAccountSync implements _SyncLoop {
           mailboxStats: stats.mailboxStats,
           protocolLog: capturedLog,
         );
+        unawaited(
+          _appLogger.info(
+            'sync.cycle.complete',
+            'JMAP sync ok: ${stats.emailsFetched} new, '
+                '${stats.mailboxesSynced} mailboxes',
+            accountId: account.id,
+            syncLogId: syncLogId == 0 ? null : syncLogId,
+            data: {
+              'protocol': 'jmap',
+              'emailsFetched': stats.emailsFetched,
+              'emailsSkipped': stats.emailsSkipped,
+              'mailboxesSynced': stats.mailboxesSynced,
+              'pendingFlushed': stats.pendingFlushed,
+              'bytesTransferred': stats.bytesTransferred,
+            },
+          ),
+        );
         _backoffSeconds = 5;
         _onSyncEnd?.call();
         await _wait();
       } catch (e, st) {
         _onSyncEnd?.call();
         final isPermanent = _isPermanentError(e);
+        var syncLogId = 0;
         try {
-          await _syncLog.log(
+          syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
             errorMessage: e.toString(),
@@ -543,6 +603,17 @@ class _JmapAccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write JMAP sync log entry: $logErr');
         }
+        unawaited(
+          _appLogger.error(
+            'sync.cycle.failed',
+            'JMAP sync failed: $e',
+            accountId: account.id,
+            syncLogId: syncLogId == 0 ? null : syncLogId,
+            data: {'protocol': 'jmap', 'permanent': isPermanent},
+            error: e,
+            stack: st,
+          ),
+        );
 
         if (isPermanent) {
           log(

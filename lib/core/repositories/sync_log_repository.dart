@@ -59,7 +59,10 @@ class SyncLogEntry {
 }
 
 abstract class SyncLogRepository {
-  Future<void> log({
+  /// Inserts a sync-cycle audit row and returns its id so callers (e.g. the
+  /// application logger) can correlate other rows back to this sync cycle.
+  /// Implementations that swallow inserts (NoOp / failure) may return 0.
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -88,7 +91,7 @@ class NoOpSyncLogRepository implements SyncLogRepository {
   const NoOpSyncLogRepository();
 
   @override
-  Future<void> log({
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -104,7 +107,8 @@ class NoOpSyncLogRepository implements SyncLogRepository {
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
-  }) async {}
+  }) async =>
+      0;
 
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>

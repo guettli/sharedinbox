@@ -4,6 +4,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 
+import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/screens/about_screen.dart';
 import 'package:sharedinbox/ui/screens/account_compare_screen.dart';
 import 'package:sharedinbox/ui/screens/account_home_screen.dart';
@@ -24,6 +25,7 @@ import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
+import 'package:sharedinbox/ui/screens/app_log_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
@@ -32,8 +34,13 @@ import 'package:sharedinbox/ui/screens/undo_log_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 
+/// Shared observer instance so `main.dart` can attach the [AppLogger] once
+/// the Riverpod container is available.
+final appLogNavigatorObserver = AppLogNavigatorObserver();
+
 final router = GoRouter(
   initialLocation: '/inbox',
+  observers: [appLogNavigatorObserver],
   routes: [
     ShellRoute(
       builder: (ctx, state, child) => UndoShell(child: child),
@@ -69,6 +76,16 @@ final router = GoRouter(
                   ),
                 ),
               ],
+            ),
+            GoRoute(
+              path: 'app-log',
+              builder: (ctx, state) => AppLogScreen(
+                initialSyncLogId: int.tryParse(
+                  state.uri.queryParameters['syncLogId'] ?? '',
+                ),
+                initialAccountId:
+                    state.uri.queryParameters['accountId'],
+              ),
             ),
             GoRoute(
               path: 'changelog',

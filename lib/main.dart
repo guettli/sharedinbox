@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
@@ -137,6 +138,12 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
   @override
   void initState() {
     super.initState();
+    // Attach the application logger to the navigator observer so that screen
+    // transitions can be recorded. The observer is a global because the
+    // router is — the logger is set here, after ProviderScope exists.
+    appLogNavigatorObserver.logger = ref.read(appLoggerProvider);
+    // Trim retained log rows once per launch.
+    unawaited(ref.read(appLogRepositoryProvider).trim());
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
     ref.read(reliabilityRunnerProvider).start();

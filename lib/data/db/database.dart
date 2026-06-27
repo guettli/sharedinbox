@@ -376,6 +376,38 @@ class InstalledVersions extends Table {
   Set<Column> get primaryKey => {gitHash};
 }
 
+/// General-purpose application event log.
+/// Distinct from [SyncLogs], which is a per-cycle sync audit trail.
+/// Rows are tagged with optional context (screen / account / folder / mail /
+/// syncLog) and a level (debug | info | warn | error). [dataJson] holds a JSON
+/// object with any extra structured fields.
+// Added in schema v45.
+@DataClassName('AppLogRow')
+class AppLogs extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get createdAt => dateTime()();
+  // 'debug' | 'info' | 'warn' | 'error'
+  TextColumn get level => text()();
+  // Short event key, e.g. 'sync.cycle.complete', 'ui.screen.enter'.
+  TextColumn get event => text()();
+  // Human-readable one-liner.
+  TextColumn get message => text()();
+  // JSON object: extra structured fields, including serialised error+stack.
+  TextColumn get dataJson => text().nullable()();
+  // Optional context (any combination may be null).
+  TextColumn get screen => text().nullable()();
+  TextColumn get accountId => text()
+      .nullable()
+      .references(Accounts, #id, onDelete: KeyAction.setNull)();
+  TextColumn get mailboxPath => text().nullable()();
+  TextColumn get emailId => text()
+      .nullable()
+      .references(Emails, #id, onDelete: KeyAction.setNull)();
+  IntColumn get syncLogId => integer()
+      .nullable()
+      .references(SyncLogs, #id, onDelete: KeyAction.setNull)();
+}
+
 /// App-wide user preferences, stored as a singleton row (id always 1).
 @DataClassName('UserPreferencesRow')
 class UserPreferences extends Table {
@@ -424,6 +456,7 @@ class UserPreferences extends Table {
     EmailNotes,
     InstalledVersions,
     DraftTombstones,
+    AppLogs,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -501,12 +534,32 @@ class AppDatabase extends _$AppDatabase {
     ''');
   }
 
+  Future<void> _createAppLogsIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_created_at '
+      'ON app_logs (created_at DESC);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_account_created_at '
+      'ON app_logs (account_id, created_at DESC);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_level '
+      'ON app_logs (level);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_sync_log_id '
+      'ON app_logs (sync_log_id);',
+    );
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           await _createEmailFts();
           await _createEmailNotesFts();
+          await _createAppLogsIndexes();
         },
         onUpgrade: (m, from, to) async {
           // NOTE: m.createTable(T) creates the LATEST version of table T.
@@ -871,6 +924,10 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from >= 12 && from < 44) {
             await m.addColumn(syncLogMailboxes, syncLogMailboxes.mailboxName);
+          }
+          if (from < 45) {
+            await m.createTable(appLogs);
+            await _createAppLogsIndexes();
           }
         },
       );
