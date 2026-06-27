@@ -9,7 +9,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
   final AppDatabase _db;
 
   @override
-  Future<void> log({
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -26,8 +26,9 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
   }) async {
+    var logId = 0;
     await _db.transaction(() async {
-      final logId = await _db.into(_db.syncLogs).insert(
+      logId = await _db.into(_db.syncLogs).insert(
             SyncLogsCompanion.insert(
               accountId: accountId,
               result: success ? 'ok' : 'error',
@@ -59,6 +60,7 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
             );
       }
     });
+    return logId;
   }
 
   @override

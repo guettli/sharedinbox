@@ -186,8 +186,9 @@ class _Log {
 
 class FakeSyncLogRepository implements SyncLogRepository {
   final logs = <_Log>[];
+  int _nextId = 1;
   @override
-  Future<void> log({
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -205,6 +206,7 @@ class FakeSyncLogRepository implements SyncLogRepository {
     String? protocolLog,
   }) async {
     logs.add(_Log(success: success));
+    return _nextId++;
   }
 
   @override

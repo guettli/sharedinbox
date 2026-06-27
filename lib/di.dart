@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
@@ -19,6 +20,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -34,6 +36,7 @@ import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
@@ -140,6 +143,19 @@ final syncLogRepositoryProvider = Provider<SyncLogRepository>((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
 });
 
+final appLogRepositoryProvider = Provider<AppLogRepository>((ref) {
+  return AppLogRepositoryImpl(ref.watch(dbProvider));
+});
+
+final appLoggerProvider = Provider<AppLogger>((ref) {
+  return AppLogger(ref.watch(appLogRepositoryProvider));
+});
+
+final appLogEntriesProvider = StreamProvider.autoDispose
+    .family<List<AppLogEntry>, AppLogFilter>((ref, filter) {
+  return ref.watch(appLogRepositoryProvider).watchEntries(filter);
+});
+
 final syncLastErrorProvider =
     StreamProvider.autoDispose.family<String?, String>((ref, accountId) {
   return ref.watch(syncLogRepositoryProvider).observeLastError(accountId);
@@ -178,6 +194,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     ref.watch(mailboxRepositoryProvider),
     ref.watch(emailRepositoryProvider),
     syncLog: ref.watch(syncLogRepositoryProvider),
+    appLogger: ref.watch(appLoggerProvider),
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
     onNewMail: showNewMailNotification,

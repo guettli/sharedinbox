@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 44);
+      expect(db.schemaVersion, 45);
       await db.close();
     });
 
@@ -436,6 +436,13 @@ void main() {
 
         // v40: installed_versions table.
         await db.customSelect('SELECT count(*) FROM installed_versions').get();
+
+        // v45: app_logs table and its supporting indexes.
+        await db.customSelect('SELECT count(*) FROM app_logs').get();
+        expect(indexNames, contains('app_logs_created_at'));
+        expect(indexNames, contains('app_logs_account_created_at'));
+        expect(indexNames, contains('app_logs_level'));
+        expect(indexNames, contains('app_logs_sync_log_id'));
 
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -236,6 +237,13 @@ class _SyncLogTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          IconButton(
+            icon: const Icon(Icons.list_alt, size: AppIconSize.sm),
+            tooltip: 'View related app log entries',
+            onPressed: () => context.push(
+              '/accounts/app-log?syncLogId=${entry.id}',
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.copy, size: AppIconSize.sm),
             tooltip: 'Copy as markdown',
