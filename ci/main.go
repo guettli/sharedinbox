@@ -1300,8 +1300,8 @@ func (m *Ci) PublishDevContainer(
 
 	// .daggerignore at the repo root keeps build/, cache dirs, etc. out
 	// of the upload to the engine.
-	built := dag.Container().
-		Build(buildContext, dagger.ContainerBuildOpts{
+	built := buildContext.
+		DockerBuild(dagger.DirectoryDockerBuildOpts{
 			Dockerfile: "Dockerfile.dev",
 		}).
 		WithRegistryAuth(imageRef, registryUser, registryToken)
