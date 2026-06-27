@@ -7,12 +7,15 @@ Supports **multiple accounts** — each synced independently via IMAP IDLE.
 
 ## Design philosophy: offline-first
 
-```text
-IMAP/SMTP server
-       ↓
-  AccountSyncManager  ←→  Drift (SQLite, local DB)
-  (IMAP IDLE per account)         ↓
-                            UI (reads only from DB)
+```mermaid
+flowchart TB
+    server[IMAP/SMTP server]
+    sync[AccountSyncManager<br/>IMAP IDLE per account]
+    db[(Drift SQLite local DB)]
+    ui[UI reads only from DB]
+    server --> sync
+    sync --> db
+    db --> ui
 ```
 
 The UI never touches the network. The sync engine runs in the background and writes to a local [Drift](https://drift.simonbinder.eu/) database. Screens observe reactive streams from that DB.
