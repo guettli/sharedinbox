@@ -45,6 +45,29 @@ Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs y
 background using IMAP IDLE and works offline — the network is only needed during initial sync and
 when sending mail.
 
+### Troubleshooting
+
+**"TLS handshake aborted" when opening Remote Filters (ManageSieve, port 4190)**
+
+The app speaks ManageSieve with STARTTLS over the plaintext port (RFC 5804). If the screen shows
+*"TLS handshake aborted on …:4190 — the connection was closed during TLS negotiation"*, the most
+likely causes are:
+
+1. The server advertises `STARTTLS` but has no usable certificate bound to that listener — the
+   server aborts the handshake after the `ClientHello`.
+2. A firewall or proxy in front of the mail server is dropping TLS connections to port 4190.
+3. The server is configured for implicit TLS on this port while the app uses STARTTLS (or vice
+   versa). Toggle **SSL/TLS** in the account's ManageSieve settings.
+
+To check from a workstation:
+
+```bash
+openssl s_client -starttls sieve -connect mail.example.com:4190 -servername mail.example.com
+```
+
+If `openssl` also reports the connection closing during negotiation, the problem is on the server
+side (check the ManageSieve listener config and certificate) or on the network path.
+
 ---
 
 ## For developers
