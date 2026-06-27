@@ -292,8 +292,14 @@ class EmailRepositoryImpl implements EmailRepository {
               (a) => {
                 'filename': a.fileName ?? '',
                 'contentType': a.contentType?.mediaType.text ?? '',
+                // ContentInfo.fetchId is empty for parts that aren't addressable
+                // (e.g. a non-multipart message whose top-level part is itself
+                // marked as an attachment). MimeMessage.getPart() throws on an
+                // empty fetchId, so guard before calling it.
                 'size': a.size ??
-                    msg.getPart(a.fetchId)?.decodeContentBinary()?.length ??
+                    (a.fetchId.isNotEmpty
+                        ? msg.getPart(a.fetchId)?.decodeContentBinary()?.length
+                        : null) ??
                     0,
                 'fetchPartId': a.fetchId,
               },

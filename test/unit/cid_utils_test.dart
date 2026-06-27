@@ -93,5 +93,26 @@ void main() {
       final decoded = base64.decode(match!.group(1)!);
       expect(decoded.length, greaterThan(0));
     });
+
+    test(
+      'does not crash on single-part inline message with empty fetchId',
+      () {
+        // A non-multipart message whose top-level part is itself marked
+        // Content-Disposition: inline yields a ContentInfo with empty fetchId.
+        // MimeMessage.getPart('') throws, so the helper must skip it cleanly.
+        const singlePartInlineMime = 'MIME-Version: 1.0\r\n'
+            'Content-Type: image/png\r\n'
+            'Content-Disposition: inline\r\n'
+            'Content-Transfer-Encoding: base64\r\n'
+            'Content-ID: <test@example.com>\r\n'
+            '\r\n'
+            '$_kPixelPng\r\n';
+        final msg = imap.MimeMessage.parseFromText(singlePartInlineMime);
+        const html = '<img src="cid:test@example.com">';
+
+        // Pre-fix this would throw InvalidArgumentException.
+        expect(injectInlineImages(html, msg), html);
+      },
+    );
   });
 }
