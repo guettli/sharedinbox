@@ -17,28 +17,22 @@ jobs:
     if: github.server_url == 'https://github.com'
     permissions:
       packages: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE: ghcr.io/guettli/sharedinbox-dev
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Log in to GitHub Container Registry
-        run: |
-          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
 
-      - name: Build image
+      - name: Build & push dev container via Dagger
+        env:
+          DAGGER_NO_NAG: "1"
+          REGISTRY_TOKEN: ${{ github.token }}
         run: |
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          docker build \
-            -t "$IMAGE:latest" \
-            -t "$IMAGE:$SHORT_SHA" \
-            -f Dockerfile.dev \
-            .
-
-      - name: Push image
-        run: |
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          docker push "$IMAGE:latest"
-          docker push "$IMAGE:$SHORT_SHA"
+          dagger call --progress=plain -q -m ci --source=. publish-dev-container \
+            --registry-token env:REGISTRY_TOKEN \
+            --registry-user "${{ github.actor }}" \
+            --image-ref ghcr.io/guettli/sharedinbox-dev \
+            --commit-sha "$GITHUB_SHA"

@@ -15,10 +15,6 @@ jobs:
     if: github.server_url == 'https://github.com'
     steps:
       - uses: actions/checkout@v5
-      - name: Print runner wait time
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/print_runner_wait.sh
       # sops, dagger and task come from the sharedinbox-arc runner image
       # (arc-runner-image/Dockerfile), which is the single source of truth for
       # their versions. We deliberately do NOT reinstall them here: if the
@@ -28,6 +24,16 @@ jobs:
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
+      - name: Print runner wait time
+        env:
+          DAGGER_NO_NAG: "1"
+          GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
+        run: |
+          dagger call --progress=plain -q -m ci --source=. print-runner-wait \
+            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID"
       - name: Run Full Check Suite
         env:
           OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318

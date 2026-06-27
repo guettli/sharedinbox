@@ -86,11 +86,28 @@ development values defined in `stalwart-dev/` — not production secrets.
 
 ## CI Integration
 
-The CI workflow in `.github/workflows/ci.yml` is configured to use the Dagger module located in the `ci/` directory.
+All workflow steps in `.github/workflows/*.yml` run through the Dagger
+module in `ci/`. Each step is either `scripts/setup_dagger_remote.sh` (the
+SOPS-decrypt bootstrap that opens the SSH tunnel to the engine) or a
+`dagger call --progress=plain -q -m ci --source=. <function>` invocation.
+The only non-Dagger step that survived is `setup_dagger_remote.sh`
+itself, because Dagger cannot decrypt the secrets that grant access to
+the engine.
 
-- **Check Suite:** Runs analysis and tests in parallel.
-- **Builds:** Produces Linux and Android artifacts.
-- **Caching:** When using the shared engine, CI runners benefit from the persistent cache on the host.
+- **Check Suite:** Runs analysis and tests in parallel (`check`).
+- **Builds:** Produces Linux and Android artifacts (`deploy-linux`,
+  `deploy-apk`, `publish-android`).
+- **Caching:** When using the shared engine, CI runners benefit from the
+  persistent cache on the host.
+- **GitHub-API helpers:** `print-runner-wait`, `changed-targets`,
+  `update-deploy-health-label`, `create-firebase-failure-issue`,
+  `verify-play-store-deploy`, and `website-verify` replace the inline
+  Python that used to live in workflow YAML; the deploy-health label
+  flip, the firebase failure-issue creator, and the changed-targets
+  detector all run inside Dagger so the workflows stay declarative.
+- **Dev container:** `publish-dev-container` builds `Dockerfile.dev` and
+  pushes both `:latest` and `:<short-sha>` to GHCR via `dag.Container().Build().Publish()`,
+  replacing the `docker login` / `docker build` / `docker push` steps.
 
 ## Credential Security — Keeping Production Secrets Off Codeberg
 
