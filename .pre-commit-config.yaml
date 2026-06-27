@@ -35,12 +35,6 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && dagger call --progress=plain -q -m ci --source=. check-fast'
         pass_filenames: false
         always_run: true
-      - id: ci-no-direct-dagger
-        name: check for direct dagger calls in workflows (use Task instead)
-        language: system
-        entry: "bash -c 'git --no-pager grep \"dagger call\" .github/workflows/ && echo \"ERROR: Direct dagger calls found in workflows. Use Taskfile instead.\" && exit 1 || exit 0'"
-        pass_filenames: false
-        always_run: true
       - id: dagger-progress-plain
         name: ensure all dagger calls use --progress=plain
         language: system

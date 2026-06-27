@@ -1183,6 +1183,314 @@ func (m *Ci) Renovate(
 		Stdout(ctx)
 }
 
+// PrintRunnerWait prints how long the workflow job waited in the runner
+// queue before this step started, by reading the run's created_at via the
+// GitHub API. Replaces scripts/print_runner_wait.sh so workflows can invoke
+// the same logic through Dagger.
+func (m *Ci) PrintRunnerWait(
+	ctx context.Context,
+	githubToken *dagger.Secret,
+	// apiUrl typically $GITHUB_API_URL (e.g. https://api.github.com).
+	apiUrl string,
+	// repository typically $GITHUB_REPOSITORY ("owner/repo").
+	repository string,
+	// runId typically $GITHUB_RUN_ID.
+	runId string,
+) (string, error) {
+	const script = `#!/bin/sh
+set -u
+created=$(curl -sf --max-time 30 \
+    -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "${API_URL:-https://api.github.com}/repos/${REPOSITORY:-}/actions/runs/${RUN_ID:-}" \
+    | python3 -c "import sys,json;print(json.load(sys.stdin).get('created_at',''))" 2>/dev/null) || true
+runner_start=$(date +%s)
+if [ -n "$created" ]; then
+    queued_epoch=$(date -d "$created" +%s)
+    echo "Runner wait time: $((runner_start - queued_epoch))s (queued at $created)"
+else
+    echo "Runner wait time: unknown (API lookup failed)"
+fi
+`
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithExec([]string{"apk", "add", "--no-cache", "curl", "coreutils"}).
+		WithNewFile("/tmp/print_runner_wait.sh", script).
+		WithSecretVariable("GITHUB_TOKEN", githubToken).
+		WithEnvVariable("API_URL", apiUrl).
+		WithEnvVariable("REPOSITORY", repository).
+		WithEnvVariable("RUN_ID", runId).
+		WithUser("nobody").
+		WithExec([]string{"sh", "/tmp/print_runner_wait.sh"}).
+		Stdout(ctx)
+}
+
+// ChangedTargets resolves which deploy targets need to run based on the
+// changed files since the last successful run of a specific workflow job.
+// Wraps scripts/changed_targets.py so deploy.yml / website.yml can replace
+// their inline Python with a single Dagger invocation. The script prints
+// notice/warning lines to stderr and the JSON verdict on stdout.
+func (m *Ci) ChangedTargets(
+	ctx context.Context,
+	githubToken *dagger.Secret,
+	apiUrl string,
+	repository string,
+	headSha string,
+	eventName string,
+	workflowFile string,
+	jobName string,
+	// targets is a JSON object mapping target name to path regex, e.g.
+	// {"android":"^(android/|lib/|...)","linux":"^(linux/|lib/|...)"}.
+	targets string,
+	// alwaysOnNonSchedule when "true" treats any non-"schedule" event as
+	// "deploy everything" (matches the historical website.yml behaviour).
+	// +optional
+	alwaysOnNonSchedule string,
+) (string, error) {
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/changed_targets.py"},
+	})
+
+	container := dag.Container().
+		From("python:3.12-alpine").
+		WithFile("/src/scripts/changed_targets.py", scriptSource.File("scripts/changed_targets.py")).
+		WithSecretVariable("GITHUB_TOKEN", githubToken).
+		WithEnvVariable("GITHUB_API_URL", apiUrl).
+		WithEnvVariable("GITHUB_REPOSITORY", repository).
+		WithEnvVariable("HEAD_SHA", headSha).
+		WithEnvVariable("EVENT_NAME", eventName).
+		WithEnvVariable("WORKFLOW_FILE", workflowFile).
+		WithEnvVariable("JOB_NAME", jobName).
+		WithEnvVariable("TARGETS", targets).
+		WithWorkdir("/src")
+	if alwaysOnNonSchedule != "" {
+		container = container.WithEnvVariable("ALWAYS_ON_NON_SCHEDULE", alwaysOnNonSchedule)
+	}
+	return container.
+		WithUser("nobody").
+		WithExec([]string{"python3", "scripts/changed_targets.py"}).
+		Stdout(ctx)
+}
+
+// PublishDevContainer builds Dockerfile.dev inside Dagger and pushes it to
+// the given image reference under both :latest and :<short-sha> tags.
+// Replaces the docker login + docker build + docker push steps in
+// publish-dev-container.yml so the workflow runs entirely through Dagger.
+// The build context is the repo root (Dockerfile.dev COPYs files from
+// several directories), supplied by +defaultPath="..".
+func (m *Ci) PublishDevContainer(
+	ctx context.Context,
+	// buildContext is the Docker build context. Defaults to the repo
+	// root because the constructor's filtered Source omits Dockerfile.dev.
+	// +defaultPath=".."
+	buildContext *dagger.Directory,
+	registryToken *dagger.Secret,
+	registryUser string,
+	// imageRef is the full image path without a tag,
+	// e.g. ghcr.io/guettli/sharedinbox-dev.
+	imageRef string,
+	// commitSha is used to derive the :<short-sha> tag.
+	commitSha string,
+) (string, error) {
+	short := commitSha
+	if len(short) > 7 {
+		short = short[:7]
+	}
+
+	// .daggerignore at the repo root keeps build/, cache dirs, etc. out
+	// of the upload to the engine.
+	built := dag.Container().
+		Build(buildContext, dagger.ContainerBuildOpts{
+			Dockerfile: "Dockerfile.dev",
+		}).
+		WithRegistryAuth(imageRef, registryUser, registryToken)
+
+	if _, err := built.Publish(ctx, imageRef+":latest"); err != nil {
+		return "", fmt.Errorf("publish :latest: %w", err)
+	}
+	digest, err := built.Publish(ctx, imageRef+":"+short)
+	if err != nil {
+		return "", fmt.Errorf("publish :%s: %w", short, err)
+	}
+	return fmt.Sprintf("Published %s:latest and %s:%s (%s)\n", imageRef, imageRef, short, digest), nil
+}
+
+// VerifyPlayStoreDeploy queries the Play Store alpha track and fails if the
+// latest versionCode is older than one hour, which would mean the deploy
+// silently did not land. Runs scripts/verify_playstore_deploy.py inside a
+// Python container so the runner does not need google-auth / requests
+// installed (mirrors the FetchPlayStoreApks / UploadToPlayStore pattern).
+func (m *Ci) VerifyPlayStoreDeploy(
+	ctx context.Context,
+	playStoreConfig *dagger.Secret,
+) (string, error) {
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/verify_playstore_deploy.py"},
+	})
+
+	return dag.Container().
+		From("python:3.12-alpine").
+		WithMountedCache("/tmp/pip-cache", dag.CacheVolume("pip-cache")).
+		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
+		WithFile("/src/scripts/verify_playstore_deploy.py", scriptSource.File("scripts/verify_playstore_deploy.py")).
+		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
+		WithWorkdir("/src").
+		WithUser("nobody").
+		WithExec([]string{"python3", "scripts/verify_playstore_deploy.py"}).
+		Stdout(ctx)
+}
+
+// WebsiteVerify hits the public site and confirms that the expected git
+// commit hash is live, retrying for ~60s. Optionally tunnels the curl
+// through SSH so the check runs from the web host itself (useful when the
+// caller's public network egress is blocked). Replaces scripts/website-verify.sh.
+func (m *Ci) WebsiteVerify(
+	ctx context.Context,
+	commitHash string,
+	// +optional
+	sshKey *dagger.Secret,
+	// +optional
+	knownHosts *dagger.Secret,
+	// +optional
+	sshUser string,
+	// +optional
+	sshHost string,
+) (string, error) {
+	useSSH := sshKey != nil && knownHosts != nil && sshUser != "" && sshHost != ""
+
+	verifyScript := `#!/bin/sh
+set -u
+VERSION="$1"
+URL="https://sharedinbox.de/"
+USE_SSH="${USE_SSH:-false}"
+echo "Checking that version ${VERSION} is live at ${URL} ..."
+for i in 1 2 3 4 5 6; do
+    if [ "$USE_SSH" = "true" ]; then
+        OUT=$(ssh -i /home/deploy/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$SSH_USER@$SSH_HOST" "
+            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}' 2>/dev/null || echo '000')
+            echo \"\$HTTP\"
+            cat /tmp/website-verify.html 2>/dev/null || true
+        " || true)
+        HTTP=$(echo "$OUT" | head -n 1)
+        HTML=$(echo "$OUT" | tail -n +2)
+    else
+        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
+        HTML=$(cat /tmp/website-verify.html 2>/dev/null || true)
+    fi
+    if [ "${HTTP}" != "200" ]; then
+        echo "HTTP ${HTTP} (attempt ${i}/6); waiting 10s ..."
+    elif echo "$HTML" | grep -q "x-version.*${VERSION}"; then
+        echo "OK: version ${VERSION} is live (HTTP ${HTTP})."
+        exit 0
+    else
+        echo "HTTP 200 but version ${VERSION} not found (attempt ${i}/6); waiting 10s ..."
+    fi
+    sleep 10
+done
+echo "FAIL: version ${VERSION} not live at ${URL} after 60s"
+exit 1
+`
+
+	if useSSH {
+		// Reuse Deployer so the SSH key + known_hosts handling matches the
+		// upload path. Deployer already includes openssh-client and python3
+		// in an alpine image; add curl for the local-fallback case.
+		container := m.Deployer(sshKey, knownHosts).
+			WithUser("root").
+			WithExec([]string{"apk", "add", "--no-cache", "curl"}).
+			WithUser("deploy").
+			WithEnvVariable("SSH_USER", sshUser).
+			WithEnvVariable("SSH_HOST", sshHost).
+			WithEnvVariable("USE_SSH", "true").
+			WithNewFile("/tmp/verify.sh", verifyScript).
+			WithExec([]string{"sh", "/tmp/verify.sh", commitHash})
+		return container.Stdout(ctx)
+	}
+
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
+		WithNewFile("/tmp/verify.sh", verifyScript).
+		WithUser("nobody").
+		WithExec([]string{"sh", "/tmp/verify.sh", commitHash}).
+		Stdout(ctx)
+}
+
+// UpdateDeployHealthLabel sets CI/Full-Pass or CI/Full-Fail on the deploy
+// health tracking issue. Replaces the inline Python in deploy.yml's
+// label-deploy-health job so the workflow runs entirely through Dagger.
+func (m *Ci) UpdateDeployHealthLabel(
+	ctx context.Context,
+	githubToken *dagger.Secret,
+	issueNumber string,
+	// allSucceeded "true" or "false". Anything other than "true" is treated
+	// as failed.
+	allSucceeded string,
+	// +optional
+	githubRepository string,
+	// +optional
+	githubApiUrl string,
+) (string, error) {
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/update_deploy_health_label.py"},
+	})
+
+	container := dag.Container().
+		From("python:3.12-alpine").
+		WithFile("/src/scripts/update_deploy_health_label.py", scriptSource.File("scripts/update_deploy_health_label.py")).
+		WithSecretVariable("GITHUB_TOKEN", githubToken).
+		WithEnvVariable("DEPLOY_HEALTH_ISSUE", issueNumber).
+		WithEnvVariable("ALL_SUCCEEDED", allSucceeded).
+		WithWorkdir("/src")
+	if githubRepository != "" {
+		container = container.WithEnvVariable("GITHUB_REPOSITORY", githubRepository)
+	}
+	if githubApiUrl != "" {
+		container = container.WithEnvVariable("GITHUB_API_URL", githubApiUrl)
+	}
+	return container.
+		WithUser("nobody").
+		WithExec([]string{"python3", "scripts/update_deploy_health_label.py"}).
+		Stdout(ctx)
+}
+
+// CreateFirebaseFailureIssue opens (or finds) a GitHub issue describing a
+// Firebase Test Lab robo-crawl failure on the Play Store alpha track. Skips
+// creation when an open issue with the canonical title already exists, so
+// hourly runs cannot pile up duplicates. Replaces the inline Python in
+// firebase-tests.yml.
+func (m *Ci) CreateFirebaseFailureIssue(
+	ctx context.Context,
+	githubToken *dagger.Secret,
+	runUrl string,
+	// +optional
+	githubRepository string,
+	// +optional
+	githubApiUrl string,
+) (string, error) {
+	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/create_firebase_failure_issue.py"},
+	})
+
+	container := dag.Container().
+		From("python:3.12-alpine").
+		WithFile("/src/scripts/create_firebase_failure_issue.py", scriptSource.File("scripts/create_firebase_failure_issue.py")).
+		WithSecretVariable("GITHUB_TOKEN", githubToken).
+		WithEnvVariable("RUN_URL", runUrl).
+		WithWorkdir("/src")
+	if githubRepository != "" {
+		container = container.WithEnvVariable("GITHUB_REPOSITORY", githubRepository)
+	}
+	if githubApiUrl != "" {
+		container = container.WithEnvVariable("GITHUB_API_URL", githubApiUrl)
+	}
+	return container.
+		WithUser("nobody").
+		WithExec([]string{"python3", "scripts/create_firebase_failure_issue.py"}).
+		Stdout(ctx)
+}
+
 // Graph returns a Mermaid diagram of the CI pipeline structure.
 // Paste the output into any Mermaid renderer (codeberg, github, mermaid.live)
 // or save it as a .md file to get a rendered diagram.

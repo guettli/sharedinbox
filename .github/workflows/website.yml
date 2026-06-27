@@ -23,20 +23,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: Print runner wait time
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/print_runner_wait.sh
-
-      - name: Check runner tools
-        run: |
-          command -v dagger  >/dev/null 2>&1 || { echo "ERROR: dagger is not installed in the runner image."; exit 1; }
-          command -v task    >/dev/null 2>&1 || { echo "ERROR: task is not installed in the runner image."; exit 1; }
-
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
+
+      - name: Print runner wait time
+        env:
+          DAGGER_NO_NAG: "1"
+          GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
+        run: |
+          dagger call --progress=plain -q -m ci --source=. print-runner-wait \
+            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID"
 
       - name: Build & Update Website
         env:
@@ -45,5 +46,12 @@ jobs:
 
       - name: Verify Website
         env:
+          DAGGER_NO_NAG: "1"
           SSH_HOST: ${{ env.WEBSITE_SSH_HOST }}
-        run: scripts/website-verify.sh
+        run: |
+          dagger call --progress=plain -q -m ci --source=. website-verify \
+            --commit-hash "$(git rev-parse --short HEAD)" \
+            --ssh-key env:SSH_PRIVATE_KEY \
+            --known-hosts env:SSH_KNOWN_HOSTS \
+            --ssh-user "$SSH_USER" \
+            --ssh-host "$SSH_HOST"
