@@ -62,7 +62,14 @@ class ManageSieveClient {
       try {
         socket = await SecureSocket.secure(socket, host: host);
       } catch (e, st) {
-        rethrowAsTlsHint(e, st, host, port);
+        // Surface the server's STARTTLS reply in the wrapped error — it
+        // sometimes reveals why the upgrade aborted (e.g. an OK message
+        // pointing at a missing cert, or a partial reply that explains a
+        // truncated TLS negotiation).
+        final hint = ok.message.isEmpty
+            ? 'STARTTLS reply: OK'
+            : 'STARTTLS reply: OK ${ok.message}';
+        rethrowAsTlsHint(e, st, host, port, hint: hint);
       }
       source = _ByteSource();
       sub = _attach(socket, source);

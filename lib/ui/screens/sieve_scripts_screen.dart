@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -65,6 +66,23 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
           _loading = false;
         });
       }
+      // Refresh the cached ManageSieve availability flag so the menu can
+      // disappear next time if the server has gone bad since the last probe
+      // (e.g. its TLS cert/listener broke after the account was added).
+      if (!widget.isLocal) {
+        unawaited(_refreshManageSieveAvailability());
+      }
+    }
+  }
+
+  Future<void> _refreshManageSieveAvailability() async {
+    try {
+      final account =
+          await ref.read(accountRepositoryProvider).getAccount(widget.accountId);
+      if (account == null || account.type != AccountType.imap) return;
+      await ref.read(manageSieveProbeServiceProvider).probe(account);
+    } catch (_) {
+      // Best-effort — the user already sees the load error.
     }
   }
 
