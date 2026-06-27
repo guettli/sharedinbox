@@ -314,12 +314,35 @@ void main() {
       await pumpUntil(tester, find.byIcon(Icons.edit));
       _log('send done');
 
-      // ComposeScreen pops back to EmailListScreen (INBOX) after send.
+      // Send is now async via the offline outbox queue (see #184): hitting
+      // Send only enqueues the message. We trigger a sync from INBOX to drain
+      // the queue (SMTP + APPEND to Sent) so the rest of the test can find
+      // both the Sent folder and the message inside it.
+      _log('sync from INBOX to drain outbox');
+      await tester.tap(find.byIcon(Icons.sync));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
 
       // ── Check Sent folder ──────────────────────────────────────────────────
       // Use the drawer to switch folders (no back button on Linux desktop).
       await tester.tap(find.byTooltip('Open folders'));
       await tester.pumpAndSettle();
+      // The Sent folder is created server-side by the IMAP send. Re-tap sync
+      // until the drawer lists it (timing depends on Stalwart latency).
+      final sentDeadline = DateTime.now().add(const Duration(seconds: 30));
+      while (!tester.any(find.text('Sent'))) {
+        if (DateTime.now().isAfter(sentDeadline)) {
+          throw Exception('Sent folder never appeared in drawer');
+        }
+        // Close drawer, tap sync, reopen drawer.
+        if (tester.any(find.byType(Drawer))) {
+          Navigator.pop(tester.element(find.byType(Drawer)));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(find.byIcon(Icons.sync));
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.byTooltip('Open folders'));
+        await tester.pumpAndSettle();
+      }
       await tester.tap(find.text('Sent'));
       await tester.pumpAndSettle();
 
