@@ -400,9 +400,8 @@ class AppLogs extends Table {
       .nullable()
       .references(Accounts, #id, onDelete: KeyAction.setNull)();
   TextColumn get mailboxPath => text().nullable()();
-  TextColumn get emailId => text()
-      .nullable()
-      .references(Emails, #id, onDelete: KeyAction.setNull)();
+  TextColumn get emailId =>
+      text().nullable().references(Emails, #id, onDelete: KeyAction.setNull)();
   IntColumn get syncLogId => integer()
       .nullable()
       .references(SyncLogs, #id, onDelete: KeyAction.setNull)();

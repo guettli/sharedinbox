@@ -71,7 +71,10 @@ class AppLogRepositoryImpl implements AppLogRepository {
     }
 
     query
-      ..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)])
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.createdAt),
+        (t) => OrderingTerm.desc(t.id),
+      ])
       ..limit(filter.limit);
 
     return query.watch().map(
@@ -103,11 +106,16 @@ class AppLogRepositoryImpl implements AppLogRepository {
     try {
       final cutoff = DateTime.now().subtract(maxAge);
       // Drop anything older than the time cap.
-      await (_db.delete(_db.appLogs)..where((t) => t.createdAt.isSmallerThanValue(cutoff))).go();
+      await (_db.delete(_db.appLogs)
+            ..where((t) => t.createdAt.isSmallerThanValue(cutoff)))
+          .go();
 
       // Then enforce the row cap by keeping the newest maxRows ids.
       final keep = await (_db.select(_db.appLogs)
-            ..orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.id)])
+            ..orderBy([
+              (t) => OrderingTerm.desc(t.createdAt),
+              (t) => OrderingTerm.desc(t.id),
+            ])
             ..limit(maxRows))
           .map((r) => r.id)
           .get();

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -12,11 +11,6 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
-
-/// Filter state for [AppLogScreen]. Held outside the widget so navigating
-/// away and back keeps the user's level/account selection in place.
-final appLogFilterProvider =
-    StateProvider.autoDispose<AppLogFilter>((ref) => const AppLogFilter());
 
 class AppLogScreen extends ConsumerStatefulWidget {
   const AppLogScreen({
@@ -37,29 +31,25 @@ class AppLogScreen extends ConsumerStatefulWidget {
 
 class _AppLogScreenState extends ConsumerState<AppLogScreen> {
   final _searchCtrl = TextEditingController();
+  late AppLogFilter _filter;
 
   @override
   void initState() {
     super.initState();
-    // Apply deep-link filters once after first frame so the StateProvider
-    // is mutated outside build().
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final notifier = ref.read(appLogFilterProvider.notifier);
-      var next = notifier.state;
-      if (widget.initialSyncLogId != null) {
-        next = next.copyWith(syncLogId: widget.initialSyncLogId);
-      }
-      if (widget.initialAccountId != null) {
-        next = next.copyWith(accountId: widget.initialAccountId);
-      }
-      if (!identical(next, notifier.state)) notifier.state = next;
-    });
+    _filter = AppLogFilter(
+      syncLogId: widget.initialSyncLogId,
+      accountId: widget.initialAccountId,
+    );
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _updateFilter(AppLogFilter next) {
+    setState(() => _filter = next);
   }
 
   Future<void> _confirmClear(BuildContext context) async {
@@ -87,8 +77,7 @@ class _AppLogScreenState extends ConsumerState<AppLogScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filter = ref.watch(appLogFilterProvider);
-    final entriesAsync = ref.watch(appLogEntriesProvider(filter));
+    final entriesAsync = ref.watch(appLogEntriesProvider(_filter));
     final accountsAsync = ref.watch(allAccountsProvider);
 
     return Scaffold(
@@ -105,17 +94,15 @@ class _AppLogScreenState extends ConsumerState<AppLogScreen> {
       body: Column(
         children: [
           _FilterBar(
-            filter: filter,
-            accounts: accountsAsync.valueOrNull ?? const [],
+            filter: _filter,
+            accounts: accountsAsync.value ?? const [],
             searchCtrl: _searchCtrl,
-            onChanged: (next) =>
-                ref.read(appLogFilterProvider.notifier).state = next,
+            onChanged: _updateFilter,
           ),
           const Divider(height: 1),
           Expanded(
             child: entriesAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Error: $e')),
               data: (entries) {
                 if (entries.isEmpty) {
@@ -341,8 +328,7 @@ class _AppLogTile extends StatelessWidget {
                       Chip(
                         label: Text(b, style: small),
                         visualDensity: VisualDensity.compact,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                   ],
                 ),

@@ -13,6 +13,7 @@ import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
+import 'package:sharedinbox/ui/screens/app_log_screen.dart';
 import 'package:sharedinbox/ui/screens/bug_report_screen.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
 import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
@@ -25,7 +26,6 @@ import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
-import 'package:sharedinbox/ui/screens/app_log_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
@@ -83,8 +83,7 @@ final router = GoRouter(
                 initialSyncLogId: int.tryParse(
                   state.uri.queryParameters['syncLogId'] ?? '',
                 ),
-                initialAccountId:
-                    state.uri.queryParameters['accountId'],
+                initialAccountId: state.uri.queryParameters['accountId'],
               ),
             ),
             GoRoute(

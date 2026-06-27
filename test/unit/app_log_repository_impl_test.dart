@@ -146,7 +146,11 @@ void main() {
   });
 
   test('watchEntries free-text search matches event and message', () async {
-    await repo.insert(level: AppLogLevel.info, event: 'sync.start', message: 'x');
+    await repo.insert(
+      level: AppLogLevel.info,
+      event: 'sync.start',
+      message: 'x',
+    );
     await repo.insert(
       level: AppLogLevel.info,
       event: 'ui.compose.send',
@@ -197,7 +201,7 @@ void main() {
       event: 'new',
       message: '',
     );
-    await repo.trim(maxAge: const Duration(days: 14));
+    await repo.trim();
     final rows = await db.select(db.appLogs).get();
     expect(rows.map((r) => r.event).toList(), ['new']);
   });

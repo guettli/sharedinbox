@@ -11,7 +11,6 @@ import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
