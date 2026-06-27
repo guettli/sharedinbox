@@ -18,6 +18,8 @@ String injectInlineImages(String html, imap.MimeMessage msg) {
   for (final info in inlineParts) {
     final cid = info.cid;
     if (cid == null || cid.isEmpty) continue;
+    // MimeMessage.getPart() throws on an empty fetchId.
+    if (info.fetchId.isEmpty) continue;
     final bareCid = cid.startsWith('<') && cid.endsWith('>')
         ? cid.substring(1, cid.length - 1)
         : cid;

@@ -3321,6 +3321,44 @@ void main() {
       expect(state['uidValidity'], 456);
     });
   });
+
+  group('IMAP getEmailBody with attachment-disposition top-level part', () {
+    test(
+      'does not crash when ContentInfo.fetchId is empty (issue #182)',
+      () async {
+        // Regression test for #182: a single-part message whose top-level part
+        // is itself marked Content-Disposition: attachment yields a ContentInfo
+        // with an empty fetchId. MimeMessage.getPart('') throws, which used to
+        // bubble up as an InvalidArgumentException from getEmailBody.
+        final r = _makeRepos(
+          imapConnect: (Account _, String __, String ___) async =>
+              _AttachmentBodyImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        final body = await r.emails.getEmailBody('acc-1:1');
+
+        final row = await (r.db.select(r.db.emailBodies)
+              ..where((t) => t.emailId.equals('acc-1:1')))
+            .getSingle();
+        final attachments = (jsonDecode(row.attachmentsJson) as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+        expect(attachments, hasLength(1));
+        expect(attachments.first['filename'], 'document.pdf');
+        expect(attachments.first['fetchPartId'], '');
+        expect(body.emailId, 'acc-1:1');
+      },
+    );
+  });
 }
 
 // ── Additional fake IMAP client for "folder deleted" tests ───────────────────
@@ -3364,6 +3402,42 @@ class _FakeImapClientUidValidity extends FakeImapClient {
     Duration? responseTimeout,
   }) async =>
       imap.SearchImapResult();
+}
+
+// ── Fake IMAP client returning a message whose top-level part is itself an
+//    attachment (Content-Disposition: attachment, no multipart). This triggers
+//    the empty-fetchId path that crashed in issue #182. ───────────────────────
+
+class _AttachmentBodyImapClient extends FakeImapClient {
+  static const String _kRawMime = 'MIME-Version: 1.0\r\n'
+      'Content-Type: application/pdf; name="document.pdf"\r\n'
+      'Content-Disposition: attachment; filename="document.pdf"\r\n'
+      'Content-Transfer-Encoding: base64\r\n'
+      '\r\n'
+      'JVBERi0xLjAKJeLjz9MK\r\n';
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+      );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
+    return imap.FetchImapResult([msg], null);
+  }
 }
 
 // ── SSE test helper ──────────────────────────────────────────────────────────
