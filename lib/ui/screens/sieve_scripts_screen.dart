@@ -77,8 +77,9 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
 
   Future<void> _refreshManageSieveAvailability() async {
     try {
-      final account =
-          await ref.read(accountRepositoryProvider).getAccount(widget.accountId);
+      final account = await ref
+          .read(accountRepositoryProvider)
+          .getAccount(widget.accountId);
       if (account == null || account.type != AccountType.imap) return;
       await ref.read(manageSieveProbeServiceProvider).probe(account);
     } catch (_) {
