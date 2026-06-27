@@ -161,6 +161,14 @@ class AppDrawer extends ConsumerWidget {
                     },
                   ),
                   ListTile(
+                    leading: const Icon(Icons.list_alt),
+                    title: const Text('Application Log'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      unawaited(context.push('/accounts/app-log'));
+                    },
+                  ),
+                  ListTile(
                     leading: const Icon(Icons.update),
                     title: const Text('ChangeLog'),
                     onTap: () {

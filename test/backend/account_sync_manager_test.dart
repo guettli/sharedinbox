@@ -324,7 +324,7 @@ class _FakeEmails implements EmailRepository {
 
 class _FakeLogs implements SyncLogRepository {
   @override
-  Future<void> log({
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -340,7 +340,8 @@ class _FakeLogs implements SyncLogRepository {
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
-  }) async {}
+  }) async =>
+      0;
 
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>

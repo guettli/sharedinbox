@@ -196,8 +196,9 @@ class _CountingEmails implements EmailRepository {
 
 class _FakeSyncLog implements SyncLogRepository {
   final logs = <bool>[];
+  int _nextId = 1;
   @override
-  Future<void> log({
+  Future<int> log({
     required String accountId,
     required bool success,
     String? errorMessage,
@@ -215,6 +216,7 @@ class _FakeSyncLog implements SyncLogRepository {
     String? protocolLog,
   }) async {
     logs.add(success);
+    return _nextId++;
   }
 
   @override
