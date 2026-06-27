@@ -221,6 +221,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
     setState(() => _sending = true);
+    final messenger = ScaffoldMessenger.of(context);
     try {
       final account =
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
@@ -244,18 +245,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           _attachments.map((a) => a.path).toList(),
         ),
       );
-      await ref.read(emailRepositoryProvider).sendEmail(_accountId!, draft);
-      // Delete the draft only after a successful send.
+      // Enqueue rather than send-and-await so a flaky network never blocks the
+      // UI. The outbox is drained on every sync cycle (see AccountSyncManager).
+      await ref.read(emailRepositoryProvider).enqueueSend(_accountId!, draft);
+      // Delete the draft once it has been queued — the queued copy is the
+      // canonical record from here on.
       if (_draftId != null) {
         await _draftRepo.deleteDraft(_draftId!);
       }
-      if (mounted) context.pop();
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('Message queued'),
+          ),
+        );
+        context.pop();
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 5),
-          content: Text('Send failed: $e'),
+          content: Text('Queue failed: $e'),
         ),
       );
     } finally {

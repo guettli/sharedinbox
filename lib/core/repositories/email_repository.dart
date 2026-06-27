@@ -43,7 +43,20 @@ abstract class EmailRepository {
   /// (e.g. Trash) if it was a soft-delete, or null if it was hard-deleted.
   Future<String?> deleteEmail(String emailId);
 
+  /// Sends [draft] synchronously. Throws on network/protocol failure.
+  /// Prefer [enqueueSend] for user-initiated compose actions so the UI does
+  /// not block on connectivity.
   Future<void> sendEmail(String accountId, EmailDraft draft);
+
+  /// Persists [draft] in the offline send queue. Always returns immediately —
+  /// transmission happens on the next sync cycle (see [flushOutbox]).
+  /// Returns the new outbox row id.
+  Future<int> enqueueSend(String accountId, EmailDraft draft);
+
+  /// Drains queued outbox messages for [accountId] via the appropriate
+  /// protocol. Called from [AccountSyncManager] on every sync cycle.
+  /// Returns the number of messages successfully transmitted.
+  Future<int> flushOutbox(String accountId, String password);
 
   /// Downloads [attachment] bytes from the server (or local cache) and returns
   /// the local file-system path.  Subsequent calls for the same attachment

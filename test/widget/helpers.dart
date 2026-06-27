@@ -18,11 +18,13 @@ import 'package:sharedinbox/core/models/discovery_result.dart';
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -215,6 +217,31 @@ class FakeMailboxRepository implements MailboxRepository {
   }
 }
 
+class FakeOutboxRepository implements OutboxRepository {
+  final List<OutboxMessage> messages = [];
+
+  @override
+  Future<int> enqueue(String accountId, EmailDraft draft) async => 0;
+
+  @override
+  Future<int> flush(
+    String accountId,
+    Future<void> Function(OutboxJob job) sender, {
+    DateTime? now,
+  }) async =>
+      0;
+
+  @override
+  Stream<List<OutboxMessage>> observeOutbox(String accountId) =>
+      Stream.value(messages);
+
+  @override
+  Future<void> retry(int id) async {}
+
+  @override
+  Future<void> discard(int id) async {}
+}
+
 class FakeEmailRepository implements EmailRepository {
   final List<Email> _emails;
   final Email? _emailDetail;
@@ -374,6 +401,16 @@ class FakeEmailRepository implements EmailRepository {
     sentEmailAccountId = accountId;
     sentEmailDraft = draft;
   }
+
+  @override
+  Future<int> enqueueSend(String accountId, EmailDraft draft) async {
+    sentEmailAccountId = accountId;
+    sentEmailDraft = draft;
+    return 0;
+  }
+
+  @override
+  Future<int> flushOutbox(String accountId, String password) async => 0;
 
   @override
   Future<String> downloadAttachment(
@@ -674,6 +711,7 @@ List<Override> baseOverrides({
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
       emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      outboxRepositoryProvider.overrideWithValue(FakeOutboxRepository()),
       draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
       accountDiscoveryServiceProvider.overrideWithValue(
         FakeDiscoveryService(discovery ?? UnknownDiscovery()),

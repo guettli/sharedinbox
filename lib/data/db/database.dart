@@ -407,6 +407,42 @@ class AppLogs extends Table {
       .references(SyncLogs, #id, onDelete: KeyAction.setNull)();
 }
 
+/// Offline send queue. One row per message that the user has hit "Send" on
+/// while the network was unreachable (or whose send is otherwise pending).
+/// Drained by [EmailRepository.flushOutbox] on every sync cycle.
+///
+/// The MIME bytes are pre-built at enqueue time so the queued message survives
+/// changes to the [Drafts] / [Accounts] rows. JMAP attachment blobs cannot be
+/// pre-uploaded (they expire and are session-scoped) so for JMAP we store
+/// local file paths in [attachmentsJson] and re-upload at flush time.
+// Added in schema v46.
+@DataClassName('OutboxRow')
+class Outbox extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // Original Drafts.id this message came from; nullable so an outbox row
+  // outlives the draft.
+  IntColumn get draftId => integer().nullable()();
+  // RFC 822 bytes, base64-encoded. Used as the SMTP payload for IMAP accounts
+  // and (after rebuild) as a fallback for the IMAP APPEND of the Sent copy.
+  TextColumn get mimeBase64 => text()();
+  // JSON envelope: {from, to, cc, subject, body} — used both for re-building
+  // the JMAP Email/set payload at flush time and for the Outbox list UI.
+  TextColumn get envelopeJson => text()();
+  // JSON list of local file-system paths of attachments (re-uploaded as JMAP
+  // blobs at flush time). Empty list = no attachments.
+  TextColumn get attachmentsJson => text().withDefault(const Constant('[]'))();
+  DateTimeColumn get createdAt => dateTime()();
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+  TextColumn get lastError => text().nullable()();
+  // When the row becomes eligible for the next attempt. Null = retry now.
+  DateTimeColumn get nextAttemptAt => dateTime().nullable()();
+  // 'pending' (default, retried with backoff) | 'failed' (permanent error,
+  // user must Retry or Discard manually).
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+}
+
 /// App-wide user preferences, stored as a singleton row (id always 1).
 @DataClassName('UserPreferencesRow')
 class UserPreferences extends Table {
@@ -456,6 +492,7 @@ class UserPreferences extends Table {
     InstalledVersions,
     DraftTombstones,
     AppLogs,
+    Outbox,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -927,6 +964,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 45) {
             await m.createTable(appLogs);
             await _createAppLogsIndexes();
+          }
+          if (from < 46) {
+            await m.createTable(outbox);
           }
         },
       );

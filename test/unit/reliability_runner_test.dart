@@ -136,6 +136,10 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<void> sendEmail(String accountId, EmailDraft draft) async {}
   @override
+  Future<int> enqueueSend(String accountId, EmailDraft draft) async => 0;
+  @override
+  Future<int> flushOutbox(String accountId, String password) async => 0;
+  @override
   Future<String> downloadAttachment(String id, EmailAttachment att) async => '';
   @override
   Future<String> fetchRawRfc822(String emailId) async => '';

@@ -140,6 +140,10 @@ class _FakeEmails implements EmailRepository {
   @override
   Future<void> sendEmail(String a, EmailDraft d) async {}
   @override
+  Future<int> enqueueSend(String a, EmailDraft d) async => 0;
+  @override
+  Future<int> flushOutbox(String a, String p) async => 0;
+  @override
   Future<String> downloadAttachment(String id, EmailAttachment att) async => '';
   @override
   Future<String> fetchRawRfc822(String id) async => '';

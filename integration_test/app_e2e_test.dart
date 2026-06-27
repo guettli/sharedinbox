@@ -120,7 +120,8 @@ void main() {
       'STALWART_USER_B',
       'STALWART_PASS_B',
     ];
-    final missing = required.where((k) => Platform.environment[k] == null).toList();
+    final missing =
+        required.where((k) => Platform.environment[k] == null).toList();
     if (missing.isNotEmpty) {
       fail(
         'Missing required environment variables: ${missing.join(', ')}. '
