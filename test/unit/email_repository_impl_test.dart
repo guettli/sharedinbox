@@ -169,6 +169,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   http.Client? httpClient,
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
+  Duration? sendOperationTimeout,
 }) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
@@ -179,6 +180,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     imapConnect: imapConnect ?? _noImapConnect,
     smtpConnect: smtpConnect ?? _noSmtpConnect,
     httpClient: httpClient,
+    sendOperationTimeout: sendOperationTimeout ?? const Duration(seconds: 50),
   );
   return (db: db, accounts: accounts, emails: emails);
 }
@@ -3241,6 +3243,54 @@ void main() {
     });
   });
 
+  group('IMAP send hang protection', () {
+    const draft = EmailDraft(
+      from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+      to: [EmailAddress(name: 'Alice', email: 'alice@example.com')],
+      cc: [],
+      subject: 'Test',
+      body: 'Body',
+    );
+
+    test('sendEmail aborts with TimeoutException when SMTP send hangs',
+        () async {
+      final hangingSmtp = _HangingSmtpClient();
+      final r = _makeRepos(
+        sendOperationTimeout: const Duration(milliseconds: 50),
+        smtpConnect: (Account _, String __, String ___) async => hangingSmtp,
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('acc-1', draft),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(
+        hangingSmtp.quitCalled,
+        isTrue,
+        reason: 'quit must run in finally',
+      );
+    });
+
+    test('sendEmail passes responseTimeout through to IMAP appendMessage',
+        () async {
+      final spy = _AppendCapturingImapClient();
+      final r = _makeRepos(
+        sendOperationTimeout: const Duration(seconds: 7),
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) async => spy,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.sendEmail('acc-1', draft);
+
+      expect(spy.lastAppendTimeout, const Duration(seconds: 7));
+    });
+  });
+
   group('IMAP folder deleted on server', () {
     test(
       'syncEmails prunes local mailbox when SELECT raises NONEXISTENT',
@@ -3404,6 +3454,69 @@ void main() {
       },
     );
   });
+}
+
+// ── Fakes for IMAP send hang protection tests ────────────────────────────────
+
+class _HangingSmtpClient extends imap.SmtpClient {
+  _HangingSmtpClient() : super('fake.host');
+
+  bool quitCalled = false;
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) =>
+      Completer<imap.SmtpResponse>().future;
+
+  @override
+  Future<imap.SmtpResponse> quit() async {
+    quitCalled = true;
+    return imap.SmtpResponse(const []);
+  }
+}
+
+class _NoOpSmtpClient extends imap.SmtpClient {
+  _NoOpSmtpClient() : super('fake.host');
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async =>
+      imap.SmtpResponse(const ['250 OK']);
+
+  @override
+  Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
+}
+
+class _AppendCapturingImapClient extends FakeImapClient {
+  Duration? lastAppendTimeout;
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async => imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+      );
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    lastAppendTimeout = responseTimeout;
+    return imap.GenericImapResult();
+  }
 }
 
 // ── Additional fake IMAP client for "folder deleted" tests ───────────────────
