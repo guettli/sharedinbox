@@ -2771,7 +2771,7 @@ void main() {
                   'type': 'forbiddenFrom',
                   'description':
                       'Envelope mailFrom does not match identity email '
-                      'address.',
+                          'address.',
                 },
               },
             },
