@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 45);
+      expect(db.schemaVersion, 46);
       await db.close();
     });
 
@@ -141,6 +141,7 @@ void main() {
           'sync_health', // v19
           'undo_actions', // v21
           'draft_tombstones', // v43
+          'outbox', // v46
         ]),
       );
 
@@ -699,6 +700,7 @@ void main() {
           'email_notes', // v39
           'installed_versions', // v40
           'draft_tombstones', // v43
+          'outbox', // v46
         ]),
       );
 

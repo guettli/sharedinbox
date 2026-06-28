@@ -478,6 +478,38 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
       ) as _i5.Future<void>);
 
   @override
+  _i5.Future<int> enqueueSend(
+    String? accountId,
+    _i3.EmailDraft? draft,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #enqueueSend,
+          [
+            accountId,
+            draft,
+          ],
+        ),
+        returnValue: _i5.Future<int>.value(0),
+      ) as _i5.Future<int>);
+
+  @override
+  _i5.Future<int> flushOutbox(
+    String? accountId,
+    String? password,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #flushOutbox,
+          [
+            accountId,
+            password,
+          ],
+        ),
+        returnValue: _i5.Future<int>.value(0),
+      ) as _i5.Future<int>);
+
+  @override
   _i5.Future<String> downloadAttachment(
     String? emailId,
     _i3.EmailAttachment? attachment,

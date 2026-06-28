@@ -22,6 +22,7 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/outbox_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
@@ -124,6 +125,11 @@ final router = GoRouter(
               path: ':accountId/sync-log',
               builder: (ctx, state) =>
                   SyncLogScreen(accountId: state.pathParameters['accountId']!),
+            ),
+            GoRoute(
+              path: ':accountId/outbox',
+              builder: (ctx, state) =>
+                  OutboxScreen(accountId: state.pathParameters['accountId']!),
             ),
             GoRoute(
               path: ':accountId/compare/:otherId',

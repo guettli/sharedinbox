@@ -312,6 +312,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           ? null
           : () async {
               try {
+                // Trigger the full per-account sync cycle (flushPendingChanges,
+                // flushOutbox, syncMailboxes, …) so a manual tap also drains
+                // queued offline sends — not just refreshes the current folder.
+                ref.read(syncManagerProvider).syncNow(widget.accountId);
                 await emailRepo.syncEmails(
                   widget.accountId,
                   widget.mailboxPath,
