@@ -45,12 +45,14 @@ class EmailRepositoryImpl implements EmailRepository {
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
     http.Client? httpClient,
     OutboxRepository? outbox,
+    Duration sendOperationTimeout = const Duration(seconds: 50),
   })  : _db = db,
         _imapConnect = imapConnect,
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
         _httpClient = httpClient ?? http.Client(),
-        _outbox = outbox ?? OutboxRepositoryImpl(db);
+        _outbox = outbox ?? OutboxRepositoryImpl(db),
+        _sendOperationTimeout = sendOperationTimeout;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
@@ -59,6 +61,13 @@ class EmailRepositoryImpl implements EmailRepository {
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
   final OutboxRepository _outbox;
+
+  /// Upper bound on each network call inside [_sendEmailImap]. `SmtpClient`
+  /// has no built-in response timeout and `ImapClient.appendMessage` does not
+  /// pick up the client's `defaultResponseTimeout` unless `responseTimeout`
+  /// is passed explicitly — without these guards a stalled server wedges the
+  /// caller indefinitely (surfaced by the nightly chaos monkey at #191).
+  final Duration _sendOperationTimeout;
 
   final _changeCtrl = StreamController<String>.broadcast();
 
@@ -2921,9 +2930,21 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await smtpClient.sendMessage(mimeMessage);
+      await smtpClient.sendMessage(mimeMessage).timeout(
+            _sendOperationTimeout,
+            onTimeout: () => throw TimeoutException(
+              'SMTP sendMessage did not complete',
+              _sendOperationTimeout,
+            ),
+          );
     } finally {
-      await smtpClient.quit();
+      // Quit is a one-liner over the wire — bound it tightly so a wedged
+      // server doesn't keep the caller hanging after the message is sent.
+      try {
+        await smtpClient.quit().timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        // Best-effort: the message is already sent.
+      }
     }
     // Save a copy to the Sent folder via IMAP APPEND.
     // Create the folder first — many servers don't pre-create it.
@@ -2942,6 +2963,7 @@ class EmailRepositoryImpl implements EmailRepository {
         mimeMessage,
         targetMailboxPath: 'Sent',
         flags: [r'\Seen'],
+        responseTimeout: _sendOperationTimeout,
       );
     } finally {
       await imapClient.logout();
