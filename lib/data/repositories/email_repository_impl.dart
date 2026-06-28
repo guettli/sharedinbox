@@ -3033,8 +3033,9 @@ class EmailRepositoryImpl implements EmailRepository {
     if (identityList == null || identityList.isEmpty) {
       throw JmapException('No identities found for JMAP account');
     }
-    final identityId =
-        (identityList.first as Map<String, dynamic>)['id'] as String;
+    final identity = identityList.first as Map<String, dynamic>;
+    final identityId = identity['id'] as String;
+    final identityEmail = identity['email'] as String?;
 
     // Create the email first.
     final createResponses = await jmap.call([
@@ -3099,7 +3100,9 @@ class EmailRepositoryImpl implements EmailRepository {
       throw JmapException(
         'EmailSubmission/set failed: ${err['type']} '
         '${err['description'] ?? ''} '
-        '${err['properties'] ?? ''}',
+        '${err['properties'] ?? ''} '
+        '(envelope mailFrom: ${draft.from.email}, '
+        'identity email: ${identityEmail ?? 'unknown'})',
       );
     }
   }

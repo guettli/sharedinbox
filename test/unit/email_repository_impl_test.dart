@@ -2759,6 +2759,51 @@ void main() {
       );
     });
 
+    test(
+      'forbiddenFrom error includes envelope and identity addresses',
+      () async {
+        final r = _makeRepos(
+          httpClient: mockSend(
+            submissionResult: {
+              'accountId': 'acct1',
+              'notCreated': {
+                'sub1': {
+                  'type': 'forbiddenFrom',
+                  'description':
+                      'Envelope mailFrom does not match identity email '
+                          'address.',
+                },
+              },
+            },
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        const mismatchedDraft = EmailDraft(
+          from: EmailAddress(name: 'Alice', email: 'other@example.com'),
+          to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          cc: [],
+          subject: 'Hello',
+          body: 'World',
+        );
+
+        await expectLater(
+          r.emails.sendEmail('jmap-1', mismatchedDraft),
+          throwsA(
+            isA<JmapException>().having(
+              (e) => e.toString(),
+              'message',
+              allOf(
+                contains('forbiddenFrom'),
+                contains('other@example.com'),
+                contains('alice@example.com'),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
     test('uses Sent mailbox ID when role=sent mailbox exists in DB', () async {
       late Map<String, dynamic> capturedBody;
       final client = MockClient((req) async {
