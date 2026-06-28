@@ -258,6 +258,34 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
   }
 }
 
+/// Surfaces the per-account offline send queue in the drawer. Shows a count
+/// badge when there are queued messages so the user knows they need delivery.
+class _OutboxTile extends ConsumerWidget {
+  const _OutboxTile({required this.accountId});
+
+  final String accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final repo = ref.watch(outboxRepositoryProvider);
+    return StreamBuilder(
+      stream: repo.observeOutbox(accountId),
+      builder: (ctx, snap) {
+        final count = snap.data?.length ?? 0;
+        return ListTile(
+          leading: const Icon(Icons.outbox),
+          title: const Text('Outbox'),
+          trailing: count > 0 ? Badge(label: Text('$count')) : null,
+          onTap: () {
+            Navigator.pop(context);
+            context.go('/accounts/$accountId/outbox');
+          },
+        );
+      },
+    );
+  }
+}
+
 class _FolderList extends ConsumerWidget {
   const _FolderList({required this.accountId, this.activeMailboxPath});
 
@@ -304,6 +332,11 @@ class _FolderList extends ConsumerWidget {
                   },
                 ),
               ),
+            // Local-only "folder" surfacing queued offline sends.
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: _OutboxTile(accountId: accountId),
+            ),
           ],
         );
       },

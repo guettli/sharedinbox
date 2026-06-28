@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
+import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -41,6 +42,7 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
@@ -120,12 +122,17 @@ final draftRepositoryProvider = Provider<DraftRepository>((ref) {
   );
 });
 
+final outboxRepositoryProvider = Provider<OutboxRepository>((ref) {
+  return OutboxRepositoryImpl(ref.watch(dbProvider));
+});
+
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
   return EmailRepositoryImpl(
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
     smtpConnect: ref.watch(smtpConnectProvider),
+    outbox: ref.watch(outboxRepositoryProvider),
   );
 });
 

@@ -396,6 +396,10 @@ class _AccountSync implements _SyncLoop {
       account.id,
       password,
     );
+    // Drain any messages that were queued offline. Failures stay in the queue
+    // and will be retried on the next sync (transient) or surfaced to the user
+    // as failed-state rows (permanent — see PermanentSendException).
+    await _emails.flushOutbox(account.id, password);
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
@@ -687,6 +691,8 @@ class _JmapAccountSync implements _SyncLoop {
       account.id,
       password,
     );
+    // Drain the offline send queue. See _sync() above for rationale.
+    await _emails.flushOutbox(account.id, password);
 
     final mailboxesSynced = await _mailboxes.syncMailboxes(account.id);
 

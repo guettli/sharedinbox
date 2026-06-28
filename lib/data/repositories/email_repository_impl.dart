@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
@@ -26,6 +27,7 @@ import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
+import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 
 typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
   account_model.Account account,
@@ -36,16 +38,19 @@ typedef GetCacheDirFn = Future<Directory> Function();
 
 class EmailRepositoryImpl implements EmailRepository {
   EmailRepositoryImpl(
-    this._db,
+    AppDatabase db,
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     SmtpConnectFn smtpConnect = connectSmtp,
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
     http.Client? httpClient,
-  })  : _imapConnect = imapConnect,
+    OutboxRepository? outbox,
+  })  : _db = db,
+        _imapConnect = imapConnect,
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
-        _httpClient = httpClient ?? http.Client();
+        _httpClient = httpClient ?? http.Client(),
+        _outbox = outbox ?? OutboxRepositoryImpl(db);
 
   final AppDatabase _db;
   final AccountRepository _accounts;
@@ -53,6 +58,7 @@ class EmailRepositoryImpl implements EmailRepository {
   final SmtpConnectFn _smtpConnect;
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
+  final OutboxRepository _outbox;
 
   final _changeCtrl = StreamController<String>.broadcast();
 
@@ -2834,6 +2840,62 @@ class EmailRepositoryImpl implements EmailRepository {
       case account_model.AccountType.jmap:
         await _sendEmailJmap(account, password, draft);
     }
+  }
+
+  @override
+  Future<int> enqueueSend(String accountId, model.EmailDraft draft) {
+    return _outbox.enqueue(accountId, draft);
+  }
+
+  @override
+  Future<int> flushOutbox(String accountId, String password) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    return _outbox.flush(accountId, (job) async {
+      // Re-validate any attachment file paths before touching the network so
+      // an obviously-broken queue entry is failed-out fast.
+      for (final filePath in job.draft.attachmentFilePaths) {
+        if (!await File(filePath).exists()) {
+          throw PermanentSendException(
+            'Attachment file no longer exists: $filePath',
+          );
+        }
+      }
+      try {
+        switch (account.type) {
+          case account_model.AccountType.imap:
+            await _sendEmailImap(account, password, job.draft);
+          case account_model.AccountType.jmap:
+            await _sendEmailJmap(account, password, job.draft);
+        }
+      } on imap.SmtpException catch (e) {
+        // Permanent SMTP rejections come back as 5xx response codes — those
+        // will fail the same way on every retry, so fail the row out.
+        if (_isPermanentSmtpError(e)) {
+          throw PermanentSendException('SMTP rejected: ${e.message}');
+        }
+        rethrow;
+      } on JmapException catch (e) {
+        // EmailSubmission errors that won't recover on retry (invalid
+        // recipient, forbidden identity, missing mailbox).
+        if (_isPermanentJmapError(e)) {
+          throw PermanentSendException('JMAP rejected: ${e.message}');
+        }
+        rethrow;
+      }
+    });
+  }
+
+  bool _isPermanentSmtpError(imap.SmtpException e) {
+    final code = e.response.code ?? 0;
+    return code >= 500 && code < 600;
+  }
+
+  bool _isPermanentJmapError(JmapException e) {
+    final m = e.message.toLowerCase();
+    return m.contains('forbidden') ||
+        m.contains('invalidemail') ||
+        m.contains('noidentity') ||
+        m.contains('cannotsend');
   }
 
   Future<void> _sendEmailImap(
