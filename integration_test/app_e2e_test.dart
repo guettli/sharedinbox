@@ -315,33 +315,41 @@ void main() {
       _log('send done');
 
       // Send is now async via the offline outbox queue (see #184): hitting
-      // Send only enqueues the message. We trigger a sync from INBOX to drain
-      // the queue (SMTP + APPEND to Sent) so the rest of the test can find
-      // both the Sent folder and the message inside it.
+      // Send only enqueues the message. Tapping the INBOX sync icon kicks off
+      // a full per-account sync cycle (flushOutbox + syncMailboxes) so the
+      // SMTP send + IMAP APPEND to Sent + Sent-folder discovery all happen.
       _log('sync from INBOX to drain outbox');
       await tester.tap(find.byIcon(Icons.sync));
-      await tester.pumpAndSettle(const Duration(seconds: 2));
 
       // ── Check Sent folder ──────────────────────────────────────────────────
-      // Use the drawer to switch folders (no back button on Linux desktop).
-      await tester.tap(find.byTooltip('Open folders'));
-      await tester.pumpAndSettle();
-      // The Sent folder is created server-side by the IMAP send. Re-tap sync
-      // until the drawer lists it (timing depends on Stalwart latency).
-      final sentDeadline = DateTime.now().add(const Duration(seconds: 30));
-      while (!tester.any(find.text('Sent'))) {
-        if (DateTime.now().isAfter(sentDeadline)) {
-          throw Exception('Sent folder never appeared in drawer');
-        }
-        // Close drawer, tap sync, reopen drawer.
+      // The Sent folder is created server-side by the IMAP send, then picked
+      // up by the next syncMailboxes pass. Poll the drawer for it (Stalwart
+      // delivery + sync timing is bounded by syncNow).
+      Future<void> openDrawer() async {
+        await tester.tap(find.byTooltip('Open folders'));
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> closeDrawerIfOpen() async {
         if (tester.any(find.byType(Drawer))) {
           Navigator.pop(tester.element(find.byType(Drawer)));
           await tester.pumpAndSettle();
         }
+      }
+
+      final sentDeadline = DateTime.now().add(const Duration(seconds: 90));
+      while (true) {
+        await openDrawer();
+        if (tester.any(find.text('Sent'))) break;
+        if (DateTime.now().isAfter(sentDeadline)) {
+          throw Exception('Sent folder never appeared in drawer');
+        }
+        // Close drawer, kick another full sync cycle, give it ~5 s.
+        await closeDrawerIfOpen();
         await tester.tap(find.byIcon(Icons.sync));
-        await tester.pump(const Duration(seconds: 1));
-        await tester.tap(find.byTooltip('Open folders'));
-        await tester.pumpAndSettle();
+        for (var i = 0; i < 25; i++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
       }
       await tester.tap(find.text('Sent'));
       await tester.pumpAndSettle();
