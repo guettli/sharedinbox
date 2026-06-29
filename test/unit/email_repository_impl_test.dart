@@ -1507,11 +1507,83 @@ void main() {
 
         // Run the deletion-reconciliation pass with a destination snapshot
         // that does NOT contain UID 5 — the row would be wiped without the
+        // in-flight guard. serverMessageCount is non-zero so the empty-mailbox
+        // guard doesn't short-circuit first; this genuinely exercises the
         // in-flight guard.
-        await r.emails
-            .reconcileDeletedImapForTest('acc-1', 'Archive', const []);
+        await r.emails.reconcileDeletedImapForTest(
+          'acc-1',
+          'Archive',
+          const [7],
+          serverMessageCount: 1,
+        );
 
         expect(await r.emails.getEmail(oldId), isNotNull);
+      },
+    );
+
+    test(
+      'reconciliation removes local rows when the server reports the mailbox '
+      'is empty (EXISTS=0)',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // A cached INBOX message whose UID is no longer on the server — e.g.
+        // it was deleted/moved to Trash by another account or client.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        // Server authoritatively reports the mailbox is empty: SEARCH ALL
+        // returned no UIDs AND SELECT reported EXISTS=0.
+        await r.emails.reconcileDeletedImapForTest(
+          'acc-1',
+          'INBOX',
+          const [],
+          serverMessageCount: 0,
+        );
+
+        expect(
+          await r.emails.getEmail('acc-1:INBOX:5'),
+          isNull,
+          reason: 'a remotely-emptied folder must clear locally',
+        );
+      },
+    );
+
+    test(
+      'reconciliation keeps local rows when search returns nothing but the '
+      'server still claims messages exist (suspicious response)',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:5',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        // SEARCH ALL came back empty, but SELECT said EXISTS=3 — an incomplete
+        // or buggy response. The cache must be preserved.
+        await r.emails.reconcileDeletedImapForTest(
+          'acc-1',
+          'INBOX',
+          const [],
+          serverMessageCount: 3,
+        );
+
+        expect(await r.emails.getEmail('acc-1:INBOX:5'), isNotNull);
       },
     );
   });
