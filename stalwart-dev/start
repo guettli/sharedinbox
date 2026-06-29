@@ -69,7 +69,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Run Stalwart in container, mapping the random host ports to the fixed container ports.
 # We mount the config.toml and use /tmp/stalwart for data (mapped to our local TMPDIR).
+#
+# --entrypoint stalwart is required: the image's default entrypoint is an
+# initializer that generates its own config (listening on the standard 143/25
+# ports) and ignores the config/CMD we pass, so IMAP and SMTP would never come
+# up on 1430/1025. Overriding the entrypoint runs the server directly against
+# our config — matching how CI launches it (see ci/main.go WithEntrypoint).
 exec "${RUNTIME}" run --rm -i \
+    --entrypoint stalwart \
     -p "${STALWART_PORT}:8080" \
     -p "${STALWART_IMAP_PORT}:1430" \
     -p "${STALWART_SMTP_PORT}:1025" \
@@ -77,4 +84,4 @@ exec "${RUNTIME}" run --rm -i \
     -v "${REPO_ROOT}/stalwart-dev/config.toml:/etc/stalwart/config.toml:ro" \
     -v "${TMPDIR}:/tmp/stalwart:rw" \
     docker.io/stalwartlabs/stalwart:v0.14.1 \
-    stalwart --config /etc/stalwart/config.toml
+    --config /etc/stalwart/config.toml

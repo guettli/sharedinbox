@@ -578,7 +578,12 @@ class EmailRepositoryImpl implements EmailRepository {
                 .matchingSequence
                 ?.toList() ??
             [];
-        await _reconcileDeletedImap(account.id, mailboxPath, serverUids);
+        await _reconcileDeletedImap(
+          account.id,
+          mailboxPath,
+          serverUids,
+          serverMessageCount: selectedMailbox.messagesExists,
+        );
         final maxUid =
             serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
         await _saveImapCheckpoint(
@@ -787,15 +792,22 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> reconcileDeletedImapForTest(
     String accountId,
     String mailboxPath,
-    List<int> serverUids,
-  ) =>
-      _reconcileDeletedImap(accountId, mailboxPath, serverUids);
+    List<int> serverUids, {
+    int? serverMessageCount,
+  }) =>
+      _reconcileDeletedImap(
+        accountId,
+        mailboxPath,
+        serverUids,
+        serverMessageCount: serverMessageCount,
+      );
 
   Future<void> _reconcileDeletedImap(
     String accountId,
     String mailboxPath,
-    List<int> serverUids,
-  ) async {
+    List<int> serverUids, {
+    int? serverMessageCount,
+  }) async {
     final localRows = await (_db.select(_db.emails)
           ..where(
             (t) =>
@@ -804,13 +816,22 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .get();
 
-    // Guard: if the server returned no UIDs but we have local emails, the
-    // server response is likely incomplete (network glitch, buggy IMAP server).
-    // Skip reconciliation to avoid wiping the local cache unnecessarily.
-    if (serverUids.isEmpty && localRows.isNotEmpty) {
+    // Guard: an empty `UID SEARCH ALL` is ambiguous — it can mean the mailbox
+    // really is empty, or that the response was incomplete (network glitch,
+    // buggy IMAP server). Distinguish the two using the authoritative EXISTS
+    // count from the SELECT response:
+    //   • EXISTS == 0  → the folder genuinely has no messages. Trust it and
+    //     reconcile, so a folder emptied on the server (e.g. the last message
+    //     was deleted/moved to Trash via another account or client) also
+    //     clears locally instead of leaving a phantom row behind.
+    //   • EXISTS  > 0  (or unknown) → the server claims messages exist but the
+    //     search returned none. That's the suspicious case; skip to avoid
+    //     wiping the cache on a bad response.
+    if (serverUids.isEmpty && localRows.isNotEmpty && serverMessageCount != 0) {
       log(
         '_reconcileDeletedImap: skipping — server returned 0 UIDs for '
-        '$mailboxPath but local DB has ${localRows.length} emails',
+        '$mailboxPath but local DB has ${localRows.length} emails '
+        '(EXISTS=${serverMessageCount ?? '?'})',
       );
       return;
     }
