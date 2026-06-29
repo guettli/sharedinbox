@@ -3289,6 +3289,62 @@ void main() {
 
       expect(spy.lastAppendTimeout, const Duration(seconds: 7));
     });
+
+    test('sendEmail aborts with TimeoutException when SMTP connect hangs',
+        () async {
+      final r = _makeRepos(
+        sendOperationTimeout: const Duration(milliseconds: 50),
+        smtpConnect: (Account _, String __, String ___) =>
+            Completer<imap.SmtpClient>().future,
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('acc-1', draft),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
+    test('sendEmail aborts with TimeoutException when IMAP connect hangs',
+        () async {
+      final r = _makeRepos(
+        sendOperationTimeout: const Duration(milliseconds: 50),
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) =>
+            Completer<imap.ImapClient>().future,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('acc-1', draft),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
+    test('sendEmail aborts with TimeoutException when IMAP createMailbox hangs',
+        () async {
+      final hangingMailbox = _HangingCreateMailboxImapClient();
+      final r = _makeRepos(
+        sendOperationTimeout: const Duration(milliseconds: 50),
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) async => hangingMailbox,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await expectLater(
+        r.emails.sendEmail('acc-1', draft),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(
+        hangingMailbox.logoutCalled,
+        isTrue,
+        reason: 'logout must run in finally',
+      );
+    });
   });
 
   group('IMAP folder deleted on server', () {
@@ -3516,6 +3572,19 @@ class _AppendCapturingImapClient extends FakeImapClient {
   }) async {
     lastAppendTimeout = responseTimeout;
     return imap.GenericImapResult();
+  }
+}
+
+class _HangingCreateMailboxImapClient extends FakeImapClient {
+  bool logoutCalled = false;
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) =>
+      Completer<imap.Mailbox>().future;
+
+  @override
+  Future<dynamic> logout() async {
+    logoutCalled = true;
   }
 }
 

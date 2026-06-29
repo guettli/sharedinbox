@@ -66,7 +66,10 @@ class EmailRepositoryImpl implements EmailRepository {
   /// has no built-in response timeout and `ImapClient.appendMessage` does not
   /// pick up the client's `defaultResponseTimeout` unless `responseTimeout`
   /// is passed explicitly — without these guards a stalled server wedges the
-  /// caller indefinitely (surfaced by the nightly chaos monkey at #191).
+  /// caller indefinitely. This covers the SMTP connect/auth, sendMessage,
+  /// the IMAP connect/login, createMailbox, and appendMessage paths so a
+  /// hang anywhere along the send pipeline fails fast instead of running
+  /// out the wall clock (surfaced by the nightly chaos monkey at #191/#193).
   final Duration _sendOperationTimeout;
 
   final _changeCtrl = StreamController<String>.broadcast();
@@ -2928,6 +2931,12 @@ class EmailRepositoryImpl implements EmailRepository {
       account,
       _effectiveUsername(account),
       password,
+    ).timeout(
+      _sendOperationTimeout,
+      onTimeout: () => throw TimeoutException(
+        'SMTP connect/auth did not complete',
+        _sendOperationTimeout,
+      ),
     );
     try {
       await smtpClient.sendMessage(mimeMessage).timeout(
@@ -2952,10 +2961,24 @@ class EmailRepositoryImpl implements EmailRepository {
       account,
       _effectiveUsername(account),
       password,
+    ).timeout(
+      _sendOperationTimeout,
+      onTimeout: () => throw TimeoutException(
+        'IMAP connect/login did not complete',
+        _sendOperationTimeout,
+      ),
     );
     try {
       try {
-        await imapClient.createMailbox('Sent');
+        await imapClient.createMailbox('Sent').timeout(
+              _sendOperationTimeout,
+              onTimeout: () => throw TimeoutException(
+                'IMAP createMailbox(Sent) did not complete',
+                _sendOperationTimeout,
+              ),
+            );
+      } on TimeoutException {
+        rethrow;
       } catch (_) {
         // Already exists — that's fine.
       }
@@ -2966,7 +2989,13 @@ class EmailRepositoryImpl implements EmailRepository {
         responseTimeout: _sendOperationTimeout,
       );
     } finally {
-      await imapClient.logout();
+      // Logout is best-effort — bound it so a wedged server can't strand the
+      // caller after the message is already appended to Sent.
+      try {
+        await imapClient.logout().timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        // Best-effort: the message is already saved to Sent.
+      }
     }
   }
 
