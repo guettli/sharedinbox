@@ -104,6 +104,29 @@ Future<void> _appendToInbox(
   );
 }
 
+/// Delivers a message over SMTP (how real mail arrives) rather than IMAP APPEND.
+/// Stalwart 0.14.x notably does not bump HIGHESTMODSEQ on SMTP delivery, so this
+/// exercises a different server-state path than _appendToInbox.
+Future<void> _smtpDeliver({
+  required String host,
+  required int port,
+  required String user,
+  required String pass,
+  required String subject,
+}) async {
+  final smtp = SmtpClient('sharedinbox-test');
+  await smtp.connectToServer(host, port, isSecure: false);
+  await smtp.ehlo();
+  await smtp.authenticate(user, pass);
+  final builder = MessageBuilder()
+    ..from = [MailAddress('Alice', user)]
+    ..to = [MailAddress('Alice', user)]
+    ..subject = subject
+    ..text = 'Body of $subject';
+  await smtp.sendMessage(builder.buildMimeMessage());
+  await smtp.quit();
+}
+
 void main() {
   late String stalwartUrl;
   late String imapHost;
@@ -208,10 +231,11 @@ void main() {
     );
   }
 
-  // One full sync cycle for an account: flush queued mutations, refresh the
-  // mailbox list, then sync the inbox and trash. Mirrors what
-  // AccountSyncManager does per loop iteration (trimmed to the folders a delete
-  // touches so the test stays fast over fresh IMAP connections).
+  // One full sync cycle for an account, faithfully mirroring what
+  // AccountSyncManager._sync does per loop iteration: flush queued mutations,
+  // refresh the mailbox list, then sync EVERY mailbox's emails in order. Syncing
+  // all folders (not just inbox+trash) matters for JMAP, whose global
+  // Email/changes state is advanced by each per-mailbox sync.
   Future<void> syncAccount(
     AppDatabase db,
     EmailRepositoryImpl emails,
@@ -223,11 +247,7 @@ void main() {
     // syncMailboxes again in case a flush (e.g. move to Trash) created folders.
     await mailboxes.syncMailboxes(accountId);
     final boxes = await (db.select(db.mailboxes)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                (t.role.equals('inbox') | t.role.equals('trash')),
-          ))
+          ..where((t) => t.accountId.equals(accountId)))
         .get();
     for (final box in boxes) {
       await emails.syncEmails(accountId, box.path);
@@ -391,6 +411,264 @@ void main() {
       await countBySubject(w.db, w.imap.id, subject, role: 'inbox'),
       0,
       reason: 'IMAP inbox still shows a message deleted via JMAP',
+    );
+  });
+
+  // The reported real-world case: the mailbox holds several messages and the
+  // one deleted is NOT the last remaining message.
+  test('deleting one of several messages in IMAP propagates to JMAP',
+      timeout: const Timeout(Duration(seconds: 90)), () async {
+    final w = await setUpWorld();
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final subjects = [for (var i = 0; i < 3; i++) 'imap-multi-$stamp-$i'];
+    for (final s in subjects) {
+      await seedInbox(s);
+    }
+
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    for (final s in subjects) {
+      expect(await countBySubject(w.db, w.jmap.id, s, role: 'inbox'), 1);
+    }
+
+    // Delete the MIDDLE message via IMAP.
+    final victim = subjects[1];
+    await w.emails.deleteEmail(await findEmailId(w.db, w.imap.id, victim));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    expect(
+      await countBySubject(w.db, w.jmap.id, victim, role: 'inbox'),
+      0,
+      reason: 'JMAP inbox still shows a message deleted via IMAP',
+    );
+    // The other two must remain.
+    expect(
+      await countBySubject(w.db, w.jmap.id, subjects[0], role: 'inbox'),
+      1,
+    );
+    expect(
+      await countBySubject(w.db, w.jmap.id, subjects[2], role: 'inbox'),
+      1,
+    );
+  });
+
+  test('deleting one of several messages in JMAP propagates to IMAP',
+      timeout: const Timeout(Duration(seconds: 90)), () async {
+    final w = await setUpWorld();
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final subjects = [for (var i = 0; i < 3; i++) 'jmap-multi-$stamp-$i'];
+    for (final s in subjects) {
+      await seedInbox(s);
+    }
+
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    for (final s in subjects) {
+      expect(await countBySubject(w.db, w.imap.id, s, role: 'inbox'), 1);
+    }
+
+    // Delete the MIDDLE message via JMAP.
+    final victim = subjects[1];
+    await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, victim));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+
+    expect(
+      await countBySubject(w.db, w.imap.id, victim, role: 'inbox'),
+      0,
+      reason: 'IMAP inbox still shows a message deleted via JMAP',
+    );
+    expect(
+      await countBySubject(w.db, w.imap.id, subjects[0], role: 'inbox'),
+      1,
+    );
+    expect(
+      await countBySubject(w.db, w.imap.id, subjects[2], role: 'inbox'),
+      1,
+    );
+  });
+
+  // The set of subjects currently in [accountId]'s inbox.
+  Future<Set<String>> inboxSubjects(AppDatabase db, String accountId) async {
+    final box = await (db.select(db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    if (box == null) return {};
+    final rows = await (db.select(db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) & t.mailboxPath.equals(box.path),
+          ))
+        .get();
+    return {for (final r in rows) r.subject ?? ''};
+  }
+
+  // Repeatedly deleting messages from BOTH accounts (interleaved) must keep the
+  // two accounts' inboxes converged — none of the deletes may be lost.
+  test('repeated deletes from both accounts keep the inboxes converged',
+      timeout: const Timeout(Duration(seconds: 120)), () async {
+    final w = await setUpWorld();
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final subjects = [for (var i = 0; i < 5; i++) 'conv-$stamp-$i'];
+    for (final s in subjects) {
+      await seedInbox(s);
+    }
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    final remaining = {...subjects};
+
+    // (deleterId, the subject to delete) — alternate accounts, never the last.
+    final plan = [
+      (w.imap.id, subjects[0]),
+      (w.jmap.id, subjects[4]),
+      (w.imap.id, subjects[2]),
+      (w.jmap.id, subjects[1]),
+    ];
+
+    for (final (deleterId, subject) in plan) {
+      await w.emails.deleteEmail(await findEmailId(w.db, deleterId, subject));
+      // Sync the deleter first (flushes to the server), then the other account.
+      // Sync each TWICE so a deletion that resurrects on a later sync round is
+      // caught.
+      final otherId = deleterId == w.imap.id ? w.jmap.id : w.imap.id;
+      for (var round = 0; round < 2; round++) {
+        await syncAccount(w.db, w.emails, w.mailboxes, deleterId);
+        await syncAccount(w.db, w.emails, w.mailboxes, otherId);
+      }
+
+      remaining.remove(subject);
+      final imapInbox = await inboxSubjects(w.db, w.imap.id);
+      final jmapInbox = await inboxSubjects(w.db, w.jmap.id);
+      expect(
+        imapInbox,
+        equals(remaining),
+        reason: 'IMAP inbox diverged after deleting "$subject" via $deleterId',
+      );
+      expect(
+        jmapInbox,
+        equals(remaining),
+        reason: 'JMAP inbox diverged after deleting "$subject" via $deleterId',
+      );
+    }
+  });
+
+  // Second delete = hard delete: deleting a message that already sits in Trash
+  // expunges it (IMAP) / destroys it (JMAP) rather than moving it. The other
+  // account must observe it leave Trash.
+  test('hard delete (delete from Trash) in IMAP propagates to JMAP',
+      timeout: const Timeout(Duration(seconds: 120)), () async {
+    final w = await setUpWorld();
+    final subject = 'hard-imap-${DateTime.now().millisecondsSinceEpoch}';
+    await seedInbox(subject);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    // First delete: INBOX -> Trash.
+    await w.emails.deleteEmail(await findEmailId(w.db, w.imap.id, subject));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    expect(
+      await countBySubject(w.db, w.imap.id, subject, role: 'trash'),
+      1,
+      reason: 'message should be in IMAP Trash after first delete',
+    );
+    expect(
+      await countBySubject(w.db, w.jmap.id, subject, role: 'trash'),
+      1,
+      reason: 'message should be in JMAP Trash after first delete',
+    );
+
+    // Second delete from Trash: hard delete (expunge).
+    await w.emails.deleteEmail(await findEmailId(w.db, w.imap.id, subject));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    expect(
+      await countBySubject(w.db, w.jmap.id, subject),
+      0,
+      reason: 'JMAP still shows a message hard-deleted via IMAP',
+    );
+  });
+
+  test('hard delete (delete from Trash) in JMAP propagates to IMAP',
+      timeout: const Timeout(Duration(seconds: 120)), () async {
+    final w = await setUpWorld();
+    final subject = 'hard-jmap-${DateTime.now().millisecondsSinceEpoch}';
+    await seedInbox(subject);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, subject));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    expect(await countBySubject(w.db, w.jmap.id, subject, role: 'trash'), 1);
+    expect(await countBySubject(w.db, w.imap.id, subject, role: 'trash'), 1);
+
+    await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, subject));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+
+    expect(
+      await countBySubject(w.db, w.imap.id, subject),
+      0,
+      reason: 'IMAP still shows a message hard-deleted via JMAP',
+    );
+  });
+
+  // Same as the multi-message case, but delivered over SMTP (the real-world
+  // path) instead of IMAP APPEND, to catch any server-state quirk (e.g. the
+  // Stalwart HIGHESTMODSEQ behaviour) that only shows with delivered mail.
+  test('SMTP-delivered: delete one of several in JMAP propagates to IMAP',
+      timeout: const Timeout(Duration(seconds: 120)), () async {
+    final w = await setUpWorld();
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final subjects = [for (var i = 0; i < 3; i++) 'smtp-$stamp-$i'];
+    for (final s in subjects) {
+      await _smtpDeliver(
+        host: smtpHost,
+        port: smtpPort,
+        user: userEmail,
+        pass: userPass,
+        subject: s,
+      );
+    }
+    // Let Stalwart finish delivery.
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    for (final s in subjects) {
+      expect(
+        await countBySubject(w.db, w.imap.id, s, role: 'inbox'),
+        1,
+        reason: 'IMAP should have SMTP-delivered "$s"',
+      );
+    }
+
+    final victim = subjects[1];
+    await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, victim));
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+
+    expect(
+      await countBySubject(w.db, w.imap.id, victim, role: 'inbox'),
+      0,
+      reason: 'IMAP inbox still shows a message deleted via JMAP',
+    );
+    expect(
+      await countBySubject(w.db, w.imap.id, subjects[0], role: 'inbox'),
+      1,
+    );
+    expect(
+      await countBySubject(w.db, w.imap.id, subjects[2], role: 'inbox'),
+      1,
     );
   });
 }
