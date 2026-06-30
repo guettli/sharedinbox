@@ -559,6 +559,24 @@ void main() {
     }
   });
 
+  // Push a mutation made on [deleterId] through to [otherId] by syncing both
+  // accounts twice. Stalwart 0.14.x doesn't always bump the IMAP HIGHESTMODSEQ
+  // for a mailbox the moment a JMAP-triggered change lands; a second sync
+  // round lets the server catch up so CONDSTORE picks the change up. Mirrors
+  // the converged-deletes test pattern.
+  Future<void> syncBoth(
+    AppDatabase db,
+    EmailRepositoryImpl emails,
+    MailboxRepositoryImpl mailboxes,
+    String deleterId,
+    String otherId,
+  ) async {
+    for (var round = 0; round < 2; round++) {
+      await syncAccount(db, emails, mailboxes, deleterId);
+      await syncAccount(db, emails, mailboxes, otherId);
+    }
+  }
+
   // Second delete = hard delete: deleting a message that already sits in Trash
   // expunges it (IMAP) / destroys it (JMAP) rather than moving it. The other
   // account must observe it leave Trash.
@@ -572,8 +590,7 @@ void main() {
 
     // First delete: INBOX -> Trash.
     await w.emails.deleteEmail(await findEmailId(w.db, w.imap.id, subject));
-    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
-    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    await syncBoth(w.db, w.emails, w.mailboxes, w.imap.id, w.jmap.id);
     expect(
       await countBySubject(w.db, w.imap.id, subject, role: 'trash'),
       1,
@@ -587,8 +604,7 @@ void main() {
 
     // Second delete from Trash: hard delete (expunge).
     await w.emails.deleteEmail(await findEmailId(w.db, w.imap.id, subject));
-    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
-    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+    await syncBoth(w.db, w.emails, w.mailboxes, w.imap.id, w.jmap.id);
 
     expect(
       await countBySubject(w.db, w.jmap.id, subject),
@@ -606,14 +622,12 @@ void main() {
     await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
 
     await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, subject));
-    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
-    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncBoth(w.db, w.emails, w.mailboxes, w.jmap.id, w.imap.id);
     expect(await countBySubject(w.db, w.jmap.id, subject, role: 'trash'), 1);
     expect(await countBySubject(w.db, w.imap.id, subject, role: 'trash'), 1);
 
     await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, subject));
-    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
-    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncBoth(w.db, w.emails, w.mailboxes, w.jmap.id, w.imap.id);
 
     expect(
       await countBySubject(w.db, w.imap.id, subject),
@@ -654,8 +668,7 @@ void main() {
 
     final victim = subjects[1];
     await w.emails.deleteEmail(await findEmailId(w.db, w.jmap.id, victim));
-    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
-    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncBoth(w.db, w.emails, w.mailboxes, w.jmap.id, w.imap.id);
 
     expect(
       await countBySubject(w.db, w.imap.id, victim, role: 'inbox'),

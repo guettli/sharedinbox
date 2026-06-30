@@ -254,5 +254,38 @@ void main() {
       expect(result, isEmpty);
       expect(b.apiCalls(), 3, reason: 'call should have retried twice');
     });
+
+    test('call retries on transport errors (Broken pipe) and recovers',
+        () async {
+      var apiCount = 0;
+      final c = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        }
+        apiCount++;
+        if (apiCount < 3) {
+          throw http.ClientException('Broken pipe', req.url);
+        }
+        return http.Response(
+          jsonEncode({'sessionState': 'st1', 'methodResponses': []}),
+          200,
+        );
+      });
+      final client = await JmapClient.connect(
+        httpClient: c,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      final result = await client.call([
+        [
+          'Mailbox/get',
+          {'accountId': _accountId},
+          '0',
+        ],
+      ]);
+      expect(result, isEmpty);
+      expect(apiCount, 3, reason: 'call should have retried twice');
+    });
   });
 }

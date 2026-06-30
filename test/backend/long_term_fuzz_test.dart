@@ -364,10 +364,14 @@ void main() {
     print('  Flushing JMAP mutations to server...');
     await emailRepo.flushPendingChanges(jmapAccount.id, userPass);
 
-    // Sync both sides to pull updates
+    // Sync both sides to pull updates. Stalwart 0.14.x doesn't always bump the
+    // IMAP HIGHESTMODSEQ on the same tick the JMAP mutation lands — sync the
+    // pair twice so CONDSTORE picks up the change on the second pass.
     print('  Syncing after JMAP mutations...');
-    await _syncAllMailboxes(db, imapAccount.id, emailRepo, mailboxRepo);
-    await _syncAllMailboxes(db, jmapAccount.id, emailRepo, mailboxRepo);
+    for (var round = 0; round < 2; round++) {
+      await _syncAllMailboxes(db, jmapAccount.id, emailRepo, mailboxRepo);
+      await _syncAllMailboxes(db, imapAccount.id, emailRepo, mailboxRepo);
+    }
 
     // Compare
     result =

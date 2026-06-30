@@ -257,21 +257,35 @@ class JmapClient {
     throw JmapException('Session has no usable accountId');
   }
 
-  // Retries a JMAP request when the server returns 429 (Too Many Requests).
-  // Honours the Retry-After header when present, otherwise backs off
-  // exponentially starting at 200 ms (max ~12 s total across 6 retries).
+  // Retries a JMAP request when the server returns 429 (Too Many Requests) OR
+  // when the connection drops mid-request (Broken pipe, Connection reset,
+  // SocketException — all surfaced as http.ClientException). Stalwart under
+  // heavy test load produces both: it returns 429 from one request and
+  // silently closes a kept-alive socket on the next.
+  //
+  // Honours the Retry-After header on 429; otherwise backs off exponentially
+  // starting at 200 ms (max ~12 s total across 6 retries).
   static Future<http.Response> _retryOn429(
     Future<http.Response> Function() send, {
     int maxAttempts = 6,
   }) async {
     var attempt = 0;
     while (true) {
-      final resp = await send();
-      if (resp.statusCode != 429 || attempt >= maxAttempts) {
-        return resp;
+      http.Response? resp;
+      http.ClientException? transportError;
+      Duration? retryAfter;
+      try {
+        resp = await send();
+        if (resp.statusCode != 429) return resp;
+        retryAfter = _parseRetryAfter(resp.headers['retry-after']);
+      } on http.ClientException catch (e) {
+        transportError = e;
+      }
+      if (attempt >= maxAttempts) {
+        if (transportError != null) throw transportError;
+        return resp!;
       }
       attempt++;
-      final retryAfter = _parseRetryAfter(resp.headers['retry-after']);
       final backoff =
           retryAfter ?? Duration(milliseconds: 200 * (1 << (attempt - 1)));
       await Future<void>.delayed(backoff);
