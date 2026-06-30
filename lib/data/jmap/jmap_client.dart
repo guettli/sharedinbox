@@ -64,21 +64,14 @@ class JmapClient {
     required String password,
   }) async {
     final credentials = base64.encode(utf8.encode('$username:$password'));
-    http.Response resp;
-    var attempt = 0;
-    while (true) {
-      resp = await httpClient.get(
+    final resp = await _retryOn429(
+      () => httpClient.get(
         jmapUrl,
         headers: {
           'Authorization': 'Basic $credentials',
         },
-      ).timeout(const Duration(seconds: 10));
-      if (resp.statusCode != 429 || attempt >= 4) {
-        break;
-      }
-      attempt++;
-      await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
-    }
+      ).timeout(const Duration(seconds: 10)),
+    );
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
       throw JmapException('Authentication failed (HTTP ${resp.statusCode})');
@@ -136,16 +129,18 @@ class JmapClient {
     ];
     final body = jsonEncode({'using': using, 'methodCalls': methodCalls});
 
-    final resp = await _httpClient
-        .post(
-          _apiUrl,
-          headers: {
-            'Authorization': 'Basic $_credentials',
-            'Content-Type': 'application/json',
-          },
-          body: body,
-        )
-        .timeout(const Duration(seconds: 10));
+    final resp = await _retryOn429(
+      () => _httpClient
+          .post(
+            _apiUrl,
+            headers: {
+              'Authorization': 'Basic $_credentials',
+              'Content-Type': 'application/json',
+            },
+            body: body,
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
 
     final log = Zone.current[verboseLogKey] as StringBuffer?;
     if (log != null) {
@@ -181,16 +176,18 @@ class JmapClient {
     final url = Uri.parse(
       _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)),
     );
-    final resp = await _httpClient
-        .post(
-          url,
-          headers: {
-            'Authorization': 'Basic $_credentials',
-            'Content-Type': contentType,
-          },
-          body: data,
-        )
-        .timeout(const Duration(seconds: 10));
+    final resp = await _retryOn429(
+      () => _httpClient
+          .post(
+            url,
+            headers: {
+              'Authorization': 'Basic $_credentials',
+              'Content-Type': contentType,
+            },
+            body: data,
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw JmapException('Blob upload failed (HTTP ${resp.statusCode})');
     }
@@ -218,12 +215,14 @@ class JmapClient {
           .replaceAll('{name}', Uri.encodeComponent(name))
           .replaceAll('{type}', Uri.encodeComponent(type)),
     );
-    final resp = await _httpClient.get(
-      url,
-      headers: {
-        'Authorization': 'Basic $_credentials',
-      },
-    ).timeout(const Duration(seconds: 30));
+    final resp = await _retryOn429(
+      () => _httpClient.get(
+        url,
+        headers: {
+          'Authorization': 'Basic $_credentials',
+        },
+      ).timeout(const Duration(seconds: 30)),
+    );
     if (resp.statusCode != 200) {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
     }
@@ -256,6 +255,37 @@ class JmapClient {
       return accounts.keys.first;
     }
     throw JmapException('Session has no usable accountId');
+  }
+
+  // Retries a JMAP request when the server returns 429 (Too Many Requests).
+  // Honours the Retry-After header when present, otherwise backs off
+  // exponentially starting at 200 ms (max ~12 s total across 6 retries).
+  static Future<http.Response> _retryOn429(
+    Future<http.Response> Function() send, {
+    int maxAttempts = 6,
+  }) async {
+    var attempt = 0;
+    while (true) {
+      final resp = await send();
+      if (resp.statusCode != 429 || attempt >= maxAttempts) {
+        return resp;
+      }
+      attempt++;
+      final retryAfter = _parseRetryAfter(resp.headers['retry-after']);
+      final backoff =
+          retryAfter ?? Duration(milliseconds: 200 * (1 << (attempt - 1)));
+      await Future<void>.delayed(backoff);
+    }
+  }
+
+  // Parses a Retry-After header (RFC 9110 §10.2.3). Supports the delta-seconds
+  // form; HTTP-date form is treated as unparseable (we fall back to backoff).
+  static Duration? _parseRetryAfter(String? header) {
+    if (header == null) return null;
+    final seconds = int.tryParse(header.trim());
+    if (seconds == null || seconds < 0) return null;
+    // Cap to keep a misbehaving server from hanging the sync loop.
+    return Duration(seconds: seconds.clamp(0, 10));
   }
 }
 

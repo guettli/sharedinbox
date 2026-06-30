@@ -191,4 +191,68 @@ void main() {
       );
     });
   });
+
+  group('429 retry', () {
+    // Counts session GETs and API POSTs so the test can assert the retry
+    // actually re-issued the request the expected number of times before
+    // either succeeding or surfacing the 429 to the caller.
+    ({http.Client client, int Function() sessions, int Function() apiCalls})
+        bucketedClient({required int sessionTries, required int apiTries}) {
+      var sessionCount = 0;
+      var apiCount = 0;
+      final c = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          sessionCount++;
+          if (sessionCount < sessionTries) {
+            return http.Response('', 429);
+          }
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        }
+        apiCount++;
+        if (apiCount < apiTries) {
+          return http.Response('', 429);
+        }
+        return http.Response(
+          jsonEncode({'sessionState': 'st1', 'methodResponses': []}),
+          200,
+        );
+      });
+      return (
+        client: c,
+        sessions: () => sessionCount,
+        apiCalls: () => apiCount,
+      );
+    }
+
+    test('connect retries on 429 and recovers', () async {
+      final b = bucketedClient(sessionTries: 3, apiTries: 1);
+      final client = await JmapClient.connect(
+        httpClient: b.client,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      expect(client.accountId, _accountId);
+      expect(b.sessions(), 3, reason: 'connect should have retried twice');
+    });
+
+    test('call retries on 429 and recovers', () async {
+      final b = bucketedClient(sessionTries: 1, apiTries: 3);
+      final client = await JmapClient.connect(
+        httpClient: b.client,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      final result = await client.call([
+        [
+          'Mailbox/get',
+          {'accountId': _accountId},
+          '0',
+        ],
+      ]);
+      expect(result, isEmpty);
+      expect(b.apiCalls(), 3, reason: 'call should have retried twice');
+    });
+  });
 }
