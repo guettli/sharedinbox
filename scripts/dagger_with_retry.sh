@@ -30,6 +30,14 @@ for attempt in 1 2 3; do
         echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
         continue
     fi
+    # Dagger module bootstrap sometimes fails resolving an inner blob
+    # ("failed to check for inner env file in <path>: <session-id>: not
+    # found") when the engine's cache/session state is stale — a fresh
+    # invocation re-resolves it. Retry same as a network blip.
+    if [ "$attempt" -lt 3 ] && grep -q "failed to check for inner env file" "$out"; then
+        echo "$(_ts) dagger: module bootstrap error on attempt $attempt/3, retrying..." >&2
+        continue
+    fi
     cat "$out"
     exit "$rc"
 done

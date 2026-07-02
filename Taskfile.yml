@@ -240,6 +240,14 @@ tasks:
     cmds:
       - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
 
+  verify-play-store-deploy:
+    desc: Verify the Play Store alpha track shipped a fresh versionCode via Dagger
+    preconditions:
+      - sh: test -n "$PLAY_STORE_CONFIG_JSON"
+        msg: "PLAY_STORE_CONFIG_JSON is not set"
+    cmds:
+      - scripts/dagger_with_retry.sh timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. verify-play-store-deploy --play-store-config env:PLAY_STORE_CONFIG_JSON
+
   smoke-test-release:
     desc: Boot the release APK on a KVM-accelerated emulator (Dagger) and fail on launch crash
     preconditions:

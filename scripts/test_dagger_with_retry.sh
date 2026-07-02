@@ -103,6 +103,36 @@ else
     _fail "recovery: should exit 0 after retry succeeds" "$(cat "$out")"
 fi
 
+# --- Module bootstrap "inner env file: not found" retries and recovers -------
+# Dagger occasionally fails module load with a blob-not-found reference:
+#   "load user defaults: failed to check for inner env file in <path>:
+#    <session-id>: not found"
+# Re-invoking clears it, so treat it like a network blip (see #207).
+echo 0 >"$attempts"
+cat >"$fakebin/cmd" <<EOF
+#!/usr/bin/env bash
+n=\$(cat $attempts); n=\$((n + 1)); echo \$n >$attempts
+if [ "\$n" -lt 2 ]; then
+    echo "Error: query module objects: loading modules: loading extra module \"ci\": resolving module source \"ci\": load user defaults: failed to check for inner env file in /src/ci: dy0t62zt68srtw6tglzpgdf8a: not found"
+    exit 1
+fi
+echo "OK: version verified on alpha track"
+exit 0
+EOF
+chmod +x "$fakebin/cmd"
+
+if "$RETRY" "$fakebin/cmd" >"$out" 2>&1; then
+    if grep -q "OK: version verified" "$out"; then
+        _fail "bootstrap: success output should not leak" "$(cat "$out")"
+    elif ! grep -q "module bootstrap error on attempt 1/3" "$out"; then
+        _fail "bootstrap: retry notice should appear on stderr" "$(cat "$out")"
+    else
+        _pass
+    fi
+else
+    _fail "bootstrap: should exit 0 after retry succeeds" "$(cat "$out")"
+fi
+
 export PATH="$PATH_SAVED"
 rm -rf "$fakebin" "$attempts"
 
