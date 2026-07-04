@@ -75,10 +75,43 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts
-_t0=$SECONDS
-timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-_elapsed=$(( SECONDS - _t0 ))
+# Add remote host to known_hosts. This is a network op that occasionally fails
+# transiently (DNS blip, brief unreachability); retry before failing the job.
+# Capture stderr into a variable so a repeat failure is diagnosable — previously
+# stderr went to /dev/null, which made an outage look like an unexplained exit
+# with no clue as to where the script stopped (see #211).
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-10}"
+keyscan_rc=0
+keyscan_err=""
+_elapsed=0
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    _t0=$SECONDS
+    keyscan_rc=0
+    # `2>&1 >>file` sends stderr to the $() capture and stdout (the keys) to
+    # known_hosts. Order matters: swapping the redirections would send stderr
+    # into the file instead.
+    keyscan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || keyscan_rc=$?
+    _elapsed=$(( SECONDS - _t0 ))
+    if [ "$keyscan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (exit=${keyscan_rc}, elapsed=${_elapsed}s); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
+if [ "$keyscan_rc" -ne 0 ]; then
+    echo "::error::ssh-keyscan failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (exit=${keyscan_rc}, elapsed=${_elapsed}s)"
+    if [ -n "$keyscan_err" ]; then
+        printf '%s\n' "$keyscan_err" | tail -8
+    else
+        echo "(no output captured from ssh-keyscan)"
+    fi
+    exit 1
+fi
 if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
