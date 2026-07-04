@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Tests for the Dagger verify block in scripts/setup_dagger_remote.sh.
-# The verify call wraps `dagger core --help` in a retry-on-timeout loop and
-# distinguishes a transient engine timeout (exit 124) from a genuine CLI/engine
-# version mismatch. These tests pin both behaviors. See issues #103 and #105.
+# Tests for the retry blocks in scripts/setup_dagger_remote.sh.
+# Two independent blocks retry on transient failure:
+#   - ssh-keyscan (populate known_hosts) — see issue #213.
+#   - `dagger core --help` verify — see issues #103 and #105.
+# These tests pin the retry, diagnostic, and error-wording behavior for both.
 #
 # Run directly: bash scripts/test_setup_dagger_remote.sh
 set -uo pipefail
@@ -27,6 +28,19 @@ _fail() {
 _verify_snippet=$(awk '/^# Verify the connection/,0' "$SCRIPT")
 if [ -z "$_verify_snippet" ]; then
     echo "FAIL: could not locate verify block in $SCRIPT"
+    exit 1
+fi
+
+# The ssh-keyscan block starts at `# Add remote host to known_hosts` and ends
+# just before the `# Create a background SSH tunnel` comment. We extract only
+# that region so the tunnel setup below doesn't try to contact a real host.
+_keyscan_snippet=$(awk '
+    /^# Add remote host to known_hosts/ {inside=1}
+    /^# Create a background SSH tunnel/ {inside=0}
+    inside
+' "$SCRIPT")
+if [ -z "$_keyscan_snippet" ]; then
+    echo "FAIL: could not locate ssh-keyscan block in $SCRIPT"
     exit 1
 fi
 
@@ -174,6 +188,103 @@ elif printf '%s' "$out" | grep -q "::warning::"; then
     _fail "success: should not print ::warning:: lines" "$out"
 elif ! printf '%s' "$out" | grep -q "Dagger connection verified successfully"; then
     _fail "success: should print the verified confirmation line" "$out"
+else
+    _pass
+fi
+
+# ---------- ssh-keyscan retry block ---------------------------------------------
+
+# Stub `ssh-keyscan` so we can drive its exit code and stderr from the tests.
+# Each call increments $SCRATCH/keyscan_attempts. Behavior is controlled via:
+#   KEYSCAN_RC              — exit code to return
+#   KEYSCAN_STDERR          — text to emit on stderr
+#   KEYSCAN_STDOUT          — text to emit on stdout (would be the host keys)
+#   KEYSCAN_SUCCEED_ON      — attempt number on which to flip to rc=0 (optional)
+cat >"$SCRATCH/ssh-keyscan" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$SCRATCH/keyscan_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/keyscan_attempts"
+[ -n "\${KEYSCAN_STDOUT:-}" ] && printf '%s\n' "\$KEYSCAN_STDOUT"
+[ -n "\${KEYSCAN_STDERR:-}" ] && printf '%s\n' "\$KEYSCAN_STDERR" >&2
+if [ -n "\${KEYSCAN_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$KEYSCAN_SUCCEED_ON" ]; then
+    exit 0
+fi
+exit "\${KEYSCAN_RC:-0}"
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+
+# Sandbox HOME so `>>~/.ssh/known_hosts` writes to the scratch dir.
+KEYSCAN_HOME="$SCRATCH/keyscan_home"
+
+run_keyscan() {
+    echo 0 >"$SCRATCH/keyscan_attempts"
+    rm -rf "$KEYSCAN_HOME"
+    mkdir -p "$KEYSCAN_HOME/.ssh"
+    PATH="$SCRATCH:$PATH" \
+        HOME="$KEYSCAN_HOME" \
+        DAGGER_ENGINE_HOST="engine.example" \
+        DAGGER_KEYSCAN_MAX_ATTEMPTS=3 \
+        DAGGER_KEYSCAN_TIMEOUT_S=30 \
+        DAGGER_KEYSCAN_RETRY_WAIT_S=0 \
+        bash -c "$_keyscan_snippet" 2>&1
+}
+
+# --- Success on first attempt: no warnings, known_hosts populated --------------
+out=$(KEYSCAN_RC=0 KEYSCAN_STDOUT="engine.example ssh-rsa AAAA..." run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan success: should exit 0" "$out"
+elif [ "$attempts" -ne 1 ]; then
+    _fail "keyscan success: should not retry (got $attempts attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::warning::"; then
+    _fail "keyscan success: should not warn" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan success: should not print errors" "$out"
+elif ! grep -q "engine.example" "$KEYSCAN_HOME/.ssh/known_hosts"; then
+    _fail "keyscan success: known_hosts should contain the host key" "$out"
+else
+    _pass
+fi
+
+# --- Transient failure recovers on attempt 2: warns once, then succeeds --------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="no route to host" KEYSCAN_STDOUT="engine.example ssh-rsa AAAA..." KEYSCAN_SUCCEED_ON=2 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan transient: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "keyscan transient: expected 2 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 1/3 failed"; then
+    _fail "keyscan transient: should warn about the first attempt" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan transient: should not print errors after recovery" "$out"
+else
+    _pass
+fi
+
+# --- Persistent failure exhausts retries, surfaces stderr in diagnostics -------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="getaddrinfo engine.example: Name or service not known" run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "keyscan failure: should exit non-zero" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "keyscan failure: should exhaust 3 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "failed after 3 attempts"; then
+    _fail "keyscan failure: should surface attempt count in the error" "$out"
+elif ! printf '%s' "$out" | grep -q "getaddrinfo"; then
+    _fail "keyscan failure: should surface captured stderr in diagnostics" "$out"
+else
+    _pass
+fi
+
+# --- Silent persistent failure (no stderr) still reports diagnostics -----------
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="" run_keyscan)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    _fail "keyscan silent: should exit non-zero" "$out"
+elif ! printf '%s' "$out" | grep -q "no output captured"; then
+    _fail "keyscan silent: should note the missing stderr" "$out"
 else
     _pass
 fi
