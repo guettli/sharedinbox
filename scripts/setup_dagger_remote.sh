@@ -75,48 +75,28 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts. Retry on transient failures: ssh-keyscan
-# exits 1 when it fetched no keys (unreachable / connection reset) and 124
-# when timeout fired. Both can be one-off blips on the way to the engine
-# host, and without a retry a single flake fails the whole workflow — see
-# issue #213 / run 28704858668 where a 5s ssh-keyscan failure silently
-# aborted the job because stderr was previously dropped to /dev/null. Real
-# host misconfiguration will still exhaust the retries and fail loudly with
-# the captured stderr surfaced in the diagnostics block.
-KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
-KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
-KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-10}"
+# Prime known_hosts for the Dagger engine host. Best-effort: the tunnel below
+# uses `-o StrictHostKeyChecking=no`, so a scan failure does not block the
+# tunnel from coming up. Treat it as non-fatal — capture stderr and surface
+# it as a warning instead of letting `set -e` exit opaquely (issue #213 /
+# run 28704858668: a 5s ssh-keyscan failure aborted the job with zero
+# diagnostics because stderr was previously dropped to /dev/null). If the
+# host is genuinely unreachable the tunnel step below fails with its own
+# visible error a few lines later.
+_t0=$SECONDS
 keyscan_rc=0
-keyscan_err=""
-for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
-    _t0=$SECONDS
-    keyscan_rc=0
-    # Swap fds so stdout appends to known_hosts and stderr is captured for
-    # the diagnostics block below. `|| keyscan_rc=$?` shields the loop from
-    # `set -e` on non-zero exits.
-    keyscan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 1>>~/.ssh/known_hosts) || keyscan_rc=$?
-    _elapsed=$(( SECONDS - _t0 ))
-    if [ "$keyscan_rc" -eq 0 ]; then
-        break
-    fi
-    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
-        break
-    fi
-    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (rc=${keyscan_rc} after ${_elapsed}s); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
-    sleep "$KEYSCAN_RETRY_WAIT_S"
-done
+# Swap fds so stdout appends to known_hosts and stderr is captured for the
+# warning block below. `|| keyscan_rc=$?` shields this from `set -e`.
+keyscan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 1>>~/.ssh/known_hosts) || keyscan_rc=$?
+_elapsed=$(( SECONDS - _t0 ))
 if [ "$keyscan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan for the Dagger engine host failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (last rc=${keyscan_rc})."
-    echo "::error::The SSH tunnel setup below cannot proceed until the host is reachable on port 22."
-    echo "--- diagnostics ---"
+    echo "::warning::ssh-keyscan for the Dagger engine host failed after ${_elapsed}s (rc=${keyscan_rc}); relying on StrictHostKeyChecking=no for the tunnel."
     if [ -n "$keyscan_err" ]; then
-        printf '%s\n' "$keyscan_err" | tail -8
+        printf '%s\n' "$keyscan_err" | sed 's/^/::warning::  /'
     else
-        echo "(no output captured from ssh-keyscan)"
+        echo "::warning::  (no output captured from ssh-keyscan)"
     fi
-    exit 1
-fi
-if [ "$_elapsed" -gt 10 ]; then
+elif [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
 

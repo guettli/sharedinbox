@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Tests for the retry blocks in scripts/setup_dagger_remote.sh.
-# Two independent blocks retry on transient failure:
-#   - ssh-keyscan (populate known_hosts) — see issue #213.
-#   - `dagger core --help` verify — see issues #103 and #105.
-# These tests pin the retry, diagnostic, and error-wording behavior for both.
+# Tests for the fault-handling blocks in scripts/setup_dagger_remote.sh:
+#   - ssh-keyscan (populate known_hosts) — non-fatal by design because the
+#     tunnel below sets StrictHostKeyChecking=no; see issue #213.
+#   - `dagger core --help` verify — retry on transient engine timeout; see
+#     issues #103 and #105.
+# These tests pin the diagnostic and error-wording behavior for both.
 #
 # Run directly: bash scripts/test_setup_dagger_remote.sh
 set -uo pipefail
@@ -31,11 +32,11 @@ if [ -z "$_verify_snippet" ]; then
     exit 1
 fi
 
-# The ssh-keyscan block starts at `# Add remote host to known_hosts` and ends
-# just before the `# Create a background SSH tunnel` comment. We extract only
-# that region so the tunnel setup below doesn't try to contact a real host.
+# The ssh-keyscan block starts at `# Prime known_hosts` and ends just before
+# the `# Create a background SSH tunnel` comment. We extract only that region
+# so the tunnel setup below doesn't try to contact a real host.
 _keyscan_snippet=$(awk '
-    /^# Add remote host to known_hosts/ {inside=1}
+    /^# Prime known_hosts/ {inside=1}
     /^# Create a background SSH tunnel/ {inside=0}
     inside
 ' "$SCRIPT")
@@ -192,23 +193,19 @@ else
     _pass
 fi
 
-# ---------- ssh-keyscan retry block ---------------------------------------------
+# ---------- ssh-keyscan non-fatal block -----------------------------------------
 
 # Stub `ssh-keyscan` so we can drive its exit code and stderr from the tests.
-# Each call increments $SCRATCH/keyscan_attempts. Behavior is controlled via:
-#   KEYSCAN_RC              — exit code to return
-#   KEYSCAN_STDERR          — text to emit on stderr
-#   KEYSCAN_STDOUT          — text to emit on stdout (would be the host keys)
-#   KEYSCAN_SUCCEED_ON      — attempt number on which to flip to rc=0 (optional)
-cat >"$SCRATCH/ssh-keyscan" <<EOF
+# The block under test is non-fatal by design (the tunnel below sets
+# StrictHostKeyChecking=no), so we never retry — we only vary rc/stderr.
+#   KEYSCAN_RC     — exit code to return
+#   KEYSCAN_STDERR — text to emit on stderr
+#   KEYSCAN_STDOUT — text to emit on stdout (would be the host keys)
+cat >"$SCRATCH/ssh-keyscan" <<'EOF'
 #!/usr/bin/env bash
-n=\$(cat "$SCRATCH/keyscan_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/keyscan_attempts"
-[ -n "\${KEYSCAN_STDOUT:-}" ] && printf '%s\n' "\$KEYSCAN_STDOUT"
-[ -n "\${KEYSCAN_STDERR:-}" ] && printf '%s\n' "\$KEYSCAN_STDERR" >&2
-if [ -n "\${KEYSCAN_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$KEYSCAN_SUCCEED_ON" ]; then
-    exit 0
-fi
-exit "\${KEYSCAN_RC:-0}"
+[ -n "${KEYSCAN_STDOUT:-}" ] && printf '%s\n' "$KEYSCAN_STDOUT"
+[ -n "${KEYSCAN_STDERR:-}" ] && printf '%s\n' "$KEYSCAN_STDERR" >&2
+exit "${KEYSCAN_RC:-0}"
 EOF
 chmod +x "$SCRATCH/ssh-keyscan"
 
@@ -216,26 +213,19 @@ chmod +x "$SCRATCH/ssh-keyscan"
 KEYSCAN_HOME="$SCRATCH/keyscan_home"
 
 run_keyscan() {
-    echo 0 >"$SCRATCH/keyscan_attempts"
     rm -rf "$KEYSCAN_HOME"
     mkdir -p "$KEYSCAN_HOME/.ssh"
     PATH="$SCRATCH:$PATH" \
         HOME="$KEYSCAN_HOME" \
         DAGGER_ENGINE_HOST="engine.example" \
-        DAGGER_KEYSCAN_MAX_ATTEMPTS=3 \
-        DAGGER_KEYSCAN_TIMEOUT_S=30 \
-        DAGGER_KEYSCAN_RETRY_WAIT_S=0 \
-        bash -c "$_keyscan_snippet" 2>&1
+        bash -c "set -euo pipefail; $_keyscan_snippet" 2>&1
 }
 
-# --- Success on first attempt: no warnings, known_hosts populated --------------
+# --- Success: no warnings, known_hosts populated -------------------------------
 out=$(KEYSCAN_RC=0 KEYSCAN_STDOUT="engine.example ssh-rsa AAAA..." run_keyscan)
 rc=$?
-attempts=$(cat "$SCRATCH/keyscan_attempts")
 if [ "$rc" -ne 0 ]; then
     _fail "keyscan success: should exit 0" "$out"
-elif [ "$attempts" -ne 1 ]; then
-    _fail "keyscan success: should not retry (got $attempts attempts)" "$out"
 elif printf '%s' "$out" | grep -q "::warning::"; then
     _fail "keyscan success: should not warn" "$out"
 elif printf '%s' "$out" | grep -q "::error::"; then
@@ -246,45 +236,32 @@ else
     _pass
 fi
 
-# --- Transient failure recovers on attempt 2: warns once, then succeeds --------
-out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="no route to host" KEYSCAN_STDOUT="engine.example ssh-rsa AAAA..." KEYSCAN_SUCCEED_ON=2 run_keyscan)
-rc=$?
-attempts=$(cat "$SCRATCH/keyscan_attempts")
-if [ "$rc" -ne 0 ]; then
-    _fail "keyscan transient: should exit 0 after retry succeeds" "$out"
-elif [ "$attempts" -ne 2 ]; then
-    _fail "keyscan transient: expected 2 attempts (got $attempts)" "$out"
-elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 1/3 failed"; then
-    _fail "keyscan transient: should warn about the first attempt" "$out"
-elif printf '%s' "$out" | grep -q "::error::"; then
-    _fail "keyscan transient: should not print errors after recovery" "$out"
-else
-    _pass
-fi
-
-# --- Persistent failure exhausts retries, surfaces stderr in diagnostics -------
+# --- Failure with stderr: non-fatal, stderr surfaced as warning ----------------
 out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="getaddrinfo engine.example: Name or service not known" run_keyscan)
 rc=$?
-attempts=$(cat "$SCRATCH/keyscan_attempts")
-if [ "$rc" -eq 0 ]; then
-    _fail "keyscan failure: should exit non-zero" "$out"
-elif [ "$attempts" -ne 3 ]; then
-    _fail "keyscan failure: should exhaust 3 attempts (got $attempts)" "$out"
-elif ! printf '%s' "$out" | grep -q "failed after 3 attempts"; then
-    _fail "keyscan failure: should surface attempt count in the error" "$out"
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan failure: should NOT abort the script (tunnel uses StrictHostKeyChecking=no)" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan for the Dagger engine host failed"; then
+    _fail "keyscan failure: should print the failure warning" "$out"
+elif ! printf '%s' "$out" | grep -q "StrictHostKeyChecking=no"; then
+    _fail "keyscan failure: warning should mention the tunnel fallback" "$out"
 elif ! printf '%s' "$out" | grep -q "getaddrinfo"; then
-    _fail "keyscan failure: should surface captured stderr in diagnostics" "$out"
+    _fail "keyscan failure: should surface captured stderr" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan failure: should not emit ::error:: lines" "$out"
 else
     _pass
 fi
 
-# --- Silent persistent failure (no stderr) still reports diagnostics -----------
+# --- Silent failure (no stderr): non-fatal, notes the missing stderr -----------
 out=$(KEYSCAN_RC=1 KEYSCAN_STDERR="" run_keyscan)
 rc=$?
-if [ "$rc" -eq 0 ]; then
-    _fail "keyscan silent: should exit non-zero" "$out"
-elif ! printf '%s' "$out" | grep -q "no output captured"; then
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan silent: should NOT abort the script" "$out"
+elif ! printf '%s' "$out" | grep -q "no output captured from ssh-keyscan"; then
     _fail "keyscan silent: should note the missing stderr" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan silent: should not emit ::error:: lines" "$out"
 else
     _pass
 fi
