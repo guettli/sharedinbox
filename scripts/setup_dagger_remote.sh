@@ -75,14 +75,19 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts. This is a network op that occasionally fails
-# transiently (DNS blip, brief unreachability); retry before failing the job.
-# Capture stderr into a variable so a repeat failure is diagnosable — previously
-# stderr went to /dev/null, which made an outage look like an unexplained exit
-# with no clue as to where the script stopped (see #211).
+# Populate known_hosts on a best-effort basis. This is NOT required for the
+# tunnel: the ssh call below already uses `StrictHostKeyChecking=no`, so a
+# missing (or stale) known_hosts entry does not prevent connecting. Treat a
+# keyscan failure as a warning and let the real ssh call decide whether the
+# engine is reachable — the tunnel step surfaces a network outage far more
+# clearly than a silent ssh-keyscan exit ever will.
+#
+# Retry once for a transient blip, and capture stderr so a real failure is
+# diagnosable — previously stderr went to /dev/null, which made an outage look
+# like an unexplained exit with no clue where the script stopped (see #211).
 KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
-KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-3}"
-KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-10}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-2}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-5}"
 keyscan_rc=0
 keyscan_err=""
 _elapsed=0
@@ -104,15 +109,13 @@ for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
     sleep "$KEYSCAN_RETRY_WAIT_S"
 done
 if [ "$keyscan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (exit=${keyscan_rc}, elapsed=${_elapsed}s)"
+    echo "::warning::ssh-keyscan failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (exit=${keyscan_rc}, elapsed=${_elapsed}s); continuing — the ssh call below sets StrictHostKeyChecking=no and does not need a known_hosts entry."
     if [ -n "$keyscan_err" ]; then
         printf '%s\n' "$keyscan_err" | tail -8
     else
-        echo "(no output captured from ssh-keyscan)"
+        echo "(no output captured from ssh-keyscan — often a silent getaddrinfo/connect failure)"
     fi
-    exit 1
-fi
-if [ "$_elapsed" -gt 10 ]; then
+elif [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
 
