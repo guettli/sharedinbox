@@ -30,6 +30,16 @@ if [ -z "$_verify_snippet" ]; then
     exit 1
 fi
 
+# Same trick for the SSH tunnel block. Runs from the tunnel comment down to
+# (but not including) the `# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST` line that
+# follows it — that export writes to $GITHUB_ENV, which we don't want to touch
+# from the test.
+_tunnel_snippet=$(awk '/^# Create a background SSH tunnel/{p=1} /^# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST/{p=0} p' "$SCRIPT")
+if [ -z "$_tunnel_snippet" ]; then
+    echo "FAIL: could not locate tunnel block in $SCRIPT"
+    exit 1
+fi
+
 # Per-test scratch dir holds the stubbed `dagger`/`timeout`/`sleep` binaries
 # and an attempts counter that the dagger stub increments on each call. The
 # caller resets it via setup_run, runs the snippet, and reads attempts from
@@ -71,6 +81,22 @@ cat >"$SCRATCH/sleep" <<'EOF'
 exit 0
 EOF
 chmod +x "$SCRATCH/sleep"
+# Stub ssh so the tunnel snippet can be exercised without a real remote host.
+# Mirrors the dagger stub: increments an attempts counter, prints
+# $SSH_STDERR (to stderr, matching how real ssh reports errors), then flips
+# to rc=0 on/after $SSH_SUCCEED_ON if set — otherwise returns $SSH_RC.
+cat >"$SCRATCH/ssh" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$SCRATCH/ssh_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/ssh_attempts"
+if [ -n "\${SSH_STDERR:-}" ]; then
+    printf '%s\n' "\$SSH_STDERR" >&2
+fi
+if [ -n "\${SSH_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$SSH_SUCCEED_ON" ]; then
+    exit 0
+fi
+exit "\${SSH_RC:-0}"
+EOF
+chmod +x "$SCRATCH/ssh"
 
 # Run the verify snippet with the stubs above. Behavior is controlled by env
 # vars set by the caller:
@@ -174,6 +200,77 @@ elif printf '%s' "$out" | grep -q "::warning::"; then
     _fail "success: should not print ::warning:: lines" "$out"
 elif ! printf '%s' "$out" | grep -q "Dagger connection verified successfully"; then
     _fail "success: should print the verified confirmation line" "$out"
+else
+    _pass
+fi
+
+# Run the SSH-tunnel snippet with the stubs above. Behavior is controlled by:
+#   SSH_RC          — exit code returned by `ssh` when it doesn't succeed
+#   SSH_STDERR      — text emitted by `ssh` on stderr (e.g. "Connection reset")
+#   SSH_SUCCEED_ON  — attempt number on which to flip to rc=0 (optional)
+# Pin MAX_ATTEMPTS=3 to keep the "failed after N attempts" assertion stable.
+# DAGGER_ENGINE_HOST is a normal env var inside the snippet, not a secret in
+# this test path — just something for the ssh stub to receive as an argument.
+run_tunnel() {
+    echo 0 >"$SCRATCH/ssh_attempts"
+    PATH="$SCRATCH:$PATH" \
+        DAGGER_ENGINE_HOST=engine.test \
+        DAGGER_TUNNEL_MAX_ATTEMPTS=3 \
+        DAGGER_TUNNEL_TIMEOUT_S=5 \
+        DAGGER_TUNNEL_RETRY_WAIT_S=0 \
+        bash -c "$_tunnel_snippet" 2>&1
+}
+
+# --- Tunnel: success on first attempt is silent about errors/warnings ---------
+out=$(SSH_RC=0 run_tunnel)
+rc=$?
+attempts=$(cat "$SCRATCH/ssh_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "tunnel success: should exit 0" "$out"
+elif [ "$attempts" -ne 1 ]; then
+    _fail "tunnel success: should not retry (got $attempts attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "tunnel success: should not print ::error:: lines" "$out"
+elif printf '%s' "$out" | grep -q "::warning::"; then
+    _fail "tunnel success: should not print ::warning:: lines" "$out"
+elif ! printf '%s' "$out" | grep -q "Establishing SSH tunnel"; then
+    _fail "tunnel success: should log the establishing line" "$out"
+else
+    _pass
+fi
+
+# --- Tunnel: transient connection-reset that recovers on attempt 2 ------------
+out=$(SSH_RC=255 SSH_STDERR="kex_exchange_identification: read: Connection reset by peer" SSH_SUCCEED_ON=2 run_tunnel)
+rc=$?
+attempts=$(cat "$SCRATCH/ssh_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "tunnel transient: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "tunnel transient: expected 2 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "tunnel transient: should not print ::error:: lines after recovery" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::SSH tunnel attempt 1/3 failed"; then
+    _fail "tunnel transient: should warn about the failed first attempt" "$out"
+elif ! printf '%s' "$out" | grep -q "kex_exchange_identification"; then
+    _fail "tunnel transient: should surface the captured ssh stderr" "$out"
+else
+    _pass
+fi
+
+# --- Tunnel: all three attempts fail — surfaces error, exits non-zero ---------
+out=$(SSH_RC=255 SSH_STDERR="kex_exchange_identification: read: Connection reset by peer" run_tunnel)
+rc=$?
+attempts=$(cat "$SCRATCH/ssh_attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "tunnel fail: should exit non-zero" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "tunnel fail: should retry to 3 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "SSH tunnel to engine.test failed after 3 attempts"; then
+    _fail "tunnel fail: final error should name host + attempt count" "$out"
+elif ! printf '%s' "$out" | grep -q "rc=255"; then
+    _fail "tunnel fail: should surface the ssh exit code" "$out"
+elif ! printf '%s' "$out" | grep -q "kex_exchange_identification"; then
+    _fail "tunnel fail: should include ssh stderr in diagnostics" "$out"
 else
     _pass
 fi
