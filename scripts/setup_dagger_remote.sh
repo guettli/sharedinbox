@@ -97,45 +97,41 @@ fi
 # Forwards local TCP port 8080 directly to /run/dagger/engine.sock on the remote host,
 # eliminating the need for a socat bridge on the server side.
 #
-# The engine host occasionally resets connections mid-handshake (engine host
-# reboot, sshd restart, transient network blip) — e.g. issue #222 saw
-# `kex_exchange_identification: read: Connection reset by peer` from a single
-# hourly run while every neighbouring run passed. Retry on any non-zero exit;
-# a persistent problem (wrong key, host permanently down) will fail all
-# attempts and surface the same error, only ~1 min later. Same shape as the
-# `dagger core --help` verify retry below (issue #105 / PR #106).
+# The sshd on the engine host occasionally resets the TCP connection during the
+# initial protocol handshake (`kex_exchange_identification: read: Connection
+# reset by peer`), which surfaces as ssh rc=255 without ever forking the tunnel
+# child. Retry a small number of times so a single transient blip does not fail
+# the whole Firebase Test Lab job. Auth or config errors fail fast on every
+# attempt, so the extra latency on a genuine misconfiguration is negligible.
 echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
 TUNNEL_TIMEOUT_S="${DAGGER_TUNNEL_TIMEOUT_S:-30}"
-TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-5}"
-TUNNEL_RETRY_WAIT_S="${DAGGER_TUNNEL_RETRY_WAIT_S:-15}"
+TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-3}"
+TUNNEL_RETRY_WAIT_S="${DAGGER_TUNNEL_RETRY_WAIT_S:-5}"
 tunnel_rc=0
-tunnel_out=""
+_t0=$SECONDS
 for attempt in $(seq 1 "$TUNNEL_MAX_ATTEMPTS"); do
     tunnel_rc=0
-    _t0=$SECONDS
-    tunnel_out=$(timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" 2>&1) || tunnel_rc=$?
-    _elapsed=$(( SECONDS - _t0 ))
+    timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" || tunnel_rc=$?
     if [ "$tunnel_rc" -eq 0 ]; then
-        if [ "$_elapsed" -gt 10 ]; then
-            echo "::warning::SSH tunnel setup took ${_elapsed}s"
-        fi
         break
     fi
     if [ "$attempt" -eq "$TUNNEL_MAX_ATTEMPTS" ]; then
         break
     fi
-    echo "::warning::SSH tunnel attempt ${attempt}/${TUNNEL_MAX_ATTEMPTS} failed after ${_elapsed}s (rc=${tunnel_rc}); retrying in ${TUNNEL_RETRY_WAIT_S}s..."
-    if [ -n "$tunnel_out" ]; then
-        printf '%s\n' "$tunnel_out" | sed 's/^/::warning::  /'
-    fi
+    echo "::warning::SSH tunnel attempt ${attempt}/${TUNNEL_MAX_ATTEMPTS} failed (rc=${tunnel_rc}); retrying in ${TUNNEL_RETRY_WAIT_S}s..."
     sleep "$TUNNEL_RETRY_WAIT_S"
 done
+_elapsed=$(( SECONDS - _t0 ))
 if [ "$tunnel_rc" -ne 0 ]; then
-    echo "::error::SSH tunnel to $DAGGER_ENGINE_HOST failed after ${TUNNEL_MAX_ATTEMPTS} attempts (rc=${tunnel_rc})."
-    if [ -n "$tunnel_out" ]; then
-        printf '%s\n' "$tunnel_out" | sed 's/^/::error::  /'
-    fi
+    echo "::error::SSH tunnel to the Dagger engine host failed after ${TUNNEL_MAX_ATTEMPTS} attempts (last rc=${tunnel_rc})."
+    echo "::error::See the ssh error messages above for the specific failure mode."
+    echo "::error::A transient blip (e.g. \"Connection reset by peer\" during key exchange) would"
+    echo "::error::normally recover on retry; a persistent failure points to the engine host"
+    echo "::error::being down or unreachable from the runner."
     exit 1
+fi
+if [ "$_elapsed" -gt 10 ]; then
+    echo "::warning::SSH tunnel setup took ${_elapsed}s"
 fi
 
 # Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
