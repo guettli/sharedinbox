@@ -10,6 +10,7 @@ class UndoAction {
     required this.emailIds,
     required this.sourceMailboxPath,
     this.destinationMailboxPath,
+    this.destinationMailboxRole,
     this.originalEmails = const [],
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
@@ -20,6 +21,11 @@ class UndoAction {
   final List<String> emailIds;
   final String sourceMailboxPath;
   final String? destinationMailboxPath;
+
+  /// Semantic role of the destination mailbox (e.g. 'archive', 'junk') for
+  /// move actions. Lets the undo snackbar pick action-specific colour/icon/
+  /// verb; undo semantics don't depend on it.
+  final String? destinationMailboxRole;
   final DateTime timestamp;
 
   /// Full email data for restoring hard-deleted rows (e.g. IMAP move/delete).
@@ -33,6 +39,7 @@ class UndoAction {
       emailIds: List<String>.from(json['emailIds'] as List),
       sourceMailboxPath: json['sourceMailboxPath'] as String,
       destinationMailboxPath: json['destinationMailboxPath'] as String?,
+      destinationMailboxRole: json['destinationMailboxRole'] as String?,
       timestamp: DateTime.parse(json['timestamp'] as String),
       originalEmails: (json['originalEmails'] as List<dynamic>)
           .map((e) => Email.fromJson(e as Map<String, dynamic>))
@@ -48,6 +55,7 @@ class UndoAction {
       'emailIds': emailIds,
       'sourceMailboxPath': sourceMailboxPath,
       'destinationMailboxPath': destinationMailboxPath,
+      'destinationMailboxRole': destinationMailboxRole,
       'timestamp': timestamp.toIso8601String(),
       'originalEmails': originalEmails.map((e) => e.toJson()).toList(),
     };
