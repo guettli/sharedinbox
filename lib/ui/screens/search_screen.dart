@@ -10,8 +10,8 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
-import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
   ref,
@@ -49,9 +49,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   bool _advancedMode = false;
   FilterGroup _filterGroup = FilterGroup.empty();
 
+  late final EmailThreadListController _selection;
+
   @override
   void initState() {
     super.initState();
+    _selection = EmailThreadListController()..addListener(_onSelectionChange);
     _focusNode.addListener(() {
       if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
     });
@@ -66,10 +69,33 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   @override
   void dispose() {
+    _selection
+      ..removeListener(_onSelectionChange)
+      ..dispose();
     _ctrl.dispose();
     _focusNode.dispose();
     _debounce?.cancel();
     super.dispose();
+  }
+
+  void _onSelectionChange() {
+    if (mounted) setState(() {});
+  }
+
+  void _onAfterBatchAction(List<String> actedThreadIds) {
+    if (_results == null || !mounted) return;
+    final actedSet = actedThreadIds.toSet();
+    final remaining = _results!.emails
+        .where((e) => !actedSet.contains(e.threadId ?? e.id))
+        .toList();
+    setState(() {
+      final updated = _SearchResults(
+        mailboxes: _results!.mailboxes,
+        addresses: _results!.addresses,
+        emails: remaining,
+      );
+      _results = updated.isEmpty ? null : updated;
+    });
   }
 
   void _toggleAdvanced() {
@@ -186,41 +212,53 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final selecting = _selection.isSelecting;
     return Scaffold(
-      appBar: AppBar(
-        title: _advancedMode
-            ? const Text('Advanced Search')
-            : TextField(
-                controller: _ctrl,
-                focusNode: _focusNode,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Search folders, addresses, emails…',
-                  border: InputBorder.none,
+      appBar: selecting
+          ? buildSelectionAppBar(_selection)
+          : AppBar(
+              title: _advancedMode
+                  ? const Text('Advanced Search')
+                  : TextField(
+                      controller: _ctrl,
+                      focusNode: _focusNode,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Search folders, addresses, emails…',
+                        border: InputBorder.none,
+                      ),
+                      onChanged: _onChanged,
+                    ),
+              actions: [
+                if (!_advancedMode && _ctrl.text.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.clear),
+                    tooltip: 'Clear search',
+                    onPressed: () {
+                      _ctrl.clear();
+                      setState(() => _results = null);
+                    },
+                  ),
+                IconButton(
+                  icon: Icon(
+                    _advancedMode ? Icons.search : Icons.tune,
+                    color: _advancedMode
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                  tooltip: _advancedMode ? 'Simple search' : 'Advanced search',
+                  onPressed: _toggleAdvanced,
                 ),
-                onChanged: _onChanged,
-              ),
-        actions: [
-          if (!_advancedMode && _ctrl.text.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.clear),
-              tooltip: 'Clear search',
-              onPressed: () {
-                _ctrl.clear();
-                setState(() => _results = null);
-              },
+              ],
             ),
-          IconButton(
-            icon: Icon(
-              _advancedMode ? Icons.search : Icons.tune,
-              color:
-                  _advancedMode ? Theme.of(context).colorScheme.primary : null,
-            ),
-            tooltip: _advancedMode ? 'Simple search' : 'Advanced search',
-            onPressed: _toggleAdvanced,
-          ),
-        ],
-      ),
+      bottomNavigationBar: selecting
+          ? buildSelectionBottomBar(
+              context,
+              ref,
+              _selection,
+              onAfterAction: _onAfterBatchAction,
+            )
+          : null,
       body: _buildBody(),
     );
   }
@@ -240,7 +278,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildAdvancedBody() {
-    return SingleChildScrollView(
+    final filterHeader = Padding(
       padding: const EdgeInsets.all(AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -258,32 +296,56 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             icon: const Icon(Icons.search),
             label: const Text('Search'),
           ),
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.only(top: AppSpacing.xl),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_results != null) ...[
-            const SizedBox(height: AppSpacing.sm),
-            if (_results!.isEmpty)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(AppSpacing.xl),
-                  child: Text('No results'),
-                ),
-              )
-            else
-              _buildResultsList(_results!),
-          ],
         ],
+      ),
+    );
+
+    if (!_loading && _results != null && !_results!.isEmpty) {
+      return Column(
+        children: [
+          filterHeader,
+          Expanded(child: _buildResultsList(_results!)),
+        ],
+      );
+    }
+
+    Widget resultsRegion;
+    if (_loading) {
+      resultsRegion = const Padding(
+        padding: EdgeInsets.only(top: AppSpacing.xl),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    } else if (_results == null) {
+      resultsRegion = const SizedBox.shrink();
+    } else {
+      resultsRegion = const Padding(
+        padding: EdgeInsets.all(AppSpacing.xl),
+        child: Center(child: Text('No results')),
+      );
+    }
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [filterHeader, resultsRegion],
       ),
     );
   }
 
   Widget _buildResultsList(_SearchResults r) {
-    return ListView(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
+    final messagesList = EmailThreadList(
+      controller: _selection,
+      items: r.emails.map(EmailThread.fromEmail).toList(),
+      enableSwipe: false,
+      showLocationLabel: true,
+    );
+
+    final hasNonMessageSections =
+        r.mailboxes.isNotEmpty || r.addresses.isNotEmpty;
+    if (!hasNonMessageSections) return messagesList;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (r.mailboxes.isNotEmpty) ...[
           const _SectionHeader('Folders'),
@@ -297,16 +359,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ],
         if (r.emails.isNotEmpty) ...[
           const _SectionHeader('Messages'),
-          for (final e in r.emails)
-            ThreadTile(
-              thread: EmailThread.fromEmail(e),
-              locationLabel: '${e.accountId} • ${e.mailboxPath}',
-              onTap: () => context.push(
-                '/accounts/${e.accountId}/mailboxes'
-                '/${Uri.encodeComponent(e.mailboxPath)}'
-                '/emails/${Uri.encodeComponent(e.id)}',
-              ),
-            ),
+          Expanded(child: messagesList),
         ],
       ],
     );
