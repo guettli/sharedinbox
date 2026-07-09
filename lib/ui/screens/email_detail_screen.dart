@@ -87,19 +87,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     unawaited(_replyWithRecipientDialog(context, header, body));
                   },
           ),
-          IconButton(
-            icon: const Icon(Icons.archive),
+          _TapPulseIconButton(
+            icon: Icons.archive,
             tooltip: 'Archive',
+            pulseColor: const Color(0xFF2E7D32),
             onPressed: header == null
                 ? null
                 : () {
+                    unawaited(HapticFeedback.mediumImpact());
                     unawaited(_archive(context, header));
                   },
           ),
-          IconButton(
-            icon: const Icon(Icons.delete),
+          _TapPulseIconButton(
+            icon: Icons.delete,
             tooltip: 'Delete',
+            pulseColor: Theme.of(context).colorScheme.error,
             onPressed: () async {
+              unawaited(HapticFeedback.heavyImpact());
               final nextEmailId = await _getNextEmailIdIfNeeded(header);
               final destPath = await repo.deleteEmail(widget.emailId);
 
@@ -132,12 +136,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               if (mounted) setState(() => _isFlagged = next);
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.report_outlined),
+          _TapPulseIconButton(
+            icon: Icons.report_outlined,
             tooltip: 'Mark as spam',
+            pulseColor: const Color(0xFFE65100),
             onPressed: header == null
                 ? null
                 : () {
+                    unawaited(HapticFeedback.mediumImpact());
                     unawaited(_markAsSpam(context, header));
                   },
           ),
@@ -645,6 +651,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               emailIds: [widget.emailId],
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: mailbox.path,
+              destinationMailboxRole: 'archive',
             ),
           ),
     );
@@ -681,6 +688,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               emailIds: [widget.emailId],
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: mailbox.path,
+              destinationMailboxRole: 'junk',
             ),
           ),
     );
@@ -1371,6 +1379,59 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
             : const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
         label: const Text('Unsubscribe'),
         onPressed: _sending ? null : () => _onTap(context, uris),
+      ),
+    );
+  }
+}
+
+/// Brief scale + colour pulse on tap so the user gets an immediate, in-place
+/// hint about which destructive action fired, before the screen navigates
+/// away and the SnackBar takes over as the persistent signal.
+class _TapPulseIconButton extends StatefulWidget {
+  const _TapPulseIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.pulseColor,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Color pulseColor;
+  final VoidCallback? onPressed;
+
+  @override
+  State<_TapPulseIconButton> createState() => _TapPulseIconButtonState();
+}
+
+class _TapPulseIconButtonState extends State<_TapPulseIconButton> {
+  static const _pulseDuration = Duration(milliseconds: 220);
+
+  bool _pulsing = false;
+
+  void _handle() {
+    final onPressed = widget.onPressed;
+    if (onPressed == null) return;
+    setState(() => _pulsing = true);
+    Future<void>.delayed(_pulseDuration, () {
+      if (mounted) setState(() => _pulsing = false);
+    });
+    onPressed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: widget.tooltip,
+      onPressed: widget.onPressed == null ? null : _handle,
+      icon: AnimatedScale(
+        scale: _pulsing ? 1.4 : 1.0,
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOut,
+        child: Icon(
+          widget.icon,
+          color: _pulsing ? widget.pulseColor : null,
+        ),
       ),
     );
   }

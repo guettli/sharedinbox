@@ -31,21 +31,103 @@ class UndoShell extends ConsumerWidget {
     UndoAction action,
   ) {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final feedback = _feedbackFor(action, Theme.of(context).colorScheme);
     scaffoldMessenger.clearSnackBars();
     scaffoldMessenger.showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 5),
-        content: Text(
-          action.type == UndoType.delete
-              ? '${action.emailIds.length} email(s) moved to Trash'
-              : '${action.emailIds.length} email(s) moved',
+        backgroundColor: feedback.background,
+        content: Row(
+          children: [
+            Icon(feedback.icon, color: feedback.foreground),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                feedback.label,
+                style: TextStyle(
+                  color: feedback.foreground,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ),
         action: SnackBarAction(
           label: 'Undo',
-          textColor: Colors.redAccent,
+          textColor: feedback.undoColor,
           onPressed: () => ref.read(undoServiceProvider.notifier).undo(),
         ),
       ),
     );
+  }
+}
+
+/// Visual style for the undo snackbar. `null` colours fall back to the
+/// scaffold's default theming so we only override for the actions that
+/// benefit from a distinctive tint.
+class _FeedbackDisplay {
+  const _FeedbackDisplay({
+    required this.label,
+    required this.icon,
+    required this.background,
+    required this.foreground,
+    required this.undoColor,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color? background;
+  final Color? foreground;
+  final Color? undoColor;
+}
+
+_FeedbackDisplay _feedbackFor(UndoAction action, ColorScheme scheme) {
+  final count = action.emailIds.length;
+  final plural = count == 1 ? '' : 's';
+
+  switch (action.type) {
+    case UndoType.delete:
+      return _FeedbackDisplay(
+        label: 'Deleted $count email$plural',
+        icon: Icons.delete,
+        background: scheme.errorContainer,
+        foreground: scheme.onErrorContainer,
+        undoColor: scheme.error,
+      );
+    case UndoType.snooze:
+      return _FeedbackDisplay(
+        label: 'Snoozed $count email$plural',
+        icon: Icons.bedtime,
+        background: null,
+        foreground: null,
+        undoColor: Colors.redAccent,
+      );
+    case UndoType.move:
+      switch (action.destinationMailboxRole) {
+        case 'archive':
+          return _FeedbackDisplay(
+            label: 'Archived $count email$plural',
+            icon: Icons.archive,
+            background: const Color(0xFF2E7D32),
+            foreground: Colors.white,
+            undoColor: Colors.white,
+          );
+        case 'junk':
+          return _FeedbackDisplay(
+            label: 'Marked $count email$plural as spam',
+            icon: Icons.report,
+            background: const Color(0xFFE65100),
+            foreground: Colors.white,
+            undoColor: Colors.white,
+          );
+        default:
+          return _FeedbackDisplay(
+            label: '$count email$plural moved',
+            icon: Icons.drive_file_move,
+            background: null,
+            foreground: null,
+            undoColor: Colors.redAccent,
+          );
+      }
   }
 }

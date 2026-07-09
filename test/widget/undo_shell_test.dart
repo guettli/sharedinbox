@@ -31,6 +31,14 @@ void main() {
     );
   }
 
+  Future<void> pushAction(WidgetTester tester, UndoAction action) async {
+    final context = tester.element(find.byType(UndoShell));
+    await ProviderScope.containerOf(
+      context,
+    ).read(undoServiceProvider.notifier).pushAction(action);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets(
     'does not show snackbar for stale action loaded from persistence on startup',
     (tester) async {
@@ -49,13 +57,36 @@ void main() {
       await tester.pumpWidget(buildShell(mockUndoRepo));
       await tester.pumpAndSettle();
 
-      expect(find.text('1 email(s) moved'), findsNothing);
+      expect(find.text('1 email moved'), findsNothing);
     },
   );
 
-  testWidgets('shows snackbar for fresh action pushed in current session', (
-    tester,
-  ) async {
+  testWidgets(
+    'shows generic move label for a fresh action pushed in current session',
+    (tester) async {
+      when(
+        mockUndoRepo.getHistory(limit: anyNamed('limit')),
+      ).thenAnswer((_) async => []);
+
+      await tester.pumpWidget(buildShell(mockUndoRepo));
+      await tester.pumpAndSettle();
+
+      await pushAction(
+        tester,
+        UndoAction(
+          id: '1',
+          accountId: 'acc1',
+          type: UndoType.move,
+          emailIds: ['e1'],
+          sourceMailboxPath: 'INBOX',
+        ),
+      );
+
+      expect(find.text('1 email moved'), findsOneWidget);
+    },
+  );
+
+  testWidgets('shows "Deleted" label for a delete action', (tester) async {
     when(
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => []);
@@ -63,23 +94,22 @@ void main() {
     await tester.pumpWidget(buildShell(mockUndoRepo));
     await tester.pumpAndSettle();
 
-    final context = tester.element(find.byType(UndoShell));
-    final freshAction = UndoAction(
-      id: '1',
-      accountId: 'acc1',
-      type: UndoType.move,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
+    await pushAction(
+      tester,
+      UndoAction(
+        id: '2',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: ['e1', 'e2'],
+        sourceMailboxPath: 'INBOX',
+      ),
     );
-    await ProviderScope.containerOf(
-      context,
-    ).read(undoServiceProvider.notifier).pushAction(freshAction);
-    await tester.pumpAndSettle();
 
-    expect(find.text('1 email(s) moved'), findsOneWidget);
+    expect(find.text('Deleted 2 emails'), findsOneWidget);
+    expect(find.byIcon(Icons.delete), findsOneWidget);
   });
 
-  testWidgets('shows correct text for delete action (moved to Trash)', (
+  testWidgets('shows "Archived" label for a move with archive role', (
     tester,
   ) async {
     when(
@@ -89,19 +119,47 @@ void main() {
     await tester.pumpWidget(buildShell(mockUndoRepo));
     await tester.pumpAndSettle();
 
-    final context = tester.element(find.byType(UndoShell));
-    final deleteAction = UndoAction(
-      id: '2',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1', 'e2'],
-      sourceMailboxPath: 'INBOX',
+    await pushAction(
+      tester,
+      UndoAction(
+        id: '3',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Archive',
+        destinationMailboxRole: 'archive',
+      ),
     );
-    await ProviderScope.containerOf(
-      context,
-    ).read(undoServiceProvider.notifier).pushAction(deleteAction);
+
+    expect(find.text('Archived 1 email'), findsOneWidget);
+    expect(find.byIcon(Icons.archive), findsOneWidget);
+  });
+
+  testWidgets('shows "Marked as spam" label for a move with junk role', (
+    tester,
+  ) async {
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
+
+    await tester.pumpWidget(buildShell(mockUndoRepo));
     await tester.pumpAndSettle();
 
-    expect(find.text('2 email(s) moved to Trash'), findsOneWidget);
+    await pushAction(
+      tester,
+      UndoAction(
+        id: '4',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e1', 'e2', 'e3'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Junk',
+        destinationMailboxRole: 'junk',
+      ),
+    );
+
+    expect(find.text('Marked 3 emails as spam'), findsOneWidget);
+    expect(find.byIcon(Icons.report), findsOneWidget);
   });
 }

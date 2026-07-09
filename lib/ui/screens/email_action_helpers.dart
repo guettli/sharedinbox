@@ -156,7 +156,7 @@ Future<void> _batchMoveToRole(
     );
     if (mailbox == null) continue;
 
-    await _moveThreadsTo(ref, accountThreads, mailbox.path);
+    await _moveThreadsTo(ref, accountThreads, mailbox.path, role: role);
   }
 }
 
@@ -309,6 +309,7 @@ Future<void> swipeDismissThread(
       emailIds: thread.emailIds,
       sourceMailboxPath: thread.mailboxPath,
       destinationMailboxPath: archive.path,
+      destinationMailboxRole: 'archive',
       originalEmails: originalEmails,
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
@@ -350,8 +351,9 @@ Map<String, List<EmailThread>> _groupByAccount(List<EmailThread> threads) {
 Future<void> _moveThreadsTo(
   WidgetRef ref,
   List<EmailThread> threads,
-  String destPath,
-) async {
+  String destPath, {
+  String? role,
+}) async {
   final repo = ref.read(emailRepositoryProvider);
   for (final t in threads) {
     final originalEmails = await _fetchOriginals(repo, t.emailIds);
@@ -367,6 +369,7 @@ Future<void> _moveThreadsTo(
       emailIds: t.emailIds,
       sourceMailboxPath: t.mailboxPath,
       destinationMailboxPath: destPath,
+      destinationMailboxRole: role,
       originalEmails: originalEmails,
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
