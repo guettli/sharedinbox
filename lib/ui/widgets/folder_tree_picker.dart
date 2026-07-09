@@ -6,8 +6,11 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 /// Opens a dialog that lets the user pick a mailbox from a hierarchical tree.
 ///
 /// [mailboxes] is the flat list to show; the tree is built by splitting each
-/// `path` on `/`. Returns the chosen `mailbox.path`, or `null` if the user
-/// dismissed the dialog. [initialPath] selects/expands the matching entry.
+/// [Mailbox.displayPath] on `/`, so JMAP mailboxes render as their
+/// human-readable folder tree (not as opaque server IDs). Returns the chosen
+/// mailbox's `displayPath`, or `null` if the user dismissed the dialog.
+/// [initialPath] selects/expands the matching entry — accepts either a
+/// `displayPath` or a legacy `path` (opaque JMAP ID) for backward compat.
 Future<String?> showFolderTreePicker(
   BuildContext context, {
   required List<Mailbox> mailboxes,
@@ -38,20 +41,35 @@ class FolderTreePickerDialog extends StatefulWidget {
 
 class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
   late final List<_FolderNode> _roots;
+  late final String? _initialDisplayPath;
   final Set<String> _expanded = {};
 
   @override
   void initState() {
     super.initState();
     _roots = _buildTree(widget.mailboxes);
-    // Expand ancestors of the initial path so it is visible on open.
-    final init = widget.initialPath;
+    // Accept either a displayPath or a legacy path (opaque JMAP ID) as
+    // initialPath — resolve both to the canonical displayPath so the tree
+    // highlights the matching row regardless of what the caller stored.
+    _initialDisplayPath = _resolveInitial(widget.mailboxes, widget.initialPath);
+    final init = _initialDisplayPath;
     if (init != null && init.contains('/')) {
       final parts = init.split('/');
       for (var i = 1; i < parts.length; i++) {
         _expanded.add(parts.take(i).join('/'));
       }
     }
+  }
+
+  static String? _resolveInitial(List<Mailbox> mailboxes, String? initial) {
+    if (initial == null || initial.isEmpty) return null;
+    for (final m in mailboxes) {
+      if (m.displayPath == initial) return m.displayPath;
+    }
+    for (final m in mailboxes) {
+      if (m.path == initial) return m.displayPath;
+    }
+    return initial;
   }
 
   @override
@@ -83,15 +101,16 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
   Widget _buildRow(_FolderNode node, {required int depth}) {
     final hasChildren = node.children.isNotEmpty;
     final isExpanded = _expanded.contains(node.key);
-    final isSelected = node.path != null && node.path == widget.initialPath;
+    final isSelected =
+        node.displayPath != null && node.displayPath == _initialDisplayPath;
     final indent = AppSpacing.md + depth * AppSpacing.lg;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         InkWell(
-          onTap: node.path == null
+          onTap: node.displayPath == null
               ? (hasChildren ? () => _toggle(node.key) : null)
-              : () => Navigator.pop(context, node.path),
+              : () => Navigator.pop(context, node.displayPath),
           child: Padding(
             padding: EdgeInsetsDirectional.only(
               start: indent,
@@ -131,7 +150,7 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontWeight: isSelected ? FontWeight.bold : null,
-                      color: node.path == null
+                      color: node.displayPath == null
                           ? Theme.of(context).colorScheme.onSurfaceVariant
                           : null,
                     ),
@@ -157,29 +176,30 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
 class _FolderNode {
   _FolderNode({required this.key, required this.label});
 
-  /// Unique key for expansion tracking — equals the joined path prefix.
+  /// Unique key for expansion tracking — equals the joined displayPath prefix.
   final String key;
   final String label;
 
-  /// Mailbox path when this node corresponds to a real mailbox. `null` means
-  /// the node is a phantom parent inferred from a child's path components.
-  String? path;
+  /// The mailbox's `displayPath` when this node corresponds to a real
+  /// mailbox. `null` means the node is a phantom parent inferred from a
+  /// child's path components.
+  String? displayPath;
   final Map<String, _FolderNode> _children = {};
 
   List<_FolderNode> get children => _children.values.toList(growable: false);
 }
 
-/// Builds a hierarchy by splitting each `mailbox.path` on `/`. Mailboxes that
-/// share a prefix become siblings under a common parent; intermediate
-/// components that do not exist as real mailboxes become phantom parents.
-/// Roots are sorted with [compareMailboxes] when both have a backing mailbox,
-/// alphabetically otherwise.
+/// Builds a hierarchy by splitting each [Mailbox.displayPath] on `/`.
+/// Mailboxes that share a prefix become siblings under a common parent;
+/// intermediate components that do not exist as real mailboxes become phantom
+/// parents. Roots are sorted with [compareMailboxes] when both have a backing
+/// mailbox, alphabetically otherwise.
 List<_FolderNode> _buildTree(List<Mailbox> mailboxes) {
   final roots = <String, _FolderNode>{};
-  final byPath = {for (final m in mailboxes) m.path: m};
+  final byDisplayPath = {for (final m in mailboxes) m.displayPath: m};
 
   for (final m in mailboxes) {
-    final parts = m.path.split('/');
+    final parts = m.displayPath.split('/');
     Map<String, _FolderNode> level = roots;
     final prefix = <String>[];
     for (var i = 0; i < parts.length; i++) {
@@ -190,37 +210,37 @@ List<_FolderNode> _buildTree(List<Mailbox> mailboxes) {
         key,
         () => _FolderNode(key: key, label: parts[i]),
       );
-      if (isLeaf) node.path = m.path;
+      if (isLeaf) node.displayPath = m.displayPath;
       level = node._children;
     }
   }
 
   final sortedRoots = roots.values.toList()
-    ..sort((a, b) => _compareNodes(a, b, byPath));
+    ..sort((a, b) => _compareNodes(a, b, byDisplayPath));
   for (final node in sortedRoots) {
-    _sortDescendants(node, byPath);
+    _sortDescendants(node, byDisplayPath);
   }
   return sortedRoots;
 }
 
-void _sortDescendants(_FolderNode node, Map<String, Mailbox> byPath) {
+void _sortDescendants(_FolderNode node, Map<String, Mailbox> byDisplayPath) {
   final sorted = node._children.values.toList()
-    ..sort((a, b) => _compareNodes(a, b, byPath));
+    ..sort((a, b) => _compareNodes(a, b, byDisplayPath));
   node._children
     ..clear()
     ..addEntries(sorted.map((c) => MapEntry(c.key, c)));
   for (final c in node._children.values) {
-    _sortDescendants(c, byPath);
+    _sortDescendants(c, byDisplayPath);
   }
 }
 
 int _compareNodes(
   _FolderNode a,
   _FolderNode b,
-  Map<String, Mailbox> byPath,
+  Map<String, Mailbox> byDisplayPath,
 ) {
-  final ma = a.path == null ? null : byPath[a.path];
-  final mb = b.path == null ? null : byPath[b.path];
+  final ma = a.displayPath == null ? null : byDisplayPath[a.displayPath];
+  final mb = b.displayPath == null ? null : byDisplayPath[b.displayPath];
   if (ma != null && mb != null) return compareMailboxes(ma, mb);
   return a.label.toLowerCase().compareTo(b.label.toLowerCase());
 }

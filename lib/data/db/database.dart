@@ -55,12 +55,23 @@ class Mailboxes extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>
       text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // Opaque server-side identifier used as a foreign key by [Emails],
+  // [Threads] and outbound protocol requests. For IMAP this equals the
+  // hierarchical folder path (e.g. "INBOX/Work"); for JMAP it is the
+  // server-assigned mailbox ID (e.g. "a").
   TextColumn get path => text()();
   TextColumn get name => text()();
   IntColumn get unreadCount => integer().withDefault(const Constant(0))();
   IntColumn get totalCount => integer().withDefault(const Constant(0))();
   // Added in schema v8: JMAP role (e.g. "inbox", "sent", "trash").
   TextColumn get role => text().nullable()();
+  // Added in schema v47: hierarchical, human-readable path used by the UI
+  // and by Sieve `fileinto`. Equal to [path] for IMAP; for JMAP built from
+  // the `parentId` chain of names joined with `/`.
+  TextColumn get displayPath => text().withDefault(const Constant(''))();
+  // Added in schema v47: parent mailbox server ID (JMAP). Null for a root
+  // or for IMAP.
+  TextColumn get parentId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -968,6 +979,34 @@ class AppDatabase extends _$AppDatabase {
           if (from < 46) {
             await m.createTable(outbox);
           }
+          if (from < 47) {
+            // Some legacy test snapshots build only a partial schema, so the
+            // `mailboxes` / `sync_states` tables may not exist. Guard each
+            // step against that so the migration is idempotent even under
+            // incomplete states.
+            if (await _tableExists(this, 'mailboxes')) {
+              await m.addColumn(mailboxes, mailboxes.displayPath);
+              await m.addColumn(mailboxes, mailboxes.parentId);
+              // Backfill display_path from path so IMAP folders (whose path
+              // is already hierarchical + human-readable) render correctly.
+              // JMAP rows still hold the opaque server ID here; the next
+              // mailbox sync recomputes them from the parent chain.
+              await customStatement('''
+                UPDATE mailboxes SET display_path = path
+                WHERE display_path = ''
+              ''');
+            }
+            // Drop the JMAP `Mailbox` sync checkpoint so the next launch
+            // triggers a full re-sync and picks up hierarchical displayPaths.
+            if (await _tableExists(this, 'sync_states') &&
+                await _tableExists(this, 'accounts')) {
+              await customStatement('''
+                DELETE FROM sync_states WHERE resource_type = 'Mailbox'
+                AND account_id IN (SELECT id FROM accounts
+                WHERE account_type = 'jmap')
+              ''');
+            }
+          }
         },
       );
 
@@ -989,6 +1028,17 @@ class AppDatabase extends _$AppDatabase {
     final rows = await select(installedVersions).get();
     return {for (final r in rows) r.gitHash: r.installedAt};
   }
+}
+
+/// True when [name] exists as a table in [db]. Used by migrations that need
+/// to survive incomplete legacy test snapshots where not every table has
+/// been created yet.
+Future<bool> _tableExists(AppDatabase db, String name) async {
+  final rows = await db.customSelect(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    variables: [Variable<String>(name)],
+  ).get();
+  return rows.isNotEmpty;
 }
 
 // Resolved once in main() via initDatabasePath() before runApp().

@@ -128,6 +128,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 unreadCount: Value(unread),
                 totalCount: Value(total),
                 role: Value(role),
+                // IMAP paths are already hierarchical + human-readable, so the
+                // display path just mirrors `path`.
+                displayPath: Value(path),
               ),
             );
       }
@@ -269,14 +272,58 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String accountId,
     List<dynamic> mailboxes,
   ) async {
+    // For JMAP, `path` stores the opaque mailbox ID (so Email rows can
+    // reference it via mailboxPath) but the UI wants the hierarchical,
+    // human-readable path — e.g. "Archive/2026". Build that by walking each
+    // mailbox's `parentId` chain and joining `name`s with '/'. Missing links
+    // (parent not in this batch and not in the local cache) fall back to
+    // the leaf name, so we always store something readable.
+    final incoming = <String, Map<String, dynamic>>{};
+    for (final mb in mailboxes) {
+      final m = mb as Map<String, dynamic>;
+      incoming[m['id'] as String] = m;
+    }
+
+    // Prime with previously-synced mailboxes so partial updates can still
+    // resolve parents that aren't in the current batch.
+    final cachedRows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    final cachedName = <String, String>{};
+    final cachedParent = <String, String?>{};
+    for (final row in cachedRows) {
+      cachedName[row.path] = row.name;
+      cachedParent[row.path] = row.parentId;
+    }
+
+    String nameOf(String id) =>
+        (incoming[id]?['name'] as String?) ?? cachedName[id] ?? id;
+    String? parentOf(String id) {
+      final m = incoming[id];
+      if (m != null) return m['parentId'] as String?;
+      return cachedParent[id];
+    }
+
+    String buildDisplayPath(String startId) {
+      final parts = <String>[];
+      var current = startId;
+      final seen = <String>{};
+      while (seen.add(current)) {
+        parts.insert(0, nameOf(current));
+        final parent = parentOf(current);
+        if (parent == null || parent.isEmpty) break;
+        current = parent;
+      }
+      return parts.join('/');
+    }
+
     for (final mb in mailboxes) {
       final m = mb as Map<String, dynamic>;
       final jmapId = m['id'] as String;
       final dbId = '$accountId:$jmapId';
-      // For JMAP accounts, path stores the JMAP mailbox ID so that
-      // Email rows can reference it via mailboxPath.
       final name = m['name'] as String? ?? jmapId;
       final role = m['role'] as String? ?? _fallbackJmapRole(name);
+      final displayPath = buildDisplayPath(jmapId);
       await _db.into(_db.mailboxes).insertOnConflictUpdate(
             MailboxesCompanion.insert(
               id: dbId,
@@ -286,8 +333,29 @@ class MailboxRepositoryImpl implements MailboxRepository {
               unreadCount: Value((m['unreadEmails'] as int?) ?? 0),
               totalCount: Value((m['totalEmails'] as int?) ?? 0),
               role: Value(role),
+              displayPath: Value(displayPath),
+              parentId: Value(m['parentId'] as String?),
             ),
           );
+    }
+
+    // When a parent's name changes, every descendant's displayPath goes stale.
+    // Fix up every mailbox in the account whose displayPath no longer matches
+    // its recomputed value. Cheap: mailboxes are few and rows already in cache.
+    final refreshedRows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in refreshedRows) {
+      cachedName[row.path] = row.name;
+      cachedParent[row.path] = row.parentId;
+    }
+    for (final row in refreshedRows) {
+      if (incoming.containsKey(row.path)) continue;
+      final rebuilt = buildDisplayPath(row.path);
+      if (rebuilt != row.displayPath) {
+        await (_db.update(_db.mailboxes)..where((t) => t.id.equals(row.id)))
+            .write(MailboxesCompanion(displayPath: Value(rebuilt)));
+      }
     }
   }
 
@@ -342,6 +410,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
         accountId: row.accountId,
         path: row.path,
         name: row.name,
+        // Fall back to `path` when display_path is empty (row predates the
+        // v47 migration, or was inserted by test setup with the older API).
+        displayPath: row.displayPath.isEmpty ? row.path : row.displayPath,
+        parentId: row.parentId,
         unreadCount: row.unreadCount,
         totalCount: row.totalCount,
         role: row.role,
@@ -475,6 +547,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             path: name,
             name: name,
             role: Value(role),
+            displayPath: Value(name),
           ),
         );
     final row = await (_db.select(
@@ -525,6 +598,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
     }
     final dbId = '${account.id}:$newId';
+    // No parent for a mailbox created via this API, so the display path is
+    // just the name. The next full sync will walk `parentId` if the user
+    // later reparents it under something else.
     await _db.into(_db.mailboxes).insertOnConflictUpdate(
           MailboxesCompanion.insert(
             id: dbId,
@@ -532,6 +608,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             path: newId,
             name: name,
             role: Value(role),
+            displayPath: Value(name),
           ),
         );
     final row = await (_db.select(

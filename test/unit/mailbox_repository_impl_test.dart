@@ -269,6 +269,86 @@ void main() {
         expect(state.first.state, 'st1');
       });
 
+      test(
+        'full sync computes hierarchical displayPath from parentId chain',
+        () async {
+          // Three mailboxes returned by the server: Archive (root), 2026
+          // (child of Archive), Q1 (child of 2026). The displayPath must
+          // walk the parentId chain so the UI can show "Archive/2026/Q1"
+          // instead of the opaque one-char server IDs.
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                _mailboxGetResponse(
+                  state: 'st1',
+                  list: [
+                    {'id': 'a', 'name': 'Archive'},
+                    {'id': 'b', 'name': '2026', 'parentId': 'a'},
+                    {'id': 'c', 'name': 'Q1', 'parentId': 'b'},
+                  ],
+                ),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await r.mailboxes.syncMailboxes('jmap-1');
+
+          final mailboxes = await r.mailboxes.observeMailboxes('jmap-1').first;
+          final byPath = {for (final m in mailboxes) m.path: m};
+          expect(byPath['a']!.displayPath, 'Archive');
+          expect(byPath['b']!.displayPath, 'Archive/2026');
+          expect(byPath['c']!.displayPath, 'Archive/2026/Q1');
+          // parent chain preserved so a later rename can rebuild children.
+          expect(byPath['a']!.parentId, isNull);
+          expect(byPath['b']!.parentId, 'a');
+          expect(byPath['c']!.parentId, 'b');
+          // path still holds the opaque server ID (unchanged from before v47).
+          expect(byPath['a']!.path, 'a');
+        },
+      );
+
+      test(
+        'renaming a parent updates every descendant displayPath',
+        () async {
+          // First sync seeds the tree, then Mailbox/changes reports that "a"
+          // was renamed from "Archive" → "Archiv"; the incremental fetch
+          // only returns "a", but the previously-synced children must have
+          // their displayPath rebuilt to reflect the new parent name.
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                _mailboxGetResponse(
+                  state: 'st1',
+                  list: [
+                    {'id': 'a', 'name': 'Archive'},
+                    {'id': 'b', 'name': '2026', 'parentId': 'a'},
+                  ],
+                ),
+                _mailboxChangesResponse(
+                  oldState: 'st1',
+                  newState: 'st2',
+                  updated: ['a'],
+                ),
+                _mailboxGetResponse(
+                  state: 'st2',
+                  list: [
+                    {'id': 'a', 'name': 'Archiv'},
+                  ],
+                ),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await r.mailboxes.syncMailboxes('jmap-1');
+          await r.mailboxes.syncMailboxes('jmap-1');
+
+          final mailboxes = await r.mailboxes.observeMailboxes('jmap-1').first;
+          final byPath = {for (final m in mailboxes) m.path: m};
+          expect(byPath['a']!.displayPath, 'Archiv');
+          expect(byPath['b']!.displayPath, 'Archiv/2026');
+        },
+      );
+
       test('incremental sync: applies created, updated, destroyed', () async {
         final r = _makeRepos(
           httpClient: _mockJmap(
