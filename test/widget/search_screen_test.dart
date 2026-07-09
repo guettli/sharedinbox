@@ -92,7 +92,9 @@ void main() {
       expect(find.text('No results'), findsOneWidget);
     });
 
-    testWidgets('shows email results under "Messages" section', (tester) async {
+    testWidgets('shows email results in the unified message list', (
+      tester,
+    ) async {
       final email = testEmail(subject: 'Invoice Q3');
       await tester.pumpWidget(
         buildApp(
@@ -119,7 +121,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
 
-      expect(find.text('Messages'), findsOneWidget);
       expect(find.text('Invoice Q3'), findsOneWidget);
     });
 
@@ -328,7 +329,6 @@ void main() {
       await tester.tap(find.text('quarterly'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Messages'), findsOneWidget);
       expect(find.text('Quarterly Report'), findsOneWidget);
     });
 
@@ -413,6 +413,68 @@ void main() {
         // Advanced-mode AppBar title and result are visible.
         expect(find.text('Advanced Search'), findsOneWidget);
         expect(find.text('You won a prize!'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'long-press on advanced-search result enters selection mode with batch bar',
+      (tester) async {
+        final hit1 = testEmail(id: 'acc-1:1', subject: 'First similar mail');
+        final hit2 = testEmail(id: 'acc-1:2', subject: 'Second similar mail');
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.from_,
+              comparison: FilterComparison.is_,
+              value: 'bob@example.com',
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(structuredSearchResults: [hit1, hit2]),
+              ),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+            child: MaterialApp(
+              home: SearchScreen(initialFilter: filter),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('First similar mail'), findsOneWidget);
+        expect(find.text('Second similar mail'), findsOneWidget);
+
+        await tester.longPress(find.text('First similar mail'));
+        await tester.pumpAndSettle();
+
+        // Selection-mode AppBar and batch action BottomBar appear — same as
+        // every other message list in the app.
+        expect(find.text('1 selected'), findsOneWidget);
+        expect(find.byIcon(Icons.select_all), findsOneWidget);
+        expect(find.byIcon(Icons.archive), findsOneWidget);
+        expect(find.byIcon(Icons.delete), findsOneWidget);
+        expect(find.byIcon(Icons.report), findsOneWidget);
+        expect(find.byIcon(Icons.drive_file_move), findsOneWidget);
+        expect(find.byIcon(Icons.access_time), findsOneWidget);
+
+        // "Select all" grows the selection to every visible result.
+        await tester.tap(find.byIcon(Icons.select_all));
+        await tester.pumpAndSettle();
+        expect(find.text('2 selected'), findsOneWidget);
       },
     );
 
