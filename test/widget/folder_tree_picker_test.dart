@@ -151,6 +151,102 @@ void main() {
       expect(await result, isNull);
     });
 
+    testWidgets(
+      'JMAP: renders human-readable displayPath, not opaque server IDs',
+      (tester) async {
+        // JMAP: `path` is a one-char server ID (`a`, `b`, `c`); the tree must
+        // render the hierarchical `displayPath` labels and return that on
+        // selection — not the opaque IDs.
+        const jmap = [
+          Mailbox(
+            id: 'j1:a',
+            accountId: 'j1',
+            path: 'a',
+            name: 'Archive',
+            displayPath: 'Archive',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+          Mailbox(
+            id: 'j1:b',
+            accountId: 'j1',
+            path: 'b',
+            name: '2026',
+            displayPath: 'Archive/2026',
+            parentId: 'a',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+          Mailbox(
+            id: 'j1:c',
+            accountId: 'j1',
+            path: 'c',
+            name: 'Q1',
+            displayPath: 'Archive/2026/Q1',
+            parentId: 'b',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+        ];
+        late Future<String?> result;
+        await tester.pumpWidget(_harness(jmap, (f) => result = f));
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+
+        // Only the root is visible initially, labelled by the mailbox name.
+        expect(find.text('Archive'), findsOneWidget);
+        expect(find.text('a'), findsNothing);
+        expect(find.text('2026'), findsNothing);
+
+        // Expand two levels.
+        await tester.tap(find.byIcon(Icons.chevron_right).first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.chevron_right).first);
+        await tester.pumpAndSettle();
+        expect(find.text('Q1'), findsOneWidget);
+
+        // Tapping the leaf returns the hierarchical displayPath, so the
+        // Sieve script fileinto stores something readable.
+        await tester.tap(find.text('Q1'));
+        await tester.pumpAndSettle();
+        expect(await result, 'Archive/2026/Q1');
+      },
+    );
+
+    testWidgets(
+      'JMAP: accepts legacy opaque path as initialPath',
+      (tester) async {
+        // Sieve scripts written before v47 stored the opaque JMAP ID
+        // ("a") as the fileinto folder. Opening the picker with that legacy
+        // value should still highlight the correct mailbox.
+        const jmap = [
+          Mailbox(
+            id: 'j1:a',
+            accountId: 'j1',
+            path: 'a',
+            name: 'Archive',
+            displayPath: 'Archive',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+        ];
+        late Future<String?> result;
+        await tester.pumpWidget(
+          _harness(jmap, (f) => result = f, initialPath: 'a'),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Archive'), findsOneWidget);
+        // Never render the opaque ID as a label.
+        expect(find.text('a'), findsNothing);
+
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(await result, isNull);
+      },
+    );
+
     testWidgets('tapping a non-leaf row toggles its expansion', (tester) async {
       // A path with intermediate components that don't exist as mailboxes
       // becomes a phantom parent. Tapping such a row should expand it (not

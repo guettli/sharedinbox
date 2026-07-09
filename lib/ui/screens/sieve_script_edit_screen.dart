@@ -446,8 +446,9 @@ class _FolderField extends ConsumerWidget {
       stream: ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId),
       builder: (ctx, snap) {
         final mailboxes = snap.data ?? const <Mailbox>[];
-        final match = _findByPath(mailboxes, value);
-        final label = value.isEmpty ? 'Select folder…' : (match?.name ?? value);
+        final match = _resolve(mailboxes, value);
+        final label =
+            value.isEmpty ? 'Select folder…' : (match?.displayPath ?? value);
         final isUnknown = value.isNotEmpty && match == null;
         return OutlinedButton.icon(
           onPressed: mailboxes.isEmpty ? null : () => _pick(context, mailboxes),
@@ -475,9 +476,16 @@ class _FolderField extends ConsumerWidget {
     );
   }
 
-  static Mailbox? _findByPath(List<Mailbox> mailboxes, String path) {
+  /// Matches the fileinto value against a mailbox. New scripts store the
+  /// mailbox's `displayPath`; legacy JMAP scripts stored the opaque server
+  /// `path` (e.g. `"a"`), so we fall back to that so the button still shows
+  /// a readable name instead of the raw ID.
+  static Mailbox? _resolve(List<Mailbox> mailboxes, String value) {
     for (final m in mailboxes) {
-      if (m.path == path) return m;
+      if (m.displayPath == value) return m;
+    }
+    for (final m in mailboxes) {
+      if (m.path == value) return m;
     }
     return null;
   }

@@ -143,5 +143,79 @@ void main() {
       expect(decoded.path, mailbox.path);
       expect(decoded.unreadCount, mailbox.unreadCount);
     });
+
+    test('displayPath defaults to path when omitted', () {
+      // IMAP mailboxes and pre-v47 rows have no separate display path — it
+      // simply mirrors the hierarchical `path`.
+      const imap = Mailbox(
+        id: 'a1:INBOX/Work',
+        accountId: 'a1',
+        path: 'INBOX/Work',
+        name: 'Work',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      expect(imap.displayPath, 'INBOX/Work');
+    });
+
+    test('displayPath can differ from path (JMAP)', () {
+      // JMAP mailboxes: path holds the opaque server ID, displayPath holds
+      // the hierarchical human-readable path.
+      const jmap = Mailbox(
+        id: 'j1:c',
+        accountId: 'j1',
+        path: 'c',
+        name: 'Q1',
+        displayPath: 'Archive/2026/Q1',
+        parentId: 'b',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      expect(jmap.path, 'c');
+      expect(jmap.displayPath, 'Archive/2026/Q1');
+      expect(jmap.parentId, 'b');
+    });
+
+    test('compareMailboxes sorts by displayPath', () {
+      // Two JMAP mailboxes whose opaque path IDs alphabetise the "wrong" way
+      // must still be ordered by their human-readable displayPath.
+      const arch = Mailbox(
+        id: 'j1:z',
+        accountId: 'j1',
+        path: 'z',
+        name: 'Archive',
+        displayPath: 'Archive',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      const misc = Mailbox(
+        id: 'j1:a',
+        accountId: 'j1',
+        path: 'a',
+        name: 'Misc',
+        displayPath: 'Misc',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      expect(compareMailboxes(arch, misc), lessThan(0));
+      expect(compareMailboxes(misc, arch), greaterThan(0));
+    });
+
+    test('copyWith preserves displayPath and parentId', () {
+      const jmap = Mailbox(
+        id: 'j1:c',
+        accountId: 'j1',
+        path: 'c',
+        name: 'Q1',
+        displayPath: 'Archive/2026/Q1',
+        parentId: 'b',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      final copy = jmap.copyWith(unreadCount: 4);
+      expect(copy.displayPath, 'Archive/2026/Q1');
+      expect(copy.parentId, 'b');
+      expect(copy.unreadCount, 4);
+    });
   });
 }

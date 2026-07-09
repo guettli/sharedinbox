@@ -2,8 +2,32 @@
 class Mailbox {
   final String id; // "<accountId>:<path>"
   final String accountId;
-  final String path; // e.g. "INBOX", "Sent", "INBOX/Work"
-  final String name; // last path component
+
+  /// Opaque server-side identifier for this mailbox.
+  ///
+  /// - IMAP: the hierarchical folder path (e.g. `INBOX/Work`), which the
+  ///   server uses as its own reference. Same as [displayPath].
+  /// - JMAP: the server-assigned mailbox ID (e.g. `a`), which is what
+  ///   `Email` rows and JMAP requests reference. Not human-readable.
+  ///
+  /// This is what belongs in database foreign keys and protocol requests.
+  final String path;
+
+  /// Last path component / leaf name (e.g. `Work` for `INBOX/Work`).
+  final String name;
+
+  /// Hierarchical, human-readable path (e.g. `Archive/2026`).
+  ///
+  /// - IMAP: equal to [path].
+  /// - JMAP: computed by walking the `parentId` chain and joining names
+  ///   with `/`, so it always reads like a folder tree.
+  ///
+  /// This is what belongs in UI strings and in Sieve `fileinto`.
+  final String displayPath;
+
+  /// JMAP parent mailbox ID, or `null` for a root / for IMAP.
+  final String? parentId;
+
   final int unreadCount;
   final int totalCount;
   // JMAP role (RFC 8621) or mapped from IMAP special-use (RFC 6154).
@@ -17,14 +41,18 @@ class Mailbox {
     required this.name,
     required this.unreadCount,
     required this.totalCount,
+    String? displayPath,
+    this.parentId,
     this.role,
-  });
+  }) : displayPath = displayPath ?? path;
 
   Mailbox copyWith({
     String? id,
     String? accountId,
     String? path,
     String? name,
+    String? displayPath,
+    String? parentId,
     int? unreadCount,
     int? totalCount,
     String? role,
@@ -34,6 +62,8 @@ class Mailbox {
       accountId: accountId ?? this.accountId,
       path: path ?? this.path,
       name: name ?? this.name,
+      displayPath: displayPath ?? this.displayPath,
+      parentId: parentId ?? this.parentId,
       unreadCount: unreadCount ?? this.unreadCount,
       totalCount: totalCount ?? this.totalCount,
       role: role ?? this.role,
@@ -46,6 +76,8 @@ class Mailbox {
       accountId: json['accountId'] as String,
       path: json['path'] as String,
       name: json['name'] as String,
+      displayPath: json['displayPath'] as String?,
+      parentId: json['parentId'] as String?,
       unreadCount: json['unreadCount'] as int,
       totalCount: json['totalCount'] as int,
       role: json['role'] as String?,
@@ -58,6 +90,8 @@ class Mailbox {
       'accountId': accountId,
       'path': path,
       'name': name,
+      'displayPath': displayPath,
+      'parentId': parentId,
       'unreadCount': unreadCount,
       'totalCount': totalCount,
       'role': role,
@@ -65,7 +99,9 @@ class Mailbox {
   }
 }
 
-/// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by path.
+/// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by
+/// [Mailbox.displayPath], so JMAP mailboxes sort by their human-readable path
+/// rather than by their opaque server ID.
 int compareMailboxes(Mailbox a, Mailbox b) {
   const roleOrder = ['inbox', 'drafts', 'sent', 'archive', 'junk', 'trash'];
   final idxA = a.role == null ? 99 : roleOrder.indexOf(a.role!);
@@ -76,5 +112,5 @@ int compareMailboxes(Mailbox a, Mailbox b) {
   if (prioA != prioB) {
     return prioA.compareTo(prioB);
   }
-  return a.path.toLowerCase().compareTo(b.path.toLowerCase());
+  return a.displayPath.toLowerCase().compareTo(b.displayPath.toLowerCase());
 }
