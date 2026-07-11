@@ -31,6 +31,7 @@ import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart'
     hide Email, EmailBody, UserPreferences;
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
@@ -285,20 +286,27 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
     EmailRepository repo,
     Email header,
   ) async {
-    final prefs = ref.read(userPreferencesProvider).value;
-    final action =
-        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
-    if (action != AfterMailViewAction.nextMessage) return;
+    // Prefetch is purely opportunistic — swallow any failure (malformed body
+    // decode, network, DB) so a background prefetch cannot tear the app down
+    // via the runZonedGuarded → CrashScreen path (see #232).
+    try {
+      final prefs = ref.read(userPreferencesProvider).value;
+      final action =
+          prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
+      if (action != AfterMailViewAction.nextMessage) return;
 
-    final threads =
-        await repo.observeThreads(header.accountId, header.mailboxPath).first;
-    final currentIndex = threads.indexWhere(
-      (t) => t.emailIds.contains(_emailId),
-    );
-    if (currentIndex < 0 || currentIndex + 1 >= threads.length) return;
+      final threads =
+          await repo.observeThreads(header.accountId, header.mailboxPath).first;
+      final currentIndex = threads.indexWhere(
+        (t) => t.emailIds.contains(_emailId),
+      );
+      if (currentIndex < 0 || currentIndex + 1 >= threads.length) return;
 
-    final nextId = threads[currentIndex + 1].latestEmailId;
-    await repo.getEmailBody(nextId);
+      final nextId = threads[currentIndex + 1].latestEmailId;
+      await repo.getEmailBody(nextId);
+    } catch (e, st) {
+      log('prefetch next email body failed', error: e, stackTrace: st);
+    }
   }
 }
 
