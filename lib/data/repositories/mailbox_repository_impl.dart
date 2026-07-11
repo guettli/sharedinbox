@@ -508,10 +508,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
     switch (account.type) {
       case account_model.AccountType.imap:
         return _createMailboxWithRoleImap(
-            account, password, name, role, parent);
+          account,
+          password,
+          name,
+          role,
+          parent,
+        );
       case account_model.AccountType.jmap:
         return _createMailboxWithRoleJmap(
-            account, password, name, role, parent);
+          account,
+          password,
+          name,
+          role,
+          parent,
+        );
     }
   }
 
@@ -527,10 +537,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
     switch (account.type) {
       case account_model.AccountType.imap:
         return _createMailboxWithRoleImap(
-            account, password, name, null, parent);
+          account,
+          password,
+          name,
+          null,
+          parent,
+        );
       case account_model.AccountType.jmap:
         return _createMailboxWithRoleJmap(
-            account, password, name, null, parent);
+          account,
+          password,
+          name,
+          null,
+          parent,
+        );
     }
   }
 
