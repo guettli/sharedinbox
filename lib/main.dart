@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/root_messenger.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
@@ -172,6 +173,10 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
       title: 'sharedinbox.de',
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),
+      // A top-level messenger so UndoShell's SnackBar survives concurrent
+      // route transitions (regression: on Android the snack was being dropped
+      // when the detail route popped in the same frame).
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       routerConfig: router,
     );
   }
