@@ -336,9 +336,8 @@ void main() {
             stream: controller.stream,
             onCreate: ({required name, parentDisplayPath}) async {
               captured.add(parentDisplayPath);
-              final displayPath = parentDisplayPath == null
-                  ? name
-                  : '$parentDisplayPath/$name';
+              final displayPath =
+                  parentDisplayPath == null ? name : '$parentDisplayPath/$name';
               final created = Mailbox(
                 id: 'acc-1:$displayPath',
                 accountId: 'acc-1',

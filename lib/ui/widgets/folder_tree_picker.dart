@@ -109,8 +109,7 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
           actions: [
             if (widget.onCreate != null)
               TextButton.icon(
-                onPressed:
-                    _creating ? null : () => _promptCreate(parent: null),
+                onPressed: _creating ? null : () => _promptCreate(parent: null),
                 icon: _creating
                     ? const SizedBox(
                         width: AppIconSize.sm,

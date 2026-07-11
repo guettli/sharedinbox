@@ -507,9 +507,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final parent = await _findParent(accountId, parentDisplayPath);
     switch (account.type) {
       case account_model.AccountType.imap:
-        return _createMailboxWithRoleImap(account, password, name, role, parent);
+        return _createMailboxWithRoleImap(
+            account, password, name, role, parent);
       case account_model.AccountType.jmap:
-        return _createMailboxWithRoleJmap(account, password, name, role, parent);
+        return _createMailboxWithRoleJmap(
+            account, password, name, role, parent);
     }
   }
 
@@ -524,9 +526,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final parent = await _findParent(accountId, parentDisplayPath);
     switch (account.type) {
       case account_model.AccountType.imap:
-        return _createMailboxWithRoleImap(account, password, name, null, parent);
+        return _createMailboxWithRoleImap(
+            account, password, name, null, parent);
       case account_model.AccountType.jmap:
-        return _createMailboxWithRoleJmap(account, password, name, null, parent);
+        return _createMailboxWithRoleJmap(
+            account, password, name, null, parent);
     }
   }
 
