@@ -213,8 +213,9 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
   _i5.Future<_i2.Mailbox> createMailboxWithRole(
     String? accountId,
     String? name,
-    String? role,
-  ) =>
+    String? role, {
+    String? parentDisplayPath,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #createMailboxWithRole,
@@ -223,6 +224,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             name,
             role,
           ],
+          {#parentDisplayPath: parentDisplayPath},
         ),
         returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
@@ -233,6 +235,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
               name,
               role,
             ],
+            {#parentDisplayPath: parentDisplayPath},
           ),
         )),
       ) as _i5.Future<_i2.Mailbox>);
@@ -240,8 +243,9 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
   @override
   _i5.Future<_i2.Mailbox> createMailbox(
     String? accountId,
-    String? name,
-  ) =>
+    String? name, {
+    String? parentDisplayPath,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #createMailbox,
@@ -249,6 +253,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             accountId,
             name,
           ],
+          {#parentDisplayPath: parentDisplayPath},
         ),
         returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
@@ -258,6 +263,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
               accountId,
               name,
             ],
+            {#parentDisplayPath: parentDisplayPath},
           ),
         )),
       ) as _i5.Future<_i2.Mailbox>);

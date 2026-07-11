@@ -244,8 +244,9 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
   Future<Mailbox> createMailboxWithRole(
     String accountId,
     String name,
-    String role,
-  ) async =>
+    String role, {
+    String? parentDisplayPath,
+  }) async =>
       Mailbox(
         id: '$accountId:$name',
         accountId: accountId,
@@ -256,7 +257,12 @@ class FakeMailboxRepositoryWithInbox implements MailboxRepository {
         totalCount: 0,
       );
   @override
-  Future<Mailbox> createMailbox(String accountId, String name) async => Mailbox(
+  Future<Mailbox> createMailbox(
+    String accountId,
+    String name, {
+    String? parentDisplayPath,
+  }) async =>
+      Mailbox(
         id: '$accountId:$name',
         accountId: accountId,
         path: name,
