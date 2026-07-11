@@ -430,11 +430,17 @@ class _FolderField extends ConsumerWidget {
   final String value;
   final void Function(String) onChanged;
 
-  Future<void> _pick(BuildContext context, List<Mailbox> mailboxes) async {
+  Future<void> _pick(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(mailboxRepositoryProvider);
     final picked = await showFolderTreePicker(
       context,
-      mailboxes: mailboxes,
+      mailboxesStream: repo.observeMailboxes(accountId),
       initialPath: value.isEmpty ? null : value,
+      onCreate: ({required name, parentDisplayPath}) => repo.createMailbox(
+        accountId,
+        name,
+        parentDisplayPath: parentDisplayPath,
+      ),
     );
     if (picked != null) onChanged(picked);
   }
@@ -451,7 +457,7 @@ class _FolderField extends ConsumerWidget {
             value.isEmpty ? 'Select folder…' : (match?.displayPath ?? value);
         final isUnknown = value.isNotEmpty && match == null;
         return OutlinedButton.icon(
-          onPressed: mailboxes.isEmpty ? null : () => _pick(context, mailboxes),
+          onPressed: mailboxes.isEmpty ? null : () => _pick(context, ref),
           icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
           label: Align(
             alignment: AlignmentDirectional.centerStart,

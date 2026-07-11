@@ -63,6 +63,16 @@ class SnoozeSpyImapClient extends FakeImapClient {
   }
 
   @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [_fakeMailbox('INBOX')];
+
+  @override
   Future<imap.StoreImapResult> uidStore(
     imap.MessageSequence sequence,
     List<String> flags, {

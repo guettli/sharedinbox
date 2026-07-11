@@ -581,6 +581,191 @@ void main() {
         expect(found!.name, 'Archive');
       });
 
+      test(
+        'IMAP: creates a subfolder under an existing parent using its '
+        'displayPath',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          // Pre-seed the parent mailbox in the local cache.
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Archive',
+                  accountId: 'acc-1',
+                  path: 'Archive',
+                  name: 'Archive',
+                  displayPath: const Value('Archive'),
+                ),
+              );
+
+          final result = await mailboxes.createMailbox(
+            'acc-1',
+            '2026',
+            parentDisplayPath: 'Archive',
+          );
+
+          // Delimiter defaulted from the parent's own path (top-level, no
+          // `/` or `.`), so the fake server sees the LIST probe and hands
+          // back `/` — the new folder is created at Archive/2026.
+          expect(spy.createdMailbox, 'Archive/2026');
+          expect(result.name, '2026');
+          expect(result.path, 'Archive/2026');
+          expect(result.displayPath, 'Archive/2026');
+        },
+      );
+
+      test(
+        'IMAP: reuses "." delimiter when the parent path already uses it',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:INBOX.Work',
+                  accountId: 'acc-1',
+                  path: 'INBOX.Work',
+                  name: 'Work',
+                  displayPath: const Value('INBOX/Work'),
+                ),
+              );
+
+          final result = await mailboxes.createMailbox(
+            'acc-1',
+            'Tasks',
+            parentDisplayPath: 'INBOX/Work',
+          );
+
+          expect(spy.createdMailbox, 'INBOX.Work.Tasks');
+          expect(result.path, 'INBOX.Work.Tasks');
+          // displayPath is always joined with `/` for the UI.
+          expect(result.displayPath, 'INBOX/Work/Tasks');
+        },
+      );
+
+      test(
+        'throws when parentDisplayPath is not found locally',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          await expectLater(
+            mailboxes.createMailbox(
+              'acc-1',
+              '2026',
+              parentDisplayPath: 'NoSuchParent',
+            ),
+            throwsA(isA<Exception>()),
+          );
+          // Never touched the server.
+          expect(spy.createdMailbox, isNull);
+        },
+      );
+
+      test(
+        'JMAP: creates a subfolder with parentId in Mailbox/set',
+        () async {
+          final requestedBodies = <String>[];
+          final r = _makeRepos(
+            httpClient: MockClient((req) async {
+              if (req.url.path.contains('well-known')) {
+                return http.Response(
+                  jsonEncode({
+                    'apiUrl': 'https://jmap.example.com/api/',
+                    'accounts': {
+                      'acct1': {
+                        'name': 'alice@example.com',
+                        'isPersonal': true,
+                      },
+                    },
+                    'primaryAccounts': {
+                      'urn:ietf:params:jmap:core': 'acct1',
+                      'urn:ietf:params:jmap:mail': 'acct1',
+                    },
+                    'capabilities': {},
+                    'username': 'alice@example.com',
+                    'state': 'sess1',
+                  }),
+                  200,
+                );
+              }
+              requestedBodies.add(req.body);
+              return http.Response(
+                jsonEncode({
+                  'sessionState': 'sess1',
+                  'methodResponses': [
+                    [
+                      'Mailbox/set',
+                      {
+                        'accountId': 'acct1',
+                        'created': {
+                          'new-mailbox': {'id': 'mbx-child'},
+                        },
+                      },
+                      '0',
+                    ],
+                  ],
+                }),
+                200,
+              );
+            }),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          // Pre-seed the parent mailbox (as if a previous sync had brought
+          // it into the cache).
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'jmap-1:mbx-parent',
+                  accountId: 'jmap-1',
+                  path: 'mbx-parent',
+                  name: 'Archive',
+                  displayPath: const Value('Archive'),
+                ),
+              );
+
+          final result = await r.mailboxes.createMailbox(
+            'jmap-1',
+            '2026',
+            parentDisplayPath: 'Archive',
+          );
+
+          expect(result.name, '2026');
+          expect(result.path, 'mbx-child');
+          expect(result.parentId, 'mbx-parent');
+          expect(result.displayPath, 'Archive/2026');
+
+          // The request body must include parentId pointing at the parent's
+          // opaque server ID.
+          expect(requestedBodies, hasLength(1));
+          final body =
+              jsonDecode(requestedBodies.first) as Map<String, dynamic>;
+          final calls = body['methodCalls'] as List<dynamic>;
+          final args = (calls.first as List)[1] as Map<String, dynamic>;
+          final create = args['create'] as Map<String, dynamic>;
+          final mbx = create['new-mailbox'] as Map<String, dynamic>;
+          expect(mbx['parentId'], 'mbx-parent');
+        },
+      );
+
       test('JMAP: throws when server returns no created ID', () async {
         final r = _makeRepos(
           httpClient: _mockJmap(

@@ -187,13 +187,17 @@ class FakeMailboxRepository implements MailboxRepository {
   Future<Mailbox> createMailboxWithRole(
     String accountId,
     String name,
-    String role,
-  ) async {
+    String role, {
+    String? parentDisplayPath,
+  }) async {
+    final displayPath =
+        parentDisplayPath == null ? name : '$parentDisplayPath/$name';
     final mailbox = Mailbox(
-      id: '$accountId:$name',
+      id: '$accountId:$displayPath',
       accountId: accountId,
-      path: name,
+      path: displayPath,
       name: name,
+      displayPath: displayPath,
       role: role,
       unreadCount: 0,
       totalCount: 0,
@@ -203,12 +207,19 @@ class FakeMailboxRepository implements MailboxRepository {
   }
 
   @override
-  Future<Mailbox> createMailbox(String accountId, String name) async {
+  Future<Mailbox> createMailbox(
+    String accountId,
+    String name, {
+    String? parentDisplayPath,
+  }) async {
+    final displayPath =
+        parentDisplayPath == null ? name : '$parentDisplayPath/$name';
     final mailbox = Mailbox(
-      id: '$accountId:$name',
+      id: '$accountId:$displayPath',
       accountId: accountId,
-      path: name,
+      path: displayPath,
       name: name,
+      displayPath: displayPath,
       unreadCount: 0,
       totalCount: 0,
     );

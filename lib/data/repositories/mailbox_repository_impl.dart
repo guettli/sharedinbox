@@ -499,28 +499,84 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<model.Mailbox> createMailboxWithRole(
     String accountId,
     String name,
-    String role,
-  ) async {
+    String role, {
+    String? parentDisplayPath,
+  }) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
+    final parent = await _findParent(accountId, parentDisplayPath);
     switch (account.type) {
       case account_model.AccountType.imap:
-        return _createMailboxWithRoleImap(account, password, name, role);
+        return _createMailboxWithRoleImap(
+          account,
+          password,
+          name,
+          role,
+          parent,
+        );
       case account_model.AccountType.jmap:
-        return _createMailboxWithRoleJmap(account, password, name, role);
+        return _createMailboxWithRoleJmap(
+          account,
+          password,
+          name,
+          role,
+          parent,
+        );
     }
   }
 
   @override
-  Future<model.Mailbox> createMailbox(String accountId, String name) async {
+  Future<model.Mailbox> createMailbox(
+    String accountId,
+    String name, {
+    String? parentDisplayPath,
+  }) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
+    final parent = await _findParent(accountId, parentDisplayPath);
     switch (account.type) {
       case account_model.AccountType.imap:
-        return _createMailboxWithRoleImap(account, password, name, null);
+        return _createMailboxWithRoleImap(
+          account,
+          password,
+          name,
+          null,
+          parent,
+        );
       case account_model.AccountType.jmap:
-        return _createMailboxWithRoleJmap(account, password, name, null);
+        return _createMailboxWithRoleJmap(
+          account,
+          password,
+          name,
+          null,
+          parent,
+        );
     }
+  }
+
+  /// Looks up the local mailbox row whose `displayPath` matches
+  /// [parentDisplayPath]. Throws when a non-null displayPath does not resolve —
+  /// creating a child under a parent that isn't in the local cache would leave
+  /// the new mailbox unreachable in the UI's tree.
+  Future<MailboxRow?> _findParent(
+    String accountId,
+    String? parentDisplayPath,
+  ) async {
+    if (parentDisplayPath == null || parentDisplayPath.isEmpty) return null;
+    final row = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.displayPath.equals(parentDisplayPath),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) {
+      throw Exception(
+        'Parent mailbox "$parentDisplayPath" not found in local cache',
+      );
+    }
+    return row;
   }
 
   Future<model.Mailbox> _createMailboxWithRoleImap(
@@ -528,26 +584,38 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String password,
     String name,
     String? role,
+    MailboxRow? parent,
   ) async {
     final client = await _imapConnect(
       account,
       _effectiveUsername(account),
       password,
     );
+    String serverPath;
     try {
-      await client.createMailbox(name);
+      if (parent != null) {
+        // Discover the server's hierarchy separator so we can build a valid
+        // subfolder path — LIST is cheap and every server responds with at
+        // least INBOX, whose pathSeparator is the same for all mailboxes.
+        final separator = await _imapPathSeparator(client, parent);
+        serverPath = '${parent.path}$separator$name';
+      } else {
+        serverPath = name;
+      }
+      await client.createMailbox(serverPath);
     } finally {
       await client.logout();
     }
-    final id = '${account.id}:$name';
+    final displayPath = parent != null ? '${parent.displayPath}/$name' : name;
+    final id = '${account.id}:$serverPath';
     await _db.into(_db.mailboxes).insertOnConflictUpdate(
           MailboxesCompanion.insert(
             id: id,
             accountId: account.id,
-            path: name,
+            path: serverPath,
             name: name,
             role: Value(role),
-            displayPath: Value(name),
+            displayPath: Value(displayPath),
           ),
         );
     final row = await (_db.select(
@@ -557,11 +625,29 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return _toModel(row);
   }
 
+  /// Returns the IMAP hierarchy separator to use when creating a subfolder
+  /// of [parent]. Derives it from the parent's own path when possible
+  /// (works for any hierarchical mailbox), otherwise asks the server via
+  /// LIST. Falls back to `/` if the server returns nothing usable.
+  Future<String> _imapPathSeparator(
+    imap.ImapClient client,
+    MailboxRow parent,
+  ) async {
+    if (parent.path.contains('/')) return '/';
+    if (parent.path.contains('.')) return '.';
+    final listed = await client.listMailboxes();
+    if (listed.isNotEmpty && listed.first.pathSeparator.isNotEmpty) {
+      return listed.first.pathSeparator;
+    }
+    return '/';
+  }
+
   Future<model.Mailbox> _createMailboxWithRoleJmap(
     account_model.Account account,
     String password,
     String name,
     String? role,
+    MailboxRow? parent,
   ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
@@ -582,6 +668,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             'new-mailbox': {
               'name': name,
               if (role != null) 'role': role,
+              if (parent != null) 'parentId': parent.path,
             },
           },
         },
@@ -598,9 +685,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
     }
     final dbId = '${account.id}:$newId';
-    // No parent for a mailbox created via this API, so the display path is
-    // just the name. The next full sync will walk `parentId` if the user
-    // later reparents it under something else.
+    // Compute the new mailbox's displayPath by prefixing the parent's chain
+    // (matching the walk in [_upsertJmapMailboxes]). Without a parent, the
+    // display path is just the name — the next full sync will confirm.
+    final displayPath = parent != null ? '${parent.displayPath}/$name' : name;
     await _db.into(_db.mailboxes).insertOnConflictUpdate(
           MailboxesCompanion.insert(
             id: dbId,
@@ -608,7 +696,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
             path: newId,
             name: name,
             role: Value(role),
-            displayPath: Value(name),
+            displayPath: Value(displayPath),
+            parentId: Value(parent?.path),
           ),
         );
     final row = await (_db.select(
