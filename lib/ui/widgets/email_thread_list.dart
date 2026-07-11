@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -258,16 +259,28 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
           isSelecting ? DismissDirection.none : DismissDirection.horizontal,
       background: _swipeBackground(
         alignment: Alignment.centerLeft,
-        color: Colors.green,
+        color: const Color(0xFF2E7D32),
         icon: Icons.archive,
         label: 'Archive',
       ),
       secondaryBackground: _swipeBackground(
         alignment: Alignment.centerRight,
-        color: Colors.red,
+        color: Colors.red.shade700,
         icon: Icons.delete,
         label: 'Delete',
       ),
+      confirmDismiss: (direction) async {
+        // Fire a distinct haptic on delete vs archive at the moment the
+        // dismiss is committed, before the row starts animating away — the
+        // sensation matches the coloured overlay banner the user is about
+        // to see (#233).
+        if (direction == DismissDirection.endToStart) {
+          unawaited(HapticFeedback.heavyImpact());
+        } else {
+          unawaited(HapticFeedback.mediumImpact());
+        }
+        return true;
+      },
       onDismissed: (direction) =>
           unawaited(swipeDismissThread(ref, t, direction)),
       child: tile,
@@ -315,9 +328,16 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white),
+          Icon(icon, color: Colors.white, size: 28),
           const SizedBox(width: AppSpacing.sm),
-          Text(label, style: const TextStyle(color: Colors.white)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
@@ -373,9 +393,11 @@ Widget buildSelectionBottomBar(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         if (includeArchive)
-          IconButton(
-            icon: const Icon(Icons.archive),
+          _BulkActionButton(
+            icon: Icons.archive,
             tooltip: 'Archive',
+            color: const Color(0xFF2E7D32),
+            haptic: HapticFeedback.mediumImpact,
             onPressed: () => run(
               () => batchArchive(
                 context,
@@ -385,17 +407,21 @@ Widget buildSelectionBottomBar(
             ),
           ),
         if (includeDelete)
-          IconButton(
-            icon: const Icon(Icons.delete),
+          _BulkActionButton(
+            icon: Icons.delete,
             tooltip: 'Delete',
+            color: Colors.red.shade700,
+            haptic: HapticFeedback.heavyImpact,
             onPressed: () => run(
               () => batchDelete(ref, threads: controller.selectedThreads),
             ),
           ),
         if (includeSpam)
-          IconButton(
-            icon: const Icon(Icons.report),
+          _BulkActionButton(
+            icon: Icons.report,
             tooltip: 'Mark as spam',
+            color: const Color(0xFFE65100),
+            haptic: HapticFeedback.mediumImpact,
             onPressed: () => run(
               () => batchMarkSpam(
                 context,
@@ -431,4 +457,84 @@ Widget buildSelectionBottomBar(
       ],
     ),
   );
+}
+
+/// Bulk-select destructive action button.
+///
+/// Distinct from the tiny [IconButton]s the bar used to render: a coloured
+/// tinted circle at rest identifies the action, and a pronounced scale +
+/// saturation pulse on tap makes the tap unmistakable. Feedback for the
+/// resulting action (Archived N, Deleted N, Marked N as spam) lands in the
+/// UndoShell banner + SnackBar (#233).
+class _BulkActionButton extends StatefulWidget {
+  const _BulkActionButton({
+    required this.icon,
+    required this.tooltip,
+    required this.color,
+    required this.onPressed,
+    required this.haptic,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Color color;
+  final VoidCallback onPressed;
+  final Future<void> Function() haptic;
+
+  @override
+  State<_BulkActionButton> createState() => _BulkActionButtonState();
+}
+
+class _BulkActionButtonState extends State<_BulkActionButton> {
+  bool _pulsing = false;
+  Timer? _pulseTimer;
+
+  @override
+  void dispose() {
+    _pulseTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handle() {
+    unawaited(widget.haptic());
+    setState(() => _pulsing = true);
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer(const Duration(milliseconds: 320), () {
+      if (mounted) setState(() => _pulsing = false);
+    });
+    widget.onPressed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.tooltip,
+      child: InkResponse(
+        onTap: _handle,
+        radius: 28,
+        child: AnimatedScale(
+          scale: _pulsing ? 1.5 : 1.0,
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutBack,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _pulsing
+                  ? widget.color
+                  : widget.color.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              widget.icon,
+              size: 24,
+              color: _pulsing ? Colors.white : widget.color,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

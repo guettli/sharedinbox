@@ -87,10 +87,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     unawaited(_replyWithRecipientDialog(context, header, body));
                   },
           ),
-          _TapPulseIconButton(
+          _ActionMorphButton(
             icon: Icons.archive,
             tooltip: 'Archive',
-            pulseColor: const Color(0xFF2E7D32),
+            color: const Color(0xFF2E7D32),
             onPressed: header == null
                 ? null
                 : () {
@@ -98,10 +98,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     unawaited(_archive(context, header));
                   },
           ),
-          _TapPulseIconButton(
+          _ActionMorphButton(
             icon: Icons.delete,
             tooltip: 'Delete',
-            pulseColor: Theme.of(context).colorScheme.error,
+            color: Theme.of(context).colorScheme.error,
             onPressed: () async {
               unawaited(HapticFeedback.heavyImpact());
               final nextEmailId = await _getNextEmailIdIfNeeded(header);
@@ -136,10 +136,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               if (mounted) setState(() => _isFlagged = next);
             },
           ),
-          _TapPulseIconButton(
+          _ActionMorphButton(
             icon: Icons.report_outlined,
             tooltip: 'Mark as spam',
-            pulseColor: const Color(0xFFE65100),
+            color: const Color(0xFFE65100),
             onPressed: header == null
                 ? null
                 : () {
@@ -1384,36 +1384,50 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   }
 }
 
-/// Brief scale + colour pulse on tap so the user gets an immediate, in-place
-/// hint about which destructive action fired, before the screen navigates
-/// away and the SnackBar takes over as the persistent signal.
-class _TapPulseIconButton extends StatefulWidget {
-  const _TapPulseIconButton({
+/// Action button used for destructive top-bar actions (archive / delete /
+/// spam). Always visible: a tinted, coloured circular badge that identifies
+/// the action at rest, so a mis-tap between the three neighbouring icons is
+/// obvious even before the SnackBar / banner appears.
+///
+/// On tap the badge saturates to full colour, the icon inverts to white,
+/// and the whole button scales up ~1.6× with an ease-out bounce before
+/// settling back — a much more emphatic pulse than the old 1.4× tint-only
+/// animation (#233).
+class _ActionMorphButton extends StatefulWidget {
+  const _ActionMorphButton({
     required this.icon,
     required this.tooltip,
-    required this.pulseColor,
+    required this.color,
     required this.onPressed,
   });
 
   final IconData icon;
   final String tooltip;
-  final Color pulseColor;
+  final Color color;
   final VoidCallback? onPressed;
 
   @override
-  State<_TapPulseIconButton> createState() => _TapPulseIconButtonState();
+  State<_ActionMorphButton> createState() => _ActionMorphButtonState();
 }
 
-class _TapPulseIconButtonState extends State<_TapPulseIconButton> {
-  static const _pulseDuration = Duration(milliseconds: 220);
+class _ActionMorphButtonState extends State<_ActionMorphButton> {
+  static const _pulseDuration = Duration(milliseconds: 320);
 
   bool _pulsing = false;
+  Timer? _pulseTimer;
+
+  @override
+  void dispose() {
+    _pulseTimer?.cancel();
+    super.dispose();
+  }
 
   void _handle() {
     final onPressed = widget.onPressed;
     if (onPressed == null) return;
     setState(() => _pulsing = true);
-    Future<void>.delayed(_pulseDuration, () {
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer(_pulseDuration, () {
       if (mounted) setState(() => _pulsing = false);
     });
     onPressed();
@@ -1421,16 +1435,47 @@ class _TapPulseIconButtonState extends State<_TapPulseIconButton> {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: widget.tooltip,
-      onPressed: widget.onPressed == null ? null : _handle,
-      icon: AnimatedScale(
-        scale: _pulsing ? 1.4 : 1.0,
-        duration: const Duration(milliseconds: 110),
-        curve: Curves.easeOut,
-        child: Icon(
-          widget.icon,
-          color: _pulsing ? widget.pulseColor : null,
+    final enabled = widget.onPressed != null;
+    final restBackground =
+        widget.color.withValues(alpha: enabled ? 0.18 : 0.08);
+    final firingBackground = widget.color;
+    final restForeground =
+        enabled ? widget.color : widget.color.withValues(alpha: 0.5);
+    const firingForeground = Colors.white;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Tooltip(
+        message: widget.tooltip,
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: InkResponse(
+            onTap: enabled ? _handle : null,
+            radius: 28,
+            child: Center(
+              child: AnimatedScale(
+                scale: _pulsing ? 1.6 : 1.0,
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOutBack,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _pulsing ? firingBackground : restBackground,
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    widget.icon,
+                    size: 22,
+                    color: _pulsing ? firingForeground : restForeground,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
