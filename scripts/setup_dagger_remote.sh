@@ -103,9 +103,13 @@ fi
 # child. Retry a small number of times so a single transient blip does not fail
 # the whole Firebase Test Lab job. Auth or config errors fail fast on every
 # attempt, so the extra latency on a genuine misconfiguration is negligible.
+# Budget: 5 × 30s timeout + 4 × 5s wait ≈ 3 min — matches the verify block's
+# retry shape so a brief engine restart or sshd hiccup (issue #241 saw the
+# engine unreachable for ~2 min) is absorbed within one workflow run instead
+# of failing every scheduled Deploy for the hour.
 echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
 TUNNEL_TIMEOUT_S="${DAGGER_TUNNEL_TIMEOUT_S:-30}"
-TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-3}"
+TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-5}"
 TUNNEL_RETRY_WAIT_S="${DAGGER_TUNNEL_RETRY_WAIT_S:-5}"
 tunnel_rc=0
 _t0=$SECONDS
