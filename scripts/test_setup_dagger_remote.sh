@@ -7,7 +7,9 @@
 #
 # The SSH tunnel call also retries on transient connection failures — the
 # engine host's sshd occasionally resets the TCP connection during key
-# exchange (issue #221). Additional tests below pin that retry behavior.
+# exchange (issue #221), or the host briefly hangs and the wrapping `timeout`
+# kills ssh with rc=124 (issue #243). Additional tests below pin that
+# retry behavior.
 #
 # Run directly: bash scripts/test_setup_dagger_remote.sh
 set -uo pipefail
@@ -280,6 +282,39 @@ elif ! printf '%s' "$out" | grep -q "::warning::SSH tunnel attempt 2/3 failed"; 
     _fail "tunnel persistent: should print an intermediate retry warning" "$out"
 elif printf '%s' "$out" | grep -q "::warning::SSH tunnel attempt 3/3 failed"; then
     _fail "tunnel persistent: should not warn on the final attempt (error prints instead)" "$out"
+else
+    _pass
+fi
+
+# --- Timeout (rc=124) recovers on attempt 3: issue #243 case ------------------
+# The engine host briefly hangs and ssh is killed by the wrapping `timeout`.
+# The retry loop treats rc=124 the same as rc=255 — retry until success or
+# max attempts. This mirrors the real-world blip that lasted ~2 minutes.
+out=$(SSH_RC=124 SSH_STDERR_MSG="" SSH_SUCCEED_ON=3 run_tunnel)
+rc=$?
+attempts=$(cat "$SCRATCH/ssh_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "tunnel timeout-recovery: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "tunnel timeout-recovery: expected 3 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "tunnel timeout-recovery: should not print ::error:: lines after recovery" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::SSH tunnel attempt 1/3 failed (rc=124)"; then
+    _fail "tunnel timeout-recovery: should warn about the first timed-out attempt" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::SSH tunnel attempt 2/3 failed (rc=124)"; then
+    _fail "tunnel timeout-recovery: should warn about the second timed-out attempt" "$out"
+else
+    _pass
+fi
+
+# --- Default budget is generous (issue #243): 5 attempts, 15s wait ------------
+# Regression guard so a future edit doesn't quietly tighten the retry loop
+# back down below what we need to ride out ~2-minute engine-host blips.
+_defaults=$(awk '/^TUNNEL_TIMEOUT_S=/{t=$0} /^TUNNEL_MAX_ATTEMPTS=/{a=$0} /^TUNNEL_RETRY_WAIT_S=/{w=$0; print t; print a; print w; exit}' "$SCRIPT")
+if ! printf '%s' "$_defaults" | grep -qE 'TUNNEL_MAX_ATTEMPTS="\$\{DAGGER_TUNNEL_MAX_ATTEMPTS:-5\}"'; then
+    _fail "defaults: TUNNEL_MAX_ATTEMPTS default should be 5" "$_defaults"
+elif ! printf '%s' "$_defaults" | grep -qE 'TUNNEL_RETRY_WAIT_S="\$\{DAGGER_TUNNEL_RETRY_WAIT_S:-15\}"'; then
+    _fail "defaults: TUNNEL_RETRY_WAIT_S default should be 15" "$_defaults"
 else
     _pass
 fi

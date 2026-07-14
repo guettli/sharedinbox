@@ -97,16 +97,24 @@ fi
 # Forwards local TCP port 8080 directly to /run/dagger/engine.sock on the remote host,
 # eliminating the need for a socat bridge on the server side.
 #
-# The sshd on the engine host occasionally resets the TCP connection during the
-# initial protocol handshake (`kex_exchange_identification: read: Connection
-# reset by peer`), which surfaces as ssh rc=255 without ever forking the tunnel
-# child. Retry a small number of times so a single transient blip does not fail
-# the whole Firebase Test Lab job. Auth or config errors fail fast on every
-# attempt, so the extra latency on a genuine misconfiguration is negligible.
+# Two transient failure modes have been observed here:
+#   * The sshd on the engine host resets the TCP connection during the initial
+#     protocol handshake (`kex_exchange_identification: read: Connection reset
+#     by peer`), which surfaces as ssh rc=255 without ever forking the tunnel
+#     child. See issue #221.
+#   * The engine host becomes briefly unreachable from the runner (TCP hang,
+#     not a reset), so ssh is still probing when the wrapping `timeout` kills
+#     it with rc=124. This has been observed lasting ~2 minutes end-to-end and
+#     recovering on the next hourly re-run. See issue #243.
+# Retry a handful of times so a single transient blip does not fail the whole
+# Firebase Test Lab job. Budget mirrors the verify block below (≈3 min total),
+# because a re-run costs more than waiting the engine host back into service.
+# Auth or config errors fail fast on every attempt, so the extra latency on a
+# genuine misconfiguration is negligible.
 echo "Establishing SSH tunnel to $DAGGER_ENGINE_HOST..."
 TUNNEL_TIMEOUT_S="${DAGGER_TUNNEL_TIMEOUT_S:-30}"
-TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-3}"
-TUNNEL_RETRY_WAIT_S="${DAGGER_TUNNEL_RETRY_WAIT_S:-5}"
+TUNNEL_MAX_ATTEMPTS="${DAGGER_TUNNEL_MAX_ATTEMPTS:-5}"
+TUNNEL_RETRY_WAIT_S="${DAGGER_TUNNEL_RETRY_WAIT_S:-15}"
 tunnel_rc=0
 _t0=$SECONDS
 for attempt in $(seq 1 "$TUNNEL_MAX_ATTEMPTS"); do
