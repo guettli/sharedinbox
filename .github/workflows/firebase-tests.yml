@@ -55,6 +55,7 @@ jobs:
       # project ID is derived from FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY.project_id
       # inside the Dagger pipeline, so it is not plumbed through here.
       - name: Run Android Tests on Firebase Test Lab
+        id: firebase-test
         env:
           DAGGER_NO_NAG: "1"
           OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
@@ -62,8 +63,14 @@ jobs:
           OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task test-android-firebase
 
+      # Only file an issue when the Robo crawl itself failed. A failure in an
+      # earlier step (e.g. Setup Dagger Remote Engine when the private engine
+      # host is briefly unreachable) leaves this step with outcome=skipped —
+      # filing a "Firebase Tests failed" issue in that case is misleading and
+      # misdirects the agentloop to investigate the APK rather than shared CI
+      # infra. See #244.
       - name: Create issue on test failure
-        if: failure()
+        if: failure() && steps.firebase-test.outcome == 'failure'
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ github.token }}
