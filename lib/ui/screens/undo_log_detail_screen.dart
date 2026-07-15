@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -41,70 +42,87 @@ class UndoLogDetailScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView(
-        children: [
-          _SectionHeader(text: 'Transaction', theme: theme),
-          ListTile(
-            leading: const Icon(Icons.account_circle),
-            title: const Text('Account'),
-            subtitle: Text(action.accountId),
-          ),
-          ListTile(
-            leading: Icon(
-              action.type == UndoType.delete
-                  ? Icons.delete_outline
-                  : (action.type == UndoType.snooze
-                      ? Icons.access_time
-                      : Icons.move_to_inbox),
-              color: action.type == UndoType.delete
-                  ? Colors.redAccent
-                  : (action.type == UndoType.snooze
-                      ? Colors.orangeAccent
-                      : Colors.blueAccent),
-            ),
-            title: const Text('Action'),
-            subtitle: Text(action.type.name.toUpperCase()),
-          ),
-          ListTile(
-            leading: const Icon(Icons.schedule),
-            title: const Text('Timestamp'),
-            subtitle: Text(_dateTimeFmt.format(action.timestamp.toLocal())),
-          ),
-          _SectionHeader(text: 'Folders', theme: theme),
-          ListTile(
-            leading: const Icon(Icons.folder_open),
-            title: const Text('Source'),
-            subtitle: Text(action.sourceMailboxPath),
-          ),
-          if (action.type == UndoType.move &&
-              action.destinationMailboxPath != null)
-            ListTile(
-              leading: const Icon(Icons.drive_file_move),
-              title: const Text('Destination'),
-              subtitle: Text(action.destinationMailboxPath!),
-            ),
-          _SectionHeader(
-            text: 'Emails (${action.emailIds.length})',
-            theme: theme,
-          ),
-          if (action.originalEmails.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.sm,
+      body: StreamBuilder<List<Mailbox>>(
+        stream: ref
+            .watch(mailboxRepositoryProvider)
+            .observeMailboxes(action.accountId),
+        builder: (ctx, snap) {
+          final mailboxes = snap.data ?? const <Mailbox>[];
+          return ListView(
+            children: [
+              _SectionHeader(text: 'Transaction', theme: theme),
+              ListTile(
+                leading: const Icon(Icons.account_circle),
+                title: const Text('Account'),
+                subtitle: Text(action.accountId),
               ),
-              child: Text(
-                '${action.emailIds.length} email(s) — details not available',
-                style: theme.textTheme.bodySmall,
+              ListTile(
+                leading: Icon(
+                  action.type == UndoType.delete
+                      ? Icons.delete_outline
+                      : (action.type == UndoType.snooze
+                          ? Icons.access_time
+                          : Icons.move_to_inbox),
+                  color: action.type == UndoType.delete
+                      ? Colors.redAccent
+                      : (action.type == UndoType.snooze
+                          ? Colors.orangeAccent
+                          : Colors.blueAccent),
+                ),
+                title: const Text('Action'),
+                subtitle: Text(action.type.name.toUpperCase()),
               ),
-            ),
-          ...action.originalEmails.map(
-            (email) => _EmailTile(email: email, accountId: action.accountId),
-          ),
-        ],
+              ListTile(
+                leading: const Icon(Icons.schedule),
+                title: const Text('Timestamp'),
+                subtitle: Text(_dateTimeFmt.format(action.timestamp.toLocal())),
+              ),
+              _SectionHeader(text: 'Folders', theme: theme),
+              ListTile(
+                leading: const Icon(Icons.folder_open),
+                title: const Text('Source'),
+                subtitle: Text(
+                  resolveMailboxDisplayPath(
+                    mailboxes,
+                    action.sourceMailboxPath,
+                  ),
+                ),
+              ),
+              if (action.type == UndoType.move &&
+                  action.destinationMailboxPath != null)
+                ListTile(
+                  leading: const Icon(Icons.drive_file_move),
+                  title: const Text('Destination'),
+                  subtitle: Text(
+                    resolveMailboxDisplayPath(
+                      mailboxes,
+                      action.destinationMailboxPath!,
+                    ),
+                  ),
+                ),
+              _SectionHeader(
+                text: 'Emails (${action.emailIds.length})',
+                theme: theme,
+              ),
+              _EmailsSection(action: action),
+            ],
+          );
+        },
       ),
     );
   }
+}
+
+/// Returns the human-readable path for [rawPath] from [mailboxes], falling
+/// back to [rawPath] itself when the mailbox is not in the local cache (e.g.
+/// deleted on the server since the action was recorded). For IMAP the two are
+/// equal; for JMAP [rawPath] is the opaque server id ("a", "b") whereas
+/// [Mailbox.displayPath] is a hierarchical name like "Archive/2026".
+String resolveMailboxDisplayPath(List<Mailbox> mailboxes, String rawPath) {
+  for (final m in mailboxes) {
+    if (m.path == rawPath) return m.displayPath;
+  }
+  return rawPath;
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -129,6 +147,63 @@ class _SectionHeader extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Emails section for an undo action. When [UndoAction.originalEmails] is
+/// populated (the common case for actions taken by the current build), those
+/// are rendered directly. Otherwise the tile falls back to
+/// [EmailRepository.getEmail] so legacy actions already persisted before the
+/// helpers started snapshotting headers still show a subject — no migration
+/// needed.
+class _EmailsSection extends ConsumerWidget {
+  const _EmailsSection({required this.action});
+
+  final UndoAction action;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (action.originalEmails.isNotEmpty) {
+      return Column(
+        children: [
+          for (final email in action.originalEmails)
+            _EmailTile(email: email, accountId: action.accountId),
+        ],
+      );
+    }
+    return FutureBuilder<List<Email>>(
+      future: _fetchEmails(ref, action.emailIds),
+      builder: (ctx, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const SizedBox.shrink();
+        }
+        final emails = snap.data ?? const <Email>[];
+        if (emails.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.sm,
+            ),
+            child: Text(
+              '${action.emailIds.length} email(s) — details not available',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
+          );
+        }
+        return Column(
+          children: [
+            for (final email in emails)
+              _EmailTile(email: email, accountId: action.accountId),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<List<Email>> _fetchEmails(WidgetRef ref, List<String> ids) async {
+    final repo = ref.read(emailRepositoryProvider);
+    final results = await Future.wait(ids.map(repo.getEmail));
+    return results.whereType<Email>().toList();
   }
 }
 

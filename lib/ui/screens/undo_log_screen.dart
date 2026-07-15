@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart';
 
 final _timeFmt = DateFormat('HH:mm:ss');
 
@@ -73,15 +75,27 @@ class _UndoActionTile extends ConsumerWidget {
                 : Colors.blueAccent),
       ),
       title: Text('$subject$extraCount'),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text(
-            '${action.type.name.toUpperCase()} from ${action.sourceMailboxPath} • ${_timeFmt.format(action.timestamp.toLocal())}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
+      subtitle: StreamBuilder<List<Mailbox>>(
+        stream: ref
+            .watch(mailboxRepositoryProvider)
+            .observeMailboxes(action.accountId),
+        builder: (ctx, snap) {
+          final mailboxes = snap.data ?? const <Mailbox>[];
+          final sourceName = resolveMailboxDisplayPath(
+            mailboxes,
+            action.sourceMailboxPath,
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                '${action.type.name.toUpperCase()} from $sourceName • ${_timeFmt.format(action.timestamp.toLocal())}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          );
+        },
       ),
       trailing: TextButton(
         onPressed: () async {

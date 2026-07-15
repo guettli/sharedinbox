@@ -658,6 +658,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'archive',
+              originalEmails: [header],
             ),
           ),
     );
@@ -695,6 +696,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'junk',
+              originalEmails: [header],
             ),
           ),
     );
@@ -823,6 +825,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               emailIds: [widget.emailId],
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: destination,
+              originalEmails: [header],
             ),
           ),
     );
