@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -80,6 +81,126 @@ void main() {
       expect(emails.syncCounts['2'], greaterThanOrEqualTo(1));
 
       manager.dispose();
+    },
+  );
+
+  test(
+    'JMAP loop does not poll while the push stream stays open',
+    () {
+      fakeAsync((async) {
+        final accounts = _FakeAccounts('pw');
+        final mailboxes = _FakeMailboxes();
+        final emails = _FakeEmails();
+        final logs = _FakeLogs();
+
+        // Long-lived push stream: subscribed, but never emits and never
+        // closes. Simulates the "SSE connected, server silent" case.
+        final pushCtrl = StreamController<void>.broadcast();
+        addTearDown(() async => pushCtrl.close());
+        emails.pushStreams['1'] = () => pushCtrl.stream;
+
+        final manager = AccountSyncManager(
+          accounts,
+          mailboxes,
+          emails,
+          syncLog: logs,
+        );
+
+        manager.start();
+        accounts.push([_jmapAccount('1')]);
+
+        // Let the first sync cycle complete and the loop enter _wait().
+        async.elapse(const Duration(milliseconds: 100));
+        final baseline = emails.syncCounts['1'] ?? 0;
+        expect(baseline, greaterThanOrEqualTo(1));
+
+        // Advance well past the old 30 s poll fallback. With push connected
+        // no additional sync cycles must fire.
+        async.elapse(const Duration(minutes: 5));
+        expect(emails.syncCounts['1'], baseline);
+
+        manager.dispose();
+        async.elapse(const Duration(milliseconds: 10));
+      });
+    },
+  );
+
+  test(
+    'JMAP loop resyncs on each StateChange push event',
+    () {
+      fakeAsync((async) {
+        final accounts = _FakeAccounts('pw');
+        final mailboxes = _FakeMailboxes();
+        final emails = _FakeEmails();
+        final logs = _FakeLogs();
+
+        final pushCtrl = StreamController<void>.broadcast();
+        addTearDown(() async => pushCtrl.close());
+        emails.pushStreams['1'] = () => pushCtrl.stream;
+
+        final manager = AccountSyncManager(
+          accounts,
+          mailboxes,
+          emails,
+          syncLog: logs,
+        );
+
+        manager.start();
+        accounts.push([_jmapAccount('1')]);
+
+        async.elapse(const Duration(milliseconds: 100));
+        final baseline = emails.syncCounts['1'] ?? 0;
+        expect(baseline, greaterThanOrEqualTo(1));
+
+        pushCtrl.add(null);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(emails.syncCounts['1'], baseline + 1);
+
+        pushCtrl.add(null);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(emails.syncCounts['1'], baseline + 2);
+
+        manager.dispose();
+        async.elapse(const Duration(milliseconds: 10));
+      });
+    },
+  );
+
+  test(
+    'JMAP loop falls back to 30 s poll when push is unavailable',
+    () {
+      fakeAsync((async) {
+        final accounts = _FakeAccounts('pw');
+        final mailboxes = _FakeMailboxes();
+        final emails = _FakeEmails();
+        final logs = _FakeLogs();
+
+        // Default `pushStreams` entry is absent → `Stream.empty()` → the
+        // stream closes immediately, so the loop should poll.
+        final manager = AccountSyncManager(
+          accounts,
+          mailboxes,
+          emails,
+          syncLog: logs,
+        );
+
+        manager.start();
+        accounts.push([_jmapAccount('1')]);
+
+        async.elapse(const Duration(milliseconds: 100));
+        final baseline = emails.syncCounts['1'] ?? 0;
+        expect(baseline, greaterThanOrEqualTo(1));
+
+        async.elapse(const Duration(seconds: 31));
+        expect(
+          emails.syncCounts['1']!,
+          greaterThan(baseline),
+          reason: 'Poll fallback must wake the loop after ~30 s',
+        );
+
+        manager.dispose();
+        async.elapse(const Duration(milliseconds: 10));
+      });
     },
   );
 }
@@ -189,6 +310,11 @@ class _FakeMailboxes implements MailboxRepository {
 
 class _FakeEmails implements EmailRepository {
   final syncCounts = <String, int>{};
+
+  /// Per-account JMAP push stream factory. Tests can install their own
+  /// controllable stream; by default we return an empty (immediately closed)
+  /// stream so the sync loop falls back to polling.
+  final Map<String, Stream<void> Function()> pushStreams = {};
 
   @override
   Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
@@ -307,8 +433,10 @@ class _FakeEmails implements EmailRepository {
       [];
 
   @override
-  Stream<void> watchJmapPush(String accountId, String password) =>
-      const Stream.empty();
+  Stream<void> watchJmapPush(String accountId, String password) {
+    final factory = pushStreams[accountId];
+    return factory != null ? factory() : const Stream.empty();
+  }
 
   @override
   Future<ReliabilityResult> verifySyncReliability(

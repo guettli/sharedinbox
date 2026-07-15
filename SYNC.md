@@ -120,9 +120,13 @@ start()
   │    syncEmails()          ← Email/query + Email/get (first run)
   │                             Email/changes (subsequent runs, state token)
   └─ _wait()
-       ├─ If server advertises eventSourceUrl: subscribe to SSE push
-       │    wake on "Email" change event
-       └─ Otherwise: sleep 30 s (poll fallback)
+       ├─ Subscribe to SSE push (`watchJmapPush`)
+       ├─ If the stream stays open: wake only on a real `StateChange`
+       │    event or a `kick()` from the UI — same shape as IMAP IDLE.
+       │    The underlying SSE connection is capped at 25 min, so a
+       │    silent server still gets a re-sync at that cadence.
+       └─ If the stream ends immediately or later (no eventSourceUrl,
+            connect failure, SSE timeout): fall back to a 30 s poll.
 ```
 
 **State tokens** — each `Mailbox/changes` / `Email/changes` call uses the server-provided

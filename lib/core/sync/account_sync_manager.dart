@@ -519,7 +519,11 @@ class _JmapAccountSync implements _SyncLoop {
   Completer<void>? _stopSignal;
   Timer? _waitTimer;
 
-  static const _pollInterval = Duration(seconds: 30);
+  /// Poll interval used only when JMAP push (SSE) is unavailable — e.g. the
+  /// server doesn't advertise an `eventSourceUrl`, the SSE connect fails, or
+  /// the underlying stream ends. When push is connected the loop waits on
+  /// real `StateChange` events instead, mirroring IMAP IDLE.
+  static const _pollFallbackInterval = Duration(seconds: 30);
 
   @override
   void start() {
@@ -731,30 +735,60 @@ class _JmapAccountSync implements _SyncLoop {
     _stopSignal = Completer<void>();
     final password = await _accounts.getPassword(account.id);
 
-    // Try JMAP push (RFC 8887 EventSource). Falls back to poll timer when
-    // the server doesn't advertise an eventSourceUrl or the connection fails.
-    final pushReady = Completer<void>();
+    // Try JMAP push (RFC 8887 EventSource). When the stream stays open the
+    // loop waits for real StateChange events — just like IMAP IDLE waits for
+    // EXISTS/EXPUNGE — with no periodic timer in between. The 25-min cap on
+    // the underlying SSE connection ([email_repository_impl] `watchJmapPush`)
+    // is what bounds the wait when the server is silent. Only when the push
+    // stream ends (no eventSourceUrl, connect failure, IMAP-only account,
+    // or the SSE stream itself timed out) do we fall back to a 30 s poll.
+    final pushEvent = Completer<void>();
+    final pushClosed = Completer<void>();
     final pushSub = _emails.watchJmapPush(account.id, password).listen(
       (_) {
-        if (!pushReady.isCompleted) pushReady.complete();
+        if (!pushEvent.isCompleted) pushEvent.complete();
       },
-      onDone: () {},
-      onError: (_) {},
+      onDone: () {
+        if (!pushClosed.isCompleted) pushClosed.complete();
+      },
+      onError: (_) {
+        if (!pushClosed.isCompleted) pushClosed.complete();
+      },
     );
 
-    final pollTimer = Timer(_pollInterval, () {
-      if (_stopSignal != null && !_stopSignal!.isCompleted) {
-        _stopSignal!.complete();
-      }
-    });
     try {
-      await Future.any([pushReady.future, _stopSignal!.future]);
-    } finally {
-      pollTimer.cancel();
-    }
+      await Future.any([
+        pushEvent.future,
+        pushClosed.future,
+        _stopSignal!.future,
+      ]);
 
-    await pushSub.cancel();
-    _stopSignal = null;
+      // Push isn't (or is no longer) available and nothing else woke us —
+      // fall back to a 30 s poll so we still make forward progress.
+      if (pushClosed.isCompleted &&
+          !pushEvent.isCompleted &&
+          !_stopSignal!.isCompleted) {
+        _waitTimer = Timer(_pollFallbackInterval, () {
+          if (_stopSignal != null && !_stopSignal!.isCompleted) {
+            _stopSignal!.complete();
+          }
+        });
+        try {
+          await _stopSignal!.future;
+        } finally {
+          _waitTimer?.cancel();
+          _waitTimer = null;
+        }
+      }
+    } finally {
+      // Fire-and-forget the cancel: awaiting it can deadlock under
+      // fake-async tests (broadcast subscription cancel schedules cleanup
+      // via a Timer that fake-async doesn't always drain), and in
+      // production the next cycle immediately opens a fresh SSE stream
+      // so there's no benefit to waiting.
+      unawaited(pushSub.cancel());
+      _stopSignal = null;
+    }
   }
 }
 
