@@ -6,7 +6,9 @@ import 'package:sharedinbox/core/utils/linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Renders plain [text] and turns any http(s) URL inside it into a tappable
-/// hyperlink. Selection still works — the widget uses [SelectableText.rich].
+/// hyperlink. Selection still works — the widget wraps a [Text.rich] in a
+/// [SelectionArea] so long-press on mobile (or click-drag on desktop) selects
+/// text without being swallowed by the link tap recognizers.
 ///
 /// Tapping a link shows a confirmation dialog with the exact URL before
 /// launching it in the platform browser, matching the safeguard used for
@@ -47,7 +49,7 @@ class _LinkifiedTextState extends State<LinkifiedText> {
 
     final matches = findUrls(widget.text);
     if (matches.isEmpty) {
-      return SelectableText(widget.text, style: baseStyle);
+      return SelectionArea(child: Text(widget.text, style: baseStyle));
     }
 
     final spans = <InlineSpan>[];
@@ -68,8 +70,8 @@ class _LinkifiedTextState extends State<LinkifiedText> {
       spans.add(TextSpan(text: widget.text.substring(cursor)));
     }
 
-    return SelectableText.rich(
-      TextSpan(style: baseStyle, children: spans),
+    return SelectionArea(
+      child: Text.rich(TextSpan(style: baseStyle, children: spans)),
     );
   }
 

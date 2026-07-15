@@ -11,10 +11,10 @@ Widget _wrap(Widget child) => MaterialApp(
 // Collects every gesture recognizer attached to any TextSpan under [text],
 // so tests can invoke the exact same tap callback that a real tap would.
 List<GestureRecognizer> _recognizersFor(WidgetTester tester, String text) {
-  final selectable = tester.widget<SelectableText>(
-    find.byWidgetPredicate((w) => w is SelectableText),
+  final richText = tester.widget<Text>(
+    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
   );
-  final root = selectable.textSpan!;
+  final root = richText.textSpan!;
   final recognizers = <GestureRecognizer>[];
   void walk(InlineSpan span) {
     if (span is TextSpan) {
@@ -33,26 +33,38 @@ List<GestureRecognizer> _recognizersFor(WidgetTester tester, String text) {
 
 void main() {
   group('LinkifiedText', () {
-    testWidgets('renders plain text without links as a SelectableText', (
+    testWidgets('wraps plain text in a SelectionArea so it can be selected', (
       tester,
     ) async {
       await tester.pumpWidget(_wrap(const LinkifiedText('just some text')));
 
-      expect(find.byType(SelectableText), findsOneWidget);
-      final w = tester.widget<SelectableText>(find.byType(SelectableText));
+      expect(find.byType(SelectionArea), findsOneWidget);
+      final w = tester.widget<Text>(
+        find.descendant(
+          of: find.byType(SelectionArea),
+          matching: find.byType(Text),
+        ),
+      );
       // No rich spans — the .rich constructor is not used for plain text.
       expect(w.textSpan, isNull);
       expect(w.data, 'just some text');
     });
 
-    testWidgets('renders text containing a URL as a rich SelectableText', (
+    testWidgets('renders text containing a URL as rich Text in SelectionArea', (
       tester,
     ) async {
       await tester.pumpWidget(
         _wrap(const LinkifiedText('See https://example.com for info.')),
       );
 
-      final w = tester.widget<SelectableText>(find.byType(SelectableText));
+      expect(find.byType(SelectionArea), findsOneWidget);
+      final w = tester.widget<Text>(
+        find.descendant(
+          of: find.byType(SelectionArea),
+          matching:
+              find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+        ),
+      );
       expect(w.textSpan, isNotNull);
 
       final rec = _recognizersFor(tester, 'https://example.com');
@@ -100,7 +112,12 @@ void main() {
       const style = TextStyle(color: Color(0xFF123456), fontSize: 17);
       await tester.pumpWidget(_wrap(const LinkifiedText('hi', style: style)));
 
-      final w = tester.widget<SelectableText>(find.byType(SelectableText));
+      final w = tester.widget<Text>(
+        find.descendant(
+          of: find.byType(SelectionArea),
+          matching: find.byType(Text),
+        ),
+      );
       expect(w.style, style);
     });
   });
