@@ -109,17 +109,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               final destPath = await repo.deleteEmail(widget.emailId);
 
               if (header != null) {
-                await ref.read(undoServiceProvider.notifier).pushAction(
-                      UndoAction(
-                        id: DateTime.now().toIso8601String(),
-                        accountId: header.accountId,
-                        type: UndoType.delete,
-                        emailIds: [widget.emailId],
-                        sourceMailboxPath: header.mailboxPath,
-                        destinationMailboxPath: destPath,
-                        originalEmails: [header],
+                // Fire-and-forget so the state update (which is applied
+                // synchronously inside pushAction) reaches UndoShell before
+                // we start the route transition. Matches _archive / _markAsSpam.
+                unawaited(
+                  ref.read(undoServiceProvider.notifier).pushAction(
+                        UndoAction(
+                          id: DateTime.now().toIso8601String(),
+                          accountId: header.accountId,
+                          type: UndoType.delete,
+                          emailIds: [widget.emailId],
+                          sourceMailboxPath: header.mailboxPath,
+                          destinationMailboxPath: destPath,
+                          originalEmails: [header],
+                        ),
                       ),
-                    );
+                );
               }
 
               if (context.mounted) _navigateTo(context, header, nextEmailId);
