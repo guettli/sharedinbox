@@ -781,7 +781,12 @@ class _JmapAccountSync implements _SyncLoop {
         }
       }
     } finally {
-      await pushSub.cancel();
+      // Fire-and-forget the cancel: awaiting it can deadlock under
+      // fake-async tests (broadcast subscription cancel schedules cleanup
+      // via a Timer that fake-async doesn't always drain), and in
+      // production the next cycle immediately opens a fresh SSE stream
+      // so there's no benefit to waiting.
+      unawaited(pushSub.cancel());
       _stopSignal = null;
     }
   }
