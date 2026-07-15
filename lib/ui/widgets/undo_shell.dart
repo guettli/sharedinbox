@@ -56,9 +56,8 @@ class _UndoShellState extends ConsumerState<UndoShell> {
       // its 10-entry cap `pushAction` produces `newList.length == state.length`
       // after trim, so a length-based gate would silently swallow every
       // subsequent notification.
-      final prevLastId =
-          (previous?.isNotEmpty ?? false) ? previous!.last.id : null;
-      final nextLast = next.isNotEmpty ? next.last : null;
+      final prevLastId = previous?.lastOrNull?.id;
+      final nextLast = next.lastOrNull;
       if (nextLast == null || nextLast.id == prevLastId) return;
       // Don't fire feedback for actions loaded from persistence on app
       // startup — only for actions pushed in this session.
@@ -165,11 +164,7 @@ class _AppBarFlashOverlay extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        display.icon,
-                        color: display.foreground,
-                        size: 32,
-                      ),
+                      Icon(display.icon, color: display.foreground, size: 32),
                       const SizedBox(width: 12),
                       Flexible(
                         child: Text(
@@ -318,24 +313,26 @@ class _PatternPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 2;
     const spacing = 14.0;
-    for (double x = -size.height;
-        x < size.width + size.height;
-        x += spacing) {
+    final start = -size.height;
+    final end = size.width + size.height;
+    var x = start;
+    while (x < end) {
       canvas.drawLine(
         Offset(x, 0),
         Offset(x + size.height, size.height),
         paint,
       );
+      x += spacing;
     }
     if (pattern == _Pattern.crossHatch) {
-      for (double x = -size.height;
-          x < size.width + size.height;
-          x += spacing) {
+      x = start;
+      while (x < end) {
         canvas.drawLine(
           Offset(x, size.height),
           Offset(x + size.height, 0),
           paint,
         );
+        x += spacing;
       }
     }
   }
