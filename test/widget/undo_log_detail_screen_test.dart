@@ -253,7 +253,6 @@ void main() {
               destinationMailboxPath: 'b',
             ),
             emailRepo: FakeEmailRepository(),
-            mailboxes: const [],
           ),
         );
         await tester.pumpAndSettle();

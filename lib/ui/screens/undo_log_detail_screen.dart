@@ -83,7 +83,9 @@ class UndoLogDetailScreen extends ConsumerWidget {
                 title: const Text('Source'),
                 subtitle: Text(
                   resolveMailboxDisplayPath(
-                      mailboxes, action.sourceMailboxPath),
+                    mailboxes,
+                    action.sourceMailboxPath,
+                  ),
                 ),
               ),
               if (action.type == UndoType.move &&
