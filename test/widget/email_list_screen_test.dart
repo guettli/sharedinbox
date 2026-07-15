@@ -376,7 +376,98 @@ void main() {
       expect(find.byTooltip('Mark as spam'), findsOneWidget);
       expect(find.byTooltip('Move to folder'), findsOneWidget);
       expect(find.byTooltip('Snooze'), findsOneWidget);
+      // The star button is labelled "Star" when the selection is not fully
+      // starred yet; it swaps to "Unstar" once every selected thread is
+      // flagged (see the "toggles based on selection state" test below).
+      expect(find.byTooltip('Star'), findsOneWidget);
     });
+
+    testWidgets(
+      'star button flags every selected thread when at least one is unstarred',
+      (tester) async {
+        final unstarred = testEmail(subject: 'Not starred');
+        final starred = testEmail(
+          subject: 'Already starred',
+          id: 'acc-1:43',
+          isFlagged: true,
+        );
+        final fakeRepo = FakeEmailRepository(emails: [unstarred, starred]);
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeRepo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('Not starred'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.select_all));
+        await tester.pumpAndSettle();
+
+        // Mixed selection ⇒ the button offers "Star" and flags all.
+        expect(find.byTooltip('Star'), findsOneWidget);
+        await tester.tap(find.byTooltip('Star'));
+        await tester.pumpAndSettle();
+
+        expect(
+          fakeRepo.setFlagCalls.map((c) => (c.emailId, c.flagged)).toSet(),
+          {('acc-1:42', true), ('acc-1:43', true)},
+        );
+      },
+    );
+
+    testWidgets(
+      'star button unflags every selected thread when all are starred',
+      (tester) async {
+        final a = testEmail(subject: 'Star A', isFlagged: true);
+        final b = testEmail(
+          subject: 'Star B',
+          id: 'acc-1:43',
+          isFlagged: true,
+        );
+        final fakeRepo = FakeEmailRepository(emails: [a, b]);
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeRepo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('Star A'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.select_all));
+        await tester.pumpAndSettle();
+
+        expect(find.byTooltip('Unstar'), findsOneWidget);
+        await tester.tap(find.byTooltip('Unstar'));
+        await tester.pumpAndSettle();
+
+        expect(
+          fakeRepo.setFlagCalls.map((c) => (c.emailId, c.flagged)).toSet(),
+          {('acc-1:42', false), ('acc-1:43', false)},
+        );
+      },
+    );
 
     testWidgets('selection bar close button exits selection mode', (
       tester,
