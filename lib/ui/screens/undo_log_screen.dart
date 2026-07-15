@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart'
+    show mailboxDisplayForPath;
 
 final _timeFmt = DateFormat('HH:mm:ss');
 
@@ -54,6 +57,7 @@ class _UndoActionTile extends ConsumerWidget {
         : '(Unknown Sender)';
     final count = action.emailIds.length;
     final extraCount = count > 1 ? ' (+${count - 1} more)' : '';
+    final mailboxRepo = ref.watch(mailboxRepositoryProvider);
 
     return ListTile(
       onTap: () => context.go(
@@ -73,15 +77,24 @@ class _UndoActionTile extends ConsumerWidget {
                 : Colors.blueAccent),
       ),
       title: Text('$subject$extraCount'),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text(
-            '${action.type.name.toUpperCase()} from ${action.sourceMailboxPath} • ${_timeFmt.format(action.timestamp.toLocal())}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
+      subtitle: StreamBuilder<List<Mailbox>>(
+        stream: mailboxRepo.observeMailboxes(action.accountId),
+        builder: (context, snapshot) {
+          final mailboxes = snapshot.data ?? const <Mailbox>[];
+          final source =
+              mailboxDisplayForPath(mailboxes, action.sourceMailboxPath);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                '${action.type.name.toUpperCase()} from $source • '
+                '${_timeFmt.format(action.timestamp.toLocal())}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          );
+        },
       ),
       trailing: TextButton(
         onPressed: () async {
