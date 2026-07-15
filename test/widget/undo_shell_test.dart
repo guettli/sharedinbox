@@ -4,16 +4,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/root_messenger.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 
 import '../unit/undo_service_test.mocks.dart';
 
 void main() {
   late MockUndoRepository mockUndoRepo;
+  late MockEmailRepository mockEmailRepo;
 
   setUp(() {
     mockUndoRepo = MockUndoRepository();
+    mockEmailRepo = MockEmailRepository();
     when(
       mockUndoRepo.pushAndTrim(any, maxHistory: anyNamed('maxHistory')),
     ).thenAnswer((_) async {});
@@ -21,17 +22,24 @@ void main() {
       mockUndoRepo.trim(maxHistory: anyNamed('maxHistory')),
     ).thenAnswer((_) async {});
     when(mockUndoRepo.clearHistory()).thenAnswer((_) async {});
+    // Some tests tap UNDO, which triggers repo access; give minimal stubs.
+    when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
+    when(mockEmailRepo.findEmailByMessageId(any, any))
+        .thenAnswer((_) async => null);
+    when(mockEmailRepo.cancelPendingChange(any, any))
+        .thenAnswer((_) async => false);
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(mockEmailRepo.restoreEmails(any)).thenAnswer((_) async {});
   });
 
   Widget buildShell(MockUndoRepository repo) {
     return ProviderScope(
-      overrides: [undoRepositoryProvider.overrideWithValue(repo)],
-      child: MaterialApp(
-        // Match main.dart wiring so UndoShell dispatches through the top-level
-        // messenger, otherwise its post-frame lookup fails and the SnackBar
-        // never renders in tests.
-        scaffoldMessengerKey: rootScaffoldMessengerKey,
-        home: const UndoShell(child: Scaffold(body: Text('content'))),
+      overrides: [
+        undoRepositoryProvider.overrideWithValue(repo),
+        emailRepositoryProvider.overrideWithValue(mockEmailRepo),
+      ],
+      child: const MaterialApp(
+        home: UndoShell(child: Scaffold(body: Text('content'))),
       ),
     );
   }
@@ -44,8 +52,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // Each fresh action produces two feedback surfaces owned by UndoShell:
+  // the AppBar flash overlay and the bottom action bar. Both carry the same
+  // label + icon, so every user-visible string appears twice while both are
+  // on screen.
   testWidgets(
-    'does not show snackbar for stale action loaded from persistence on startup',
+    'does not show feedback for stale action loaded from persistence on startup',
     (tester) async {
       final staleAction = UndoAction(
         id: '1',
@@ -66,9 +78,6 @@ void main() {
     },
   );
 
-  // After #233 every fresh action produces TWO feedback surfaces: the
-  // top-of-shell banner overlay AND the top-level SnackBar. So each label /
-  // icon is expected to appear twice.
   testWidgets(
     'shows generic move label for a fresh action pushed in current session',
     (tester) async {
@@ -91,6 +100,8 @@ void main() {
       );
 
       expect(find.text('1 email moved'), findsNWidgets(2));
+      // Bottom overlay carries an inline Undo button.
+      expect(find.text('UNDO'), findsOneWidget);
     },
   );
 
@@ -171,7 +182,7 @@ void main() {
     expect(find.byIcon(Icons.report), findsNWidgets(2));
   });
 
-  testWidgets('banner auto-dismisses after ~1.4 s', (tester) async {
+  testWidgets('flash overlay auto-dismisses after ~1.4 s', (tester) async {
     when(
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => []);
@@ -192,13 +203,120 @@ void main() {
       ),
     );
 
-    // Immediately after the push both the banner and the SnackBar are
+    // Immediately after the push both the flash and the bottom overlay are
     // visible → text appears twice.
     expect(find.text('Archived 1 email'), findsNWidgets(2));
 
-    // After the banner timer (1400 ms) fires, only the SnackBar remains.
+    // After the flash timer (1400 ms) fires only the bottom overlay remains.
     await tester.pump(const Duration(milliseconds: 1500));
-    await tester.pump(const Duration(milliseconds: 250)); // banner fade-out
+    await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('Archived 1 email'), findsOneWidget);
   });
+
+  testWidgets('bottom overlay auto-dismisses after ~5 s', (tester) async {
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
+
+    await tester.pumpWidget(buildShell(mockUndoRepo));
+    await tester.pumpAndSettle();
+
+    await pushAction(
+      tester,
+      UndoAction(
+        id: '6',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'INBOX',
+      ),
+    );
+
+    expect(find.text('Deleted 1 email'), findsNWidgets(2));
+
+    // After 5.5 s both flash and bottom overlay are gone.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('Deleted 1 email'), findsNothing);
+  });
+
+  testWidgets(
+    'feedback still fires when the undo log is already at the 10-entry cap',
+    (tester) async {
+      when(
+        mockUndoRepo.getHistory(limit: anyNamed('limit')),
+      ).thenAnswer((_) async => []);
+
+      await tester.pumpWidget(buildShell(mockUndoRepo));
+      await tester.pumpAndSettle();
+
+      // Fill the log to the 10-entry cap.
+      for (var i = 0; i < 10; i++) {
+        await pushAction(
+          tester,
+          UndoAction(
+            id: 'fill-$i',
+            accountId: 'acc1',
+            type: UndoType.move,
+            emailIds: ['x'],
+            sourceMailboxPath: 'INBOX',
+          ),
+        );
+      }
+
+      // Let both overlays for the 10th fill action fade away so the next
+      // assertion only sees widgets from the 11th push.
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Pushing an 11th action must still trigger feedback even though the
+      // list length after trim equals the previous length.
+      await pushAction(
+        tester,
+        UndoAction(
+          id: '11',
+          accountId: 'acc1',
+          type: UndoType.delete,
+          emailIds: ['e1'],
+          sourceMailboxPath: 'INBOX',
+        ),
+      );
+
+      expect(find.text('Deleted 1 email'), findsNWidgets(2));
+    },
+  );
+
+  testWidgets(
+    'tapping UNDO on the bottom overlay dismisses it',
+    (tester) async {
+      when(
+        mockUndoRepo.getHistory(limit: anyNamed('limit')),
+      ).thenAnswer((_) async => []);
+
+      await tester.pumpWidget(buildShell(mockUndoRepo));
+      await tester.pumpAndSettle();
+
+      await pushAction(
+        tester,
+        UndoAction(
+          id: 'undo-me',
+          accountId: 'acc1',
+          type: UndoType.move,
+          emailIds: ['e1'],
+          sourceMailboxPath: 'INBOX',
+          destinationMailboxPath: 'Archive',
+          destinationMailboxRole: 'archive',
+        ),
+      );
+
+      expect(find.text('UNDO'), findsOneWidget);
+
+      await tester.tap(find.text('UNDO'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Bottom overlay is gone as soon as UNDO is tapped.
+      expect(find.text('UNDO'), findsNothing);
+    },
+  );
 }
