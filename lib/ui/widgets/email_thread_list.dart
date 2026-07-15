@@ -377,6 +377,7 @@ Widget buildSelectionBottomBar(
   bool includeSpam = true,
   bool includeMove = true,
   bool includeSnooze = true,
+  bool includeStar = true,
   void Function(List<String> actedThreadIds)? onAfterAction,
 }) {
   void run(Future<void> Function() body) {
@@ -387,6 +388,12 @@ Widget buildSelectionBottomBar(
       onAfterAction?.call(actedIds);
     }());
   }
+
+  // If every selected thread is already starred, the button unstars them all;
+  // otherwise it stars every selection (so a mixed selection resolves to
+  // "everything gets starred").
+  final selected = controller.selectedThreads;
+  final allStarred = selected.isNotEmpty && selected.every((t) => t.isFlagged);
 
   return BottomAppBar(
     child: Row(
@@ -403,6 +410,20 @@ Widget buildSelectionBottomBar(
                 context,
                 ref,
                 threads: controller.selectedThreads,
+              ),
+            ),
+          ),
+        if (includeStar)
+          _BulkActionButton(
+            icon: allStarred ? Icons.star : Icons.star_border,
+            tooltip: allStarred ? 'Unstar' : 'Star',
+            color: Colors.amber.shade700,
+            haptic: HapticFeedback.selectionClick,
+            onPressed: () => run(
+              () => batchStar(
+                ref,
+                threads: controller.selectedThreads,
+                flagged: !allStarred,
               ),
             ),
           ),

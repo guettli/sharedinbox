@@ -367,8 +367,13 @@ class FakeEmailRepository implements EmailRepository {
   ) async =>
       SyncEmailsResult.zero;
 
+  /// Records every [setFlag] call so tests can assert on batch behaviour.
+  final List<({String emailId, bool? seen, bool? flagged})> setFlagCalls = [];
+
   @override
-  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {}
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+    setFlagCalls.add((emailId: emailId, seen: seen, flagged: flagged));
+  }
   @override
   Future<void> markAllAsRead(String accountId, String mailboxPath) async {}
 

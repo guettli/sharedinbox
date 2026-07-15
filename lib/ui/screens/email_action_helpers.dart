@@ -283,6 +283,24 @@ Future<void> batchSnooze(
   );
 }
 
+/// Flags (stars) or unflags every email in every thread in [threads]. The
+/// selection-mode bottom bar decides which direction to apply based on the
+/// current thread flags: if any selected thread is unstarred we star all of
+/// them, otherwise we unstar all.
+Future<void> batchStar(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required bool flagged,
+}) async {
+  if (threads.isEmpty) return;
+  final repo = ref.read(emailRepositoryProvider);
+  for (final t in threads) {
+    for (final id in t.emailIds) {
+      await repo.setFlag(id, flagged: flagged);
+    }
+  }
+}
+
 /// Handles a swipe-to-archive (start→end) or swipe-to-delete (end→start) on a
 /// single [thread]. Shared between folder and combined inbox surfaces.
 Future<void> swipeDismissThread(
