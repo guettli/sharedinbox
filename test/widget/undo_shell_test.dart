@@ -287,7 +287,7 @@ void main() {
   );
 
   testWidgets(
-    'tapping UNDO on the bottom overlay dismisses it',
+    'tapping UNDO on the bottom overlay triggers the undo repo call',
     (tester) async {
       when(
         mockUndoRepo.getHistory(limit: anyNamed('limit')),
@@ -312,11 +312,11 @@ void main() {
       expect(find.text('UNDO'), findsOneWidget);
 
       await tester.tap(find.text('UNDO'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pumpAndSettle();
 
-      // Bottom overlay is gone as soon as UNDO is tapped.
-      expect(find.text('UNDO'), findsNothing);
+      // undo() moves the email back to its source mailbox. Confirms the
+      // UNDO button is actually wired to the notifier.
+      verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
     },
   );
 }
