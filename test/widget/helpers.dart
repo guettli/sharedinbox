@@ -374,6 +374,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
     setFlagCalls.add((emailId: emailId, seen: seen, flagged: flagged));
   }
+
   @override
   Future<void> markAllAsRead(String accountId, String mailboxPath) async {}
 
