@@ -2013,9 +2013,10 @@ void main() {
       expect(emails.map((e) => e.subject).toSet(), {'First', 'Second'});
       expect(emails.firstWhere((e) => e.subject == 'Second').isSeen, isTrue);
 
-      final states = await r.db.select(r.db.syncStates).get();
-      expect(states, hasLength(1));
-      expect(states.first.state, 'est1');
+      final emailState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+          .getSingle();
+      expect(emailState.state, 'est1');
     });
 
     test('incremental sync applies created, updated, destroyed', () async {
@@ -2076,14 +2077,25 @@ void main() {
               syncedAt: DateTime.now(),
             ),
           );
+      // Skip the periodic reconciliation network call — covered separately.
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'JMAP:Reconcile:mbx1',
+              state: DateTime.now().toIso8601String(),
+              syncedAt: DateTime.now(),
+            ),
+          );
 
       await r.emails.syncEmails('jmap-1', 'mbx1');
 
       final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
       expect(emails.map((e) => e.subject).toSet(), {'First updated', 'Third'});
 
-      final states = await r.db.select(r.db.syncStates).get();
-      expect(states.first.state, 'est2');
+      final emailState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('Email')))
+          .getSingle();
+      expect(emailState.state, 'est2');
     });
 
     test('incremental sync with no changes updates state only', () async {
@@ -2103,11 +2115,22 @@ void main() {
               syncedAt: DateTime.now(),
             ),
           );
+      // Skip the periodic reconciliation network call — covered separately.
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'JMAP:Reconcile:mbx1',
+              state: DateTime.now().toIso8601String(),
+              syncedAt: DateTime.now(),
+            ),
+          );
 
       await r.emails.syncEmails('jmap-1', 'mbx1');
 
-      final states = await r.db.select(r.db.syncStates).get();
-      expect(states.first.state, 'est1');
+      final emailState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('Email')))
+          .getSingle();
+      expect(emailState.state, 'est1');
     });
 
     test('full sync paginates when total exceeds page size', () async {
@@ -2139,9 +2162,450 @@ void main() {
         'Page2-B',
       });
 
-      final states = await r.db.select(r.db.syncStates).get();
-      expect(states.first.state, 'est1');
+      final emailState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+          .getSingle();
+      expect(emailState.state, 'est1');
     });
+
+    // #262: Thunderbird "move to Trash" via IMAP surfaces on JMAP as an
+    // Email/changes 'updated' entry whose mailboxIds no longer contains the
+    // original mailbox. The mail must disappear from that mailbox's view.
+    test(
+      'incremental sync drops mail from source mailbox when '
+      'mailboxIds shifts (regression for #262)',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                updated: ['e1'],
+              ),
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  // e1 is no longer in inbox mbx1 — moved to Trash mbx-trash.
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx-trash', subject: 'x'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('x'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(
+          await r.emails.observeEmails('jmap-1', 'mbx1').first,
+          isEmpty,
+          reason: 'email should leave mbx1 once mailboxIds no longer '
+              'contains it',
+        );
+        final row = await (r.db.select(r.db.emails)
+              ..where((t) => t.id.equals('jmap-1:e1')))
+            .getSingle();
+        expect(row.mailboxPath, 'mbx-trash');
+      },
+    );
+
+    test(
+      'incremental sync deletes local row when mailboxIds becomes empty',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                updated: ['e1'],
+              ),
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  // mailboxIds is empty — treat as gone.
+                  {
+                    'id': 'e1',
+                    'mailboxIds': <String, dynamic>{},
+                    'from': [],
+                    'to': [],
+                    'cc': [],
+                    'receivedAt': '2024-01-01T00:00:00Z',
+                  },
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(
+          await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('jmap-1:e1')))
+              .getSingleOrNull(),
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'full sync prunes local rows no longer present in Email/query',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailGetResponse(
+                state: 'est1',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        // Pre-populate a stale row that the server no longer has.
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-stale',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('stale'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final subjects = (await r.emails.observeEmails('jmap-1', 'mbx1').first)
+            .map((e) => e.subject)
+            .toSet();
+        expect(subjects, {'kept'});
+      },
+    );
+
+    test(
+      'incremental sync falls back to full sync on cannotCalculateChanges',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              // Call 1: Email/changes with error
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'error',
+                    {'type': 'cannotCalculateChanges'},
+                    '0',
+                  ],
+                ],
+              },
+              // Call 2: full sync Email/query + Email/get
+              _emailGetResponse(
+                state: 'est-new',
+                list: [
+                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        // Stale row that the server no longer has — full sync should prune it.
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-ghost',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('ghost'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est-ancient',
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final subjects = (await r.emails.observeEmails('jmap-1', 'mbx1').first)
+            .map((e) => e.subject)
+            .toSet();
+        expect(
+          subjects,
+          {'live'},
+          reason: 'full-sync reconciliation should drop the ghost row',
+        );
+
+        final emailState = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+            .getSingle();
+        expect(emailState.state, 'est-new');
+      },
+    );
+
+    test(
+      'incremental sync drops row that Email/get omits (server treats as gone)',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                updated: ['e-gone', 'e-live'],
+              ),
+              _emailGetOnly(
+                state: 'est2',
+                // e-gone omitted — server no longer has it.
+                list: [
+                  _jmapEmail(
+                    id: 'e-live',
+                    mailboxId: 'mbx1',
+                    subject: 'live',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-gone',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-live',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(
+          await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('jmap-1:e-gone')))
+              .getSingleOrNull(),
+          isNull,
+        );
+        expect(
+          await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('jmap-1:e-live')))
+              .getSingleOrNull(),
+          isNotNull,
+        );
+      },
+    );
+
+    test(
+      'periodic reconcile prunes rows missing from Email/query',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              // Call 1: Email/changes reports nothing.
+              _emailChangesResponse(oldState: 'est1', newState: 'est1'),
+              // Call 2: reconcile pass Email/query — only e-live remains.
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Email/query',
+                    {
+                      'accountId': 'acct1',
+                      'ids': ['e-live'],
+                      'total': 1,
+                    },
+                    '0',
+                  ],
+                ],
+              },
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-live',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        // Server-side gone but no destroyed/updated hit us (the exact bug in
+        // #262). Reconcile should still find and prune it.
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-ghost',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        // No JMAP:Reconcile:mbx1 row → reconcile pass runs.
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(
+          await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('jmap-1:e-ghost')))
+              .getSingleOrNull(),
+          isNull,
+        );
+        expect(
+          await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('jmap-1:e-live')))
+              .getSingleOrNull(),
+          isNotNull,
+        );
+        final recon = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Reconcile:mbx1')))
+            .getSingle();
+        expect(recon.state, isNotEmpty);
+      },
+    );
+
+    test(
+      'periodic reconcile is throttled to at most once per hour',
+      () async {
+        // Only 1 mocked response — a second network call for reconcile would
+        // wrap around and mismatch. The throttle must prevent that.
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(oldState: 'est1', newState: 'est1'),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        final freshTimestamp = DateTime.now()
+            .subtract(const Duration(minutes: 5))
+            .toIso8601String();
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: freshTimestamp,
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final recon = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Reconcile:mbx1')))
+            .getSingle();
+        expect(
+          recon.state,
+          freshTimestamp,
+          reason: 'reconcile ran again when it should have been throttled',
+        );
+      },
+    );
   });
 
   group('JMAP setFlag / moveEmail / deleteEmail enqueue pending_changes', () {
