@@ -288,7 +288,9 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   ) async {
     // Prefetch is purely opportunistic — swallow any failure (malformed body
     // decode, network, DB) so a background prefetch cannot tear the app down
-    // via the runZonedGuarded → CrashScreen path (see #232).
+    // via the runZonedGuarded → CrashScreen path (see #232). The specific
+    // trigger from #232 is fixed upstream in Enough-Software/enough_mail#283;
+    // once released we still keep this guard for network/DB failures.
     try {
       final prefs = ref.read(userPreferencesProvider).value;
       final action =
