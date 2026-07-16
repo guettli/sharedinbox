@@ -146,10 +146,15 @@ final router = GoRouter(
             ),
             GoRoute(
               path: ':accountId/sieve/edit',
-              builder: (ctx, state) => SieveScriptEditScreen(
-                accountId: state.pathParameters['accountId']!,
-                script: state.extra as SieveScript?,
-              ),
+              builder: (ctx, state) {
+                final payload = _sieveEditPayload(state.extra);
+                return SieveScriptEditScreen(
+                  accountId: state.pathParameters['accountId']!,
+                  script: payload.script,
+                  initialFilter: payload.filter,
+                  initialName: payload.name,
+                );
+              },
             ),
             GoRoute(
               path: ':accountId/sieve/local',
@@ -160,11 +165,16 @@ final router = GoRouter(
             ),
             GoRoute(
               path: ':accountId/sieve/local/edit',
-              builder: (ctx, state) => SieveScriptEditScreen(
-                accountId: state.pathParameters['accountId']!,
-                script: state.extra as SieveScript?,
-                isLocal: true,
-              ),
+              builder: (ctx, state) {
+                final payload = _sieveEditPayload(state.extra);
+                return SieveScriptEditScreen(
+                  accountId: state.pathParameters['accountId']!,
+                  script: payload.script,
+                  isLocal: true,
+                  initialFilter: payload.filter,
+                  initialName: payload.name,
+                );
+              },
             ),
             GoRoute(
               path: ':accountId/search',
@@ -247,3 +257,26 @@ final router = GoRouter(
     ),
   ],
 );
+
+/// A `sieve/edit` route accepts either a bare [SieveScript] (edit an existing
+/// script) or a prefill record `(filter, name)` used when creating a new
+/// script from another screen — e.g. the mail-header actions in issue #254.
+({SieveScript? script, FilterGroup? filter, String? name}) _sieveEditPayload(
+  Object? extra,
+) {
+  if (extra is SieveScript) {
+    return (script: extra, filter: null, name: null);
+  }
+  if (extra is SieveEditPrefill) {
+    return (script: null, filter: extra.filter, name: extra.name);
+  }
+  return (script: null, filter: null, name: null);
+}
+
+/// Prefill payload for `context.push('/…/sieve/edit', extra: …)` when creating
+/// a new Sieve script pre-populated from elsewhere in the app.
+class SieveEditPrefill {
+  const SieveEditPrefill({required this.filter, required this.name});
+  final FilterGroup filter;
+  final String name;
+}

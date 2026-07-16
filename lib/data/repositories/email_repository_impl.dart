@@ -3434,6 +3434,7 @@ class EmailRepositoryImpl implements EmailRepository {
       FilterField.subject => _textLike(t.subject, leaf.comparison, val),
       // Size is not stored in the local cache; skip silently.
       FilterField.size => const Constant(true),
+      FilterField.header => _headerLike(leaf, t),
     };
   }
 
@@ -3460,6 +3461,68 @@ class EmailRepositoryImpl implements EmailRepository {
         FilterComparison.matches => col.like(_globToLike(val)),
         _ => const Constant(true),
       };
+
+  /// Header filters are matched against the JSON-encoded header list cached
+  /// in `email_bodies.headers_json`. Only messages whose body has already
+  /// been fetched (and therefore have a matching `email_bodies` row) can be
+  /// found — messages without a cached body are silently skipped.
+  Expression<bool> _headerLike(FilterLeaf leaf, $EmailsTable t) {
+    final name = (leaf.headerName ?? '').trim();
+    if (name.isEmpty) return const Constant(false);
+    // Header list is stored as `[{"name":"X","value":"Y"},...]`, in the
+    // order produced by `EmailHeader.toJson` (name first, then value).
+    final storedName = _jsonEsc(name);
+    final storedValue = _jsonEsc(leaf.value);
+    final literalNameLike = _likeEsc(storedName);
+    final literalValueLike = _likeEsc(storedValue);
+    final pattern = switch (leaf.comparison) {
+      FilterComparison.is_ =>
+        '%"name":"$literalNameLike","value":"$literalValueLike"%',
+      FilterComparison.contains =>
+        '%"name":"$literalNameLike","value":"%$literalValueLike%"%',
+      FilterComparison.matches =>
+        '%"name":"$literalNameLike","value":"${_globToLikeBang(storedValue)}"%',
+      _ => null,
+    };
+    if (pattern == null) return const Constant(true);
+    final sub = _db.selectOnly(_db.emailBodies)
+      ..addColumns([_db.emailBodies.emailId])
+      ..where(
+        _db.emailBodies.emailId.equalsExp(t.id) &
+            _db.emailBodies.headersJson.like(pattern, escapeChar: '!'),
+      );
+    return existsQuery(sub);
+  }
+
+  /// Escapes characters that would break out of a JSON string literal.
+  static String _jsonEsc(String s) =>
+      s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+
+  /// Escapes SQL LIKE meta-characters (`%`, `_`) with a leading `!`; the
+  /// caller must pair this with `escapeChar: '!'` on the LIKE call. `!` is
+  /// used instead of `\` so it never collides with the literal backslashes
+  /// that JSON encoding inserts into the header value.
+  static String _likeEsc(String s) =>
+      s.replaceAll('!', '!!').replaceAll('%', '!%').replaceAll('_', '!_');
+
+  /// Converts a glob pattern to a SQL LIKE pattern, escaping LIKE
+  /// meta-characters with `!` to match the escape char used by [_headerLike].
+  static String _globToLikeBang(String glob) {
+    final buf = StringBuffer();
+    for (var i = 0; i < glob.length; i++) {
+      final ch = glob[i];
+      if (ch == '%' || ch == '_' || ch == '!') {
+        buf.write('!$ch');
+      } else if (ch == '*') {
+        buf.write('%');
+      } else if (ch == '?') {
+        buf.write('_');
+      } else {
+        buf.write(ch);
+      }
+    }
+    return buf.toString();
+  }
 
   static String _globToLike(String glob) {
     final buf = StringBuffer();

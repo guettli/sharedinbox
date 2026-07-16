@@ -107,13 +107,22 @@ class FilterSieveConverter {
       final headers = _parseStringOrList(s);
       s.skip();
       final values = _parseStringOrList(s);
-      if (headers.firstOrNull?.toLowerCase() != 'subject') return null;
+      final headerName = headers.firstOrNull;
+      if (headerName == null) return null;
       final comp = _comp(matchType);
       if (comp == null) return null;
+      if (headerName.toLowerCase() == 'subject') {
+        return FilterLeaf(
+          field: FilterField.subject,
+          comparison: comp,
+          value: values.firstOrNull ?? '',
+        );
+      }
       return FilterLeaf(
-        field: FilterField.subject,
+        field: FilterField.header,
         comparison: comp,
         value: values.firstOrNull ?? '',
+        headerName: headerName,
       );
     }
 

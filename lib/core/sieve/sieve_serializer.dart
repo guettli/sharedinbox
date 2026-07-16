@@ -59,7 +59,8 @@ class SieveSerializer {
         FilterField.to ||
         FilterField.cc =>
           _serializeAddressLeaf(leaf),
-        FilterField.subject => _serializeHeaderLeaf(leaf),
+        FilterField.subject => _serializeHeaderLeaf(leaf, 'subject'),
+        FilterField.header => _serializeHeaderLeaf(leaf, leaf.headerName ?? ''),
         FilterField.size => _serializeSizeLeaf(leaf),
       };
 
@@ -73,8 +74,9 @@ class SieveSerializer {
     return 'address ${_matchType(leaf.comparison)} "$header" "${_esc(leaf.value)}"';
   }
 
-  String _serializeHeaderLeaf(FilterLeaf leaf) =>
-      'header ${_matchType(leaf.comparison)} "subject" "${_esc(leaf.value)}"';
+  String _serializeHeaderLeaf(FilterLeaf leaf, String headerName) =>
+      'header ${_matchType(leaf.comparison)}'
+      ' "${_esc(headerName)}" "${_esc(leaf.value)}"';
 
   String _serializeSizeLeaf(FilterLeaf leaf) {
     final comp = leaf.comparison == FilterComparison.over ? ':over' : ':under';
