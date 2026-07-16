@@ -1143,16 +1143,28 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
+    final model.SyncEmailsResult result;
     if (storedMailboxState == null) {
-      return _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
+      log('JMAP-sync: full sync mailbox=$mailboxJmapId (no stored state)');
+      result = await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
     } else {
-      return _jmapIncrementalEmailSync(
+      log(
+        'JMAP-sync: incremental sync mailbox=$mailboxJmapId '
+        'sinceState=$storedMailboxState',
+      );
+      result = await _jmapIncrementalEmailSync(
         account.id,
         jmap,
         storedMailboxState,
         mailboxJmapId: mailboxJmapId,
       );
     }
+
+    // Defence-in-depth: periodically diff the local cache against a bare
+    // Email/query to catch server-side edge cases where Email/changes
+    // under-reports deletions (see #262). Cheap: ids only, no bodies.
+    await _maybeReconcileJmapMailbox(account.id, jmap, mailboxJmapId);
+    return result;
   }
 
   Future<model.SyncEmailsResult> _jmapFullEmailSync(
@@ -1164,6 +1176,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String? firstState;
     var fetched = 0;
     var bytes = 0;
+    final seenIds = <String>{};
 
     while (true) {
       final responses = await jmap.call([
@@ -1196,18 +1209,40 @@ class EmailRepositoryImpl implements EmailRepository {
       final queryResult = _responseArgs(responses, 0, 'Email/query');
       final ids = queryResult['ids'] as List<dynamic>;
       final total = queryResult['total'] as int?;
+      seenIds.addAll(ids.cast<String>());
 
       final getResult = _responseArgs(responses, 1, 'Email/get');
       firstState ??= getResult['state'] as String;
       final list = getResult['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(accountId, list);
+      bytes += await _upsertJmapEmails(
+        accountId,
+        list,
+        currentMailboxJmapId: mailboxJmapId,
+      );
       fetched += list.length;
 
       position += ids.length;
       if (ids.isEmpty || total == null || position >= total) break;
     }
 
+    final pruned = await _pruneJmapMailboxToServerIds(
+      accountId,
+      mailboxJmapId,
+      seenIds,
+    );
+    log(
+      'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
+      'newState=$firstState',
+    );
+
     await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', firstState);
+    // Record that we've just done an exhaustive reconciliation so the periodic
+    // pass in _maybeReconcileJmapMailbox doesn't repeat it immediately.
+    await _saveSyncState(
+      accountId,
+      'JMAP:Reconcile:$mailboxJmapId',
+      DateTime.now().toIso8601String(),
+    );
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -1229,11 +1264,41 @@ class EmailRepositoryImpl implements EmailRepository {
       ],
     ]);
 
-    final changes = _responseArgs(responses, 0, 'Email/changes');
+    // RFC 8620 §5.2: when the server can no longer resolve the sinceState
+    // token (e.g. GC after long inactivity) it returns an error method
+    // response with type=cannotCalculateChanges. Recover by discarding the
+    // stored state and falling through to a full sync, which also runs a
+    // deletion reconciliation.
+    final triple = responses[0] as List<dynamic>;
+    if (triple[0] == 'error') {
+      final err = triple[1] as Map<String, dynamic>;
+      final type = err['type'] as String?;
+      log(
+        'JMAP-sync: Email/changes error type=$type mailbox=$mailboxJmapId '
+        'sinceState=$sinceState — falling back to full sync',
+      );
+      if (type == 'cannotCalculateChanges') {
+        await _clearJmapSyncState(accountId, mailboxJmapId);
+        if (mailboxJmapId != null) {
+          return _jmapFullEmailSync(accountId, jmap, mailboxJmapId);
+        }
+      }
+      throw JmapException('Email/changes error: $type');
+    }
+
+    final changes = triple[1] as Map<String, dynamic>;
     final newState = changes['newState'] as String;
     final created = List<String>.from(changes['created'] as List? ?? []);
     final updated = List<String>.from(changes['updated'] as List? ?? []);
     final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
+
+    log(
+      'JMAP-sync: incremental mailbox=$mailboxJmapId '
+      '$sinceState → $newState '
+      'created=${_briefIds(created)} '
+      'updated=${_briefIds(updated)} '
+      'destroyed=${_briefIds(destroyed)}',
+    );
 
     var fetched = 0;
     var bytes = 0;
@@ -1253,19 +1318,28 @@ class EmailRepositoryImpl implements EmailRepository {
       ]);
       final getResult = _responseArgs(getResponses, 0, 'Email/get');
       final list = getResult['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(accountId, list);
+      bytes += await _upsertJmapEmails(
+        accountId,
+        list,
+        currentMailboxJmapId: mailboxJmapId,
+      );
       fetched += list.length;
+
+      // Any id we asked to fetch but did not receive back is treated by the
+      // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
+      // don't linger.
+      final returnedIds = <String>{
+        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+      };
+      for (final jmapId in toFetch) {
+        if (!returnedIds.contains(jmapId)) {
+          await _deleteJmapEmailById(accountId, jmapId);
+        }
+      }
     }
 
     for (final jmapId in destroyed) {
-      final dbId = '$accountId:$jmapId';
-      final email = await getEmail(dbId);
-      if (email != null) {
-        final tid = email.threadId ?? dbId;
-        final mailbox = email.mailboxPath;
-        await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
-        await _updateThread(accountId, mailbox, tid);
-      }
+      await _deleteJmapEmailById(accountId, jmapId);
     }
 
     await _saveSyncState(accountId, 'Email', newState);
@@ -1279,8 +1353,156 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  Future<void> _deleteJmapEmailById(String accountId, String jmapId) async {
+    final dbId = '$accountId:$jmapId';
+    final email = await getEmail(dbId);
+    if (email == null) return;
+    final tid = email.threadId ?? dbId;
+    final mailbox = email.mailboxPath;
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
+    await _updateThread(accountId, mailbox, tid);
+  }
+
+  Future<void> _clearJmapSyncState(
+    String accountId,
+    String? mailboxJmapId,
+  ) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.resourceType.equals('Email') |
+                    t.resourceType.like('JMAP:Email:%')),
+          ))
+        .go();
+  }
+
+  /// Deletes local email rows for [mailboxJmapId] whose id isn't in the
+  /// authoritative [serverIds] set. Returns the number of rows removed.
+  ///
+  /// Mirrors [_reconcileDeletedImap]: skips rows with a pending optimistic
+  /// move/snooze so we don't wipe them mid-flight, and updates affected
+  /// threads. `serverIds` are raw JMAP email ids (no `accountId:` prefix).
+  Future<int> _pruneJmapMailboxToServerIds(
+    String accountId,
+    String mailboxJmapId,
+    Set<String> serverIds,
+  ) async {
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxJmapId),
+          ))
+        .get();
+
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const ['move', 'snooze', 'unsnooze'],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
+    final affectedThreads = <String>{};
+    var removed = 0;
+    for (final row in localRows) {
+      final jmapId = row.id.substring('$accountId:'.length);
+      if (serverIds.contains(jmapId)) continue;
+      if (inFlightSet.contains(row.id)) continue;
+      affectedThreads.add(row.threadId ?? row.id);
+      await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+      removed++;
+    }
+    for (final tid in affectedThreads) {
+      await _updateThread(accountId, mailboxJmapId, tid);
+    }
+    return removed;
+  }
+
+  static const _jmapReconcileInterval = Duration(hours: 1);
+
+  /// Periodic safety net: at most once per [_jmapReconcileInterval] per
+  /// mailbox, list all server-side email ids in [mailboxJmapId] and prune
+  /// local rows no longer present. Catches ghosts from Email/changes
+  /// under-reporting (Stalwart's IMAP-triggered mailbox moves have surfaced
+  /// this — see #262).
+  Future<void> _maybeReconcileJmapMailbox(
+    String accountId,
+    JmapClient jmap,
+    String mailboxJmapId,
+  ) async {
+    final key = 'JMAP:Reconcile:$mailboxJmapId';
+    final last = await _loadSyncState(accountId, key);
+    if (last != null) {
+      final lastAt = DateTime.tryParse(last);
+      if (lastAt != null &&
+          DateTime.now().difference(lastAt) < _jmapReconcileInterval) {
+        return;
+      }
+    }
+
+    final serverIds = <String>{};
+    int position = 0;
+    while (true) {
+      final responses = await jmap.call([
+        [
+          'Email/query',
+          {
+            'accountId': jmap.accountId,
+            'filter': {'inMailbox': mailboxJmapId},
+            'limit': _jmapPageSize,
+            'position': position,
+            'calculateTotal': true,
+          },
+          '0',
+        ],
+      ]);
+      final queryResult = _responseArgs(responses, 0, 'Email/query');
+      final ids = List<String>.from(queryResult['ids'] as List);
+      final total = queryResult['total'] as int?;
+      serverIds.addAll(ids);
+      position += ids.length;
+      if (ids.isEmpty || total == null || position >= total) break;
+    }
+
+    final removed = await _pruneJmapMailboxToServerIds(
+      accountId,
+      mailboxJmapId,
+      serverIds,
+    );
+    if (removed > 0) {
+      log(
+        'JMAP-sync: reconcile mailbox=$mailboxJmapId pruned=$removed '
+        '(server=${serverIds.length})',
+      );
+    }
+    await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  String _briefIds(List<String> ids, {int keep = 10}) {
+    if (ids.length <= keep) return '${ids.length}:$ids';
+    return '${ids.length}:${ids.take(keep).toList()}+${ids.length - keep} more';
+  }
+
   // Returns total bytes transferred (sum of JMAP `size` fields).
-  Future<int> _upsertJmapEmails(String accountId, List<dynamic> emails) async {
+  //
+  // [currentMailboxJmapId], when provided, is the mailbox whose sync triggered
+  // this fetch. It is used to pick a stable [mailboxPath] for messages that
+  // are members of multiple mailboxes: we prefer the row's existing
+  // `mailboxPath` when it's still a member, then [currentMailboxJmapId], and
+  // finally any remaining membership. Without this, `Map.keys.firstOrNull`
+  // picks an arbitrary mailbox and a message moved out of [currentMailboxJmapId]
+  // may keep showing there indefinitely (#262).
+  Future<int> _upsertJmapEmails(
+    String accountId,
+    List<dynamic> emails, {
+    String? currentMailboxJmapId,
+  }) async {
     var bytes = 0;
     final affectedByMailbox = <String, Set<String>>{};
     for (final e in emails) {
@@ -1289,9 +1511,52 @@ class EmailRepositoryImpl implements EmailRepository {
       final dbId = '$accountId:$jmapId';
       bytes += (m['size'] as int?) ?? 0;
 
-      // Use first mailbox ID as the primary mailboxPath.
       final mailboxIds = m['mailboxIds'] as Map<String, dynamic>?;
-      final mailboxPath = mailboxIds?.keys.firstOrNull ?? '';
+
+      // If the mail is no longer in any mailbox, treat it as gone. This
+      // shouldn't normally reach us via Email/get (destroyed mails end up in
+      // Email/changes.destroyed) but is defensive against unusual server
+      // states where mailboxIds is empty.
+      if (mailboxIds == null || mailboxIds.isEmpty) {
+        final existing = await getEmail(dbId);
+        if (existing != null) {
+          final tid = existing.threadId ?? dbId;
+          final oldMailbox = existing.mailboxPath;
+          await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
+          affectedByMailbox.putIfAbsent(oldMailbox, () => {}).add(tid);
+        }
+        continue;
+      }
+
+      final existingRow = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(dbId)))
+          .getSingleOrNull();
+      final String mailboxPath;
+      if (existingRow != null &&
+          mailboxIds.containsKey(existingRow.mailboxPath)) {
+        // Stable: keep the mailbox we already display it under.
+        mailboxPath = existingRow.mailboxPath;
+      } else if (currentMailboxJmapId != null &&
+          mailboxIds.containsKey(currentMailboxJmapId)) {
+        mailboxPath = currentMailboxJmapId;
+      } else {
+        mailboxPath = mailboxIds.keys.first;
+      }
+
+      // Membership changed: the mail is no longer in the mailbox where the
+      // local row lived (e.g. IMAP "move to Trash" via Thunderbird — #262).
+      // Refresh the thread aggregate for the old mailbox so it no longer
+      // lists this email; the new mailbox is refreshed below via
+      // affectedByMailbox.
+      if (existingRow != null && existingRow.mailboxPath != mailboxPath) {
+        affectedByMailbox
+            .putIfAbsent(existingRow.mailboxPath, () => {})
+            .add(existingRow.threadId ?? dbId);
+        log(
+          'JMAP-sync: mailbox change id=$jmapId '
+          '${existingRow.mailboxPath} → $mailboxPath',
+        );
+      }
 
       final keywords = m['keywords'] as Map<String, dynamic>? ?? {};
       DateTime? snoozedUntil;
