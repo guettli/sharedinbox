@@ -1,13 +1,23 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/received_header.dart';
+import 'package:sharedinbox/ui/router.dart' show SieveEditPrefill;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Full-screen dialog for browsing email headers, organised into groups.
 class EmailHeadersDialog extends StatelessWidget {
-  const EmailHeadersDialog({super.key, required this.headers});
+  const EmailHeadersDialog({
+    super.key,
+    required this.headers,
+    required this.accountId,
+  });
   final List<EmailHeader> headers;
+  final String accountId;
 
   @override
   Widget build(BuildContext context) {
@@ -17,15 +27,16 @@ class EmailHeadersDialog extends StatelessWidget {
           title: const Text('Mail Headers'),
           leading: const CloseButton(),
         ),
-        body: _HeadersBody(headers: headers),
+        body: _HeadersBody(headers: headers, accountId: accountId),
       ),
     );
   }
 }
 
 class _HeadersBody extends StatelessWidget {
-  const _HeadersBody({required this.headers});
+  const _HeadersBody({required this.headers, required this.accountId});
   final List<EmailHeader> headers;
+  final String accountId;
 
   @override
   Widget build(BuildContext context) {
@@ -63,19 +74,35 @@ class _HeadersBody extends StatelessWidget {
     final sections = <Widget>[];
 
     if (otherHeaders.isNotEmpty) {
-      sections.add(_HeadersSection(title: 'Headers', headers: otherHeaders));
+      sections.add(
+        _HeadersSection(
+          title: 'Headers',
+          headers: otherHeaders,
+          accountId: accountId,
+        ),
+      );
     }
     if (listHeaders.isNotEmpty) {
       sections.add(
-        _HeadersSection(title: 'List- Headers', headers: listHeaders),
+        _HeadersSection(
+          title: 'List- Headers',
+          headers: listHeaders,
+          accountId: accountId,
+        ),
       );
     }
     if (receivedHeaders.isNotEmpty) {
-      sections.add(_ReceivedSection(headers: receivedHeaders));
+      sections.add(
+        _ReceivedSection(headers: receivedHeaders, accountId: accountId),
+      );
     }
     if (arcHeaders.isNotEmpty) {
       sections.add(
-        _HeadersSection(title: 'ARC- Headers', headers: arcHeaders),
+        _HeadersSection(
+          title: 'ARC- Headers',
+          headers: arcHeaders,
+          accountId: accountId,
+        ),
       );
     }
 
@@ -87,6 +114,7 @@ class _HeadersBody extends StatelessWidget {
         _HeadersSection(
           title: '$prefix Headers',
           headers: xByPrefix[prefix]!,
+          accountId: accountId,
         ),
       );
     }
@@ -96,10 +124,15 @@ class _HeadersBody extends StatelessWidget {
 }
 
 class _HeadersSection extends StatelessWidget {
-  const _HeadersSection({required this.title, required this.headers});
+  const _HeadersSection({
+    required this.title,
+    required this.headers,
+    required this.accountId,
+  });
 
   final String title;
   final List<EmailHeader> headers;
+  final String accountId;
 
   @override
   Widget build(BuildContext context) {
@@ -107,7 +140,7 @@ class _HeadersSection extends StatelessWidget {
       title: Text('$title (${headers.length})'),
       children: [
         for (var i = 0; i < headers.length; i++)
-          _HeaderRow(header: headers[i], index: i),
+          _HeaderRow(header: headers[i], index: i, accountId: accountId),
       ],
     );
   }
@@ -115,8 +148,9 @@ class _HeadersSection extends StatelessWidget {
 
 /// Received headers section — collapsed by default; shows inter-hop delays.
 class _ReceivedSection extends StatelessWidget {
-  const _ReceivedSection({required this.headers});
+  const _ReceivedSection({required this.headers, required this.accountId});
   final List<EmailHeader> headers;
+  final String accountId;
 
   @override
   Widget build(BuildContext context) {
@@ -125,7 +159,11 @@ class _ReceivedSection extends StatelessWidget {
       title: Text('Received (${headers.length})'),
       children: [
         for (var i = 0; i < entries.length; i++) ...[
-          _HeaderRow(header: entries[i].header, index: i),
+          _HeaderRow(
+            header: entries[i].header,
+            index: i,
+            accountId: accountId,
+          ),
           if (entries[i].delay != null) _DelayRow(delay: entries[i].delay!),
         ],
       ],
@@ -161,9 +199,14 @@ class _ReceivedEntry {
 }
 
 class _HeaderRow extends StatelessWidget {
-  const _HeaderRow({required this.header, required this.index});
+  const _HeaderRow({
+    required this.header,
+    required this.index,
+    required this.accountId,
+  });
   final EmailHeader header;
   final int index;
+  final String accountId;
 
   @override
   Widget build(BuildContext context) {
@@ -187,6 +230,13 @@ class _HeaderRow extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(flex: 2, child: SelectableText(header.value)),
+          IconButton(
+            icon: const Icon(Icons.more_vert, size: AppIconSize.sm),
+            tooltip: 'Actions for this header',
+            visualDensity: VisualDensity.compact,
+            onPressed: () =>
+                _showHeaderActions(context, header, accountId: accountId),
+          ),
         ],
       ),
     );
@@ -221,6 +271,96 @@ class _DelayRow extends StatelessWidget {
     );
   }
 }
+
+/// Opens a bottom sheet offering the three actions described in issue #254:
+/// search mails with this exact header/value, or create a remote / local
+/// mail filter pre-populated with a matching `header :is` condition.
+Future<void> _showHeaderActions(
+  BuildContext context,
+  EmailHeader header, {
+  required String accountId,
+}) async {
+  final choice = await showModalBottomSheet<_HeaderAction>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.xs,
+            ),
+            child: Text(
+              header.name,
+              style: Theme.of(ctx).textTheme.titleSmall,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.search),
+            title: const Text('Search mails with this header'),
+            onTap: () => Navigator.pop(ctx, _HeaderAction.search),
+          ),
+          ListTile(
+            leading: const Icon(Icons.dns),
+            title: const Text('Create remote filter'),
+            onTap: () => Navigator.pop(ctx, _HeaderAction.remoteFilter),
+          ),
+          ListTile(
+            leading: const Icon(Icons.phone_android),
+            title: const Text('Create local filter'),
+            onTap: () => Navigator.pop(ctx, _HeaderAction.localFilter),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+
+  final filter = FilterGroup(
+    operator: FilterOperator.and_,
+    children: [
+      FilterLeaf(
+        field: FilterField.header,
+        comparison: FilterComparison.is_,
+        value: header.value,
+        headerName: header.name,
+      ),
+    ],
+  );
+  final suggestedName = _suggestFilterName(header);
+
+  switch (choice) {
+    case _HeaderAction.search:
+      unawaited(context.push('/accounts/$accountId/search', extra: filter));
+    case _HeaderAction.remoteFilter:
+      unawaited(
+        context.push(
+          '/accounts/$accountId/sieve/edit',
+          extra: SieveEditPrefill(filter: filter, name: suggestedName),
+        ),
+      );
+    case _HeaderAction.localFilter:
+      unawaited(
+        context.push(
+          '/accounts/$accountId/sieve/local/edit',
+          extra: SieveEditPrefill(filter: filter, name: suggestedName),
+        ),
+      );
+  }
+}
+
+String _suggestFilterName(EmailHeader h) {
+  final v = h.value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  final shortV = v.length > 40 ? '${v.substring(0, 40)}…' : v;
+  return '${h.name}: $shortV';
+}
+
+enum _HeaderAction { search, remoteFilter, localFilter }
 
 String _formatDuration(Duration d) {
   if (d.inSeconds < 60) return '${d.inSeconds}s';

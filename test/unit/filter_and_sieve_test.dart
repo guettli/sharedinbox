@@ -380,5 +380,61 @@ if address :contains "from" "bob" {
       final leaf = result!.group.children.first as FilterLeaf;
       expect(leaf.value, 'bob');
     });
+
+    test('parses arbitrary header test into FilterField.header', () {
+      const script = '''
+if header :is "List-Id" "<newsletter.example.com>" {
+  fileinto "Newsletters";
+}''';
+      final result = conv.parse(script);
+      expect(result, isNotNull);
+      final leaf = result!.group.children.first as FilterLeaf;
+      expect(leaf.field, FilterField.header);
+      expect(leaf.headerName, 'List-Id');
+      expect(leaf.comparison, FilterComparison.is_);
+      expect(leaf.value, '<newsletter.example.com>');
+    });
+
+    test('header round-trips through serializer preserving header name', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.header,
+            comparison: FilterComparison.is_,
+            value: 'Yes',
+            headerName: 'X-Spam-Status',
+          ),
+        ],
+      );
+      final script = SieveSerializer().serialize(group, [KeepAction()]);
+      expect(script, contains('header :is "X-Spam-Status" "Yes"'));
+      final parsed = conv.parse(script);
+      expect(parsed, isNotNull);
+      final leaf = parsed!.group.children.first as FilterLeaf;
+      expect(leaf.field, FilterField.header);
+      expect(leaf.headerName, 'X-Spam-Status');
+      expect(leaf.value, 'Yes');
+      expect(leaf.comparison, FilterComparison.is_);
+    });
+
+    test('subject header still round-trips as FilterField.subject', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.subject,
+            comparison: FilterComparison.contains,
+            value: 'invoice',
+          ),
+        ],
+      );
+      final script = SieveSerializer().serialize(group, [KeepAction()]);
+      final parsed = conv.parse(script);
+      expect(parsed, isNotNull);
+      final leaf = parsed!.group.children.first as FilterLeaf;
+      expect(leaf.field, FilterField.subject);
+      expect(leaf.headerName, isNull);
+    });
   });
 }

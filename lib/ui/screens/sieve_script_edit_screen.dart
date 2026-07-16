@@ -20,6 +20,8 @@ class SieveScriptEditScreen extends ConsumerStatefulWidget {
     required this.accountId,
     this.script,
     this.isLocal = false,
+    this.initialFilter,
+    this.initialName,
   });
 
   final String accountId;
@@ -29,6 +31,13 @@ class SieveScriptEditScreen extends ConsumerStatefulWidget {
 
   /// True for locally-executed scripts; false for server-side (ManageSieve/JMAP).
   final bool isLocal;
+
+  /// Optional filter to pre-populate a *new* (unsaved) script with; ignored
+  /// when [script] is non-null.
+  final FilterGroup? initialFilter;
+
+  /// Optional name to pre-fill the name field for a new script.
+  final String? initialName;
 
   @override
   ConsumerState<SieveScriptEditScreen> createState() =>
@@ -54,12 +63,19 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.script?.name ?? '');
+    _nameController = TextEditingController(
+      text: widget.script?.name ?? widget.initialName ?? '',
+    );
     _contentController = TextEditingController();
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(_onTabChanged);
     if (widget.script != null) {
       unawaited(_loadContent());
+    } else if (widget.initialFilter != null) {
+      _filterGroup = widget.initialFilter!;
+      _actions = [KeepAction()];
+      _contentController.text =
+          SieveSerializer().serialize(_filterGroup, _actions);
     }
   }
 

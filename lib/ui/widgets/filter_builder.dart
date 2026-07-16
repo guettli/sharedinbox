@@ -226,11 +226,13 @@ class _LeafRow extends StatefulWidget {
 
 class _LeafRowState extends State<_LeafRow> {
   late final TextEditingController _ctrl;
+  late final TextEditingController _headerNameCtrl;
 
   @override
   void initState() {
     super.initState();
     _ctrl = TextEditingController(text: widget.leaf.value);
+    _headerNameCtrl = TextEditingController(text: widget.leaf.headerName ?? '');
   }
 
   @override
@@ -239,11 +241,16 @@ class _LeafRowState extends State<_LeafRow> {
     if (widget.leaf.value != _ctrl.text) {
       _ctrl.text = widget.leaf.value;
     }
+    final nextName = widget.leaf.headerName ?? '';
+    if (nextName != _headerNameCtrl.text) {
+      _headerNameCtrl.text = nextName;
+    }
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _headerNameCtrl.dispose();
     super.dispose();
   }
 
@@ -263,6 +270,7 @@ class _LeafRowState extends State<_LeafRow> {
 
   @override
   Widget build(BuildContext context) {
+    final isHeader = widget.leaf.field == FilterField.header;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
@@ -278,6 +286,26 @@ class _LeafRowState extends State<_LeafRow> {
                 )
                 .toList(),
           ),
+          if (isHeader) ...[
+            const SizedBox(width: AppSpacing.sm),
+            SizedBox(
+              width: 140,
+              child: TextField(
+                controller: _headerNameCtrl,
+                onChanged: (v) =>
+                    widget.onChanged(widget.leaf.copyWith(headerName: v)),
+                decoration: const InputDecoration(
+                  hintText: 'header name',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.sm,
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(width: AppSpacing.sm),
           DropdownButton<FilterComparison>(
             value: widget.leaf.comparison,

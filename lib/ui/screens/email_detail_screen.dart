@@ -197,8 +197,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 final nextEmailId = await _getNextEmailIdIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
                 if (context.mounted) _navigateTo(context, header, nextEmailId);
-              } else if (value == 'headers' && body != null) {
-                unawaited(_showHeaders(context, body));
+              } else if (value == 'headers' && body != null && header != null) {
+                unawaited(_showHeaders(context, body, header.accountId));
               } else if (value == 'structure' && body != null) {
                 unawaited(_showStructure(context, body));
               } else if (value == 'rfc') {
@@ -1036,7 +1036,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
-  Future<void> _showHeaders(BuildContext context, EmailBody body) async {
+  Future<void> _showHeaders(
+    BuildContext context,
+    EmailBody body,
+    String accountId,
+  ) async {
     var effective = body;
     if (effective.headers.isEmpty) {
       effective = await _refetchBody(context) ?? effective;
@@ -1055,7 +1059,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     unawaited(
       showDialog<void>(
         context: context,
-        builder: (ctx) => EmailHeadersDialog(headers: effective.headers),
+        builder: (ctx) => EmailHeadersDialog(
+          headers: effective.headers,
+          accountId: accountId,
+        ),
       ),
     );
   }

@@ -816,6 +816,80 @@ void main() {
     );
 
     test(
+      'searchEmailsStructured with header filter matches cached headers',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // Two emails; only the first has a matching List-Id header cached in
+        // email_bodies.headers_json. The third has no body row at all, so it
+        // must be excluded (documented limitation).
+        for (final id in ['acc-1:1', 'acc-1:2', 'acc-1:3']) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: id,
+                  accountId: 'acc-1',
+                  mailboxPath: 'INBOX',
+                  uid: int.parse(id.split(':').last),
+                  receivedAt: DateTime(2026, 1, int.parse(id.split(':').last)),
+                ),
+              );
+        }
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: 'acc-1:1',
+                headersJson: const Value(
+                  '[{"name":"List-Id","value":"<news.example.com>"},'
+                  '{"name":"From","value":"news@example.com"}]',
+                ),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: 'acc-1:2',
+                headersJson: const Value(
+                  '[{"name":"List-Id","value":"<other.example.com>"}]',
+                ),
+              ),
+            );
+
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.header,
+              comparison: FilterComparison.is_,
+              value: '<news.example.com>',
+              headerName: 'List-Id',
+            ),
+          ],
+        );
+        final results = await r.emails.searchEmailsStructured('acc-1', filter);
+        expect(results.map((e) => e.id), ['acc-1:1']);
+
+        final containsFilter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.header,
+              comparison: FilterComparison.contains,
+              value: 'example.com',
+              headerName: 'List-Id',
+            ),
+          ],
+        );
+        final containsResults = await r.emails.searchEmailsStructured(
+          'acc-1',
+          containsFilter,
+        );
+        expect(
+          containsResults.map((e) => e.id),
+          unorderedEquals(['acc-1:1', 'acc-1:2']),
+        );
+      },
+    );
+
+    test(
       'searchEmailsStructured with similarFilterFor finds near-duplicate spam',
       () async {
         final r = _makeRepos();

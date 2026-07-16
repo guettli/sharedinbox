@@ -3,7 +3,8 @@ enum FilterField {
   to,
   cc,
   subject,
-  size;
+  size,
+  header;
 
   String get label => switch (this) {
         FilterField.from_ => 'From',
@@ -11,6 +12,7 @@ enum FilterField {
         FilterField.cc => 'CC',
         FilterField.subject => 'Subject',
         FilterField.size => 'Size (bytes)',
+        FilterField.header => 'Header',
       };
 
   List<FilterComparison> get allowedComparisons => switch (this) {
@@ -48,21 +50,28 @@ final class FilterLeaf extends FilterNode {
     required this.field,
     required this.comparison,
     required this.value,
+    this.headerName,
   });
 
   final FilterField field;
   final FilterComparison comparison;
   final String value;
 
+  /// Only meaningful when [field] is [FilterField.header] — names the raw
+  /// mail header to match against (e.g. `List-Id`, `X-Spam-Status`).
+  final String? headerName;
+
   FilterLeaf copyWith({
     FilterField? field,
     FilterComparison? comparison,
     String? value,
+    String? headerName,
   }) =>
       FilterLeaf(
         field: field ?? this.field,
         comparison: comparison ?? this.comparison,
         value: value ?? this.value,
+        headerName: headerName ?? this.headerName,
       );
 }
 
