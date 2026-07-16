@@ -105,7 +105,7 @@ fi
 #   * The engine host becomes briefly unreachable from the runner (TCP hang,
 #     not a reset), so ssh is still probing when the wrapping `timeout` kills
 #     it with rc=124. This has been observed lasting ~2 minutes end-to-end and
-#     recovering on the next hourly re-run. See issue #243.
+#     recovering on the next hourly re-run. See issues #241 and #243.
 # Retry a handful of times so a single transient blip does not fail the whole
 # Firebase Test Lab job. Budget mirrors the verify block below (≈3 min total),
 # because a re-run costs more than waiting the engine host back into service.
