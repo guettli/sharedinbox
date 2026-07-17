@@ -65,3 +65,9 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_ci_monitor.sh'
         pass_filenames: false
         files: ^scripts/(ci-monitor|test_ci_monitor)\.sh$
+      - id: duplication-orchestrator-tests
+        name: duplication orchestrator unit tests
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 scripts/test_detect_duplication.py'
+        pass_filenames: false
+        files: ^scripts/(detect_duplication\.py|test_detect_duplication\.py)$

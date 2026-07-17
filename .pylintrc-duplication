@@ -1,0 +1,20 @@
+# Config for pylint's duplicate-code checker only. Invoked by
+# scripts/detect_duplication.py — see DEVELOPMENT.md#duplication.
+
+[MASTER]
+persistent = no
+jobs = 0
+
+[MESSAGES CONTROL]
+disable = all
+enable = duplicate-code
+
+[REPORTS]
+score = no
+
+[SIMILARITIES]
+min-similarity-lines = 6
+ignore-comments = yes
+ignore-docstrings = yes
+ignore-imports = yes
+ignore-signatures = yes

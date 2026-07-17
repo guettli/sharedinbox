@@ -189,6 +189,60 @@ Using SSH to `localhost` is preferred over complex X11/Wayland permission hacks.
 
 Refer to the [README.md](./README.md#daily-workflow) for common development tasks and commands.
 
+## Duplication
+
+CI runs a duplicated-code checker on every PR and fails if any clone is found
+that is not already in `duplication-baseline.json`. The goal is to ratchet
+duplication downward: refactors that remove baselined clones are welcome, but
+new duplicates need a good reason.
+
+**Tools.** No single OSS tool covers Dart + Go + Python + Shell semantically,
+so the orchestrator (`scripts/detect_duplication.py`) runs three:
+
+| Language | Tool | Analysis |
+|---|---|---|
+| Go | [`dupl`](https://github.com/mibk/dupl) | AST-based (Go parser) |
+| Python | `pylint --enable=duplicate-code` | AST-based (astroid) |
+| Dart, Shell | [`jscpd`](https://github.com/kucherenko/jscpd) `--mode strict` | token-normalised — no OSS AST clone detector exists for either |
+
+Each finding is keyed by a whitespace-normalised hash of the duplicated
+block, so a rename or reformat does not invalidate the baseline.
+
+**Running locally.**
+
+```bash
+# Via Dagger — no local toolchain needed:
+task duplication
+
+# Or directly, if npx / python3+pylint / dupl are on PATH:
+task duplication-local
+```
+
+Reports land in `build/duplication/` (JSON) and are also uploaded as a
+Dagger artifact on CI failure.
+
+**Accepting a new duplicate.** When refactoring is genuinely worse than
+duplicating (e.g. two DTOs that happen to overlap but will diverge), refresh
+the baseline and explain the addition in your PR description:
+
+```bash
+task duplication-baseline           # via Dagger — matches CI exactly
+git add duplication-baseline.json
+```
+
+The Dagger-based refresh is the source of truth: local tool versions can
+produce slightly different block boundaries, which shift the content hashes
+and make CI reject a baseline generated with `task duplication-baseline-local`.
+
+**Tuning.** Thresholds live in each tool's config file:
+
+- `.jscpd.json` — `minLines`, `minTokens`, `ignore` (Dart / Shell)
+- `.pylintrc-duplication` — `[SIMILARITIES]` block (Python)
+- `dupl -threshold` inside `scripts/detect_duplication.py` (Go)
+
+**Roadmap.** Shrink the baseline to zero, then drop the
+`--against-baseline` flag and gate CI on absolute counts.
+
 ## Smoke-testing the Android mail-handler registration
 
 After `task build-android` + install, you can verify the app appears as a
