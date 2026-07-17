@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
@@ -132,6 +133,85 @@ void main() {
       expect(spans.single.text, 'mailto:alice@example.com');
       expect(spans.single.style?.fontWeight, isNull);
     });
+  });
+
+  group('isMailtoUrl', () {
+    test('accepts lowercase mailto: prefix', () {
+      expect(isMailtoUrl('mailto:foo@bar.com'), isTrue);
+    });
+
+    test('accepts uppercase MAILTO: prefix (scheme is case-insensitive)', () {
+      expect(isMailtoUrl('MAILTO:foo@bar.com'), isTrue);
+    });
+
+    test('rejects http and https URLs', () {
+      expect(isMailtoUrl('http://example.com'), isFalse);
+      expect(isMailtoUrl('https://example.com'), isFalse);
+    });
+
+    test('rejects strings that merely contain "mailto" later on', () {
+      expect(isMailtoUrl('https://example.com/mailto:x'), isFalse);
+    });
+  });
+
+  group('openMailtoInApp', () {
+    // Pumps a minimal GoRouter that starts on /host and exposes /compose so we
+    // can assert openMailtoInApp navigates in-app instead of leaking a mailto:
+    // URI to an external application (issue #290).
+    Future<GoRouter> pumpRouter(
+      WidgetTester tester, {
+      required void Function(Map<String, dynamic>? extra) onCompose,
+    }) async {
+      final router = GoRouter(
+        initialLocation: '/host',
+        routes: [
+          GoRoute(
+            path: '/host',
+            builder: (ctx, state) => Scaffold(
+              body: Center(
+                child: Builder(
+                  builder: (innerCtx) => ElevatedButton(
+                    onPressed: () => openMailtoInApp(
+                      innerCtx,
+                      'mailto:alice@example.com'
+                      '?subject=Hello&body=Line1%0ALine2&cc=carol@example.com',
+                    ),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/compose',
+            builder: (ctx, state) {
+              onCompose(state.extra as Map<String, dynamic>?);
+              return const Scaffold(body: Center(child: Text('compose')));
+            },
+          ),
+        ],
+      );
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+      return router;
+    }
+
+    testWidgets(
+      'navigates to /compose with prefilled fields from a mailto: URI',
+      (tester) async {
+        Map<String, dynamic>? seen;
+        await pumpRouter(tester, onCompose: (extra) => seen = extra);
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('compose'), findsOneWidget);
+        expect(seen, isNotNull);
+        expect(seen!['prefillTo'], 'alice@example.com');
+        expect(seen!['prefillCc'], 'carol@example.com');
+        expect(seen!['prefillSubject'], 'Hello');
+        expect(seen!['prefillBody'], 'Line1\nLine2');
+      },
+    );
   });
 
   // On Linux (the test host) the widget falls back to plain text extracted via
