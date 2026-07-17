@@ -723,6 +723,26 @@ tasks:
     cmds:
       - scripts/check_ci_images.sh
 
+  duplication:
+    desc: Detect duplicated code (jscpd for Dart/Shell, pylint for Python, dupl for Go). Fails on findings not present in duplication-baseline.json.
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. duplication
+
+  duplication-local:
+    desc: Same as `duplication` but invokes the orchestrator directly (no Dagger). Requires npx/node, python3+pylint, and dupl on PATH.
+    cmds:
+      - scripts/detect_duplication.sh --against-baseline
+
+  duplication-baseline:
+    desc: Refresh duplication-baseline.json from the CI container (Dagger). Preferred over duplication-baseline-local — the container is what CI compares against, so its output is authoritative.
+    cmds:
+      - dagger call --progress=plain -q -m ci --source=. duplication-baseline -o duplication-baseline.json
+
+  duplication-baseline-local:
+    desc: Same as duplication-baseline but uses local jscpd/pylint/dupl. Convenient during development, but the resulting baseline may drift from CI's.
+    cmds:
+      - scripts/detect_duplication.sh --baseline
+
   check-dagger-versions:
     desc: Verify Dockerfile.dev and DAGGER.md pin the same Dagger version and that ci/dagger.json engineVersion is not newer
     cmds:

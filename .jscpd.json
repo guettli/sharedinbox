@@ -1,0 +1,33 @@
+{
+  "$comment": "Duplicate-code detection for Dart and Shell. See DEVELOPMENT.md#duplication. Go uses dupl, Python uses pylint --enable=duplicate-code.",
+  "minLines": 10,
+  "minTokens": 60,
+  "reporters": ["json"],
+  "output": "./build/duplication/jscpd",
+  "format": ["dart", "bash"],
+  "mode": "strict",
+  "ignore": [
+    "**/*.g.dart",
+    "**/*.freezed.dart",
+    "**/*.mocks.dart",
+    "**/*.pb.dart",
+    "**/generated/**",
+    "build/**",
+    "**/.dart_tool/**",
+    "android/**",
+    "ios/**",
+    "linux/**",
+    "macos/**",
+    "windows/**",
+    "web/**",
+    "assets/**",
+    "drift_schemas/**",
+    "playstore/**",
+    "arc-runner-image/**",
+    "**/node_modules/**",
+    "duplication-baseline.json"
+  ],
+  "absolute": false,
+  "gitignore": true,
+  "exitCode": 0
+}

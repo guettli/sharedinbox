@@ -443,6 +443,77 @@ func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
 		WithEnvVariable("STALWART_PASS_C", "secret")
 }
 
+// duplicationSrc is the source subset the Duplication checker sees. Kept
+// separate from checkSrc so we can include the Go server tree (server/) and
+// pre-built ci/main.go without pulling in Android / iOS scaffolding.
+func (m *Ci) duplicationSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{
+			"lib/",
+			"test/",
+			"integration_test/",
+			"scripts/",
+			"hooks/",
+			"deploy_cron.py",
+			"ci/",
+			"server/",
+			"stalwart-dev/",
+			".jscpd.json",
+			".pylintrc-duplication",
+			"duplication-baseline.json",
+		},
+		Exclude: []string{
+			"**/*.g.dart",
+			"**/*.freezed.dart",
+			"**/*.mocks.dart",
+			"**/*.pb.dart",
+		},
+	})
+}
+
+// duplicationBase builds the container image the duplication orchestrator
+// needs. Shared between Duplication (gate) and DuplicationBaseline (artifact
+// producer) so the apt/pip/go/npm install layer is cached once per invocation.
+//
+// Uses golang:1.23-bookworm because dupl is installed via `go install` and
+// needs a recent Go toolchain; Debian's packaged Go on python:*-slim was too
+// old for reliable module resolution.
+func (m *Ci) duplicationBase() *dagger.Container {
+	return dag.Container().
+		From("golang:1.23-bookworm").
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && " +
+				"apt-get install -y -qq --no-install-recommends " +
+				"python3 python3-pip nodejs npm ca-certificates && " +
+				"pip install --quiet --no-cache-dir --break-system-packages pylint==4.0.6 && " +
+				"GOBIN=/usr/local/bin go install github.com/mibk/dupl@v1.1.0 && " +
+				"npm install --silent --no-progress --global jscpd@4.2.5"}).
+		WithDirectory("/src", m.duplicationSrc()).
+		WithWorkdir("/src").
+		WithEnvVariable("HOME", "/tmp")
+}
+
+// Duplication runs the duplicated-code orchestrator (jscpd + pylint + dupl)
+// against the committed baseline. Exits non-zero if any clone is found that
+// is NOT already in duplication-baseline.json. See DEVELOPMENT.md#duplication.
+func (m *Ci) Duplication(ctx context.Context) (string, error) {
+	return m.duplicationBase().
+		WithExec([]string{"python3", "scripts/detect_duplication.py", "--against-baseline"}).
+		Stdout(ctx)
+}
+
+// DuplicationBaseline regenerates duplication-baseline.json inside the CI
+// container and returns it as a file. Use when the local baseline drifts
+// from the container's output (different tool versions, file ordering, etc.)
+// — export with:
+//
+//	dagger call --progress=plain -q -m ci --source=. duplication-baseline -o duplication-baseline.json
+func (m *Ci) DuplicationBaseline() *dagger.File {
+	return m.duplicationBase().
+		WithExec([]string{"python3", "scripts/detect_duplication.py", "--baseline"}).
+		File("duplication-baseline.json")
+}
+
 // CheckHygiene checks that no forbidden home-directory files are in the source.
 func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 	return m.Base().
@@ -608,6 +679,10 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	})
 	fastEg.Go(func() error {
 		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	fastEg.Go(func() error {
+		_, err := m.Duplication(ctx)
 		return err
 	})
 	if err := fastEg.Wait(); err != nil {
