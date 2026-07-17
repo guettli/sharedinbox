@@ -95,6 +95,9 @@ void main() {
     expect(leaf.headerName, 'List-Id');
     expect(leaf.value, '<newsletter.example.com>');
     expect(leaf.comparison, FilterComparison.is_);
+    // The headers dialog must not remain on top of the destination screen —
+    // see #269.
+    expect(find.text('Mail Headers'), findsNothing);
   });
 
   testWidgets('remote-filter action pushes sieve/edit with prefill',
@@ -114,6 +117,7 @@ void main() {
     final leaf = prefill.filter.children.first as FilterLeaf;
     expect(leaf.field, FilterField.header);
     expect(leaf.headerName, 'List-Id');
+    expect(find.text('Mail Headers'), findsNothing);
   });
 
   testWidgets('local-filter action pushes sieve/local/edit', (tester) async {
@@ -128,5 +132,6 @@ void main() {
     expect(recorder.pushes, hasLength(1));
     expect(recorder.pushes.first.path, '/accounts/acc-1/sieve/local/edit');
     expect(recorder.pushes.first.extra, isA<SieveEditPrefill>());
+    expect(find.text('Mail Headers'), findsNothing);
   });
 }
