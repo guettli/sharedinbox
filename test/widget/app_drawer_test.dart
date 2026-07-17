@@ -92,17 +92,19 @@ void main() {
       await tester.pumpAndSettle();
       await openDrawer(tester);
 
-      // Scroll the drawer to the bottom so all global entries become visible
-      // — Flutter's widget tester treats off-screen widgets as not found.
+      // Flutter's widget tester treats off-screen widgets as not found. The
+      // drawer is taller than the test viewport, so assert the upper entries
+      // while they're visible, then scroll to reveal the lower ones.
+      expect(textInDrawer('Manage accounts'), findsOneWidget);
+      expect(textInDrawer('Add account'), findsOneWidget);
+      expect(textInDrawer('Receive accounts'), findsOneWidget);
+
       await tester.drag(
         find.byType(AppDrawer),
         const Offset(0, -1000),
       );
       await tester.pumpAndSettle();
 
-      expect(textInDrawer('Manage accounts'), findsOneWidget);
-      expect(textInDrawer('Add account'), findsOneWidget);
-      expect(textInDrawer('Receive accounts'), findsOneWidget);
       expect(textInDrawer('Preferences'), findsOneWidget);
       expect(textInDrawer('Sent Queue'), findsOneWidget);
       expect(textInDrawer('Undo Log'), findsOneWidget);
