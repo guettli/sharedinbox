@@ -4120,6 +4120,80 @@ void main() {
       },
     );
   });
+
+  group('JMAP fetchRawRfc822', () {
+    // Regression tests for #264: the JMAP branch used `.first` on the
+    // Email/get list, which threw an unhelpful `Bad state: No element` when
+    // the server returned an empty list (email destroyed server-side or the
+    // id was rewritten). The IMAP branch already guarded with a descriptive
+    // StateError; the JMAP branch now matches.
+    test('throws a descriptive StateError when the list is empty', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          apiResponses: [
+            _emailGetOnly(state: 'es1', list: const []),
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      expect(
+        () => r.emails.fetchRawRfc822('jmap-1:e1'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('e1'),
+          ),
+        ),
+      );
+    });
+
+    test('throws when the returned email has no blobId', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          apiResponses: [
+            _emailGetOnly(
+              state: 'es1',
+              list: [
+                {'id': 'e1'},
+              ],
+            ),
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      expect(
+        () => r.emails.fetchRawRfc822('jmap-1:e1'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('blobId'),
+          ),
+        ),
+      );
+    });
+  });
 }
 
 // ── Fakes for IMAP send hang protection tests ────────────────────────────────

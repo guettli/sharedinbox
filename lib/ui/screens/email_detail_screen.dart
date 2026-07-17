@@ -375,7 +375,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
       await OpenFilex.open(path);
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.attachment.open_failed',
+              'Opening attachment failed',
+              emailId: widget.emailId,
+              data: {'filename': att.filename},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -496,6 +506,20 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Widget _buildHeader(BuildContext ctx, Email email) {
+    if (email.from.isEmpty || email.to.isEmpty) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+          'email.header.missing_addresses',
+          'Email has empty from/to on open',
+          accountId: email.accountId,
+          emailId: email.id,
+          data: {
+            'fromEmpty': email.from.isEmpty,
+            'toEmpty': email.to.isEmpty,
+          },
+        ),
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -504,16 +528,18 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           style: Theme.of(ctx).textTheme.titleMedium,
         ),
         const SizedBox(height: AppSpacing.xs),
-        if (email.from.isNotEmpty)
-          Text(
-            'From: ${email.from.first}',
-            style: Theme.of(ctx).textTheme.bodySmall,
-          ),
-        if (email.to.isNotEmpty)
-          Text(
-            'To: ${email.to.map((a) => a.toString()).join(', ')}',
-            style: Theme.of(ctx).textTheme.bodySmall,
-          ),
+        Text(
+          email.from.isNotEmpty
+              ? 'From: ${email.from.first}'
+              : 'From: (unknown)',
+          style: Theme.of(ctx).textTheme.bodySmall,
+        ),
+        Text(
+          email.to.isNotEmpty
+              ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
+              : 'To: (no recipients)',
+          style: Theme.of(ctx).textTheme.bodySmall,
+        ),
         if (email.sentAt != null)
           Text(
             _dateFmt.format(email.sentAt!),
@@ -874,7 +900,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       raw = await ref
           .read(emailRepositoryProvider)
           .fetchRawRfc822(widget.emailId);
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.raw.fetch_failed',
+              'Failed to fetch raw email',
+              accountId: header?.accountId,
+              emailId: widget.emailId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -980,7 +1016,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           action: action,
         ),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.raw.download_failed',
+              'Saving raw email failed',
+              accountId: header?.accountId,
+              emailId: widget.emailId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -1024,7 +1070,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       return await ref
           .read(emailRepositoryProvider)
           .getEmailBody(widget.emailId, forceRefresh: true);
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.body.refetch_failed',
+              'Failed to fetch mail details',
+              emailId: widget.emailId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (context.mounted) {
         messenger.showSnackBar(
           SnackBar(content: Text('Failed to fetch mail details: $e')),
@@ -1369,7 +1424,17 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
       messenger.showSnackBar(
         const SnackBar(content: Text('Unsubscribe email sent')),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.unsubscribe.send_failed',
+              'Failed to send unsubscribe email',
+              accountId: widget.email.accountId,
+              emailId: widget.email.id,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(content: Text('Failed to send unsubscribe: $e')),

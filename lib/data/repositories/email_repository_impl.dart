@@ -3554,9 +3554,19 @@ class EmailRepositoryImpl implements EmailRepository {
         ],
       ]);
       final result = _responseArgs(responses, 0, 'Email/get');
-      final emailData =
-          (result['list'] as List<dynamic>).first as Map<String, dynamic>;
-      final blobId = emailData['blobId'] as String;
+      final list = result['list'] as List<dynamic>;
+      final emailData = list.firstOrNull as Map<String, dynamic>?;
+      if (emailData == null) {
+        throw StateError(
+          'JMAP server returned no message for id $jmapEmailId.',
+        );
+      }
+      final blobId = emailData['blobId'] as String?;
+      if (blobId == null || blobId.isEmpty) {
+        throw StateError(
+          'JMAP server returned no blobId for id $jmapEmailId.',
+        );
+      }
       final bytes = await jmap.downloadBlob(
         blobId,
         name: 'email.eml',
