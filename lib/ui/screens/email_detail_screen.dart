@@ -341,10 +341,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
     if (action != AfterMailViewAction.nextMessage) return null;
 
-    final threads = await ref
-        .read(emailRepositoryProvider)
-        .observeThreads(header.accountId, header.mailboxPath)
-        .first;
+    // Restrict to threads that live in the same mailbox as the current mail.
+    // observeThreads is expected to filter server-side, but a defensive
+    // client-side check keeps the "next message" from ever pointing at a
+    // thread in another folder such as Junk (#293).
+    final threads = (await ref
+            .read(emailRepositoryProvider)
+            .observeThreads(header.accountId, header.mailboxPath)
+            .first)
+        .where((t) => t.mailboxPath == header.mailboxPath)
+        .toList();
 
     final currentIndex = threads.indexWhere(
       (t) => t.emailIds.contains(widget.emailId),

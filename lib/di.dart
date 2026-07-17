@@ -297,8 +297,14 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
           prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
       if (action != AfterMailViewAction.nextMessage) return;
 
-      final threads =
-          await repo.observeThreads(header.accountId, header.mailboxPath).first;
+      // Restrict to threads in the current mailbox so a stray thread from
+      // another folder (e.g. Junk) does not cause us to prefetch — and later
+      // navigate to — a mail that isn't the actual next inbox message (#293).
+      final threads = (await repo
+              .observeThreads(header.accountId, header.mailboxPath)
+              .first)
+          .where((t) => t.mailboxPath == header.mailboxPath)
+          .toList();
       final currentIndex = threads.indexWhere(
         (t) => t.emailIds.contains(_emailId),
       );
