@@ -39,7 +39,8 @@ void main() {
     }
 
     final smtpClient = SmtpClient('sharedinbox-test');
-    await smtpClient.connectToServer(env.smtpHost, env.smtpPort, isSecure: false);
+    await smtpClient.connectToServer(env.smtpHost, env.smtpPort,
+        isSecure: false);
     await smtpClient.ehlo();
     await smtpClient.authenticate(alice.email, alice.password);
 

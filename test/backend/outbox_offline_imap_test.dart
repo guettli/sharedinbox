@@ -146,7 +146,8 @@ void main() {
       }
 
       // ── 3. Reset backoff (simulate user-driven retry / next sync cycle) ──
-      await emails.flushOutbox(account.id, user.password); // no-op (backoff active)
+      await emails.flushOutbox(
+          account.id, user.password); // no-op (backoff active)
       // Clear the backoff so the next call is eligible immediately.
       final outboxRepo = OutboxRepositoryImpl(db);
       await outboxRepo.retry(outboxId);

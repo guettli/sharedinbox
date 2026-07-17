@@ -111,7 +111,8 @@ void main() {
             await emails.sendEmail(
               account.id,
               email_model.EmailDraft(
-                from: email_model.EmailAddress(name: 'Chaos', email: user.email),
+                from:
+                    email_model.EmailAddress(name: 'Chaos', email: user.email),
                 to: [email_model.EmailAddress(email: user.email)],
                 cc: [],
                 subject: subject,
