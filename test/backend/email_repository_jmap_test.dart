@@ -1,11 +1,8 @@
 // Integration tests for EmailRepositoryImpl JMAP path against a real Stalwart instance.
 // Run via: stalwart-dev/test.sh
 //
-// Environment variables (set by the runner script):
-//   STALWART_URL       — JMAP base URL, e.g. http://127.0.0.1:8080
-//   STALWART_IMAP_HOST, STALWART_IMAP_PORT
-//   STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
+// Uses a per-isolate pool user from stalwart_harness.dart so multiple test
+// files can run in parallel without racing on INBOX/Trash resets.
 
 import 'dart:io';
 
@@ -22,85 +19,26 @@ import 'package:test/test.dart';
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
 import 'localhost_mapping_client.dart';
-
-String _env(String key, [String fallback = '']) =>
-    Platform.environment[key] ?? fallback;
-
-Future<ImapClient> _imapConnect({
-  required String host,
-  required int port,
-  required String user,
-  required String pass,
-}) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
-
-Future<void> _clearMailbox(
-  ImapClient client, {
-  String mailboxPath = 'INBOX',
-}) async {
-  final box = await client.selectMailboxByPath(mailboxPath);
-  if (box.messagesExists == 0) return;
-  final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-  final uids = result.matchingSequence?.toList() ?? [];
-  if (uids.isEmpty) return;
-  final seq = MessageSequence.fromIds(uids, isUid: true);
-  await client.uidMarkDeleted(seq);
-  await client.uidExpunge(seq);
-}
+import 'stalwart_harness.dart';
 
 void main() {
-  late String stalwartUrl;
-  late String imapHost;
-  late int imapPort;
-  late String smtpPort;
-  late String userEmail;
-  late String userPass;
+  late StalwartEnv env;
+  late StalwartTestUser user;
   late Account account;
   late Directory cacheDir;
 
   setUpAll(() {
     configureSqliteForTests();
-    stalwartUrl = _env('STALWART_URL', 'http://127.0.0.1:8080');
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    smtpPort = _env('STALWART_SMTP_PORT', '1025');
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
-    account = Account(
-      id: 'test-jmap',
-      displayName: 'Alice',
-      email: userEmail,
-      type: AccountType.jmap,
-      jmapUrl: '$stalwartUrl/.well-known/jmap',
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: imapHost,
-      smtpPort: int.parse(smtpPort),
-    );
+    env = StalwartEnv.fromPlatform();
+    user = pickPoolUser(env: env);
+    account = user.jmapAccount(id: 'test-jmap', env: env);
     cacheDir = Directory.systemTemp.createTempSync('repo_jmap_test_');
   });
 
   tearDownAll(() => cacheDir.deleteSync(recursive: true));
 
   setUp(() async {
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
-    try {
-      await _clearMailbox(client);
-    } finally {
-      await client.logout();
-    }
+    await clearStandardMailboxes(env: env, user: user);
   });
 
   ({
@@ -129,7 +67,7 @@ void main() {
     AccountRepositoryImpl accounts,
     MailboxRepositoryImpl mailboxes,
   ) async {
-    await accounts.addAccount(account, userPass);
+    await accounts.addAccount(account, user.password);
     await mailboxes.syncMailboxes('test-jmap');
     final row = await (db.select(db.mailboxes)
           ..where(
@@ -142,16 +80,11 @@ void main() {
   }
 
   Future<void> appendToInbox(String subject, {String body = 'Body'}) async {
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final msg = MessageBuilder()
-        ..from = [MailAddress('Alice', userEmail)]
-        ..to = [MailAddress('Alice', userEmail)]
+        ..from = [MailAddress(user.email, user.email)]
+        ..to = [MailAddress(user.email, user.email)]
         ..subject = subject
         ..text = body;
       await client.appendMessage(
@@ -211,12 +144,7 @@ void main() {
     );
 
     // Delete via IMAP directly on the server.
-    final imap = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imap = await connectImap(env: env, user: user);
     try {
       await imap.selectMailboxByPath('INBOX');
       final search = await imap.uidSearchMessages(
@@ -327,14 +255,14 @@ void main() {
     () async {
       final subject = 'jmap-send-${DateTime.now().millisecondsSinceEpoch}';
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.mailboxes.syncMailboxes('test-jmap');
 
       await r.emails.sendEmail(
         'test-jmap',
         EmailDraft(
-          from: EmailAddress(name: 'Alice', email: userEmail),
-          to: [EmailAddress(name: 'Alice', email: userEmail)],
+          from: EmailAddress(name: user.email, email: user.email),
+          to: [EmailAddress(name: user.email, email: user.email)],
           cc: [],
           subject: subject,
           body: 'Integration test message via JMAP',
@@ -370,14 +298,9 @@ void main() {
 
     final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
     await r.emails.setFlag(emails.first.id, seen: true);
-    await r.emails.flushPendingChanges('test-jmap', userPass);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       await client.selectMailboxByPath('INBOX');
       final seen = await client.uidSearchMessages(searchCriteria: 'SEEN');
@@ -396,14 +319,9 @@ void main() {
 
     final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
     await r.emails.deleteEmail(emails.first.id);
-    await r.emails.flushPendingChanges('test-jmap', userPass);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final inbox = await client.selectMailboxByPath('INBOX');
       expect(inbox.messagesExists, 0);
@@ -434,7 +352,7 @@ void main() {
 
     final emails = await r.emails.observeEmails('test-jmap', inboxId).first;
     await r.emails.moveEmail(emails.first.id, trashId);
-    await r.emails.flushPendingChanges('test-jmap', userPass);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
 
     // Re-sync both mailboxes to see updated state.
     await r.emails.syncEmails('test-jmap', inboxId);

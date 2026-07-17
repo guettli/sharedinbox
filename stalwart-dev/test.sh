@@ -65,13 +65,16 @@ START=$(date +%s)
 run_tests() {
   # If unit tests already produced a coverage baseline, merge integration coverage
   # into it so the final gate reflects both suites.
+  # Concurrency defaults to `flutter test`'s CPU-count value; backend tests
+  # shard across the aliceN/bobN pool in stalwart-dev/config.toml so they no
+  # longer race on shared mailboxes.
   local target="${1:-test/backend/}"
   if [ -f coverage/lcov.info ]; then
     cp coverage/lcov.info coverage/lcov.base.info
-    flutter test --concurrency=1 --coverage --merge-coverage --reporter compact "$target" >"$tmp" 2>&1
+    flutter test --coverage --merge-coverage --reporter compact "$target" >"$tmp" 2>&1
     rm -f coverage/lcov.base.info
   else
-    flutter test --concurrency=1 --reporter compact "$target" >"$tmp" 2>&1
+    flutter test --reporter compact "$target" >"$tmp" 2>&1
   fi
 }
 if run_tests "${@:-}"; then

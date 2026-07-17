@@ -1,68 +1,51 @@
 // Integration tests — requires a running Stalwart instance.
-// Run via: stalwart-dev/test.sh  (sets the env vars below)
+// Run via: stalwart-dev/test.sh
 //
-// STALWART_IMAP_HOST, STALWART_IMAP_PORT, STALWART_SMTP_HOST, STALWART_SMTP_PORT
-// STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
-// STALWART_USER_C / STALWART_PASS_C  (bob@example.com)
-
-import 'dart:io';
+// Uses paired pool users from stalwart_harness.dart (aliceN + bobN at the
+// same shard) so this file can run in parallel with the rest of the suite.
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:test/test.dart';
 
-String _env(String key) {
-  final v = Platform.environment[key];
-  if (v == null || v.isEmpty) throw StateError('$key is not set');
-  return v;
-}
-
-Future<ImapClient> _connect(
-  String user,
-  String pass, {
-  required String host,
-  required int port,
-}) async {
-  final client = ImapClient();
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
+import 'stalwart_harness.dart';
 
 void main() {
-  late String imapHost;
-  late int imapPort;
-  late int smtpPort;
-  late String userA, passA, userB, passB;
+  late StalwartEnv env;
+  late StalwartTestUser alice;
+  late StalwartTestUser bob;
 
   setUpAll(() {
-    imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
-    imapPort = int.parse(_env('STALWART_IMAP_PORT'));
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT'));
-    userA = _env('STALWART_USER_B'); // alice
-    passA = _env('STALWART_PASS_B');
-    userB = _env('STALWART_USER_C'); // bob
-    passB = _env('STALWART_PASS_C');
+    env = StalwartEnv.fromPlatform();
+    alice = pickPoolUser(env: env);
+    bob = pickPoolUser(env: env, prefix: 'bob');
   });
 
   test('login and list mailboxes', () async {
-    final client = await _connect(userA, passA, host: imapHost, port: imapPort);
+    final client = await connectImap(env: env, user: alice);
     addTearDown(() => client.logout().ignore());
 
-    // listMailboxes() returns List<Mailbox> directly
     final mailboxes = await client.listMailboxes();
     expect(mailboxes, isNotEmpty);
     expect(mailboxes.map((m) => m.name), contains('INBOX'));
   });
 
   test('send via SMTP and receive via IMAP', () async {
-    final smtpClient = SmtpClient('test');
-    await smtpClient.connectToServer(imapHost, smtpPort, isSecure: false);
+    // Empty bob's INBOX so the messagesExists check reflects this send only.
+    final bobClient = await connectImap(env: env, user: bob);
+    try {
+      await clearMailbox(bobClient);
+    } finally {
+      await bobClient.logout();
+    }
+
+    final smtpClient = SmtpClient('sharedinbox-test');
+    await smtpClient.connectToServer(env.smtpHost, env.smtpPort, isSecure: false);
     await smtpClient.ehlo();
-    await smtpClient.authenticate(userA, passA);
+    await smtpClient.authenticate(alice.email, alice.password);
 
     final builder = MessageBuilder()
-      ..from = [MailAddress('Alice', userA)]
-      ..to = [MailAddress('Bob', userB)]
+      ..from = [MailAddress(alice.email, alice.email)]
+      ..to = [MailAddress(bob.email, bob.email)]
       ..subject = 'Integration test ${DateTime.now().millisecondsSinceEpoch}'
       ..text = 'Hello from SharedInbox integration test.';
     await smtpClient.sendMessage(builder.buildMimeMessage());
@@ -71,12 +54,7 @@ void main() {
     // Give Stalwart a moment to deliver the message.
     await Future<void>.delayed(const Duration(milliseconds: 500));
 
-    final imapClient = await _connect(
-      userB,
-      passB,
-      host: imapHost,
-      port: imapPort,
-    );
+    final imapClient = await connectImap(env: env, user: bob);
     addTearDown(() => imapClient.logout().ignore());
 
     final inbox = await imapClient.selectMailboxByPath('INBOX');

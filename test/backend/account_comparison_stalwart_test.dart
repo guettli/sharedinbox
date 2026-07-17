@@ -32,9 +32,7 @@ import 'package:test/test.dart';
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
 import 'localhost_mapping_client.dart';
-
-String _env(String key, [String fallback = '']) =>
-    Platform.environment[key] ?? fallback;
+import 'stalwart_harness.dart' as harness;
 
 Future<ImapClient> _imapConnectPlain(
   model.Account account,
@@ -53,74 +51,23 @@ Future<ImapClient> _imapConnectPlain(
   return client;
 }
 
-Future<ImapClient> _imapConnectDirect({
-  required String host,
-  required int port,
-  required String user,
-  required String pass,
-}) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
-
-/// Empties [mailboxPath], swallowing the error if the folder doesn't exist
-/// (e.g. Trash hasn't been created yet).
-Future<void> _clearMailbox(
-  ImapClient client, {
-  String mailboxPath = 'INBOX',
-}) async {
-  try {
-    final box = await client.selectMailboxByPath(mailboxPath);
-    if (box.messagesExists == 0) return;
-    final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-    final uids = result.matchingSequence?.toList() ?? [];
-    if (uids.isEmpty) return;
-    final seq = MessageSequence.fromIds(uids, isUid: true);
-    await client.uidMarkDeleted(seq);
-    await client.uidExpunge(seq);
-  } catch (_) {
-    // Mailbox doesn't exist — nothing to clear.
-  }
-}
-
-Future<void> _appendToInbox(
-  ImapClient client, {
-  required String subject,
-  required String userEmail,
-  String body = 'Hello',
-}) async {
-  final msg = MessageBuilder()
-    ..from = [MailAddress('Alice', userEmail)]
-    ..to = [MailAddress('Alice', userEmail)]
-    ..subject = subject
-    ..text = body;
-  await client.appendMessage(
-    msg.buildMimeMessage(),
-    targetMailboxPath: 'INBOX',
-  );
-}
-
 /// Delivers a message over SMTP (how real mail arrives) rather than IMAP APPEND.
 /// Stalwart 0.14.x notably does not bump HIGHESTMODSEQ on SMTP delivery, so this
-/// exercises a different server-state path than _appendToInbox.
+/// exercises a different server-state path than IMAP APPEND.
 Future<void> _smtpDeliver({
   required String host,
   required int port,
-  required String user,
-  required String pass,
+  required String userEmail,
+  required String password,
   required String subject,
 }) async {
   final smtp = SmtpClient('sharedinbox-test');
   await smtp.connectToServer(host, port, isSecure: false);
   await smtp.ehlo();
-  await smtp.authenticate(user, pass);
+  await smtp.authenticate(userEmail, password);
   final builder = MessageBuilder()
-    ..from = [MailAddress('Alice', user)]
-    ..to = [MailAddress('Alice', user)]
+    ..from = [MailAddress(userEmail, userEmail)]
+    ..to = [MailAddress(userEmail, userEmail)]
     ..subject = subject
     ..text = 'Body of $subject';
   await smtp.sendMessage(builder.buildMimeMessage());
@@ -128,44 +75,20 @@ Future<void> _smtpDeliver({
 }
 
 void main() {
-  late String stalwartUrl;
-  late String imapHost;
-  late int imapPort;
-  late String smtpHost;
-  late int smtpPort;
-  late String userEmail;
-  late String userPass;
+  late harness.StalwartEnv env;
+  late harness.StalwartTestUser user;
   late Directory cacheDir;
 
   setUpAll(() {
     configureSqliteForTests();
-    stalwartUrl = _env('STALWART_URL', 'http://127.0.0.1:8080');
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    smtpHost = _env('STALWART_SMTP_HOST', '127.0.0.1');
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT', '1025'));
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
+    env = harness.StalwartEnv.fromPlatform();
+    user = harness.pickPoolUser(env: env);
     cacheDir = Directory.systemTemp.createTempSync('compare_stalwart_test_');
   });
 
   tearDownAll(() => cacheDir.deleteSync(recursive: true));
 
-  setUp(() async {
-    final client = await _imapConnectDirect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
-    try {
-      for (final path in const ['INBOX', 'Trash', 'Deleted Items']) {
-        await _clearMailbox(client, mailboxPath: path);
-      }
-    } finally {
-      await client.logout();
-    }
-  });
+  setUp(() => harness.clearStandardMailboxes(env: env, user: user));
 
   // Builds the two-account world shared by every test: one IMAP and one JMAP
   // account for the same Stalwart user, backed by a single in-memory DB so the
@@ -181,31 +104,31 @@ void main() {
     final imapAccount = model.Account(
       id: 'compare-imap',
       displayName: 'Alice (IMAP)',
-      email: userEmail,
-      imapHost: imapHost,
-      imapPort: imapPort,
+      email: user.email,
+      imapHost: env.imapHost,
+      imapPort: env.imapPort,
       imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
+      smtpHost: env.smtpHost,
+      smtpPort: env.smtpPort,
     );
     final jmapAccount = model.Account(
       id: 'compare-jmap',
       displayName: 'Alice (JMAP)',
-      email: userEmail,
+      email: user.email,
       type: model.AccountType.jmap,
-      jmapUrl: '$stalwartUrl/.well-known/jmap',
-      imapHost: imapHost,
-      imapPort: imapPort,
+      jmapUrl: '${env.stalwartUrl}/.well-known/jmap',
+      imapHost: env.imapHost,
+      imapPort: env.imapPort,
       imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
+      smtpHost: env.smtpHost,
+      smtpPort: env.smtpPort,
     );
 
     final db = openTestDatabase();
     addTearDown(db.close);
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-    await accounts.addAccount(imapAccount, userPass);
-    await accounts.addAccount(jmapAccount, userPass);
+    await accounts.addAccount(imapAccount, user.password);
+    await accounts.addAccount(jmapAccount, user.password);
 
     final httpClient = LocalhostMappingClient();
     addTearDown(httpClient.close);
@@ -243,7 +166,7 @@ void main() {
     String accountId,
   ) async {
     await mailboxes.syncMailboxes(accountId);
-    await emails.flushPendingChanges(accountId, userPass);
+    await emails.flushPendingChanges(accountId, user.password);
     // syncMailboxes again in case a flush (e.g. move to Trash) created folders.
     await mailboxes.syncMailboxes(accountId);
     final boxes = await (db.select(db.mailboxes)
@@ -304,14 +227,9 @@ void main() {
   // Seeds one message into INBOX via a direct IMAP APPEND so both protocols
   // see the same data.
   Future<void> seedInbox(String subject) async {
-    final imap = await _imapConnectDirect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imap = await harness.connectImap(env: env, user: user);
     try {
-      await _appendToInbox(imap, subject: subject, userEmail: userEmail);
+      await harness.appendMessage(imap, subject: subject, userEmail: user.email);
     } finally {
       await imap.logout();
     }
@@ -632,10 +550,10 @@ void main() {
     final subjects = [for (var i = 0; i < 3; i++) 'smtp-$stamp-$i'];
     for (final s in subjects) {
       await _smtpDeliver(
-        host: smtpHost,
-        port: smtpPort,
-        user: userEmail,
-        pass: userPass,
+        host: env.smtpHost,
+        port: env.smtpPort,
+        userEmail: user.email,
+        password: user.password,
         subject: s,
       );
     }

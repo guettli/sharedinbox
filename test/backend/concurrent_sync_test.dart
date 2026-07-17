@@ -1,18 +1,10 @@
 // Integration test — requires a running Stalwart instance.
-// Run via: stalwart-dev/test.sh  (sets the env vars below)
+// Run via: stalwart-dev/test.sh
 //
 // Concurrently syncs via IMAP (alice) and JMAP (bob), sends emails in both
-// directions, and verifies the in-memory Drift DB cache is consistent.
-//
-// Env vars:
-//   STALWART_URL           — JMAP base URL (e.g. http://127.0.0.1:8080)
-//   STALWART_IMAP_HOST     — IMAP hostname (default 127.0.0.1)
-//   STALWART_IMAP_PORT     — IMAP port
-//   STALWART_SMTP_PORT     — SMTP port
-//   STALWART_USER_B / STALWART_PASS_B  — alice (IMAP account)
-//   STALWART_USER_C / STALWART_PASS_C  — bob   (JMAP account)
-
-import 'dart:io';
+// directions, and verifies the in-memory Drift DB cache is consistent. Uses
+// paired pool users (aliceN + bobN at the same shard) so this file can run
+// in parallel with the rest of the suite.
 
 import 'package:drift/native.dart';
 import 'package:enough_mail/enough_mail.dart' as enough_mail;
@@ -27,13 +19,9 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+import 'stalwart_harness.dart';
 
-String _env(String key) {
-  final v = Platform.environment[key];
-  if (v == null || v.isEmpty) throw StateError('$key is not set');
-  return v;
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// In-memory SecureStorage backed by a plain map — no flutter_secure_storage.
 class _MemSecureStorage implements SecureStorage {
@@ -97,29 +85,24 @@ Future<void> _sendMessage({
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
-  late String imapHost;
-  late int imapPort;
-  late int smtpPort;
-  late String jmapUrl;
-  late String aliceUser, alicePass;
-  late String bobUser, bobPass;
+  late StalwartEnv env;
+  late StalwartTestUser alice;
+  late StalwartTestUser bob;
   late AppDatabase db;
   late AccountRepository accounts;
 
   setUpAll(() {
-    imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
-    imapPort = int.parse(_env('STALWART_IMAP_PORT'));
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT'));
-    jmapUrl = _env('STALWART_URL');
-    aliceUser = _env('STALWART_USER_B');
-    alicePass = _env('STALWART_PASS_B');
-    bobUser = _env('STALWART_USER_C');
-    bobPass = _env('STALWART_PASS_C');
+    env = StalwartEnv.fromPlatform();
+    alice = pickPoolUser(env: env);
+    bob = pickPoolUser(env: env, prefix: 'bob');
   });
 
-  setUp(() {
+  setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
     accounts = AccountRepositoryImpl(db, _MemSecureStorage());
+    // Reset per-user INBOXes so counts reflect this test only.
+    await clearStandardMailboxes(env: env, user: alice);
+    await clearStandardMailboxes(env: env, user: bob);
   });
 
   tearDown(() async {
@@ -138,19 +121,19 @@ void main() {
       // bob   → alice (cross-direction)
       for (var i = 0; i < msgCount; i++) {
         await _sendMessage(
-          host: imapHost,
-          port: smtpPort,
-          from: aliceUser,
-          pass: alicePass,
-          to: bobUser,
+          host: env.smtpHost,
+          port: env.smtpPort,
+          from: alice.email,
+          pass: alice.password,
+          to: bob.email,
           subject: 'alice-to-bob-$ts-$i',
         );
         await _sendMessage(
-          host: imapHost,
-          port: smtpPort,
-          from: bobUser,
-          pass: bobPass,
-          to: aliceUser,
+          host: env.smtpHost,
+          port: env.smtpPort,
+          from: bob.email,
+          pass: bob.password,
+          to: alice.email,
           subject: 'bob-to-alice-$ts-$i',
         );
       }
@@ -158,28 +141,11 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 800));
 
       // ── 2. Insert accounts ─────────────────────────────────────────────────────
-      final aliceAccount = model.Account(
-        id: 'alice',
-        displayName: 'Alice',
-        email: aliceUser,
-        imapHost: imapHost,
-        imapPort: imapPort,
-        imapSsl: false,
-        smtpHost: imapHost,
-        smtpPort: smtpPort,
-      );
-      final bobAccount = model.Account(
-        id: 'bob',
-        displayName: 'Bob',
-        email: bobUser,
-        type: model.AccountType.jmap,
-        jmapUrl: '$jmapUrl/.well-known/jmap',
-        smtpHost: imapHost,
-        smtpPort: smtpPort,
-      );
+      final aliceAccount = alice.imapAccount(id: 'alice', env: env);
+      final bobAccount = bob.jmapAccount(id: 'bob', env: env);
 
-      await accounts.addAccount(aliceAccount, alicePass);
-      await accounts.addAccount(bobAccount, bobPass);
+      await accounts.addAccount(aliceAccount, alice.password);
+      await accounts.addAccount(bobAccount, bob.password);
 
       final httpClient = http.Client();
       addTearDown(httpClient.close);

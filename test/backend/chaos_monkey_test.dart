@@ -3,10 +3,9 @@
 //
 // Run via: stalwart-dev/test.sh
 //
+// Uses a per-isolate pool user from stalwart_harness.dart.
+//
 // Environment variables:
-//   STALWART_IMAP_HOST, STALWART_IMAP_PORT
-//   STALWART_SMTP_HOST, STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
 //   CHAOS_ROUNDS  (default: 30) — number of random operations to perform
 //   CHAOS_SEED    (default: current epoch ms) — seed for reproducibility
 
@@ -27,73 +26,14 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import 'stalwart_harness.dart';
 
 String _env(String key, [String fallback = '']) =>
     Platform.environment[key] ?? fallback;
 
-Future<ImapClient> _imapConnectPlain(
-  Account account,
-  String username,
-  String password,
-) async {
-  final client =
-      ImapClient(defaultResponseTimeout: const Duration(seconds: 20));
-  await client.connectToServer(
-    account.imapHost,
-    account.imapPort,
-    isSecure: false,
-  );
-  await client.login(username, password);
-  return client;
-}
-
-Future<SmtpClient> _smtpConnectPlain(
-  Account account,
-  String username,
-  String password,
-) async {
-  final atIndex = account.email.lastIndexOf('@');
-  final domain =
-      atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
-  final client = SmtpClient(domain);
-  await client.connectToServer(
-    account.smtpHost,
-    account.smtpPort,
-    isSecure: false,
-  );
-  await client.ehlo();
-  await client.authenticate(username, password);
-  return client;
-}
-
-Future<void> _clearMailbox(
-  Account account,
-  String userEmail,
-  String userPass,
-  String mailboxPath,
-) async {
-  final client = await _imapConnectPlain(account, userEmail, userPass);
-  try {
-    final box = await client.selectMailboxByPath(mailboxPath);
-    if (box.messagesExists == 0) return;
-    final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-    final uids = result.matchingSequence?.toList() ?? [];
-    if (uids.isEmpty) return;
-    final seq = MessageSequence.fromIds(uids, isUid: true);
-    await client.uidMarkDeleted(seq);
-    await client.uidExpunge(seq);
-  } finally {
-    await client.logout();
-  }
-}
-
 void main() {
-  late String imapHost;
-  late int imapPort;
-  late String smtpHost;
-  late int smtpPort;
-  late String userEmail;
-  late String userPass;
+  late StalwartEnv env;
+  late StalwartTestUser user;
   late Account account;
   late AppDatabase db;
   late EmailRepositoryImpl emails;
@@ -101,36 +41,22 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   setUp(() async {
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    smtpHost = _env('STALWART_SMTP_HOST', '127.0.0.1');
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT', '1025'));
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
-
-    account = Account(
-      id: 'chaos',
-      displayName: 'Chaos',
-      email: userEmail,
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
-    );
+    env = StalwartEnv.fromPlatform();
+    user = pickPoolUser(env: env);
+    account = user.imapAccount(id: 'chaos', env: env);
 
     db = openTestDatabase();
     final secureStorage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, secureStorage);
-    await accounts.addAccount(account, userPass);
+    await accounts.addAccount(account, user.password);
     emails = EmailRepositoryImpl(
       db,
       accounts,
-      imapConnect: _imapConnectPlain,
-      smtpConnect: _smtpConnectPlain,
+      imapConnect: testImapConnect,
+      smtpConnect: testSmtpConnect,
     );
 
-    await _clearMailbox(account, userEmail, userPass, 'INBOX');
+    await clearStandardMailboxes(env: env, user: user);
   });
 
   tearDown(() => db.close());
@@ -151,8 +77,8 @@ void main() {
       await emails.sendEmail(
         account.id,
         email_model.EmailDraft(
-          from: email_model.EmailAddress(name: 'Chaos', email: userEmail),
-          to: [email_model.EmailAddress(email: userEmail)],
+          from: email_model.EmailAddress(name: 'Chaos', email: user.email),
+          to: [email_model.EmailAddress(email: user.email)],
           cc: [],
           subject: 'seed-$i',
           body: 'Seed email $i.',
@@ -185,8 +111,8 @@ void main() {
             await emails.sendEmail(
               account.id,
               email_model.EmailDraft(
-                from: email_model.EmailAddress(name: 'Chaos', email: userEmail),
-                to: [email_model.EmailAddress(email: userEmail)],
+                from: email_model.EmailAddress(name: 'Chaos', email: user.email),
+                to: [email_model.EmailAddress(email: user.email)],
                 cc: [],
                 subject: subject,
                 body: 'Round $round. Value: ${rng.nextInt(1000000)}.',
@@ -213,7 +139,7 @@ void main() {
 
           case 6: // flush pending changes to server
             final flushed =
-                await emails.flushPendingChanges(account.id, userPass);
+                await emails.flushPendingChanges(account.id, user.password);
             stdout.writeln('chaos-monkey: flushed $flushed pending changes');
 
           case 7: // delete random email
@@ -261,7 +187,7 @@ void main() {
 
     // Final flush and sync to confirm the server is in a consistent state.
     final flushed =
-        await emails.flushPendingChanges(account.id, userPass).timeout(
+        await emails.flushPendingChanges(account.id, user.password).timeout(
               actionTimeout,
               onTimeout: () => _abortOnTimeout('final flush hung (seed=$seed)'),
             );
