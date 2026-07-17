@@ -5,6 +5,11 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+# github.token is only used by actions/checkout below; Renovate itself
+# authenticates with the RENOVATE_TOKEN PAT (see the "Run Renovate" step).
+permissions:
+  contents: read
+
 jobs:
   renovate:
     name: Renovate
@@ -23,5 +28,10 @@ jobs:
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
-          GITHUB_TOKEN: ${{ secrets.RENOVATE_TOKEN || github.token }}
+          # Must be a PAT (or GitHub App token), NOT the ephemeral github.token:
+          # Renovate rejects the Actions token as an integration token and fails
+          # with "integration-unauthorized" when creating PRs/issues. No fallback
+          # here on purpose — a missing secret trips the `task renovate`
+          # precondition and fails the run loudly instead of silently degrading.
+          GITHUB_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
         run: task renovate

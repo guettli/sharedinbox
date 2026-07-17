@@ -203,4 +203,34 @@ SharedInbox should appear in the resulting chooser (or open directly if it
 is the system default email app). Selecting it lands on the Compose screen
 with `To`, `Subject` and `Body` prefilled.
 
+## Renovate token rotation
+
+Dependency updates are driven by [`.github/workflows/renovate.yml`](./.github/workflows/renovate.yml),
+which runs daily (and on `workflow_dispatch`) and calls `task renovate`
+(Dagger `Ci.Renovate`, `ci/main.go`) against `guettli/sharedinbox`.
+
+Renovate authenticates with the **`RENOVATE_TOKEN`** repository secret. It must
+be a Personal Access Token (or GitHub App token) — the ephemeral Actions
+`github.token` does **not** work: Renovate treats it as an integration token and
+fails every write with `integration-unauthorized` (no dependency dashboard, no
+PRs). If the secret is missing the workflow now fails fast on the `task renovate`
+precondition rather than silently degrading.
+
+To create / rotate the token:
+
+1. Generate a **fine-grained PAT** (on a bot account, or on `guettli`) scoped to
+   `guettli/sharedinbox` with repository permissions:
+   `Contents: RW`, `Pull requests: RW`, `Issues: RW`, `Workflows: RW`
+   (needed to bump action versions), `Metadata: R`.
+2. Store it as the repo secret:
+   ```bash
+   gh secret set RENOVATE_TOKEN --repo guettli/sharedinbox
+   ```
+3. Trigger a run and confirm it is healthy — the Dependency Dashboard issue
+   (label `dependencies`) appears and no `integration-unauthorized` warning is
+   logged:
+   ```bash
+   gh workflow run renovate.yml --repo guettli/sharedinbox
+   ```
+
 <!-- agentloop code test passed -->
