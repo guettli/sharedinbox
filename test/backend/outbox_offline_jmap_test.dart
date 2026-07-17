@@ -3,14 +3,10 @@
 //
 // Run via: stalwart-dev/test.sh
 //
-// Environment variables (set by the runner script):
-//   STALWART_URL       — JMAP base URL, e.g. http://127.0.0.1:8080
-//   STALWART_IMAP_HOST, STALWART_IMAP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
+// Uses a per-isolate pool user from stalwart_harness.dart.
 
 import 'dart:io';
 
-import 'package:enough_mail/enough_mail.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -23,9 +19,7 @@ import 'package:test/test.dart';
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
 import 'localhost_mapping_client.dart';
-
-String _env(String key, [String fallback = '']) =>
-    Platform.environment[key] ?? fallback;
+import 'stalwart_harness.dart';
 
 /// Mutable test-only network gate. Setting [online] to false causes the
 /// wrapping http.Client to throw [SocketException] for every JMAP request,
@@ -54,78 +48,26 @@ class _GatedHttpClient extends http.BaseClient {
   }
 }
 
-Future<ImapClient> _imapConnect({
-  required String host,
-  required int port,
-  required String user,
-  required String pass,
-}) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
-
-Future<void> _clearMailbox(
-  ImapClient client, {
-  String mailboxPath = 'INBOX',
-}) async {
-  final box = await client.selectMailboxByPath(mailboxPath);
-  if (box.messagesExists == 0) return;
-  final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-  final uids = result.matchingSequence?.toList() ?? [];
-  if (uids.isEmpty) return;
-  final seq = MessageSequence.fromIds(uids, isUid: true);
-  await client.uidMarkDeleted(seq);
-  await client.uidExpunge(seq);
-}
-
 void main() {
-  late String stalwartUrl;
-  late String imapHost;
-  late int imapPort;
-  late String smtpPort;
-  late String userEmail;
-  late String userPass;
+  late StalwartEnv env;
+  late StalwartTestUser user;
   late Account account;
   late Directory cacheDir;
 
   setUpAll(() {
     configureSqliteForTests();
-    stalwartUrl = _env('STALWART_URL', 'http://127.0.0.1:8080');
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    smtpPort = _env('STALWART_SMTP_PORT', '1025');
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
-    account = Account(
-      id: 'jmap-offline',
-      displayName: 'Alice',
-      email: userEmail,
-      type: AccountType.jmap,
-      jmapUrl: '$stalwartUrl/.well-known/jmap',
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: imapHost,
-      smtpPort: int.parse(smtpPort),
-    );
+    env = StalwartEnv.fromPlatform();
+    user = pickPoolUser(env: env);
+    account = user.jmapAccount(id: 'jmap-offline', env: env);
     cacheDir = Directory.systemTemp.createTempSync('outbox_jmap_test_');
   });
 
   tearDownAll(() => cacheDir.deleteSync(recursive: true));
 
   setUp(() async {
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
-      await _clearMailbox(client);
+      await clearMailbox(client);
     } finally {
       await client.logout();
     }
@@ -150,7 +92,7 @@ void main() {
       final mailboxes =
           MailboxRepositoryImpl(db, accounts, httpClient: gatedHttp);
 
-      await accounts.addAccount(account, userPass);
+      await accounts.addAccount(account, user.password);
       // Bootstrap mailboxes so the JMAP send code can find the Sent mailbox id.
       await mailboxes.syncMailboxes(account.id);
 
@@ -158,8 +100,8 @@ void main() {
       network.online = false;
       final subject = 'offline-jmap-${DateTime.now().millisecondsSinceEpoch}';
       final draft = EmailDraft(
-        from: EmailAddress(name: 'Alice', email: userEmail),
-        to: [EmailAddress(email: userEmail)],
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(email: user.email)],
         cc: const [],
         subject: subject,
         body: 'Queued while offline.',
@@ -172,7 +114,7 @@ void main() {
       expect(queued, hasLength(1));
 
       // ── 2. Flushing while offline must record an error, not deliver ──────
-      var flushed = await emails.flushOutbox(account.id, userPass);
+      var flushed = await emails.flushOutbox(account.id, user.password);
       expect(flushed, 0);
       final afterFailedFlush = await db.select(db.outbox).get();
       expect(afterFailedFlush, hasLength(1));
@@ -180,12 +122,7 @@ void main() {
       expect(afterFailedFlush.first.lastError, isNotNull);
 
       // Server confirms nothing arrived.
-      final probe = await _imapConnect(
-        host: imapHost,
-        port: imapPort,
-        user: userEmail,
-        pass: userPass,
-      );
+      final probe = await connectImap(env: env, user: user);
       try {
         final box = await probe.selectMailboxByPath('INBOX');
         expect(box.messagesExists, 0);
@@ -197,7 +134,7 @@ void main() {
       network.online = true;
       final outboxRepo = OutboxRepositoryImpl(db);
       await outboxRepo.retry(outboxId); // clear backoff window
-      flushed = await emails.flushOutbox(account.id, userPass);
+      flushed = await emails.flushOutbox(account.id, user.password);
       expect(flushed, 1);
 
       final afterFlush = await db.select(db.outbox).get();
@@ -207,12 +144,7 @@ void main() {
       final deadline = DateTime.now().add(const Duration(seconds: 15));
       var found = false;
       while (!found && DateTime.now().isBefore(deadline)) {
-        final c = await _imapConnect(
-          host: imapHost,
-          port: imapPort,
-          user: userEmail,
-          pass: userPass,
-        );
+        final c = await connectImap(env: env, user: user);
         try {
           await c.selectMailboxByPath('INBOX');
           final result = await c.uidSearchMessages(

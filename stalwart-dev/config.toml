@@ -58,6 +58,396 @@ name   = "bob@example.com"
 secret = "secret"
 email  = ["bob@example.com"]
 
+# Pool of sharded users so backend tests can run in parallel: each Dart test
+# isolate picks a user by pid % N and gets its own mailbox namespace, so
+# per-test INBOX/Trash resets no longer race. N=32 covers realistic CPU
+# counts with negligible boot cost for the in-memory directory.
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice1@example.com"
+secret = "secret"
+email  = ["alice1@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob1@example.com"
+secret = "secret"
+email  = ["bob1@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice2@example.com"
+secret = "secret"
+email  = ["alice2@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob2@example.com"
+secret = "secret"
+email  = ["bob2@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice3@example.com"
+secret = "secret"
+email  = ["alice3@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob3@example.com"
+secret = "secret"
+email  = ["bob3@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice4@example.com"
+secret = "secret"
+email  = ["alice4@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob4@example.com"
+secret = "secret"
+email  = ["bob4@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice5@example.com"
+secret = "secret"
+email  = ["alice5@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob5@example.com"
+secret = "secret"
+email  = ["bob5@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice6@example.com"
+secret = "secret"
+email  = ["alice6@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob6@example.com"
+secret = "secret"
+email  = ["bob6@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice7@example.com"
+secret = "secret"
+email  = ["alice7@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob7@example.com"
+secret = "secret"
+email  = ["bob7@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice8@example.com"
+secret = "secret"
+email  = ["alice8@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob8@example.com"
+secret = "secret"
+email  = ["bob8@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice9@example.com"
+secret = "secret"
+email  = ["alice9@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob9@example.com"
+secret = "secret"
+email  = ["bob9@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice10@example.com"
+secret = "secret"
+email  = ["alice10@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob10@example.com"
+secret = "secret"
+email  = ["bob10@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice11@example.com"
+secret = "secret"
+email  = ["alice11@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob11@example.com"
+secret = "secret"
+email  = ["bob11@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice12@example.com"
+secret = "secret"
+email  = ["alice12@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob12@example.com"
+secret = "secret"
+email  = ["bob12@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice13@example.com"
+secret = "secret"
+email  = ["alice13@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob13@example.com"
+secret = "secret"
+email  = ["bob13@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice14@example.com"
+secret = "secret"
+email  = ["alice14@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob14@example.com"
+secret = "secret"
+email  = ["bob14@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice15@example.com"
+secret = "secret"
+email  = ["alice15@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob15@example.com"
+secret = "secret"
+email  = ["bob15@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice16@example.com"
+secret = "secret"
+email  = ["alice16@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob16@example.com"
+secret = "secret"
+email  = ["bob16@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice17@example.com"
+secret = "secret"
+email  = ["alice17@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob17@example.com"
+secret = "secret"
+email  = ["bob17@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice18@example.com"
+secret = "secret"
+email  = ["alice18@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob18@example.com"
+secret = "secret"
+email  = ["bob18@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice19@example.com"
+secret = "secret"
+email  = ["alice19@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob19@example.com"
+secret = "secret"
+email  = ["bob19@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice20@example.com"
+secret = "secret"
+email  = ["alice20@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob20@example.com"
+secret = "secret"
+email  = ["bob20@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice21@example.com"
+secret = "secret"
+email  = ["alice21@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob21@example.com"
+secret = "secret"
+email  = ["bob21@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice22@example.com"
+secret = "secret"
+email  = ["alice22@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob22@example.com"
+secret = "secret"
+email  = ["bob22@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice23@example.com"
+secret = "secret"
+email  = ["alice23@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob23@example.com"
+secret = "secret"
+email  = ["bob23@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice24@example.com"
+secret = "secret"
+email  = ["alice24@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob24@example.com"
+secret = "secret"
+email  = ["bob24@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice25@example.com"
+secret = "secret"
+email  = ["alice25@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob25@example.com"
+secret = "secret"
+email  = ["bob25@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice26@example.com"
+secret = "secret"
+email  = ["alice26@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob26@example.com"
+secret = "secret"
+email  = ["bob26@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice27@example.com"
+secret = "secret"
+email  = ["alice27@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob27@example.com"
+secret = "secret"
+email  = ["bob27@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice28@example.com"
+secret = "secret"
+email  = ["alice28@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob28@example.com"
+secret = "secret"
+email  = ["bob28@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice29@example.com"
+secret = "secret"
+email  = ["alice29@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob29@example.com"
+secret = "secret"
+email  = ["bob29@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice30@example.com"
+secret = "secret"
+email  = ["alice30@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob30@example.com"
+secret = "secret"
+email  = ["bob30@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice31@example.com"
+secret = "secret"
+email  = ["alice31@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob31@example.com"
+secret = "secret"
+email  = ["bob31@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "alice32@example.com"
+secret = "secret"
+email  = ["alice32@example.com"]
+
+[[directory."memory".principals]]
+class  = "individual"
+name   = "bob32@example.com"
+secret = "secret"
+email  = ["bob32@example.com"]
+
+
 [authentication.fallback-admin]
 user   = "admin"
 secret = "admin"

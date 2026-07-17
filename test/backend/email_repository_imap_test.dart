@@ -1,10 +1,8 @@
 // Integration tests for EmailRepositoryImpl against a real Stalwart instance.
 // Run via: stalwart-dev/test.sh
 //
-// Environment variables (set by the runner script):
-//   STALWART_IMAP_HOST, STALWART_IMAP_PORT
-//   STALWART_SMTP_HOST, STALWART_SMTP_PORT
-//   STALWART_USER_B / STALWART_PASS_B  (alice@example.com)
+// Uses a per-isolate pool user from stalwart_harness.dart so multiple test
+// files can run in parallel without racing on INBOX/Trash resets.
 
 import 'dart:convert';
 import 'dart:io';
@@ -21,23 +19,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
-
-String _env(String key, [String fallback = '']) =>
-    Platform.environment[key] ?? fallback;
-
-Future<ImapClient> _imapConnect({
-  required String host,
-  required int port,
-  required String user,
-  required String pass,
-}) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
+import 'stalwart_harness.dart';
 
 Future<void> _ensureMailbox(ImapClient client, String mailboxPath) async {
   try {
@@ -47,95 +29,25 @@ Future<void> _ensureMailbox(ImapClient client, String mailboxPath) async {
   }
 }
 
-/// Deletes every message in [mailboxPath] so tests start with a clean slate.
-Future<void> _clearMailbox(
-  ImapClient client, {
-  String mailboxPath = 'INBOX',
-}) async {
-  final box = await client.selectMailboxByPath(mailboxPath);
-  if (box.messagesExists == 0) return;
-  final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-  final uids = result.matchingSequence?.toList() ?? [];
-  if (uids.isEmpty) return;
-  final seq = MessageSequence.fromIds(uids, isUid: true);
-  await client.uidMarkDeleted(seq);
-  await client.uidExpunge(seq);
-}
-
 void main() {
-  late String imapHost;
-  late int imapPort;
-  late String smtpHost;
-  late int smtpPort;
-  late String userEmail;
-  late String userPass;
+  late StalwartEnv env;
+  late StalwartTestUser user;
   late Account account;
   late Directory cacheDir;
 
   setUpAll(() {
     configureSqliteForTests();
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    smtpHost = _env('STALWART_SMTP_HOST', '127.0.0.1');
-    smtpPort = int.parse(_env('STALWART_SMTP_PORT', '1025'));
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
-    account = Account(
-      id: 'test',
-      displayName: 'Alice',
-      email: userEmail,
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
-    );
+    env = StalwartEnv.fromPlatform();
+    user = pickPoolUser(env: env);
+    account = user.imapAccount(id: 'test', env: env);
     cacheDir = Directory.systemTemp.createTempSync('repo_imap_test_');
   });
 
   tearDownAll(() => cacheDir.deleteSync(recursive: true));
 
   setUp(() async {
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
-    try {
-      await _clearMailbox(client);
-    } finally {
-      await client.logout();
-    }
+    await clearStandardMailboxes(env: env, user: user);
   });
-
-  // Plaintext IMAP/SMTP connect functions for the dev Stalwart (no TLS cert).
-  Future<ImapClient> testImapConnect(
-    Account a,
-    String username,
-    String password,
-  ) async {
-    final client = ImapClient(
-      defaultResponseTimeout: const Duration(seconds: 20),
-    );
-    await client.connectToServer(a.imapHost, a.imapPort, isSecure: false);
-    await client.login(username, password);
-    return client;
-  }
-
-  Future<SmtpClient> testSmtpConnect(
-    Account a,
-    String username,
-    String password,
-  ) async {
-    final atIndex = a.email.lastIndexOf('@');
-    final domain = atIndex != -1 ? a.email.substring(atIndex + 1) : a.smtpHost;
-    final client = SmtpClient(domain);
-    await client.connectToServer(a.smtpHost, a.smtpPort, isSecure: false);
-    await client.ehlo();
-    await client.authenticate(username, password);
-    return client;
-  }
 
   ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
       makeRepo() {
@@ -153,16 +65,11 @@ void main() {
   }
 
   Future<void> appendToInbox(String subject, {String body = 'Body'}) async {
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final msg = MessageBuilder()
-        ..from = [MailAddress('Alice', userEmail)]
-        ..to = [MailAddress('Alice', userEmail)]
+        ..from = [MailAddress(user.email, user.email)]
+        ..to = [MailAddress(user.email, user.email)]
         ..subject = subject
         ..text = body;
       await client.appendMessage(
@@ -179,7 +86,7 @@ void main() {
     await appendToInbox(subject);
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -192,7 +99,7 @@ void main() {
     await appendToInbox('checkpoint-test');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final states = await r.db.select(r.db.syncStates).get();
@@ -208,7 +115,7 @@ void main() {
       await appendToInbox('first');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final afterFirst = await r.emails.observeEmails('test', 'INBOX').first;
@@ -230,7 +137,7 @@ void main() {
       await appendToInbox('condstore-test');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
 
       // First sync — full sync, saves modseq checkpoint.
       await r.emails.syncEmails('test', 'INBOX');
@@ -249,19 +156,14 @@ void main() {
     await appendToInbox('flag-refresh-test');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
     expect(emails.first.isSeen, isFalse);
 
     // Mark seen directly on server, advancing modseq.
-    final imap = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imap = await connectImap(env: env, user: user);
     try {
       await imap.selectMailboxByPath('INBOX');
       final seq = MessageSequence.fromIds([emails.first.uid], isUid: true);
@@ -282,17 +184,12 @@ void main() {
     await appendToInbox('delete-me');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
     expect(await r.emails.observeEmails('test', 'INBOX').first, hasLength(2));
 
     // Delete second message directly on the server.
-    final imap = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imap = await connectImap(env: env, user: user);
     try {
       await imap.selectMailboxByPath('INBOX');
       final search = await imap.uidSearchMessages(
@@ -318,7 +215,7 @@ void main() {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -339,7 +236,7 @@ void main() {
       await appendToInbox('legacy-body-test', body: 'Fresh from server');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -365,7 +262,7 @@ void main() {
       await appendToInbox('force-refresh', body: 'Force refresh content');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -395,7 +292,7 @@ void main() {
       await appendToInbox('null-mime-tree', body: 'Self-heal body');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -434,7 +331,7 @@ void main() {
       await appendToInbox('old-body-test', body: 'Current content');
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -457,25 +354,20 @@ void main() {
   test('sendEmail delivers via SMTP and appends copy to Sent folder', () async {
     final subject = 'send-${DateTime.now().millisecondsSinceEpoch}';
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
 
     await r.emails.sendEmail(
       'test',
       EmailDraft(
-        from: EmailAddress(name: 'Alice', email: userEmail),
-        to: [EmailAddress(name: 'Alice', email: userEmail)],
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(name: user.email, email: user.email)],
         cc: [],
         subject: subject,
         body: 'Integration test message',
       ),
     );
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final sent = await client.selectMailboxByPath('Sent');
       expect(sent.messagesExists, greaterThan(0));
@@ -489,7 +381,7 @@ void main() {
     await appendToInbox(uniqueWord);
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final results = await r.emails.searchEmails('test', 'INBOX', uniqueWord);
@@ -501,7 +393,7 @@ void main() {
     await appendToInbox('unrelated subject');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final results = await r.emails.searchEmails(
@@ -516,19 +408,14 @@ void main() {
     await appendToInbox('flag-test');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
     await r.emails.setFlag(emails.first.id, seen: true);
-    await r.emails.flushPendingChanges('test', userPass);
+    await r.emails.flushPendingChanges('test', user.password);
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       await client.selectMailboxByPath('INBOX');
       final seen = await client.uidSearchMessages(searchCriteria: 'SEEN');
@@ -541,12 +428,7 @@ void main() {
   test('flushPendingChanges moves email to destination folder', () async {
     await appendToInbox('move-test');
 
-    final setup = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final setup = await connectImap(env: env, user: user);
     try {
       await _ensureMailbox(setup, 'Trash');
     } finally {
@@ -554,19 +436,14 @@ void main() {
     }
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
     await r.emails.moveEmail(emails.first.id, 'Trash');
-    await r.emails.flushPendingChanges('test', userPass);
+    await r.emails.flushPendingChanges('test', user.password);
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final inbox = await client.selectMailboxByPath('INBOX');
       expect(inbox.messagesExists, 0);
@@ -581,19 +458,14 @@ void main() {
     await appendToInbox('delete-test');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
     await r.emails.deleteEmail(emails.first.id);
-    await r.emails.flushPendingChanges('test', userPass);
+    await r.emails.flushPendingChanges('test', user.password);
 
-    final client = await _imapConnect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final client = await connectImap(env: env, user: user);
     try {
       final inbox = await client.selectMailboxByPath('INBOX');
       expect(inbox.messagesExists, 0);
@@ -611,7 +483,7 @@ void main() {
     await appendToInbox('delete-and-sync');
 
     final r = makeRepo();
-    await r.accounts.addAccount(account, userPass);
+    await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
     final emails = await r.emails.observeEmails('test', 'INBOX').first;
@@ -647,16 +519,11 @@ void main() {
       const attachmentMime = 'application/octet-stream';
 
       // Build a multipart email with a binary attachment and append it.
-      final client = await _imapConnect(
-        host: imapHost,
-        port: imapPort,
-        user: userEmail,
-        pass: userPass,
-      );
+      final client = await connectImap(env: env, user: user);
       try {
         final builder = MessageBuilder()
-          ..from = [MailAddress('Alice', userEmail)]
-          ..to = [MailAddress('Alice', userEmail)]
+          ..from = [MailAddress(user.email, user.email)]
+          ..to = [MailAddress(user.email, user.email)]
           ..subject = 'attach-${DateTime.now().millisecondsSinceEpoch}'
           ..text = 'See attachment.';
         builder.addBinary(
@@ -673,7 +540,7 @@ void main() {
       }
 
       final r = makeRepo();
-      await r.accounts.addAccount(account, userPass);
+      await r.accounts.addAccount(account, user.password);
       await r.emails.syncEmails('test', 'INBOX');
 
       final emails = await r.emails.observeEmails('test', 'INBOX').first;

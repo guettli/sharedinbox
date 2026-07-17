@@ -17,6 +17,7 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
 import 'localhost_mapping_client.dart';
+import 'stalwart_harness.dart';
 
 class MapSecureStorage implements SecureStorage {
   final _map = <String, String>{};
@@ -39,46 +40,11 @@ class MapSecureStorage implements SecureStorage {
   }
 }
 
-Future<imap.ImapClient> _imapConnectDirect({
-  required String host,
-  required int port,
-  required String user,
-  required String pass,
-}) async {
-  final client = imap.ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(host, port, isSecure: false);
-  await client.login(user, pass);
-  return client;
-}
-
-Future<imap.ImapClient> _imapConnectPlain(
-  model.Account account,
-  String username,
-  String password,
-) async {
-  return _imapConnectDirect(
-    host: account.imapHost,
-    port: account.imapPort,
-    user: username,
-    pass: password,
-  );
-}
-
 Future<void> _clearMailbox(
   imap.ImapClient client, {
   String mailboxPath = 'INBOX',
-}) async {
-  final box = await client.selectMailboxByPath(mailboxPath);
-  if (box.messagesExists == 0) return;
-  final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-  final uids = result.matchingSequence?.toList() ?? [];
-  if (uids.isEmpty) return;
-  final seq = imap.MessageSequence.fromIds(uids, isUid: true);
-  await client.uidMarkDeleted(seq);
-  await client.uidExpunge(seq);
-}
+}) =>
+    clearMailbox(client, mailboxPath: mailboxPath);
 
 Future<void> _syncAllMailboxes(
   AppDatabase db,
@@ -139,28 +105,15 @@ void main() {
 
   test('long term IMAP and JMAP sync fuzzing',
       timeout: const Timeout(Duration(minutes: 5)), () async {
-    final stalwartUrl =
-        Platform.environment['STALWART_URL'] ?? 'http://127.0.0.1:8080';
-    final imapHost = Platform.environment['STALWART_IMAP_HOST'] ?? '127.0.0.1';
-    final imapPort =
-        int.parse(Platform.environment['STALWART_IMAP_PORT'] ?? '1430');
-    final smtpHost = Platform.environment['STALWART_SMTP_HOST'] ?? '127.0.0.1';
-    final smtpPort =
-        int.parse(Platform.environment['STALWART_SMTP_PORT'] ?? '1025');
-    final userEmail =
-        Platform.environment['STALWART_USER_B'] ?? 'alice@example.com';
-    final userPass = Platform.environment['STALWART_PASS_B'] ?? 'secret';
+    final env = StalwartEnv.fromPlatform();
+    final user = pickPoolUser(env: env);
 
     print('=== STARTING SYNC FUZZ CYCLE ===');
-    print('Connecting to JMAP: $stalwartUrl, IMAP: $imapHost:$imapPort');
+    print('Connecting as ${user.email} to JMAP: ${env.stalwartUrl}, '
+        'IMAP: ${env.imapHost}:${env.imapPort}');
 
     // 1. Initial cleanup on the server
-    final imapClient = await _imapConnectDirect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imapClient = await connectImap(env: env, user: user);
     try {
       await _clearMailbox(imapClient);
       for (final mbox in ['Trash', 'Archive', 'Sent']) {
@@ -183,59 +136,54 @@ void main() {
     final imapAccount = model.Account(
       id: 'compare-imap',
       displayName: 'Alice (IMAP)',
-      email: userEmail,
-      imapHost: imapHost,
-      imapPort: imapPort,
+      email: user.email,
+      imapHost: env.imapHost,
+      imapPort: env.imapPort,
       imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
+      smtpHost: env.smtpHost,
+      smtpPort: env.smtpPort,
     );
     final jmapAccount = model.Account(
       id: 'compare-jmap',
       displayName: 'Alice (JMAP)',
-      email: userEmail,
+      email: user.email,
       type: model.AccountType.jmap,
-      jmapUrl: '$stalwartUrl/.well-known/jmap',
-      imapHost: imapHost,
-      imapPort: imapPort,
+      jmapUrl: '${env.stalwartUrl}/.well-known/jmap',
+      imapHost: env.imapHost,
+      imapPort: env.imapPort,
       imapSsl: false,
-      smtpHost: smtpHost,
-      smtpPort: smtpPort,
+      smtpHost: env.smtpHost,
+      smtpPort: env.smtpPort,
     );
 
-    await accounts.addAccount(imapAccount, userPass);
-    await accounts.addAccount(jmapAccount, userPass);
+    await accounts.addAccount(imapAccount, user.password);
+    await accounts.addAccount(jmapAccount, user.password);
 
     final tempDir = Directory.systemTemp.createTempSync('long_term_fuzz_');
     final httpClient = LocalhostMappingClient();
     final emailRepo = EmailRepositoryImpl(
       db,
       accounts,
-      imapConnect: _imapConnectPlain,
+      imapConnect: testImapConnect,
       getCacheDir: () async => tempDir,
       httpClient: httpClient,
     );
     final mailboxRepo = MailboxRepositoryImpl(
       db,
       accounts,
-      imapConnect: _imapConnectPlain,
+      imapConnect: testImapConnect,
       httpClient: httpClient,
     );
 
     // 3. Do some CRUD operations directly on the Stalwart server via IMAP
     print('Step 3: Appending random messages via IMAP...');
-    final imapSender = await _imapConnectDirect(
-      host: imapHost,
-      port: imapPort,
-      user: userEmail,
-      pass: userPass,
-    );
+    final imapSender = await connectImap(env: env, user: user);
     try {
       for (int i = 0; i < 5; i++) {
         final ts = DateTime.now().microsecondsSinceEpoch;
         final builder = imap.MessageBuilder()
-          ..from = [imap.MailAddress('Sender', userEmail)]
-          ..to = [imap.MailAddress('Receiver', userEmail)]
+          ..from = [imap.MailAddress(user.email, user.email)]
+          ..to = [imap.MailAddress(user.email, user.email)]
           ..subject = 'Fuzz Message $i - $ts'
           ..text = 'This is fuzz body $i for timestamp $ts';
         await imapSender.appendMessage(
@@ -318,7 +266,7 @@ void main() {
 
     // Flush IMAP changes to server
     print('  Flushing IMAP mutations to server...');
-    await emailRepo.flushPendingChanges(imapAccount.id, userPass);
+    await emailRepo.flushPendingChanges(imapAccount.id, user.password);
 
     // Sync both sides to pull updates
     print('  Syncing after IMAP mutations...');
@@ -362,7 +310,7 @@ void main() {
 
     // Flush JMAP changes to server
     print('  Flushing JMAP mutations to server...');
-    await emailRepo.flushPendingChanges(jmapAccount.id, userPass);
+    await emailRepo.flushPendingChanges(jmapAccount.id, user.password);
 
     // Sync both sides to pull updates. Stalwart 0.14.x doesn't always bump the
     // IMAP HIGHESTMODSEQ on the same tick the JMAP mutation lands — sync the
@@ -397,7 +345,7 @@ void main() {
     if (jmapTrashEmails.isNotEmpty) {
       print('  Hard deleting email via JMAP...');
       await emailRepo.deleteEmail(jmapTrashEmails.first.id);
-      await emailRepo.flushPendingChanges(jmapAccount.id, userPass);
+      await emailRepo.flushPendingChanges(jmapAccount.id, user.password);
     }
 
     // B: Hard delete on IMAP side
@@ -411,7 +359,7 @@ void main() {
     if (imapTrashEmails.isNotEmpty) {
       print('  Hard deleting email via IMAP...');
       await emailRepo.deleteEmail(imapTrashEmails.first.id);
-      await emailRepo.flushPendingChanges(imapAccount.id, userPass);
+      await emailRepo.flushPendingChanges(imapAccount.id, user.password);
     }
 
     // Sync both sides to pull updates

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
@@ -12,32 +10,11 @@ import 'package:test/test.dart';
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
 import 'localhost_mapping_client.dart';
-
-String _env(String key, [String fallback = '']) =>
-    Platform.environment[key] ?? fallback;
-
-Future<ImapClient> _imapConnectPlain(
-  model.Account account,
-  String username,
-  String password,
-) async {
-  final client = ImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
-  );
-  await client.connectToServer(
-    account.imapHost,
-    account.imapPort,
-    isSecure: false,
-  );
-  await client.login(username, password);
-  return client;
-}
+import 'stalwart_harness.dart';
 
 void main() {
-  late String imapHost;
-  late int imapPort;
-  late String userEmail;
-  late String userPass;
+  late StalwartEnv env;
+  late StalwartTestUser user;
   late model.Account account;
   late AppDatabase db;
   late EmailRepositoryImpl repo;
@@ -45,20 +22,9 @@ void main() {
 
   setUpAll(() {
     configureSqliteForTests();
-    imapHost = _env('STALWART_IMAP_HOST', '127.0.0.1');
-    imapPort = int.parse(_env('STALWART_IMAP_PORT', '1430'));
-    userEmail = _env('STALWART_USER_B', 'alice@example.com');
-    userPass = _env('STALWART_PASS_B', 'secret');
-    account = model.Account(
-      id: 'test',
-      displayName: 'Alice',
-      email: userEmail,
-      imapHost: imapHost,
-      imapPort: imapPort,
-      imapSsl: false,
-      smtpHost: '127.0.0.1',
-      smtpPort: 1025,
-    );
+    env = StalwartEnv.fromPlatform();
+    user = pickPoolUser(env: env);
+    account = user.imapAccount(id: 'test', env: env);
   });
 
   late LocalhostMappingClient httpClient;
@@ -67,25 +33,15 @@ void main() {
     db = openTestDatabase();
     secureStorage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, secureStorage);
-    await accounts.addAccount(account, userPass);
+    await accounts.addAccount(account, user.password);
     httpClient = LocalhostMappingClient();
     repo = EmailRepositoryImpl(
       db,
       accounts,
-      imapConnect: _imapConnectPlain,
+      imapConnect: testImapConnect,
       httpClient: httpClient,
     );
-
-    final client = await _imapConnectPlain(account, userEmail, userPass);
-    await client.selectMailboxByPath('INBOX');
-    final result = await client.uidSearchMessages(searchCriteria: 'ALL');
-    final uids = result.matchingSequence?.toList() ?? [];
-    if (uids.isNotEmpty) {
-      final seq = MessageSequence.fromIds(uids, isUid: true);
-      await client.uidMarkDeleted(seq);
-      await client.uidExpunge(seq);
-    }
-    await client.logout();
+    await clearStandardMailboxes(env: env, user: user);
   });
 
   tearDown(() async {
@@ -95,11 +51,11 @@ void main() {
 
   test('verifySyncReliability identifies missing local emails', () async {
     // 1. Inject an email directly into the server via IMAP
-    final client = await _imapConnectPlain(account, userEmail, userPass);
+    final client = await connectImap(env: env, user: user);
     await client.selectMailboxByPath('INBOX');
     final builder = MessageBuilder()
       ..from = [const MailAddress('Sender', 'sender@example.com')]
-      ..to = [MailAddress('Alice', userEmail)]
+      ..to = [MailAddress(user.email, user.email)]
       ..subject = 'Ground Truth Test'
       ..text = 'Hello';
     await client.appendMessage(
@@ -140,7 +96,7 @@ void main() {
 
   test('verifySyncReliability identifies flag mismatches', () async {
     // 1. Sync one email
-    final client = await _imapConnectPlain(account, userEmail, userPass);
+    final client = await connectImap(env: env, user: user);
     await client.selectMailboxByPath('INBOX');
     await client.appendMessage(
       (MessageBuilder()
@@ -158,7 +114,7 @@ void main() {
     expect(emails.first.isSeen, isFalse);
 
     // 2. Mark as seen on server only
-    final client2 = await _imapConnectPlain(account, userEmail, userPass);
+    final client2 = await connectImap(env: env, user: user);
     await client2.selectMailboxByPath('INBOX');
     await client2.uidMarkSeen(MessageSequence.fromAll());
     await client2.logout();
@@ -173,30 +129,28 @@ void main() {
   });
 
   group('JMAP Reliability', () {
-    late String stalwartUrl;
     late model.Account jmapAccount;
 
     setUp(() async {
-      stalwartUrl = _env('STALWART_URL', 'http://127.0.0.1:8080');
       jmapAccount = model.Account(
         id: 'test-jmap',
         displayName: 'Alice JMAP',
-        email: userEmail,
+        email: user.email,
         type: model.AccountType.jmap,
-        jmapUrl: '$stalwartUrl/.well-known/jmap',
-        imapHost: imapHost,
-        imapPort: imapPort,
+        jmapUrl: '${env.stalwartUrl}/.well-known/jmap',
+        imapHost: env.imapHost,
+        imapPort: env.imapPort,
         imapSsl: false,
-        smtpHost: imapHost,
-        smtpPort: 1025,
+        smtpHost: env.smtpHost,
+        smtpPort: env.smtpPort,
       );
       final accounts = AccountRepositoryImpl(db, secureStorage);
-      await accounts.addAccount(jmapAccount, userPass);
+      await accounts.addAccount(jmapAccount, user.password);
     });
 
     test('identifies missing local emails in JMAP', () async {
       // 1. Inject via IMAP (Stalwart reflects it in JMAP)
-      final client = await _imapConnectPlain(account, userEmail, userPass);
+      final client = await connectImap(env: env, user: user);
       await client.selectMailboxByPath('INBOX');
       await client.appendMessage(
         (MessageBuilder()..subject = 'JMAP Ground Truth').buildMimeMessage(),
