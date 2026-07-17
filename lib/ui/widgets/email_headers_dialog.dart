@@ -334,19 +334,27 @@ Future<void> _showHeaderActions(
   );
   final suggestedName = _suggestFilterName(header);
 
+  // Close the fullscreen headers dialog first so the destination screen
+  // isn't rendered underneath it — the dialog sits on the imperative
+  // navigator stack above go_router's declarative pages (see #269). Look
+  // up the router before popping because `context` is deactivated once
+  // the dialog route is gone.
+  final router = GoRouter.of(context);
+  Navigator.of(context).pop();
+
   switch (choice) {
     case _HeaderAction.search:
-      unawaited(context.push('/accounts/$accountId/search', extra: filter));
+      unawaited(router.push('/accounts/$accountId/search', extra: filter));
     case _HeaderAction.remoteFilter:
       unawaited(
-        context.push(
+        router.push(
           '/accounts/$accountId/sieve/edit',
           extra: SieveEditPrefill(filter: filter, name: suggestedName),
         ),
       );
     case _HeaderAction.localFilter:
       unawaited(
-        context.push(
+        router.push(
           '/accounts/$accountId/sieve/local/edit',
           extra: SieveEditPrefill(filter: filter, name: suggestedName),
         ),
