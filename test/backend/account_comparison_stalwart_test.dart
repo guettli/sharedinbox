@@ -229,8 +229,11 @@ void main() {
   Future<void> seedInbox(String subject) async {
     final imap = await harness.connectImap(env: env, user: user);
     try {
-      await harness.appendMessage(imap,
-          subject: subject, userEmail: user.email);
+      await harness.appendMessage(
+        imap,
+        subject: subject,
+        userEmail: user.email,
+      );
     } finally {
       await imap.logout();
     }
