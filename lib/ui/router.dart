@@ -25,6 +25,7 @@ import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
+import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
@@ -252,6 +253,10 @@ final router = GoRouter(
           builder: (ctx, state) => BugReportScreen(
             emailId: state.uri.queryParameters['emailId'],
           ),
+        ),
+        GoRoute(
+          path: '/sent-queue',
+          builder: (ctx, state) => const SentQueueScreen(),
         ),
       ],
     ),

@@ -113,6 +113,14 @@ class OutboxRepositoryImpl implements OutboxRepository {
   }
 
   @override
+  Stream<List<OutboxMessage>> observeAllOutbox() {
+    return (_db.select(_db.outbox)
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows.map(_rowToMessage).toList());
+  }
+
+  @override
   Future<void> retry(int id) async {
     await (_db.update(_db.outbox)..where((t) => t.id.equals(id))).write(
       const OutboxCompanion(

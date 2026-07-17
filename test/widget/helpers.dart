@@ -247,6 +247,9 @@ class FakeOutboxRepository implements OutboxRepository {
       Stream.value(messages);
 
   @override
+  Stream<List<OutboxMessage>> observeAllOutbox() => Stream.value(messages);
+
+  @override
   Future<void> retry(int id) async {}
 
   @override

@@ -152,6 +152,7 @@ class AppDrawer extends ConsumerWidget {
                       unawaited(context.push('/accounts/preferences'));
                     },
                   ),
+                  const _SentQueueDrawerTile(),
                   ListTile(
                     leading: const Icon(Icons.history),
                     title: const Text('Undo Log'),
@@ -254,6 +255,27 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
             activeMailboxPath: activeMailboxPath,
           ),
       ],
+    );
+  }
+}
+
+/// Global "Sent Queue" drawer entry — lists every message waiting to leave
+/// the device across all accounts. Shows a count badge when non-empty so
+/// stuck messages are visible without opening the screen.
+class _SentQueueDrawerTile extends ConsumerWidget {
+  const _SentQueueDrawerTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(allOutboxProvider).value?.length ?? 0;
+    return ListTile(
+      leading: const Icon(Icons.outbox),
+      title: const Text('Sent Queue'),
+      trailing: count > 0 ? Badge(label: Text('$count')) : null,
+      onTap: () {
+        Navigator.pop(context);
+        unawaited(context.push('/sent-queue'));
+      },
     );
   }
 }

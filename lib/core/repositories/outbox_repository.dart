@@ -23,6 +23,11 @@ abstract class OutboxRepository {
   /// Emits the current list of queued messages for [accountId], live.
   Stream<List<OutboxMessage>> observeOutbox(String accountId);
 
+  /// Emits every queued message across all accounts, live. Powers the global
+  /// "Sent Queue" view where the user wants a single list of everything
+  /// waiting to leave the device.
+  Stream<List<OutboxMessage>> observeAllOutbox();
+
   /// Resets the attempt counter / backoff on a single row so it is eligible
   /// the next flush. No-op if the row no longer exists.
   Future<void> retry(int id);

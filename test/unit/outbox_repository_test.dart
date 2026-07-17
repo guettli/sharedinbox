@@ -239,5 +239,35 @@ void main() {
         ),
       );
     });
+
+    test('observeAllOutbox merges rows from every account by createdAt',
+        () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      await db.into(db.accounts).insert(
+            AccountsCompanion.insert(
+              id: 'acc-2',
+              displayName: 'Bob',
+              email: 'bob@example.com',
+              imapHost: 'imap.example.com',
+              imapPort: 993,
+              imapSsl: true,
+              smtpHost: 'smtp.example.com',
+              smtpPort: 587,
+              smtpSsl: true,
+            ),
+          );
+      final repo = OutboxRepositoryImpl(db);
+
+      await repo.enqueue(_accountId, _makeDraft(subject: 'First'));
+      // Nudge createdAt forward so ordering is deterministic under the second
+      // resolution used by DateTime.now() in enqueue().
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      await repo.enqueue('acc-2', _makeDraft(subject: 'Second'));
+
+      final rows = await repo.observeAllOutbox().first;
+      expect(rows.map((r) => r.accountId), [_accountId, 'acc-2']);
+      expect(rows.map((r) => r.subject), ['First', 'Second']);
+    });
   });
 }

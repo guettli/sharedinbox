@@ -104,6 +104,7 @@ void main() {
       expect(textInDrawer('Add account'), findsOneWidget);
       expect(textInDrawer('Receive accounts'), findsOneWidget);
       expect(textInDrawer('Preferences'), findsOneWidget);
+      expect(textInDrawer('Sent Queue'), findsOneWidget);
       expect(textInDrawer('Undo Log'), findsOneWidget);
       expect(textInDrawer('ChangeLog'), findsOneWidget);
       expect(textInDrawer('About'), findsOneWidget);
