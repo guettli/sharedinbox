@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
+import 'package:sharedinbox/core/utils/mailto_parser.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -129,6 +131,10 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
     if (url == 'about:blank' || url.startsWith('data:')) {
       return NavigationDecision.navigate;
     }
+    if (isMailtoUrl(url)) {
+      if (mounted) unawaited(openMailtoInApp(context, url));
+      return NavigationDecision.prevent;
+    }
     unawaited(_showLinkDialog(url));
     return NavigationDecision.prevent;
   }
@@ -189,6 +195,38 @@ class _SecureEmailWebViewState extends State<SecureEmailWebView> {
       child: WebViewWidget(controller: _controller!),
     );
   }
+}
+
+/// Whether [url] begins with the `mailto:` scheme. Case-insensitive, matching
+/// the scheme-comparison rules from RFC 3986 §3.1.
+bool isMailtoUrl(String url) => url.toLowerCase().startsWith('mailto:');
+
+/// Routes a `mailto:` link to the in-app compose screen (via `/compose`)
+/// instead of handing it off to another mail app.
+///
+/// Falls back to launching the URI externally when [url] cannot be parsed as
+/// a `mailto:` URI — a defensive path that should not normally be reached
+/// because callers gate on [isMailtoUrl] first.
+Future<void> openMailtoInApp(BuildContext context, String url) async {
+  final uri = Uri.tryParse(url);
+  final fields = uri == null ? null : parseMailto(uri);
+  if (fields == null) {
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+    return;
+  }
+  unawaited(
+    context.push(
+      '/compose',
+      extra: <String, dynamic>{
+        if (fields.to != null) 'prefillTo': fields.to,
+        if (fields.cc != null) 'prefillCc': fields.cc,
+        if (fields.subject != null) 'prefillSubject': fields.subject,
+        if (fields.body != null) 'prefillBody': fields.body,
+      },
+    ),
+  );
 }
 
 /// Splits [url] into text spans so the registered domain (last two DNS labels
