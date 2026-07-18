@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/note.dart';
+import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -125,6 +126,12 @@ final draftRepositoryProvider = Provider<DraftRepository>((ref) {
 
 final outboxRepositoryProvider = Provider<OutboxRepository>((ref) {
   return OutboxRepositoryImpl(ref.watch(dbProvider));
+});
+
+/// Live list of every queued outbox row across all accounts, ordered oldest
+/// first. Backs the global "Sent Queue" screen and its drawer badge.
+final allOutboxProvider = StreamProvider<List<OutboxMessage>>((ref) {
+  return ref.watch(outboxRepositoryProvider).observeAllOutbox();
 });
 
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
