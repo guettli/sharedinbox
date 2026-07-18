@@ -1032,8 +1032,7 @@ void main() {
         );
       }
 
-      test(
-          'rename: sends Mailbox/set update with name, updates local row',
+      test('rename: sends Mailbox/set update with name, updates local row',
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1073,8 +1072,7 @@ void main() {
         expect((update['mbx-1'] as Map<String, dynamic>)['name'], 'New');
       });
 
-      test(
-          'delete: sends Mailbox/set destroy and drops the local row',
+      test('delete: sends Mailbox/set destroy and drops the local row',
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1160,8 +1158,8 @@ void main() {
         expect(result.displayPath, 'Parent/Child');
         final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
-        final update = (args[1] as Map<String, dynamic>)['update']
-            as Map<String, dynamic>;
+        final update =
+            (args[1] as Map<String, dynamic>)['update'] as Map<String, dynamic>;
         expect(
           (update['mbx-child'] as Map<String, dynamic>)['parentId'],
           'mbx-parent',
