@@ -101,7 +101,12 @@ void main() {
       );
 
       expect(snapshot.body, isNotNull);
-      expect(snapshot.body!.cachedAt, DateTime.utc(2026, 6, 1, 12));
+      expect(
+        snapshot.body!.cachedAt!.isAtSameMomentAs(
+          DateTime.utc(2026, 6, 1, 12),
+        ),
+        isTrue,
+      );
       expect(snapshot.body!.textBodyLength, 'hello'.length);
       expect(snapshot.body!.htmlBodyLength, '<p>hello</p>'.length);
     });
@@ -287,7 +292,12 @@ void main() {
       expect(snapshot.lastSyncLog, isNotNull);
       expect(snapshot.lastSyncLog!.result, 'error');
       expect(snapshot.lastSyncLog!.errorMessage, 'timeout');
-      expect(snapshot.lastSyncLog!.finishedAt, DateTime.utc(2026, 6, 1, 12, 0, 30));
+      expect(
+        snapshot.lastSyncLog!.finishedAt.isAtSameMomentAs(
+          DateTime.utc(2026, 6, 1, 12, 0, 30),
+        ),
+        isTrue,
+      );
     });
   });
 
