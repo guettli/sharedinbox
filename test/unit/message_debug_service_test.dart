@@ -101,7 +101,11 @@ void main() {
       );
 
       expect(snapshot.body, isNotNull);
-      expect(snapshot.body!.cachedAt, DateTime.utc(2026, 6, 1, 12));
+      // Drift returns DateTime in local time — compare as an instant.
+      expect(
+        snapshot.body!.cachedAt!.toUtc(),
+        DateTime.utc(2026, 6, 1, 12),
+      );
       expect(snapshot.body!.textBodyLength, 'hello'.length);
       expect(snapshot.body!.htmlBodyLength, '<p>hello</p>'.length);
     });
@@ -287,7 +291,11 @@ void main() {
       expect(snapshot.lastSyncLog, isNotNull);
       expect(snapshot.lastSyncLog!.result, 'error');
       expect(snapshot.lastSyncLog!.errorMessage, 'timeout');
-      expect(snapshot.lastSyncLog!.finishedAt, DateTime.utc(2026, 6, 1, 12, 0, 30));
+      // Drift returns DateTime in local time — compare as an instant.
+      expect(
+        snapshot.lastSyncLog!.finishedAt.toUtc(),
+        DateTime.utc(2026, 6, 1, 12, 0, 30),
+      );
     });
   });
 
