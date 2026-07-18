@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,26 +7,10 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
-import 'package:sharedinbox/data/db/database.dart' as db;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
-
-/// Coordinate identifying a single message the debug screen should inspect.
-///
-/// Named `DebugMessageRef` (rather than `MessageRef`) to avoid clashing with
-/// other repositories' terminology if they ever add a similar concept.
-class DebugMessageRef {
-  const DebugMessageRef({
-    required this.accountId,
-    required this.mailboxPath,
-    required this.emailId,
-  });
-
-  final String accountId;
-  final String mailboxPath;
-  final String emailId;
-}
 
 final _timeFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
 
@@ -50,9 +32,7 @@ class _MessageDebugScreenState extends ConsumerState<MessageDebugScreen> {
     final total = widget.messages.length;
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          total == 1 ? 'Debug 1 message' : 'Debug $total messages',
-        ),
+        title: Text(total == 1 ? 'Debug 1 message' : 'Debug $total messages'),
       ),
       body: widget.messages.isEmpty
           ? const Center(child: Text('No messages selected.'))
@@ -84,41 +64,89 @@ class _MessageDebugCard extends ConsumerStatefulWidget {
 }
 
 class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
-  _LocalState? _local;
   ProbeResult? _probe;
   bool _fetchingProbe = false;
   bool _resyncing = false;
   String? _resyncMessage;
-  Object? _loadError;
+  bool _probeDispatched = false;
 
   @override
-  void initState() {
-    super.initState();
-    unawaited(_loadLocal());
-  }
-
-  Future<void> _loadLocal() async {
-    try {
-      final state = await _readLocalState(ref, widget.messageRef);
-      if (!mounted) return;
-      setState(() {
-        _local = state;
-        _loadError = null;
-      });
-      if (widget.initiallyExpanded) {
-        unawaited(_runProbe());
+  Widget build(BuildContext context) {
+    final snapshotAsync = ref.watch(
+      messageDebugSnapshotProvider(widget.messageRef),
+    );
+    if (widget.initiallyExpanded && !_probeDispatched) {
+      final snapshot = snapshotAsync.value;
+      if (snapshot != null && snapshot.email != null) {
+        _probeDispatched = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _runProbe());
       }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadError = e;
-      });
     }
+
+    final headline =
+        snapshotAsync.value?.email?.subject?.trim().isNotEmpty == true
+            ? snapshotAsync.value!.email!.subject!
+            : '(no subject)';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xs,
+      ),
+      child: ExpansionTile(
+        initiallyExpanded: widget.initiallyExpanded,
+        onExpansionChanged: (expanded) {
+          if (expanded && _probe == null && !_fetchingProbe) {
+            unawaited(_runProbe());
+          }
+        },
+        title: Text(
+          headline,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        subtitle: Text(
+          '${widget.messageRef.accountId} • '
+          '${widget.messageRef.mailboxPath} • '
+          '${widget.messageRef.emailId}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        trailing: _RemoteStatusChip(
+          snapshot: snapshotAsync.value,
+          probe: _probe,
+          fetching: _fetchingProbe,
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.md,
+            ),
+            child: snapshotAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Text('Failed to load local state: $e'),
+              data: (snapshot) => _buildBody(context, snapshot),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _runProbe() async {
     if (_fetchingProbe) return;
-    final local = _local;
+    final snapshot = ref.read(
+      messageDebugSnapshotProvider(widget.messageRef),
+    );
+    final local = snapshot.value;
     if (local == null || local.email == null) return;
     setState(() {
       _fetchingProbe = true;
@@ -129,9 +157,10 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       final accountRepo = ref.read(accountRepositoryProvider);
       final account = await accountRepo.getAccount(widget.messageRef.accountId);
       if (account == null) {
-        setState(() {
-          _probe = const ProbeResult.error('Account not found');
-        });
+        if (!mounted) return;
+        setState(
+          () => _probe = const ProbeResult.error('Account not found'),
+        );
         return;
       }
       final password = await accountRepo.getPassword(account.id);
@@ -167,7 +196,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       await repo.getEmailBody(widget.messageRef.emailId, forceRefresh: true);
       if (!mounted) return;
       setState(() => _resyncMessage = 'Resync complete');
-      await _loadLocal();
+      ref.invalidate(messageDebugSnapshotProvider(widget.messageRef));
       await _runProbe();
     } catch (e) {
       if (!mounted) return;
@@ -177,81 +206,21 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final ref = widget.messageRef;
-    final headline = _local?.email?.subject?.trim().isNotEmpty == true
-        ? _local!.email!.subject!
-        : '(no subject)';
-    return Card(
-      margin: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: AppSpacing.xs,
-      ),
-      child: ExpansionTile(
-        initiallyExpanded: widget.initiallyExpanded,
-        onExpansionChanged: (expanded) {
-          if (expanded && _probe == null && !_fetchingProbe) {
-            unawaited(_runProbe());
-          }
-        },
-        title: Text(
-          headline,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        subtitle: Text(
-          '${ref.accountId} • ${ref.mailboxPath} • ${ref.emailId}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        trailing: _RemoteStatusChip(
-          local: _local,
-          probe: _probe,
-          fetching: _fetchingProbe,
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              0,
-              AppSpacing.md,
-              AppSpacing.md,
-            ),
-            child: _buildBody(context),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBody(BuildContext context) {
-    if (_loadError != null) {
-      return Text('Failed to load local state: $_loadError');
-    }
-    final local = _local;
-    if (local == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
+  Widget _buildBody(BuildContext context, MessageDebugSnapshot snapshot) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionLabel(context, 'Local state'),
-        _localTable(local),
+        _localTable(snapshot),
         const SizedBox(height: AppSpacing.sm),
-        _sectionLabel(context, 'Pending changes (${local.pending.length})'),
-        _pendingList(local.pending),
+        _sectionLabel(context, 'Pending changes (${snapshot.pending.length})'),
+        _pendingList(snapshot.pending),
         const SizedBox(height: AppSpacing.sm),
         _sectionLabel(context, 'Sync state'),
-        _syncStateSection(context, local),
+        _syncStateSection(context, snapshot),
         const SizedBox(height: AppSpacing.md),
         _sectionLabel(context, 'Remote state'),
-        _remoteSection(context, local),
+        _remoteSection(context, snapshot),
         const SizedBox(height: AppSpacing.sm),
         _actionsRow(),
         if (_resyncMessage != null)
@@ -270,15 +239,14 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
         padding: const EdgeInsets.only(bottom: AppSpacing.xs),
         child: Text(
           label,
-          style: Theme.of(context)
-              .textTheme
-              .labelLarge
-              ?.copyWith(fontWeight: FontWeight.bold),
+          style: Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.bold),
         ),
       );
 
-  Widget _localTable(_LocalState local) {
-    final email = local.email;
+  Widget _localTable(MessageDebugSnapshot snapshot) {
+    final email = snapshot.email;
     if (email == null) {
       return const Text('No local row for this message ID.');
     }
@@ -290,12 +258,13 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       ('subject', email.subject ?? ''),
       (
         'sentAt',
-        email.sentAt != null ? _timeFmt.format(email.sentAt!.toLocal()) : ''
+        email.sentAt != null ? _timeFmt.format(email.sentAt!.toLocal()) : '',
       ),
       ('receivedAt', _timeFmt.format(email.receivedAt.toLocal())),
       ('from', email.fromJson),
       ('to', email.toAddresses),
       ('cc', email.ccJson),
+      ('preview', email.preview ?? ''),
       ('isSeen', email.isSeen.toString()),
       ('isFlagged', email.isFlagged.toString()),
       ('hasAttachment', email.hasAttachment.toString()),
@@ -307,21 +276,21 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
         'snoozedUntil',
         email.snoozedUntil != null
             ? _timeFmt.format(email.snoozedUntil!.toLocal())
-            : ''
+            : '',
       ),
       ('snoozedFromMailboxPath', email.snoozedFromMailboxPath ?? ''),
       ('listUnsubscribeHeader', email.listUnsubscribeHeader ?? ''),
     ];
-    if (local.body != null) {
+    if (snapshot.body != null) {
       rows.addAll([
         (
           'body.cachedAt',
-          local.body!.cachedAt != null
-              ? _timeFmt.format(local.body!.cachedAt!.toLocal())
-              : '(never)'
+          snapshot.body!.cachedAt != null
+              ? _timeFmt.format(snapshot.body!.cachedAt!.toLocal())
+              : '(never)',
         ),
-        ('body.textBytes', (local.body!.textBody?.length ?? 0).toString()),
-        ('body.htmlBytes', (local.body!.htmlBody?.length ?? 0).toString()),
+        ('body.textBytes', snapshot.body!.textBodyLength.toString()),
+        ('body.htmlBytes', snapshot.body!.htmlBodyLength.toString()),
       ]);
     } else {
       rows.add(('body', '(not cached)'));
@@ -329,7 +298,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     return _KeyValueTable(rows: rows);
   }
 
-  Widget _pendingList(List<db.PendingChangeRow> pending) {
+  Widget _pendingList(List<MessageDebugPending> pending) {
     if (pending.isEmpty) {
       return const Text('No pending mutations for this message.');
     }
@@ -352,23 +321,26 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     );
   }
 
-  Widget _syncStateSection(BuildContext context, _LocalState local) {
+  Widget _syncStateSection(
+    BuildContext context,
+    MessageDebugSnapshot snapshot,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _KeyValueTable(
           rows: [
-            for (final s in local.syncStates)
+            for (final s in snapshot.syncStates)
               (
                 s.resourceType,
-                '${s.state} (synced ${_timeFmt.format(s.syncedAt.toLocal())})'
+                '${s.state} (synced ${_timeFmt.format(s.syncedAt.toLocal())})',
               ),
-            if (local.lastSyncLog != null)
+            if (snapshot.lastSyncLog != null)
               (
                 'lastSyncLog',
-                '${local.lastSyncLog!.result} at '
-                    '${_timeFmt.format(local.lastSyncLog!.startedAt.toLocal())}'
-                    '${local.lastSyncLog!.errorMessage != null ? ' — ${local.lastSyncLog!.errorMessage}' : ''}'
+                '${snapshot.lastSyncLog!.result} at '
+                    '${_timeFmt.format(snapshot.lastSyncLog!.startedAt.toLocal())}'
+                    '${snapshot.lastSyncLog!.errorMessage != null ? ' — ${snapshot.lastSyncLog!.errorMessage}' : ''}',
               ),
           ],
         ),
@@ -386,7 +358,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     );
   }
 
-  Widget _remoteSection(BuildContext context, _LocalState local) {
+  Widget _remoteSection(BuildContext context, MessageDebugSnapshot snapshot) {
     if (_fetchingProbe) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
@@ -416,39 +388,39 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     if (probe.error != null) {
       return Text('Remote fetch failed: ${probe.error}');
     }
-    final snapshot = probe.snapshot!;
-    final email = local.email;
+    final remote = probe.snapshot!;
+    final email = snapshot.email;
     if (email == null) {
       return const Text('No local row; nothing to compare.');
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, local.attachments),
-      snapshot,
+      _buildLocalSnapshot(email, snapshot.attachments),
+      remote,
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _KeyValueTable(
           rows: [
-            ('subject', snapshot.subject ?? ''),
-            ('isSeen', snapshot.isSeen.toString()),
-            ('isFlagged', snapshot.isFlagged.toString()),
-            ('mailboxPath', snapshot.mailboxPath),
-            ('messageId', snapshot.messageId ?? ''),
-            if (snapshot.uid != null) ('uid', snapshot.uid.toString()),
-            if (snapshot.sizeBytes != null)
-              ('sizeBytes', snapshot.sizeBytes.toString()),
-            ('attachmentCount', snapshot.attachments.length.toString()),
+            ('subject', remote.subject ?? ''),
+            ('isSeen', remote.isSeen.toString()),
+            ('isFlagged', remote.isFlagged.toString()),
+            ('mailboxPath', remote.mailboxPath),
+            ('messageId', remote.messageId ?? ''),
+            if (remote.uid != null) ('uid', remote.uid.toString()),
+            if (remote.sizeBytes != null)
+              ('sizeBytes', remote.sizeBytes.toString()),
+            ('attachmentCount', remote.attachments.length.toString()),
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
         _diffTable(comparison),
-        if (snapshot.headers.isNotEmpty) ...[
+        if (remote.headers.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
           _sectionLabel(context, 'Headers'),
           _KeyValueTable(
             rows: [
-              for (final e in snapshot.headers.entries) (e.key, e.value),
+              for (final e in remote.headers.entries) (e.key, e.value),
             ],
           ),
         ],
@@ -512,12 +484,12 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
 
 class _RemoteStatusChip extends StatelessWidget {
   const _RemoteStatusChip({
-    required this.local,
+    required this.snapshot,
     required this.probe,
     required this.fetching,
   });
 
-  final _LocalState? local;
+  final MessageDebugSnapshot? snapshot;
   final ProbeResult? probe;
   final bool fetching;
 
@@ -538,14 +510,14 @@ class _RemoteStatusChip extends StatelessWidget {
     if (probe!.notFound) {
       return const _StatusChip(label: 'Missing', color: Colors.orange);
     }
-    final snapshot = probe!.snapshot!;
-    final email = local?.email;
+    final remote = probe!.snapshot!;
+    final email = snapshot?.email;
     if (email == null) {
       return const _StatusChip(label: 'Remote-only', color: Colors.blue);
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, local!.attachments),
-      snapshot,
+      _buildLocalSnapshot(email, snapshot!.attachments),
+      remote,
     );
     return comparison.isMatch
         ? const _StatusChip(label: 'Match', color: Colors.green)
@@ -580,14 +552,11 @@ class _KeyValueTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (rows.isEmpty) {
-      return Text(
-        '(none)',
-        style: Theme.of(context).textTheme.bodySmall,
-      );
+      return Text('(none)', style: Theme.of(context).textTheme.bodySmall);
     }
-    final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-          fontWeight: FontWeight.w600,
-        );
+    final labelStyle = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -597,10 +566,7 @@ class _KeyValueTable extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 160,
-                  child: Text(k, style: labelStyle),
-                ),
+                SizedBox(width: 160, child: Text(k, style: labelStyle)),
                 Expanded(
                   child: GestureDetector(
                     onLongPress: () async {
@@ -620,75 +586,8 @@ class _KeyValueTable extends StatelessWidget {
   }
 }
 
-// ── Local-state loading ─────────────────────────────────────────────────────
-
-class _LocalState {
-  const _LocalState({
-    required this.email,
-    required this.body,
-    required this.pending,
-    required this.syncStates,
-    required this.lastSyncLog,
-    required this.attachments,
-  });
-
-  final db.Email? email;
-  final db.EmailBody? body;
-  final List<db.PendingChangeRow> pending;
-  final List<db.SyncStateRow> syncStates;
-  final db.SyncLogRow? lastSyncLog;
-  final List<EmailAttachment> attachments;
-}
-
-Future<_LocalState> _readLocalState(
-  WidgetRef ref,
-  DebugMessageRef messageRef,
-) async {
-  final db = ref.read(dbProvider);
-  final email = await (db.select(db.emails)
-        ..where((t) => t.id.equals(messageRef.emailId)))
-      .getSingleOrNull();
-  final body = await (db.select(db.emailBodies)
-        ..where((t) => t.emailId.equals(messageRef.emailId)))
-      .getSingleOrNull();
-  final pending = await (db.select(db.pendingChanges)
-        ..where(
-          (t) =>
-              t.accountId.equals(messageRef.accountId) &
-              t.resourceId.equals(messageRef.emailId),
-        )
-        ..orderBy([(t) => drift.OrderingTerm.asc(t.createdAt)]))
-      .get();
-  final syncStates = await (db.select(db.syncStates)
-        ..where((t) => t.accountId.equals(messageRef.accountId)))
-      .get();
-  final lastSyncLog = await (db.select(db.syncLogs)
-        ..where((t) => t.accountId.equals(messageRef.accountId))
-        ..orderBy([(t) => drift.OrderingTerm.desc(t.finishedAt)])
-        ..limit(1))
-      .getSingleOrNull();
-
-  final attachments = <EmailAttachment>[];
-  if (body != null) {
-    try {
-      attachments.addAll(_decodeAttachments(body.attachmentsJson));
-    } catch (_) {
-      // Malformed cache — leave attachments empty, still show the row above.
-    }
-  }
-
-  return _LocalState(
-    email: email,
-    body: body,
-    pending: pending,
-    syncStates: syncStates,
-    lastSyncLog: lastSyncLog,
-    attachments: attachments,
-  );
-}
-
 LocalMessageSnapshot _buildLocalSnapshot(
-  db.Email email,
+  MessageDebugEmail email,
   List<EmailAttachment> attachments,
 ) {
   return LocalMessageSnapshot(
@@ -701,44 +600,12 @@ LocalMessageSnapshot _buildLocalSnapshot(
     isFlagged: email.isFlagged,
     hasAttachment: email.hasAttachment,
     uid: email.uid,
-    from: _decodeAddresses(email.fromJson),
-    to: _decodeAddresses(email.toAddresses),
-    cc: _decodeAddresses(email.ccJson),
+    from: decodeMessageDebugAddresses(email.fromJson),
+    to: decodeMessageDebugAddresses(email.toAddresses),
+    cc: decodeMessageDebugAddresses(email.ccJson),
     inReplyTo: email.inReplyTo,
     references: email.references,
     listUnsubscribeHeader: email.listUnsubscribeHeader,
     attachments: attachments,
   );
-}
-
-List<EmailAddress> _decodeAddresses(String rawJson) {
-  if (rawJson.trim().isEmpty) return const [];
-  try {
-    final decoded = jsonDecode(rawJson);
-    if (decoded is! List) return const [];
-    return [
-      for (final e in decoded)
-        EmailAddress(
-          name: (e as Map<String, dynamic>)['name'] as String?,
-          email: e['email'] as String? ?? '',
-        ),
-    ];
-  } catch (_) {
-    return const [];
-  }
-}
-
-List<EmailAttachment> _decodeAttachments(String rawJson) {
-  if (rawJson.trim().isEmpty) return const [];
-  final decoded = jsonDecode(rawJson);
-  if (decoded is! List) return const [];
-  return [
-    for (final e in decoded)
-      EmailAttachment(
-        filename: (e as Map<String, dynamic>)['filename'] as String? ?? '',
-        contentType: e['contentType'] as String? ?? '',
-        size: (e['size'] as int?) ?? 0,
-        fetchPartId: e['fetchPartId'] as String? ?? '',
-      ),
-  ];
 }

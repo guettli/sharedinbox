@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 
 import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/screens/about_screen.dart';
