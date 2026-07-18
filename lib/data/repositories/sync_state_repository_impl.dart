@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'package:drift/drift.dart';
-
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/repositories/sync_state_repository.dart';
