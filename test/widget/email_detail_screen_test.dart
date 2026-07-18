@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -12,6 +13,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 
 import 'helpers.dart';
 
@@ -1242,6 +1244,282 @@ void main() {
         );
       },
     );
+
+    group('Prev/Next navigation (#292)', () {
+      // The chevron controls are only shown on desktop platforms. Widget
+      // tests default to TargetPlatform.android, so each test switches
+      // to a desktop platform for the duration of its body.  The reset
+      // has to happen INSIDE the test body — Flutter's post-test
+      // invariants check runs before setUp/tearDown callbacks fire, so a
+      // group-level tearDown would trigger "foundation debug variable was
+      // changed by the test" (issue #292).
+      Future<void> withDesktopPlatform(
+        Future<void> Function() body,
+      ) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+        try {
+          await body();
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      }
+
+      Email navMail(String id, {String mailbox = 'INBOX'}) => Email(
+            id: id,
+            accountId: 'acc-1',
+            mailboxPath: mailbox,
+            uid: int.parse(id.split(':').last),
+            subject: 'Mail $id',
+            receivedAt: DateTime(2024, 6),
+            sentAt: DateTime(2024, 6),
+            from: const [
+              EmailAddress(name: 'Bob', email: 'bob@example.com'),
+            ],
+            to: const [EmailAddress(email: 'alice@example.com')],
+            cc: const [],
+            isSeen: false,
+            isFlagged: false,
+            hasAttachment: false,
+          );
+
+      testWidgets(
+        'shows enabled prev+next chevrons in the middle of nav',
+        (tester) => withDesktopPlatform(() async {
+          final nav = EmailDetailNav.fromEmails([
+            navMail('acc-1:1'),
+            navMail('acc-1:2'),
+            navMail('acc-1:3'),
+          ]);
+
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A2',
+              initialExtra: nav,
+              overrides: _overrides(
+                body: const EmailBody(emailId: 'acc-1:2', attachments: []),
+                email: navMail('acc-1:2'),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final prev = tester.widget<IconButton>(
+            find.ancestor(
+              of: find.byIcon(Icons.chevron_left),
+              matching: find.byType(IconButton),
+            ),
+          );
+          final next = tester.widget<IconButton>(
+            find.ancestor(
+              of: find.byIcon(Icons.chevron_right),
+              matching: find.byType(IconButton),
+            ),
+          );
+          expect(prev.onPressed, isNotNull);
+          expect(next.onPressed, isNotNull);
+        }),
+      );
+
+      testWidgets(
+        'disables prev at first message',
+        (tester) => withDesktopPlatform(() async {
+          final nav = EmailDetailNav.fromEmails([
+            navMail('acc-1:1'),
+            navMail('acc-1:2'),
+          ]);
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+              initialExtra: nav,
+              overrides: _overrides(
+                body: const EmailBody(emailId: 'acc-1:1', attachments: []),
+                email: navMail('acc-1:1'),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final prev = tester.widget<IconButton>(
+            find.ancestor(
+              of: find.byIcon(Icons.chevron_left),
+              matching: find.byType(IconButton),
+            ),
+          );
+          expect(prev.onPressed, isNull);
+        }),
+      );
+
+      testWidgets(
+        'disables next at last message',
+        (tester) => withDesktopPlatform(() async {
+          final nav = EmailDetailNav.fromEmails([
+            navMail('acc-1:1'),
+            navMail('acc-1:2'),
+          ]);
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A2',
+              initialExtra: nav,
+              overrides: _overrides(
+                body: const EmailBody(emailId: 'acc-1:2', attachments: []),
+                email: navMail('acc-1:2'),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final next = tester.widget<IconButton>(
+            find.ancestor(
+              of: find.byIcon(Icons.chevron_right),
+              matching: find.byType(IconButton),
+            ),
+          );
+          expect(next.onPressed, isNull);
+        }),
+      );
+
+      testWidgets(
+        'tapping next navigates to the next email in nav',
+        (tester) => withDesktopPlatform(() async {
+          final second = navMail('acc-1:2');
+          final nav = EmailDetailNav.fromEmails([navMail('acc-1:1'), second]);
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+              initialExtra: nav,
+              overrides: [
+                accountRepositoryProvider.overrideWithValue(
+                  FakeAccountRepository([kTestAccount]),
+                ),
+                mailboxRepositoryProvider
+                    .overrideWithValue(FakeMailboxRepository()),
+                emailRepositoryProvider.overrideWithValue(
+                  FakeEmailRepository(
+                    // Both emails are resolvable so the detail screen renders
+                    // after the route hop.
+                    emails: [navMail('acc-1:1'), second],
+                    emailBody:
+                        const EmailBody(emailId: 'acc-1:1', attachments: []),
+                  ),
+                ),
+              ],
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('Mail acc-1:1'), findsOneWidget);
+
+          await tester.tap(find.byIcon(Icons.chevron_right));
+          await tester.pumpAndSettle();
+
+          // Route swapped to the neighbour; its subject is now on screen.
+          expect(find.text('Mail acc-1:2'), findsOneWidget);
+          expect(find.text('Mail acc-1:1'), findsNothing);
+        }),
+      );
+
+      testWidgets(
+        'falls back to the mailbox stream when nav is not supplied',
+        (tester) => withDesktopPlatform(() async {
+          final one = navMail('acc-1:1');
+          final two = navMail('acc-1:2');
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+              overrides: [
+                accountRepositoryProvider.overrideWithValue(
+                  FakeAccountRepository([kTestAccount]),
+                ),
+                mailboxRepositoryProvider
+                    .overrideWithValue(FakeMailboxRepository()),
+                emailRepositoryProvider.overrideWithValue(
+                  FakeEmailRepository(
+                    emails: [one, two],
+                    emailBody:
+                        const EmailBody(emailId: 'acc-1:1', attachments: []),
+                  ),
+                ),
+              ],
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final next = tester.widget<IconButton>(
+            find.ancestor(
+              of: find.byIcon(Icons.chevron_right),
+              matching: find.byType(IconButton),
+            ),
+          );
+          expect(next.onPressed, isNotNull);
+        }),
+      );
+    });
+
+    group('Swipe navigation (#292)', () {
+      testWidgets(
+        'left-swipe on mobile navigates to the next email',
+        (tester) async {
+          Email mail(String id) => Email(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: int.parse(id.split(':').last),
+                subject: 'Mail $id',
+                receivedAt: DateTime(2024, 6),
+                sentAt: DateTime(2024, 6),
+                from: const [
+                  EmailAddress(name: 'Bob', email: 'bob@example.com'),
+                ],
+                to: const [EmailAddress(email: 'alice@example.com')],
+                cc: const [],
+                isSeen: false,
+                isFlagged: false,
+                hasAttachment: false,
+              );
+
+          final nav =
+              EmailDetailNav.fromEmails([mail('acc-1:1'), mail('acc-1:2')]);
+          await tester.pumpWidget(
+            buildApp(
+              initialLocation:
+                  '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+              initialExtra: nav,
+              overrides: [
+                accountRepositoryProvider.overrideWithValue(
+                  FakeAccountRepository([kTestAccount]),
+                ),
+                mailboxRepositoryProvider
+                    .overrideWithValue(FakeMailboxRepository()),
+                emailRepositoryProvider.overrideWithValue(
+                  FakeEmailRepository(
+                    emails: [mail('acc-1:1'), mail('acc-1:2')],
+                    emailBody:
+                        const EmailBody(emailId: 'acc-1:1', attachments: []),
+                  ),
+                ),
+              ],
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('Mail acc-1:1'), findsOneWidget);
+
+          // Fling left with enough velocity to trip the 300 px/s threshold.
+          await tester.fling(
+            find.byType(Scaffold),
+            const Offset(-400, 0),
+            1000,
+          );
+          await tester.pumpAndSettle();
+
+          expect(find.text('Mail acc-1:2'), findsOneWidget);
+          expect(find.text('Mail acc-1:1'), findsNothing);
+        },
+      );
+    });
 
     testWidgets(
       'Load remote images snack bar auto-dismisses after 3 seconds',

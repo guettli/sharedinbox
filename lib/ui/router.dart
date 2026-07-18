@@ -20,6 +20,7 @@ import 'package:sharedinbox/ui/screens/changelog_screen.dart';
 import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
@@ -217,6 +218,9 @@ final router = GoRouter(
                       path: ':emailId',
                       builder: (ctx, state) => EmailDetailScreen(
                         emailId: state.pathParameters['emailId']!,
+                        nav: state.extra is EmailDetailNav
+                            ? state.extra as EmailDetailNav
+                            : null,
                       ),
                     ),
                   ],

@@ -45,6 +45,7 @@ import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
@@ -553,9 +554,11 @@ Widget buildApp({
   UserPreferencesRepository? userPreferences,
   ThemeMode themeMode = ThemeMode.light,
   bool debugShowCheckedModeBanner = true,
+  Object? initialExtra,
 }) {
   final testRouter = GoRouter(
     initialLocation: initialLocation,
+    initialExtra: initialExtra,
     routes: [
       GoRoute(
         path: '/accounts',
@@ -628,6 +631,9 @@ Widget buildApp({
                     path: ':emailId',
                     builder: (ctx, state) => EmailDetailScreen(
                       emailId: state.pathParameters['emailId']!,
+                      nav: state.extra is EmailDetailNav
+                          ? state.extra as EmailDetailNav
+                          : null,
                     ),
                   ),
                 ],

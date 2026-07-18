@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
@@ -365,12 +366,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     if (_searchResults!.isEmpty) {
       return const Center(child: Text('No results'));
     }
-    final threads = _searchResults!.map(EmailThread.fromEmail).toList();
+    final results = _searchResults!;
+    final threads = results.map(EmailThread.fromEmail).toList();
     return EmailThreadList(
       controller: _selection,
       items: threads,
       enableSwipe: false,
-      onTap: (t) => unawaited(_openSearchResultAndRefresh(t.latestEmailId)),
+      onTap: (t) => unawaited(
+        _openSearchResultAndRefresh(
+          t.latestEmailId,
+          EmailDetailNav.fromEmails(results),
+        ),
+      ),
     );
   }
 
@@ -434,11 +441,15 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     );
   }
 
-  Future<void> _openSearchResultAndRefresh(String emailId) async {
+  Future<void> _openSearchResultAndRefresh(
+    String emailId,
+    EmailDetailNav nav,
+  ) async {
     await context.push(
       '/accounts/${widget.accountId}/mailboxes'
       '/${Uri.encodeComponent(widget.mailboxPath)}'
       '/emails/${Uri.encodeComponent(emailId)}',
+      extra: nav,
     );
     await _refreshSearchAndPopIfEmpty();
   }
