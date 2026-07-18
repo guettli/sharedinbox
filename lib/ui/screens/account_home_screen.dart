@@ -103,6 +103,14 @@ class _AccountHomeBody extends ConsumerWidget {
               runAccountAction(context, ref, account, AccountAction.syncLog),
         ),
         ListTile(
+          leading: const Icon(Icons.cloud_download),
+          title: const Text('Sync state'),
+          subtitle: const Text(
+            'Per-folder counts and disk usage for cached mail',
+          ),
+          onTap: () => context.push('/accounts/${account.id}/sync-state'),
+        ),
+        ListTile(
           leading: const Icon(Icons.verified),
           title: const Text('Verify sync health'),
           onTap: () =>
