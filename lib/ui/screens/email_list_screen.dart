@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
@@ -199,7 +200,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     required bool menuAtBottom,
   }) {
     if (_selection.isSelecting) {
-      return buildSelectionAppBar(_selection);
+      return buildSelectionAppBar(
+        _selection,
+        overflowActions: [
+          ('Debug messages', _openDebugForSelection),
+        ],
+      );
     }
 
     // For JMAP accounts the mailboxPath stores the opaque server id (e.g. "a"),
@@ -453,6 +459,22 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return;
     }
     setState(() => _searchResults = remaining);
+  }
+
+  void _openDebugForSelection() {
+    // Expand each selected thread into its constituent messages so the debug
+    // view shows one card per email (per the plan for #303).
+    final messages = <DebugMessageRef>[
+      for (final t in _selection.selectedThreads)
+        for (final emailId in t.emailIds)
+          DebugMessageRef(
+            accountId: t.accountId,
+            mailboxPath: t.mailboxPath,
+            emailId: emailId,
+          ),
+    ];
+    if (messages.isEmpty) return;
+    unawaited(context.push('/debug/messages', extra: messages));
   }
 
   void _onAfterBatchAction(List<String> actedThreadIds) {

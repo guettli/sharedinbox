@@ -345,7 +345,15 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
 }
 
 /// Standard "N selected" AppBar with X-close and select-all actions.
-PreferredSizeWidget buildSelectionAppBar(EmailThreadListController controller) {
+///
+/// [overflowActions] adds a "..." overflow menu after "Select all" when
+/// non-empty. Each entry is a `(label, callback)` tuple; the callback runs on
+/// tap and the menu closes automatically. Used e.g. by the email list screen
+/// to surface the "Debug messages" entry point (#303).
+PreferredSizeWidget buildSelectionAppBar(
+  EmailThreadListController controller, {
+  List<(String label, VoidCallback onSelected)> overflowActions = const [],
+}) {
   return AppBar(
     leading: IconButton(
       icon: const Icon(Icons.close),
@@ -359,6 +367,15 @@ PreferredSizeWidget buildSelectionAppBar(EmailThreadListController controller) {
         tooltip: 'Select all',
         onPressed: controller.selectAll,
       ),
+      if (overflowActions.isNotEmpty)
+        PopupMenuButton<int>(
+          tooltip: 'More actions',
+          onSelected: (index) => overflowActions[index].$2(),
+          itemBuilder: (_) => [
+            for (int i = 0; i < overflowActions.length; i++)
+              PopupMenuItem(value: i, child: Text(overflowActions[i].$1)),
+          ],
+        ),
     ],
   );
 }
