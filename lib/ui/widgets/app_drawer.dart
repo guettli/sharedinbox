@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 /// Identifies the currently-active destination so the drawer can highlight
 /// the matching row. Use the named constructors below at call sites.
@@ -342,9 +343,10 @@ class _FolderList extends ConsumerWidget {
                         : null,
                   ),
                   selected: mb.path == activeMailboxPath,
-                  trailing: mb.unreadCount > 0
-                      ? Badge(label: Text('${mb.unreadCount}'))
-                      : null,
+                  trailing: MailboxCountLabel(
+                    unread: mb.unreadCount,
+                    total: mb.totalCount,
+                  ),
                   onTap: () {
                     Navigator.pop(context);
                     context.go(
