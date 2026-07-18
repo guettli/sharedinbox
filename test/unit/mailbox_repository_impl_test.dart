@@ -1032,7 +1032,8 @@ void main() {
         );
       }
 
-      test('rename: sends Mailbox/set update with name, updates local row',
+      test(
+          'rename: sends Mailbox/set update with name, updates local row',
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1072,7 +1073,8 @@ void main() {
         expect((update['mbx-1'] as Map<String, dynamic>)['name'], 'New');
       });
 
-      test('delete: sends Mailbox/set destroy and drops the local row',
+      test(
+          'delete: sends Mailbox/set destroy and drops the local row',
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1111,7 +1113,8 @@ void main() {
         );
       });
 
-      test('move: sends Mailbox/set update with parentId and re-parents locally',
+      test(
+          'move: sends Mailbox/set update with parentId and re-parents locally',
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1165,7 +1168,8 @@ void main() {
         );
       });
 
-      test('rename: rejects an empty or slash-bearing name without hitting the server',
+      test(
+          'rename: rejects an empty or slash-bearing name without hitting server',
           () async {
         final r = await setupJmap(
           responseFor: () => {

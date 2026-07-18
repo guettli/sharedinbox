@@ -720,7 +720,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
       throw ArgumentError.value(newName, 'newName', 'Name must not be empty');
     }
     if (trimmed.contains('/')) {
-      throw ArgumentError.value(newName, 'newName', 'Name must not contain "/"');
+      throw ArgumentError.value(
+        newName,
+        'newName',
+        'Name must not contain "/"',
+      );
     }
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
