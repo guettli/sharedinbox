@@ -16,14 +16,15 @@ import 'package:sharedinbox/di.dart';
 /// (regressed #255 after the #236 fix). Owning both surfaces in the shell
 /// removes the whole class of scaffold-lifetime bugs.
 ///
-/// 1. `_AppBarFlashOverlay` — covers the top button bar with a large,
-///    icon-and-label filled banner tinted in the action's colour, overlaid
-///    with a diagonal-stripe pattern so the action is still distinguishable
-///    on a colour-blind or grayscale display. Sits exactly where the user's
-///    eyes were when tapping.
+/// 1. `_AppBarFlashOverlay` — thin coloured strip painted just below the
+///    AppBar in the action's colour, overlaid with a diagonal-stripe pattern
+///    so the action is still distinguishable on a colour-blind or grayscale
+///    display. Sits close to the user's eyes without covering the AppBar
+///    action buttons, so successive deletes/archives stay one tap away (#291).
 /// 2. `_BottomActionOverlay` — SnackBar-shaped bar with the same label,
 ///    the action icon, and an inline **Undo** button. Persists for 5 s and
-///    survives every route transition because it's not a SnackBar.
+///    survives every route transition because it's not a SnackBar. Carries
+///    the human-readable confirmation the strip omits.
 class UndoShell extends ConsumerStatefulWidget {
   const UndoShell({super.key, required this.child});
 
@@ -34,7 +35,7 @@ class UndoShell extends ConsumerStatefulWidget {
 }
 
 class _UndoShellState extends ConsumerState<UndoShell> {
-  static const _flashHoldDuration = Duration(milliseconds: 1400);
+  static const _flashHoldDuration = Duration(milliseconds: 800);
   static const _snackDisplayDuration = Duration(seconds: 5);
 
   _FeedbackDisplay? _flash;
@@ -72,7 +73,7 @@ class _UndoShellState extends ConsumerState<UndoShell> {
         widget.child,
         if (_flash != null)
           Positioned(
-            top: 0,
+            top: MediaQuery.of(context).padding.top + kToolbarHeight,
             left: 0,
             right: 0,
             child: _AppBarFlashOverlay(display: _flash!),
@@ -125,20 +126,21 @@ class _UndoShellState extends ConsumerState<UndoShell> {
   }
 }
 
-/// Full-width overlay that sits exactly on top of the AppBar area (status-bar
-/// padding + [kToolbarHeight]) and paints the action's colour, a diagonal
-/// stripe pattern, a large icon, and a bold label. The pattern encodes the
-/// action independently of hue so a colour-blind or monochrome display can
-/// still distinguish delete / archive / spam.
+/// Thin coloured strip painted just below the AppBar in the action's colour
+/// and overlaid with a diagonal-stripe pattern so the action is still
+/// distinguishable on a colour-blind or grayscale display. Unlike the earlier
+/// full-height banner, this strip does not obscure the AppBar's action-button
+/// row, so users can chain deletes/archives without waiting for feedback to
+/// clear (#291). The label + icon live in the bottom overlay instead.
 class _AppBarFlashOverlay extends StatelessWidget {
   const _AppBarFlashOverlay({required this.display});
+
+  static const stripHeight = 6.0;
 
   final _FeedbackDisplay display;
 
   @override
   Widget build(BuildContext context) {
-    final topPadding = MediaQuery.of(context).padding.top;
-    final height = kToolbarHeight + topPadding;
     return IgnorePointer(
       child: TweenAnimationBuilder<double>(
         duration: const Duration(milliseconds: 180),
@@ -150,42 +152,15 @@ class _AppBarFlashOverlay extends StatelessWidget {
           liveRegion: true,
           label: display.label,
           child: Material(
+            key: const ValueKey('undoFlashStrip'),
             color: display.background,
-            elevation: 8,
+            elevation: 4,
             child: SizedBox(
-              height: height,
+              height: stripHeight,
               child: CustomPaint(
                 painter: _PatternPainter(
                   pattern: display.pattern,
-                  color: display.foreground.withValues(alpha: 0.22),
-                ),
-                child: Padding(
-                  padding: EdgeInsets.only(top: topPadding),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(display.icon, color: display.foreground, size: 32),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          display.label,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: display.foreground,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            shadows: const [
-                              Shadow(
-                                color: Color(0x66000000),
-                                offset: Offset(0, 1),
-                                blurRadius: 2,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  color: display.foreground.withValues(alpha: 0.35),
                 ),
               ),
             ),
