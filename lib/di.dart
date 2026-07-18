@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -19,6 +20,7 @@ import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/repositories/sync_state_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
@@ -50,6 +52,7 @@ import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/sync_state_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -158,6 +161,17 @@ final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((
 
 final syncLogRepositoryProvider = Provider<SyncLogRepository>((ref) {
   return SyncLogRepositoryImpl(ref.watch(dbProvider));
+});
+
+final syncStateRepositoryProvider = Provider<SyncStateRepository>((ref) {
+  return SyncStateRepositoryImpl(ref.watch(dbProvider));
+});
+
+/// One-shot future of the per-mailbox sync state for a single account.
+/// autoDispose so leaving the screen releases the loaded snapshot.
+final syncStateForAccountProvider = FutureProvider.autoDispose
+    .family<List<MailboxSyncState>, String>((ref, accountId) {
+  return ref.watch(syncStateRepositoryProvider).statesForAccount(accountId);
 });
 
 final appLogRepositoryProvider = Provider<AppLogRepository>((ref) {

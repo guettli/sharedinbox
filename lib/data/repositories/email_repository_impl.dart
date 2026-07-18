@@ -342,6 +342,7 @@ class EmailRepositoryImpl implements EmailRepository {
               headersJson: Value(headersJson),
               mimeTreeJson: Value(mimeTreeJson),
               cachedAt: Value(DateTime.now()),
+              bodySize: Value(_bodySize(textBody, htmlBody)),
             ),
           );
       return model.EmailBody(
@@ -426,6 +427,7 @@ class EmailRepositoryImpl implements EmailRepository {
             headersJson: Value(headersJson),
             mimeTreeJson: Value(mimeTreeJson),
             cachedAt: Value(DateTime.now()),
+            bodySize: Value(_bodySize(textBody, htmlBody)),
           ),
         );
 
@@ -1630,6 +1632,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 htmlBody: Value(htmlBody),
                 attachmentsJson: Value(attachmentsJson),
                 cachedAt: Value(DateTime.now()),
+                bodySize: Value(_bodySize(textBody, htmlBody)),
               ),
             );
       }
@@ -3461,7 +3464,10 @@ class EmailRepositoryImpl implements EmailRepository {
     await dir.create(recursive: true);
 
     final file = File(p.join(dir.path, attachment.filename));
-    if (await file.exists()) return file.path;
+    if (await file.exists()) {
+      await _recordAttachmentFile(emailId, attachment.filename, file);
+      return file.path;
+    }
 
     if (attachment.fetchPartId.isEmpty) {
       throw StateError(
@@ -3490,6 +3496,7 @@ class EmailRepositoryImpl implements EmailRepository {
         type: attachment.contentType,
       );
       await file.writeAsBytes(bytes);
+      await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
     }
 
@@ -3517,10 +3524,30 @@ class EmailRepositoryImpl implements EmailRepository {
         throw StateError('Failed to decode attachment ${attachment.filename}.');
       }
       await file.writeAsBytes(bytes);
+      await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
     } finally {
       await client.logout();
     }
+  }
+
+  /// Upserts an [AttachmentFiles] row after the attachment has been flushed
+  /// to disk. Used by the Sync state screen to bucket mails as fully / partly
+  /// offline without stat()ing every attachment on every render.
+  Future<void> _recordAttachmentFile(
+    String emailId,
+    String filename,
+    File file,
+  ) async {
+    final size = await file.length();
+    await _db.into(_db.attachmentFiles).insertOnConflictUpdate(
+          AttachmentFilesCompanion.insert(
+            emailId: emailId,
+            filename: filename,
+            size: size,
+            downloadedAt: DateTime.now(),
+          ),
+        );
   }
 
   @override
@@ -4112,6 +4139,11 @@ class EmailRepositoryImpl implements EmailRepository {
       return [];
     }
   }
+
+  /// Rough on-disk size of a cached body in characters — sum of textBody +
+  /// htmlBody length. Reported by the Sync state screen; not the wire size.
+  int _bodySize(String? textBody, String? htmlBody) =>
+      (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
 
   List<model.EmailAttachment> _parseAttachments(String json) {
     final list = jsonDecode(json) as List<dynamic>;

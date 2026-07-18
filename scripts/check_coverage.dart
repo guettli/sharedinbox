@@ -19,6 +19,7 @@ const _noCode = {
   'lib/core/repositories/mailbox_repository.dart',
   'lib/core/repositories/share_key_repository.dart',
   'lib/core/repositories/sync_log_repository.dart',
+  'lib/core/repositories/sync_state_repository.dart',
   'lib/core/repositories/undo_repository.dart',
   'lib/core/repositories/search_history_repository.dart',
   'lib/core/repositories/user_preferences_repository.dart',

@@ -127,9 +127,28 @@ class EmailBodies extends Table {
   TextColumn get headersJson => text().nullable()();
   // Added in schema v28: serialised MimePart tree (JSON)
   TextColumn get mimeTreeJson => text().nullable()();
+  // Added in schema v48: cached body size in characters (textBody + htmlBody
+  // length). Populated on write; null for rows cached before v48.
+  IntColumn get bodySize => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {emailId};
+}
+
+/// One row per attachment file that lives on the local file system under the
+/// cache directory. Written by [EmailRepository.downloadAttachment] after
+/// the bytes have been flushed to disk. Cascade-deleted with the parent email.
+// Added in schema v48.
+@DataClassName('AttachmentFileRow')
+class AttachmentFiles extends Table {
+  TextColumn get emailId =>
+      text().references(Emails, #id, onDelete: KeyAction.cascade)();
+  TextColumn get filename => text()();
+  IntColumn get size => integer()();
+  DateTimeColumn get downloadedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {emailId, filename};
 }
 
 @DataClassName('ThreadRow')
@@ -504,6 +523,7 @@ class UserPreferences extends Table {
     DraftTombstones,
     AppLogs,
     Outbox,
+    AttachmentFiles,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1006,6 +1026,18 @@ class AppDatabase extends _$AppDatabase {
                 WHERE account_type = 'jmap')
               ''');
             }
+          }
+          if (from < 48) {
+            if (await _tableExists(this, 'email_bodies')) {
+              await m.addColumn(emailBodies, emailBodies.bodySize);
+              // Backfill bodySize for existing rows from the cached text/html.
+              await customStatement('''
+                UPDATE email_bodies
+                SET body_size =
+                  COALESCE(LENGTH(text_body), 0) + COALESCE(LENGTH(html_body), 0)
+              ''');
+            }
+            await m.createTable(attachmentFiles);
           }
         },
       );
