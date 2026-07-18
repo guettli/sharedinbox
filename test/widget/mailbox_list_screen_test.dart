@@ -116,6 +116,96 @@ void main() {
       },
     );
 
+    testWidgets(
+      'long-press on a mailbox opens the folder actions sheet',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('INBOX').first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Rename'), findsOneWidget);
+        expect(find.text('Move'), findsOneWidget);
+        expect(find.text('Delete'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'choosing Delete → confirming calls repo.deleteMailbox',
+      (tester) async {
+        final repo = FakeMailboxRepository([kTestMailbox]);
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(repo),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('INBOX').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+        expect(find.text('Delete folder?'), findsOneWidget);
+        await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+        await tester.pumpAndSettle();
+
+        expect(repo.deleteCalls, ['INBOX']);
+      },
+    );
+
+    testWidgets(
+      'choosing Rename → submitting calls repo.renameMailbox',
+      (tester) async {
+        final repo = FakeMailboxRepository([kTestMailbox]);
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(repo),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('INBOX').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rename'));
+        await tester.pumpAndSettle();
+        expect(find.text('Rename folder'), findsOneWidget);
+
+        await tester.enterText(find.byType(TextFormField), 'Renamed');
+        await tester.tap(find.widgetWithText(FilledButton, 'Rename'));
+        await tester.pumpAndSettle();
+
+        expect(repo.renameCalls, [(path: 'INBOX', newName: 'Renamed')]);
+      },
+    );
+
     testWidgets('shows no count label when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(
         id: 'acc-1:Empty',

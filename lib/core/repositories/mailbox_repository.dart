@@ -37,4 +37,26 @@ abstract class MailboxRepository {
     String name, {
     String? parentDisplayPath,
   });
+
+  /// Renames the mailbox with [mailboxPath] under [accountId] so that its
+  /// leaf name becomes [newName]. Parent stays the same. Returns the updated
+  /// [Mailbox]. Talks to the account's IMAP/JMAP server.
+  Future<Mailbox> renameMailbox(
+    String accountId,
+    String mailboxPath,
+    String newName,
+  );
+
+  /// Deletes the mailbox with [mailboxPath] under [accountId] on the server
+  /// and removes its local cache (emails, threads, sync state).
+  Future<void> deleteMailbox(String accountId, String mailboxPath);
+
+  /// Moves the mailbox with [mailboxPath] under [accountId] to live under
+  /// [newParentDisplayPath] (null for top level). The leaf name is preserved.
+  /// Returns the updated [Mailbox].
+  Future<Mailbox> moveMailbox(
+    String accountId,
+    String mailboxPath, {
+    required String? newParentDisplayPath,
+  });
 }
