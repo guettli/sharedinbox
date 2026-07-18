@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -160,8 +159,10 @@ Future<void> _batchMoveToRole(
   }
 }
 
-/// Deletes every thread in [threads]. Each thread becomes its own undo entry
-/// so the destination path remains per-thread (e.g. each account's Trash).
+/// Deletes every thread in [threads]. Threads are grouped by
+/// `(accountId, sourceMailboxPath)` so a batch produces one aggregated
+/// undo entry per source folder — the shell's SnackBar then reports the
+/// true count instead of just the last thread's message count (#289).
 Future<void> batchDelete(
   WidgetRef ref, {
   required List<EmailThread> threads,
@@ -169,24 +170,29 @@ Future<void> batchDelete(
   if (threads.isEmpty) return;
   final repo = ref.read(emailRepositoryProvider);
 
-  for (final t in threads) {
-    final originalEmails = await _fetchOriginals(repo, t.emailIds);
+  for (final accountThreads in _groupByAccount(threads).values) {
+    for (final entry in _groupBySource(accountThreads).entries) {
+      final sourcePath = entry.key;
+      final sourceThreads = entry.value;
+      final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
+      final originalEmails = await _fetchOriginals(repo, allEmailIds);
 
-    String? lastDestPath;
-    for (final id in t.emailIds) {
-      lastDestPath = await repo.deleteEmail(id);
+      String? lastDestPath;
+      for (final id in allEmailIds) {
+        lastDestPath = await repo.deleteEmail(id);
+      }
+
+      final action = UndoAction(
+        id: DateTime.now().toIso8601String(),
+        accountId: sourceThreads.first.accountId,
+        type: UndoType.delete,
+        emailIds: allEmailIds,
+        sourceMailboxPath: sourcePath,
+        destinationMailboxPath: lastDestPath,
+        originalEmails: originalEmails,
+      );
+      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
     }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: t.accountId,
-      type: UndoType.delete,
-      emailIds: t.emailIds,
-      sourceMailboxPath: t.mailboxPath,
-      destinationMailboxPath: lastDestPath,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }
 }
 
@@ -250,37 +256,29 @@ Future<void> batchSnooze(
   if (until == null || !context.mounted) return;
 
   final repo = ref.read(emailRepositoryProvider);
-  var totalCount = 0;
 
-  for (final t in threads) {
-    final originalEmails = await _fetchOriginals(repo, t.emailIds);
+  for (final accountThreads in _groupByAccount(threads).values) {
+    for (final entry in _groupBySource(accountThreads).entries) {
+      final sourcePath = entry.key;
+      final sourceThreads = entry.value;
+      final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
+      final originalEmails = await _fetchOriginals(repo, allEmailIds);
 
-    for (final id in t.emailIds) {
-      await repo.snoozeEmail(id, until);
+      for (final id in allEmailIds) {
+        await repo.snoozeEmail(id, until);
+      }
+
+      final action = UndoAction(
+        id: DateTime.now().toIso8601String(),
+        accountId: sourceThreads.first.accountId,
+        type: UndoType.snooze,
+        emailIds: allEmailIds,
+        sourceMailboxPath: sourcePath,
+        originalEmails: originalEmails,
+      );
+      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
     }
-
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: t.accountId,
-      type: UndoType.snooze,
-      emailIds: t.emailIds,
-      sourceMailboxPath: t.mailboxPath,
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    totalCount += t.emailIds.length;
   }
-
-  if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      duration: const Duration(seconds: 5),
-      content: Text(
-        'Snoozed $totalCount email${totalCount == 1 ? '' : 's'} until '
-        '${DateFormat('MMM d, HH:mm').format(until)}',
-      ),
-    ),
-  );
 }
 
 /// Flags (stars) or unflags every email in every thread in [threads]. The
@@ -366,6 +364,18 @@ Map<String, List<EmailThread>> _groupByAccount(List<EmailThread> threads) {
   return byAccount;
 }
 
+/// Groups [threads] by their [EmailThread.mailboxPath] so a batch action can
+/// push one aggregated [UndoAction] per source folder. Undo can then restore
+/// each group to its own original folder — search selections legitimately
+/// span multiple folders.
+Map<String, List<EmailThread>> _groupBySource(List<EmailThread> threads) {
+  final bySource = <String, List<EmailThread>>{};
+  for (final t in threads) {
+    (bySource[t.mailboxPath] ??= []).add(t);
+  }
+  return bySource;
+}
+
 Future<void> _moveThreadsTo(
   WidgetRef ref,
   List<EmailThread> threads,
@@ -373,19 +383,25 @@ Future<void> _moveThreadsTo(
   String? role,
 }) async {
   final repo = ref.read(emailRepositoryProvider);
-  for (final t in threads) {
-    final originalEmails = await _fetchOriginals(repo, t.emailIds);
+  // Callers hand us a single-account thread list; aggregate by source folder
+  // so the resulting UndoAction carries every message in that folder, and
+  // the shell's SnackBar reports the true batch count (#289).
+  for (final entry in _groupBySource(threads).entries) {
+    final sourcePath = entry.key;
+    final sourceThreads = entry.value;
+    final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
+    final originalEmails = await _fetchOriginals(repo, allEmailIds);
 
-    for (final id in t.emailIds) {
+    for (final id in allEmailIds) {
       await repo.moveEmail(id, destPath);
     }
 
     final action = UndoAction(
       id: DateTime.now().toIso8601String(),
-      accountId: t.accountId,
+      accountId: sourceThreads.first.accountId,
       type: UndoType.move,
-      emailIds: t.emailIds,
-      sourceMailboxPath: t.mailboxPath,
+      emailIds: allEmailIds,
+      sourceMailboxPath: sourcePath,
       destinationMailboxPath: destPath,
       destinationMailboxRole: role,
       originalEmails: originalEmails,
