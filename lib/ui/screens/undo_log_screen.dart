@@ -7,7 +7,6 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart';
 
 final _timeFmt = DateFormat('HH:mm:ss');
 
