@@ -12,6 +12,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
   ref,
@@ -487,8 +488,10 @@ class _FolderTile extends StatelessWidget {
             : null,
       ),
       subtitle: Text(accountId, style: Theme.of(context).textTheme.bodySmall),
-      trailing:
-          mb.unreadCount > 0 ? Badge(label: Text('${mb.unreadCount}')) : null,
+      trailing: MailboxCountLabel(
+        unread: mb.unreadCount,
+        total: mb.totalCount,
+      ),
       onTap: () => context.go(
         '/accounts/$accountId/mailboxes'
         '/${Uri.encodeComponent(mb.path)}/emails',
