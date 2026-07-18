@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
 
@@ -320,6 +321,122 @@ void main() {
 
       expect(find.text('No spam folder found'), findsOneWidget);
     });
+
+    testWidgets(
+      'Mark as spam navigates to the next INBOX message, not a Junk one (#293)',
+      (tester) async {
+        // Three emails on the account: two live in INBOX, one lives in Junk.
+        // The dates are picked so an unfiltered "next" lookup would pick the
+        // Junk mail (its date sits between the two INBOX mails), which is
+        // exactly the scenario from #293.
+        final inbox1 = Email(
+          id: 'acc-1:1',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 1,
+          subject: 'Inbox mail one',
+          receivedAt: DateTime(2024, 6, 3),
+          sentAt: DateTime(2024, 6, 3),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final junkMail = Email(
+          id: 'acc-1:99',
+          accountId: 'acc-1',
+          mailboxPath: 'Junk',
+          uid: 99,
+          subject: 'Junk mail from junk folder',
+          receivedAt: DateTime(2024, 6, 2),
+          sentAt: DateTime(2024, 6, 2),
+          from: const [
+            EmailAddress(name: 'Spam', email: 'spam@example.com'),
+          ],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final inbox2 = Email(
+          id: 'acc-1:2',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 2,
+          subject: 'Inbox mail two',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+
+        const mailboxes = [
+          Mailbox(
+            id: 'acc-1:INBOX',
+            accountId: 'acc-1',
+            path: 'INBOX',
+            name: 'INBOX',
+            role: 'inbox',
+            unreadCount: 2,
+            totalCount: 2,
+          ),
+          Mailbox(
+            id: 'acc-1:Junk',
+            accountId: 'acc-1',
+            path: 'Junk',
+            name: 'Junk',
+            role: 'junk',
+            unreadCount: 1,
+            totalCount: 1,
+          ),
+        ];
+
+        const body = EmailBody(emailId: 'acc-1:1', attachments: []);
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository(mailboxes)),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  emails: [inbox1, junkMail, inbox2],
+                  emailBody: body,
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Precondition: we opened the first INBOX mail.
+        expect(find.text('Inbox mail one'), findsOneWidget);
+
+        await tester.tap(
+          find.byWidgetPredicate(
+            (w) => w is Tooltip && w.message == 'Mark as spam',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // After marking as spam we must land on the next INBOX message, not
+        // on the junk-folder mail whose date sits between the two INBOX
+        // ones. The subject of the junk mail must never appear.
+        expect(find.text('Junk mail from junk folder'), findsNothing);
+        expect(find.text('Inbox mail two'), findsOneWidget);
+      },
+    );
 
     testWidgets('Archive button is present in app bar', (tester) async {
       await tester.pumpWidget(
