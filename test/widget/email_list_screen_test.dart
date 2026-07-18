@@ -380,6 +380,37 @@ void main() {
       // starred yet; it swaps to "Unstar" once every selected thread is
       // flagged (see the "toggles based on selection state" test below).
       expect(find.byTooltip('Star'), findsOneWidget);
+      // The "More actions" overflow surfaces per-message debug tools (#303).
+      expect(find.byTooltip('More actions'), findsOneWidget);
+    });
+
+    testWidgets('overflow menu exposes "Debug messages" entry', (tester) async {
+      final email = testEmail(subject: 'Select me');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Select me'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('More actions'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Debug messages'), findsOneWidget);
     });
 
     testWidgets(

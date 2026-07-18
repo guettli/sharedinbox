@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 class MailboxListScreen extends ConsumerWidget {
   const MailboxListScreen({super.key, required this.accountId});
@@ -99,9 +100,10 @@ class MailboxListScreen extends ConsumerWidget {
                             ? const TextStyle(fontWeight: FontWeight.bold)
                             : null,
                       ),
-                      trailing: hasUnread
-                          ? Badge(label: Text('${mb.unreadCount}'))
-                          : null,
+                      trailing: MailboxCountLabel(
+                        unread: mb.unreadCount,
+                        total: mb.totalCount,
+                      ),
                       onTap: () => context.push(
                         '/accounts/$accountId/mailboxes/${Uri.encodeComponent(mb.path)}/emails',
                       ),
