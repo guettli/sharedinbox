@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/di.dart';
 
 final _dateFmt = DateFormat('MMM d');
 
@@ -9,7 +11,7 @@ final _dateFmt = DateFormat('MMM d');
 ///
 /// Used in search-result lists and the per-mailbox search overlay.
 /// Pass a custom [leading] widget to support selection-mode checkboxes.
-class EmailTile extends StatelessWidget {
+class EmailTile extends ConsumerWidget {
   const EmailTile({
     super.key,
     required this.email,
@@ -26,11 +28,20 @@ class EmailTile extends StatelessWidget {
   final bool selected;
   final VoidCallback? onLongPress;
 
-  /// When true, appends `accountId • mailboxPath` as a second subtitle line.
+  /// When true, appends `accountId • <folder display path>` as a second
+  /// subtitle line. The folder is resolved through [mailboxByPathProvider], so
+  /// JMAP mailboxes render as their human-readable hierarchical path — never
+  /// as the opaque server id (#288).
   final bool showLocation;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mailbox = showLocation
+        ? ref
+            .watch(mailboxByPathProvider((email.accountId, email.mailboxPath)))
+            .value
+        : null;
+    final folderLabel = mailbox?.displayPath ?? email.mailboxPath;
     final sender = email.from.isNotEmpty
         ? (email.from.first.name ?? email.from.first.email)
         : '(unknown)';
@@ -58,7 +69,7 @@ class EmailTile extends StatelessWidget {
           ),
           if (showLocation)
             Text(
-              '${email.accountId} • ${email.mailboxPath}',
+              '${email.accountId} • $folderLabel',
               style: Theme.of(context).textTheme.bodySmall,
             ),
         ],

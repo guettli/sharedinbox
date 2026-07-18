@@ -99,6 +99,22 @@ class Mailbox {
   }
 }
 
+/// Returns the human-readable path for [rawPath] from [mailboxes], falling
+/// back to [rawPath] itself when the mailbox is not in the local cache (e.g.
+/// deleted on the server since the row that stored [rawPath] was recorded).
+///
+/// For IMAP `path` and `displayPath` are equal. For JMAP `path` is the opaque
+/// server id (e.g. `"a"`) whereas `displayPath` is a hierarchical name like
+/// `"Archive/2026"`. Every UI that has an `Email` / `EmailThread` in hand (i.e.
+/// only the raw `mailboxPath` string) must route it through this helper before
+/// rendering to a user, otherwise the JMAP opaque id leaks into the UI (#288).
+String resolveMailboxDisplayPath(List<Mailbox> mailboxes, String rawPath) {
+  for (final m in mailboxes) {
+    if (m.path == rawPath) return m.displayPath;
+  }
+  return rawPath;
+}
+
 /// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by
 /// [Mailbox.displayPath], so JMAP mailboxes sort by their human-readable path
 /// rather than by their opaque server ID.
