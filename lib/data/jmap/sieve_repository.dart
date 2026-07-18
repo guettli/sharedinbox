@@ -201,7 +201,7 @@ class SieveRepository {
       return;
     }
     await _withJmap(account, (jmap) async {
-      await jmap.call(
+      final responses = await jmap.call(
         [
           [
             'SieveScript/activate',
@@ -211,6 +211,40 @@ class SieveRepository {
         ],
         withSieve: true,
       );
+      final result = _responseArgs(responses, 0, 'SieveScript/activate');
+      final notActivated = result['notActivated'] as Map<String, dynamic>?;
+      if (notActivated != null && notActivated.containsKey(scriptId)) {
+        final err = notActivated[scriptId] as Map<String, dynamic>?;
+        throw JmapException(
+          'Failed to activate script: ${err?['type']} — ${err?['description']}',
+        );
+      }
+    });
+  }
+
+  /// Deactivates the currently active script, if any. On JMAP this passes a
+  /// null id to `SieveScript/activate`; on ManageSieve it issues `SETACTIVE ""`
+  /// per RFC 5804 §2.8.
+  Future<void> deactivateScript(String accountId) async {
+    final account = await _requireAccount(accountId);
+    if (account.type == AccountType.imap) {
+      await _withManageSieve(account, (c) async {
+        await c.setActive('');
+      });
+      return;
+    }
+    await _withJmap(account, (jmap) async {
+      final responses = await jmap.call(
+        [
+          [
+            'SieveScript/activate',
+            {'accountId': jmap.accountId, 'id': null},
+            '0',
+          ],
+        ],
+        withSieve: true,
+      );
+      _responseArgs(responses, 0, 'SieveScript/activate');
     });
   }
 

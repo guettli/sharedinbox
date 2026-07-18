@@ -93,4 +93,10 @@ class LocalSieveRepository {
           .write(const LocalSieveScriptsCompanion(isActive: Value(true)));
     });
   }
+
+  Future<void> deactivateScript(String accountId) async {
+    await (_db.update(_db.localSieveScripts)
+          ..where((t) => t.accountId.equals(accountId)))
+        .write(const LocalSieveScriptsCompanion(isActive: Value(false)));
+  }
 }
