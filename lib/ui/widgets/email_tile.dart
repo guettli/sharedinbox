@@ -28,7 +28,7 @@ class EmailTile extends ConsumerWidget {
   final bool selected;
   final VoidCallback? onLongPress;
 
-  /// When true, appends `accountId • <folder display path>` as a second
+  /// When true, appends `accountId` plus the folder display path as a second
   /// subtitle line. The folder is resolved through [mailboxByPathProvider], so
   /// JMAP mailboxes render as their human-readable hierarchical path — never
   /// as the opaque server id (#288).

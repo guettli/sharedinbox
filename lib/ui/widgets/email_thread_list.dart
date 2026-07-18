@@ -123,8 +123,8 @@ class EmailThreadList extends ConsumerStatefulWidget {
   final bool showAccountLabel;
   final Map<String, String> accountNames;
 
-  /// Show a per-tile location label ("accountId • <folder display path>").
-  /// Used by global search results. The folder is resolved through the local
+  /// Show a per-tile location label like `"accountId • Archive/2026"`. Used
+  /// by global search results. The folder is resolved through the local
   /// mailbox cache, so JMAP mailboxes render as their human-readable
   /// hierarchical path — never as the opaque server id (#288).
   final bool showLocationLabel;
@@ -179,7 +179,8 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
   /// verbatim would leak the id into the UI (#288). Falls back to the raw
   /// value when the mailbox is not yet cached locally.
   String _displayFolder(String accountId, String rawPath) {
-    final mailbox = ref.watch(mailboxByPathProvider((accountId, rawPath))).value;
+    final mailbox =
+        ref.watch(mailboxByPathProvider((accountId, rawPath))).value;
     return mailbox?.displayPath ?? rawPath;
   }
 
