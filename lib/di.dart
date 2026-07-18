@@ -31,6 +31,8 @@ import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
+import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart'
@@ -201,6 +203,24 @@ final isSyncingProvider = StreamProvider.autoDispose.family<bool, String>((
   accountId,
 ) {
   return ref.watch(syncManagerProvider).watchSyncing(accountId);
+});
+
+/// Read-only "fetch a single message from the server" probe used by the
+/// per-message debug screen (`/debug/messages`) to compare local vs remote.
+final messageProbeProvider = Provider<MessageProbe>((ref) {
+  return MessageProbeImpl(
+    imapConnect: ref.watch(imapConnectProvider),
+    httpClient: ref.watch(httpClientProvider),
+  );
+});
+
+/// Streams a per-message debug snapshot used by the debug screen at
+/// `/debug/messages`. Kept out of `core/` so the UI never has to import
+/// `data/db/*` (enforced by the layer check in `ci/main.go`).
+final messageDebugSnapshotProvider = FutureProvider.autoDispose
+    .family<MessageDebugSnapshot, DebugMessageRef>((ref, messageRef) async {
+  final database = ref.watch(dbProvider);
+  return loadMessageDebugSnapshot(database, messageRef);
 });
 
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {

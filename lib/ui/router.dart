@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 
 import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/screens/about_screen.dart';
@@ -22,6 +23,7 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
@@ -257,6 +259,14 @@ final router = GoRouter(
         GoRoute(
           path: '/sent-queue',
           builder: (ctx, state) => const SentQueueScreen(),
+        ),
+        GoRoute(
+          path: '/debug/messages',
+          builder: (ctx, state) {
+            final messages =
+                (state.extra as List<DebugMessageRef>?) ?? const [];
+            return MessageDebugScreen(messages: messages);
+          },
         ),
       ],
     ),
