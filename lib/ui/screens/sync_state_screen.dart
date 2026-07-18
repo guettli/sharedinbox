@@ -172,15 +172,13 @@ class _MailboxSyncStateTile extends StatelessWidget {
     final theme = Theme.of(context);
     final total = state.totalCount;
     final subtitleParts = <String>[
-      if (state.fullyOfflineCount > 0)
-        'Offline ${state.fullyOfflineCount}',
+      if (state.fullyOfflineCount > 0) 'Offline ${state.fullyOfflineCount}',
       if (state.partialCount > 0) 'Partial ${state.partialCount}',
-      if (state.headerOnlyCount > 0)
-        'Header-only ${state.headerOnlyCount}',
-      if (state.serverOnlyCount > 0)
-        'On server ${state.serverOnlyCount}',
+      if (state.headerOnlyCount > 0) 'Header-only ${state.headerOnlyCount}',
+      if (state.serverOnlyCount > 0) 'On server ${state.serverOnlyCount}',
     ];
-    final subtitle = subtitleParts.isEmpty ? 'Empty' : subtitleParts.join(' · ');
+    final subtitle =
+        subtitleParts.isEmpty ? 'Empty' : subtitleParts.join(' · ');
 
     return ExpansionTile(
       leading: const Icon(Icons.folder_outlined),
@@ -226,12 +224,7 @@ class _MailboxSyncStateTile extends StatelessWidget {
               ),
               const Divider(),
               _row(context, null, 'Server total', '$total'),
-              _row(
-                context,
-                null,
-                'On disk',
-                _fmtBytes(state.totalBytes),
-              ),
+              _row(context, null, 'On disk', _fmtBytes(state.totalBytes)),
             ],
           ),
         ),
@@ -239,12 +232,7 @@ class _MailboxSyncStateTile extends StatelessWidget {
     );
   }
 
-  Widget _row(
-    BuildContext context,
-    Color? swatch,
-    String label,
-    String value,
-  ) {
+  Widget _row(BuildContext context, Color? swatch, String label, String value) {
     final theme = Theme.of(context);
     final smallStyle = theme.textTheme.bodySmall;
     return Padding(

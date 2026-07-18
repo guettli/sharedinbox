@@ -69,7 +69,7 @@ void main() {
             accountId: accountId,
             mailboxPath: mailboxPath,
             uid: uid,
-            receivedAt: DateTime(2026, 1, 1),
+            receivedAt: DateTime(2026),
             hasAttachment: Value(hasAttachment),
           ),
         );
@@ -82,8 +82,7 @@ void main() {
     List<Map<String, dynamic>> attachments = const [],
     int? bodySize,
   }) async {
-    final defaultBodySize =
-        (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
+    final defaultBodySize = (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
     await db.into(db.emailBodies).insert(
           EmailBodiesCompanion.insert(
             emailId: emailId,
@@ -116,10 +115,7 @@ void main() {
 
     // 1) Fully offline: body + no attachments
     await insertEmail(id: '$accountId:INBOX:1', mailboxPath: 'INBOX', uid: 1);
-    await insertBody(
-      emailId: '$accountId:INBOX:1',
-      textBody: 'hello world',
-    );
+    await insertBody(emailId: '$accountId:INBOX:1', textBody: 'hello world');
 
     // 2) Fully offline: body + all attachments on disk
     await insertEmail(
@@ -201,8 +197,8 @@ void main() {
   });
 
   test('empty mailboxes report zero counts', () async {
-    await insertMailbox(path: 'INBOX', totalCount: 0);
-    await insertMailbox(path: 'Trash', totalCount: 0);
+    await insertMailbox(path: 'INBOX');
+    await insertMailbox(path: 'Trash');
 
     final states = await repo.statesForAccount(accountId);
     expect(states, hasLength(2));
@@ -210,14 +206,15 @@ void main() {
   });
 
   test('sorts mailboxes with inbox first', () async {
-    await insertMailbox(path: 'Zeta', totalCount: 0);
-    await insertMailbox(path: 'INBOX', totalCount: 0, role: 'inbox');
-    await insertMailbox(path: 'Alpha', totalCount: 0);
+    await insertMailbox(path: 'Zeta');
+    await insertMailbox(path: 'INBOX', role: 'inbox');
+    await insertMailbox(path: 'Alpha');
 
     final states = await repo.statesForAccount(accountId);
-    expect(
-      states.map((s) => s.mailboxPath).toList(),
-      ['INBOX', 'Alpha', 'Zeta'],
-    );
+    expect(states.map((s) => s.mailboxPath).toList(), [
+      'INBOX',
+      'Alpha',
+      'Zeta',
+    ]);
   });
 }

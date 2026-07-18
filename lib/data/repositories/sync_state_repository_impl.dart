@@ -12,25 +12,29 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
 
   @override
   Future<List<MailboxSyncState>> statesForAccount(String accountId) async {
-    final mailboxRows = await (_db.select(_db.mailboxes)
-          ..where((t) => t.accountId.equals(accountId)))
+    final mailboxRows = await (_db.select(
+      _db.mailboxes,
+    )..where((t) => t.accountId.equals(accountId)))
         .get();
 
-    final emailRows = await (_db.select(_db.emails)
-          ..where((t) => t.accountId.equals(accountId)))
+    final emailRows = await (_db.select(
+      _db.emails,
+    )..where((t) => t.accountId.equals(accountId)))
         .get();
 
     final emailIdSubquery = _db.selectOnly(_db.emails)
       ..addColumns([_db.emails.id])
       ..where(_db.emails.accountId.equals(accountId));
 
-    final bodyRows = await (_db.select(_db.emailBodies)
-          ..where((t) => t.emailId.isInQuery(emailIdSubquery)))
+    final bodyRows = await (_db.select(
+      _db.emailBodies,
+    )..where((t) => t.emailId.isInQuery(emailIdSubquery)))
         .get();
     final bodyByEmailId = {for (final b in bodyRows) b.emailId: b};
 
-    final attachmentFileRows = await (_db.select(_db.attachmentFiles)
-          ..where((t) => t.emailId.isInQuery(emailIdSubquery)))
+    final attachmentFileRows = await (_db.select(
+      _db.attachmentFiles,
+    )..where((t) => t.emailId.isInQuery(emailIdSubquery)))
         .get();
     final filesByEmailId = <String, List<AttachmentFileRow>>{};
     for (final f in attachmentFileRows) {
@@ -82,9 +86,8 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
       final b = buckets[mb.path] ?? _MailboxBucket();
       final localCount =
           b.fullyOfflineCount + b.partialCount + b.headerOnlyCount;
-      final serverOnly = mb.totalCount > localCount
-          ? mb.totalCount - localCount
-          : 0;
+      final serverOnly =
+          mb.totalCount > localCount ? mb.totalCount - localCount : 0;
       final displayName = mb.displayPath.isNotEmpty ? mb.displayPath : mb.path;
       result.add(
         MailboxSyncState(
