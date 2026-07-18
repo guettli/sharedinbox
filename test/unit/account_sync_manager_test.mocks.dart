@@ -267,6 +267,79 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
           ),
         )),
       ) as _i5.Future<_i2.Mailbox>);
+
+  @override
+  _i5.Future<_i2.Mailbox> renameMailbox(
+    String? accountId,
+    String? mailboxPath,
+    String? newName,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #renameMailbox,
+          [
+            accountId,
+            mailboxPath,
+            newName,
+          ],
+        ),
+        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+          this,
+          Invocation.method(
+            #renameMailbox,
+            [
+              accountId,
+              mailboxPath,
+              newName,
+            ],
+          ),
+        )),
+      ) as _i5.Future<_i2.Mailbox>);
+
+  @override
+  _i5.Future<void> deleteMailbox(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #deleteMailbox,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i5.Future<void>.value(),
+        returnValueForMissingStub: _i5.Future<void>.value(),
+      ) as _i5.Future<void>);
+
+  @override
+  _i5.Future<_i2.Mailbox> moveMailbox(
+    String? accountId,
+    String? mailboxPath, {
+    required String? newParentDisplayPath,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #moveMailbox,
+          [
+            accountId,
+            mailboxPath,
+          ],
+          {#newParentDisplayPath: newParentDisplayPath},
+        ),
+        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+          this,
+          Invocation.method(
+            #moveMailbox,
+            [
+              accountId,
+              mailboxPath,
+            ],
+            {#newParentDisplayPath: newParentDisplayPath},
+          ),
+        )),
+      ) as _i5.Future<_i2.Mailbox>);
 }
 
 /// A class which mocks [EmailRepository].
