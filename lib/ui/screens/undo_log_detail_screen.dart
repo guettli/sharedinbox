@@ -113,18 +113,6 @@ class UndoLogDetailScreen extends ConsumerWidget {
   }
 }
 
-/// Returns the human-readable path for [rawPath] from [mailboxes], falling
-/// back to [rawPath] itself when the mailbox is not in the local cache (e.g.
-/// deleted on the server since the action was recorded). For IMAP the two are
-/// equal; for JMAP [rawPath] is the opaque server id ("a", "b") whereas
-/// [Mailbox.displayPath] is a hierarchical name like "Archive/2026".
-String resolveMailboxDisplayPath(List<Mailbox> mailboxes, String rawPath) {
-  for (final m in mailboxes) {
-    if (m.path == rawPath) return m.displayPath;
-  }
-  return rawPath;
-}
-
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({required this.text, required this.theme});
 

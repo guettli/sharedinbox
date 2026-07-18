@@ -218,4 +218,45 @@ void main() {
       expect(copy.unreadCount, 4);
     });
   });
+
+  group('resolveMailboxDisplayPath', () {
+    const jmapMailbox = Mailbox(
+      id: 'j1:a',
+      accountId: 'j1',
+      path: 'a',
+      name: '2026',
+      displayPath: 'Archive/2026',
+      unreadCount: 0,
+      totalCount: 0,
+    );
+    const imapMailbox = Mailbox(
+      id: 'i1:INBOX/Work',
+      accountId: 'i1',
+      path: 'INBOX/Work',
+      name: 'Work',
+      unreadCount: 0,
+      totalCount: 0,
+    );
+
+    test('returns displayPath for JMAP mailboxes (never the opaque id)', () {
+      // #288: renders "Archive/2026" instead of the leaked server key "a".
+      expect(
+        resolveMailboxDisplayPath([jmapMailbox], 'a'),
+        'Archive/2026',
+      );
+    });
+
+    test('returns the path as-is for IMAP where the two are equal', () {
+      expect(
+        resolveMailboxDisplayPath([imapMailbox], 'INBOX/Work'),
+        'INBOX/Work',
+      );
+    });
+
+    test('falls back to the raw path when the mailbox is not cached', () {
+      // Server deleted the folder since a log row referenced it.
+      expect(resolveMailboxDisplayPath([jmapMailbox], 'b'), 'b');
+      expect(resolveMailboxDisplayPath(const [], 'anything'), 'anything');
+    });
+  });
 }

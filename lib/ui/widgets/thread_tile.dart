@@ -18,7 +18,10 @@ String _fmtDate(DateTime dt) =>
 /// Used in inbox lists, combined inbox, and search result lists.
 /// Pass a custom [leading] widget to support selection-mode checkboxes.
 /// Pass [locationLabel] to show an extra subtitle line (e.g. account name or
-/// "accountId • mailboxPath") — useful in cross-mailbox views.
+/// "accountId • folder display path") — useful in cross-mailbox views.
+/// Callers must pre-resolve the folder to a human-readable display path
+/// before passing it here; rendering a raw `mailboxPath` would leak the opaque
+/// JMAP server id (e.g. `"a"`) into the UI (#288).
 class ThreadTile extends StatelessWidget {
   const ThreadTile({
     super.key,

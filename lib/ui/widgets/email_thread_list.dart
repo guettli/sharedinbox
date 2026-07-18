@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
@@ -122,8 +123,10 @@ class EmailThreadList extends ConsumerStatefulWidget {
   final bool showAccountLabel;
   final Map<String, String> accountNames;
 
-  /// Show a per-tile location label ("accountId • mailboxPath"). Used by
-  /// global search results.
+  /// Show a per-tile location label like `"accountId • Archive/2026"`. Used
+  /// by global search results. The folder is resolved through the local
+  /// mailbox cache, so JMAP mailboxes render as their human-readable
+  /// hierarchical path — never as the opaque server id (#288).
   final bool showLocationLabel;
 
   /// Optional tap handler. When null, the default navigates to the email or
@@ -168,6 +171,17 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
 
   void _onControllerChange() {
     if (mounted) setState(() {});
+  }
+
+  /// Resolves a raw `mailboxPath` (server key) to the human-readable
+  /// `displayPath` for the given account. For IMAP the two are equal; for JMAP
+  /// `mailboxPath` is an opaque server id (e.g. `"a"`) and rendering it
+  /// verbatim would leak the id into the UI (#288). Falls back to the raw
+  /// value when the mailbox is not yet cached locally.
+  String _displayFolder(String accountId, String rawPath) {
+    final mailbox =
+        ref.watch(mailboxByPathProvider((accountId, rawPath))).value;
+    return mailbox?.displayPath ?? rawPath;
   }
 
   void _publishThreads(List<EmailThread> threads) {
@@ -229,7 +243,7 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
     final isSelecting = widget.controller.isSelecting;
     final accountName = widget.accountNames[t.accountId];
     final locationLabel = widget.showLocationLabel
-        ? '${t.accountId} • ${t.mailboxPath}'
+        ? '${t.accountId} • ${_displayFolder(t.accountId, t.mailboxPath)}'
         : widget.showAccountLabel
             ? accountName
             : null;

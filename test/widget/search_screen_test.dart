@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
@@ -413,6 +414,78 @@ void main() {
         // Advanced-mode AppBar title and result are visible.
         expect(find.text('Advanced Search'), findsOneWidget);
         expect(find.text('You won a prize!'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'advanced-search result location label shows JMAP folder display path, '
+      'never the opaque server id',
+      (tester) async {
+        // Simulates a JMAP mailbox whose path is the opaque server id "a"
+        // and whose displayPath is the human-readable "Archive/2026" — the
+        // exact shape that regressed in #288 (the screenshot showed "a").
+        const jmapMailbox = Mailbox(
+          id: 'acc-1:a',
+          accountId: 'acc-1',
+          path: 'a',
+          name: '2026',
+          displayPath: 'Archive/2026',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        final hit = Email(
+          id: 'acc-1:1',
+          accountId: 'acc-1',
+          mailboxPath: 'a',
+          uid: 1,
+          subject: 'Test message',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.from_,
+              comparison: FilterComparison.is_,
+              value: 'bob@example.com',
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([jmapMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(structuredSearchResults: [hit]),
+              ),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+            child: MaterialApp(
+              home: SearchScreen(initialFilter: filter),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The location label must render the human-readable display path,
+        // never the opaque JMAP mailbox id.
+        expect(find.text('acc-1 • Archive/2026'), findsOneWidget);
+        expect(find.text('acc-1 • a'), findsNothing);
       },
     );
 
