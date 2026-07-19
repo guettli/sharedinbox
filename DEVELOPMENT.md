@@ -237,7 +237,8 @@ and make CI reject a baseline generated with `task duplication-baseline-local`.
 **Tuning.** Thresholds live in each tool's config file:
 
 - `.jscpd.json` — `minLines`, `minTokens`, `ignore` (Dart / Shell)
-- `.pylintrc-duplication` — `[SIMILARITIES]` block (Python)
+- Pylint `--min-similarity-lines` and related flags inside
+  `scripts/detect_duplication.py` (Python)
 - `dupl -threshold` inside `scripts/detect_duplication.py` (Go)
 
 **Roadmap.** Shrink the baseline to zero, then drop the

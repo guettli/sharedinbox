@@ -189,6 +189,19 @@ func New(
 				"drift_schemas/",
 				"stalwart-dev/",
 				"website/",
+				// Duplication checker needs the whole tree it scans plus its
+				// config/baseline. duplicationSrc() further narrows this, but
+				// its Filter is applied on top of the constructor's Filter —
+				// paths not in the constructor's Include list are already
+				// gone by the time duplicationSrc runs, which is what
+				// silently zeroed out the Go detector and the baseline
+				// lookup in the past.
+				"hooks/",
+				"deploy_cron.py",
+				"ci/",
+				"server/",
+				".jscpd.json",
+				"duplication-baseline.json",
 			},
 		}),
 	}, nil
@@ -459,7 +472,6 @@ func (m *Ci) duplicationSrc() *dagger.Directory {
 			"server/",
 			"stalwart-dev/",
 			".jscpd.json",
-			".pylintrc-duplication",
 			"duplication-baseline.json",
 		},
 		Exclude: []string{
@@ -487,7 +499,15 @@ func (m *Ci) duplicationBase() *dagger.Container {
 				"python3 python3-pip nodejs npm ca-certificates && " +
 				"pip install --quiet --no-cache-dir --break-system-packages pylint==4.0.6 && " +
 				"GOBIN=/usr/local/bin go install github.com/mibk/dupl@v1.1.0 && " +
-				"npm install --silent --no-progress --global jscpd@4.2.5"}).
+				// jscpd@4.2.5's transitive deps resolve to commander@15,
+				// which is ESM-only and blows up under `require()` on the
+				// Node 18 in this base image with `ERR_REQUIRE_ESM`. Pin
+				// commander@11 (last major with CommonJS) at the parent
+				// node_modules and delete jscpd's private copy so its
+				// require('commander') falls through to the CommonJS one.
+				"npm install --silent --no-progress --global " +
+				"jscpd@4.2.5 commander@11.1.0 && " +
+				"rm -rf /usr/local/lib/node_modules/jscpd/node_modules/commander"}).
 		WithDirectory("/src", m.duplicationSrc()).
 		WithWorkdir("/src").
 		WithEnvVariable("HOME", "/tmp")

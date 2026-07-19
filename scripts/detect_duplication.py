@@ -160,16 +160,25 @@ def run_jscpd(scope_files: list[str] | None) -> list[Clone]:
     if json_report.exists():
         json_report.unlink()
 
-    if not shutil.which("npx"):
-        sys.stderr.write("jscpd: npx not found — skipping Dart/Shell detection\n")
-        return []
-
-    cmd = [
-        "npx", "--yes", "-p", "jscpd@4.2.5", "jscpd",
+    # Prefer a pre-installed jscpd binary (CI installs jscpd@4.2.5 globally
+    # with locked transitive deps). Falling back to `npx --yes -p jscpd@4.2.5`
+    # re-resolves dependencies on every invocation; when a compatible
+    # commander release goes ESM-only jscpd blows up with ERR_REQUIRE_ESM,
+    # silently zeroing out the check.
+    jscpd_args = [
         "--silent",
         "--noTips",
         "--config", str(REPO_ROOT / ".jscpd.json"),
     ]
+    if shutil.which("jscpd"):
+        cmd = ["jscpd", *jscpd_args]
+    elif shutil.which("npx"):
+        cmd = ["npx", "--yes", "-p", "jscpd@4.2.5", "jscpd", *jscpd_args]
+    else:
+        sys.stderr.write(
+            "jscpd: neither jscpd nor npx found — skipping Dart/Shell detection\n"
+        )
+        return []
     if scope_files is not None:
         # jscpd needs the whole tree to see cross-file clones — restricting it
         # to a handful of paths silently drops matches against unchanged files.
@@ -229,9 +238,22 @@ def run_pylint(scope_files: list[str] | None) -> list[Clone]:
         sys.stderr.write("pylint: not available — skipping Python detection\n")
         return []
 
+    # Pass every option on the CLI instead of via --rcfile. The rcfile path
+    # depended on the config being copied into the CI container image, which
+    # was not always the case — pylint then bailed with "config file does not
+    # exist" and the Python detector silently reported zero clones.
     cmd = [
         "python3", "-m", "pylint",
-        "--rcfile", str(REPO_ROOT / ".pylintrc-duplication"),
+        "--persistent=no",
+        "--jobs=0",
+        "--disable=all",
+        "--enable=duplicate-code",
+        "--score=no",
+        "--min-similarity-lines=6",
+        "--ignore-comments=yes",
+        "--ignore-docstrings=yes",
+        "--ignore-imports=yes",
+        "--ignore-signatures=yes",
         *py_files,
     ]
     # pylint's exit code is a bitmask: 0=clean, 1=fatal, 2=error, 4=warning,
