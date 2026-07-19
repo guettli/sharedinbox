@@ -1,11 +1,14 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 
-Widget _wrap(Widget child) => MaterialApp(
-      home: Scaffold(body: child),
+Widget _wrap(Widget child) => ProviderScope(
+      child: MaterialApp(
+        home: Scaffold(body: child),
+      ),
     );
 
 // Collects every gesture recognizer attached to any TextSpan under [text],

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/di.dart';
@@ -12,6 +13,46 @@ import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 
 import '../unit/db_test_helper.dart';
 import 'helpers.dart';
+
+class _RecordingAppLogRepository implements AppLogRepository {
+  final List<Map<String, Object?>> inserts = [];
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    inserts.add({
+      'level': level,
+      'event': event,
+      'message': message,
+      'accountId': accountId,
+      'dataJson': dataJson,
+    });
+    return inserts.length;
+  }
+
+  @override
+  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
+      Stream.value(const []);
+
+  @override
+  Future<void> trim({
+    int maxRows = 10000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
+
+  @override
+  Future<void> clearAll() async {}
+}
 
 class _FakeSieveRepository extends SieveRepository {
   _FakeSieveRepository({this.error, List<SieveScript>? initialScripts})
@@ -313,6 +354,41 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Activated'), findsNothing);
+  });
+
+  testWidgets('activation failure writes an app-log entry (regression #320)', (
+    tester,
+  ) async {
+    final repo = _FakeSieveRepository(
+      initialScripts: [_script('s1', name: 'My filter')],
+    )..activateError = Exception('server rejected');
+    final logRepo = _RecordingAppLogRepository();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith((ref) => repo),
+          appLogRepositoryProvider.overrideWith((ref) => logRepo),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set active'));
+    await tester.pumpAndSettle();
+
+    final activateLogs = logRepo.inserts.where(
+      (row) => row['event'] == 'sieve.activate_failed',
+    );
+    expect(activateLogs, hasLength(1));
+    final row = activateLogs.single;
+    expect(row['level'], AppLogLevel.error);
+    expect(row['accountId'], 'acc-1');
+    expect(row['message'], 'Failed to activate sieve script');
+    expect(row['dataJson'], contains('server rejected'));
+    expect(row['dataJson'], contains('"scriptId":"s1"'));
   });
 
   testWidgets(

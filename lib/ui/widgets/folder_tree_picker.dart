@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Callback used by [FolderTreePickerDialog] to create a new folder.
@@ -46,7 +50,7 @@ Future<String?> showFolderTreePicker(
   );
 }
 
-class FolderTreePickerDialog extends StatefulWidget {
+class FolderTreePickerDialog extends ConsumerStatefulWidget {
   const FolderTreePickerDialog({
     super.key,
     required this.mailboxesStream,
@@ -59,10 +63,12 @@ class FolderTreePickerDialog extends StatefulWidget {
   final FolderCreateCallback? onCreate;
 
   @override
-  State<FolderTreePickerDialog> createState() => _FolderTreePickerDialogState();
+  ConsumerState<FolderTreePickerDialog> createState() =>
+      _FolderTreePickerDialogState();
 }
 
-class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
+class _FolderTreePickerDialogState
+    extends ConsumerState<FolderTreePickerDialog> {
   List<_FolderNode> _roots = const [];
   List<Mailbox> _mailboxes = const [];
   String? _initialDisplayPath;
@@ -254,7 +260,16 @@ class _FolderTreePickerDialogState extends State<FolderTreePickerDialog> {
         }
       }
       Navigator.pop(context, displayPath);
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'folder_picker.create_failed',
+              'Failed to create folder from picker',
+              data: {'name': name, 'parent': parent},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!mounted) return;
       setState(() => _creating = false);
       ScaffoldMessenger.of(context).showSnackBar(

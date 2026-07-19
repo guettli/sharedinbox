@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -176,11 +178,11 @@ Future<void> _showFolderActions(
   final repo = ref.read(mailboxRepositoryProvider);
   switch (action) {
     case _FolderAction.rename:
-      await _promptRename(context, repo, accountId, mailbox);
+      await _promptRename(context, ref, repo, accountId, mailbox);
     case _FolderAction.move:
-      await _promptMove(context, repo, accountId, mailbox);
+      await _promptMove(context, ref, repo, accountId, mailbox);
     case _FolderAction.delete:
-      await _promptDelete(context, repo, accountId, mailbox);
+      await _promptDelete(context, ref, repo, accountId, mailbox);
   }
 }
 
@@ -188,6 +190,7 @@ enum _FolderAction { rename, move, delete }
 
 Future<void> _promptRename(
   BuildContext context,
+  WidgetRef ref,
   MailboxRepository repo,
   String accountId,
   Mailbox mailbox,
@@ -203,7 +206,18 @@ Future<void> _promptRename(
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Folder renamed to "$newName"')),
     );
-  } catch (e) {
+  } catch (e, stack) {
+    unawaited(
+      ref.read(appLoggerProvider).error(
+            'mailbox.rename_failed',
+            'Failed to rename mailbox',
+            accountId: accountId,
+            mailboxPath: mailbox.path,
+            data: {'newName': newName},
+            error: e,
+            stack: stack,
+          ),
+    );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Could not rename folder: $e')),
@@ -213,6 +227,7 @@ Future<void> _promptRename(
 
 Future<void> _promptMove(
   BuildContext context,
+  WidgetRef ref,
   MailboxRepository repo,
   String accountId,
   Mailbox mailbox,
@@ -246,7 +261,18 @@ Future<void> _promptMove(
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Folder moved under "$destination"')),
     );
-  } catch (e) {
+  } catch (e, stack) {
+    unawaited(
+      ref.read(appLoggerProvider).error(
+            'mailbox.move_failed',
+            'Failed to move mailbox',
+            accountId: accountId,
+            mailboxPath: mailbox.path,
+            data: {'destination': destination},
+            error: e,
+            stack: stack,
+          ),
+    );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Could not move folder: $e')),
@@ -256,6 +282,7 @@ Future<void> _promptMove(
 
 Future<void> _promptDelete(
   BuildContext context,
+  WidgetRef ref,
   MailboxRepository repo,
   String accountId,
   Mailbox mailbox,
@@ -290,7 +317,17 @@ Future<void> _promptDelete(
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Folder "${mailbox.name}" deleted')),
     );
-  } catch (e) {
+  } catch (e, stack) {
+    unawaited(
+      ref.read(appLoggerProvider).error(
+            'mailbox.delete_failed',
+            'Failed to delete mailbox',
+            accountId: accountId,
+            mailboxPath: mailbox.path,
+            error: e,
+            stack: stack,
+          ),
+    );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Could not delete folder: $e')),

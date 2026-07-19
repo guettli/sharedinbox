@@ -78,15 +78,33 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         url,
         mode: LaunchMode.externalApplication,
       );
-      if (!launched && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 5),
-            content: Text('Could not open browser.'),
+      if (!launched) {
+        unawaited(
+          ref.read(appLoggerProvider).warn(
+            'about.launch_url_failed',
+            'Browser refused to open URL',
+            data: {'url': url.toString()},
           ),
         );
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 5),
+              content: Text('Could not open browser.'),
+            ),
+          );
+        }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'about.launch_url_failed',
+              'Failed to open URL',
+              data: {'url': url.toString()},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -129,15 +147,33 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         url,
         mode: LaunchMode.externalApplication,
       );
-      if (!launched && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 5),
-            content: Text('Could not open browser.'),
+      if (!launched) {
+        unawaited(
+          ref.read(appLoggerProvider).warn(
+            'about.create_issue_failed',
+            'Browser refused to open new-issue URL',
+            data: {'url': url.toString()},
           ),
         );
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 5),
+              content: Text('Could not open browser.'),
+            ),
+          );
+        }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'about.create_issue_failed',
+              'Failed to open new-issue URL',
+              data: {'url': url.toString()},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

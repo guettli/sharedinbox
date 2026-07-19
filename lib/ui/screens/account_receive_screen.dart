@@ -165,7 +165,15 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
         );
         context.pop();
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.receive.import_failed',
+              'Failed to import shared account(s)',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _errorMessage = _friendlyError(e);

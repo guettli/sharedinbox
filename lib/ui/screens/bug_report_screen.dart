@@ -119,7 +119,15 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       setState(() {
         _attachments.addAll(newFiles);
       });
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'bug_report.pick_files_failed',
+              'Failed to pick files for bug report',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to pick files: $e')),
@@ -268,6 +276,16 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
             errorMsg = resData['error'] as String;
           }
         } catch (_) {}
+        unawaited(
+          ref.read(appLoggerProvider).error(
+            'bug_report.submit_failed',
+            'Bug-report submission returned non-2xx status',
+            data: {
+              'statusCode': response.statusCode,
+              'errorMsg': errorMsg,
+            },
+          ),
+        );
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errorMsg),
@@ -275,7 +293,15 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'bug_report.submit_failed',
+              'Bug-report submission threw',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
