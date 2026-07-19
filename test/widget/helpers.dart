@@ -292,6 +292,7 @@ class FakeOutboxRepository implements OutboxRepository {
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
+    OutboxFlushObserver? observer,
   }) async =>
       0;
 

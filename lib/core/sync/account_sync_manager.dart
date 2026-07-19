@@ -121,9 +121,15 @@ class AccountSyncManager {
   }
 
   /// Wakes the idle/wait phase of the given account's sync loop so a new
-  /// sync cycle starts immediately. No-op if the account is unknown.
-  void syncNow(String accountId) {
-    _active[accountId]?.kick();
+  /// sync cycle starts immediately. Returns `true` if a loop was actually
+  /// kicked, `false` if the account isn't currently active — used by the
+  /// Retry button on the sent queue so we can tell the user we did nothing
+  /// instead of silently faking success.
+  bool syncNow(String accountId) {
+    final loop = _active[accountId];
+    if (loop == null) return false;
+    loop.kick();
+    return true;
   }
 
   /// Wakes the idle/wait phase of every active account loop. Used by the

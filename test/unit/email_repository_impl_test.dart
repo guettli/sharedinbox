@@ -3955,6 +3955,63 @@ void main() {
         reason: 'logout must run in finally',
       );
     });
+
+    test(
+      'SMTP connect timeout carries phase name + host:port so the sent-queue '
+      'row surfaces the root cause (#323)',
+      () async {
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) =>
+              Completer<imap.SmtpClient>().future,
+          imapConnect: (Account _, String __, String ___) async =>
+              _AppendCapturingImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+
+        await expectLater(
+          r.emails.sendEmail('acc-1', draft),
+          throwsA(
+            isA<TimeoutException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('SMTP connect/auth timed out'),
+                contains('smtp.example.com'),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'IMAP connect timeout carries the IMAP host:port',
+      () async {
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) =>
+              Completer<imap.ImapClient>().future,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+
+        await expectLater(
+          r.emails.sendEmail('acc-1', draft),
+          throwsA(
+            isA<TimeoutException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('IMAP connect/login'),
+                contains('imap.example.com'),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   });
 
   group('IMAP folder deleted on server', () {

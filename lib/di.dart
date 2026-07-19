@@ -146,6 +146,7 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
     imapConnect: ref.watch(imapConnectProvider),
     smtpConnect: ref.watch(smtpConnectProvider),
     outbox: ref.watch(outboxRepositoryProvider),
+    appLogger: ref.watch(appLoggerProvider),
   );
 });
 
@@ -235,6 +236,13 @@ final messageDebugSnapshotProvider = FutureProvider.autoDispose
     .family<MessageDebugSnapshot, DebugMessageRef>((ref, messageRef) async {
   final database = ref.watch(dbProvider);
   return loadMessageDebugSnapshot(database, messageRef);
+});
+
+/// Callback wrapper around [AccountSyncManager.syncNow]. The queued-message
+/// tiles depend on this instead of the full [syncManagerProvider] so widget
+/// tests can override the kick without materialising a real sync manager.
+final syncNowProvider = Provider<bool Function(String accountId)>((ref) {
+  return ref.watch(syncManagerProvider).syncNow;
 });
 
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {

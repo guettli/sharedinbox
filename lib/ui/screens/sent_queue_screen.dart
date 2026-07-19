@@ -8,6 +8,8 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/outbox_screen.dart'
+    show SyncNowFn, showOutboxErrorDetails;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
@@ -26,6 +28,7 @@ class SentQueueScreen extends ConsumerWidget {
     final rowsAsync = ref.watch(allOutboxProvider);
     final accountsAsync = ref.watch(allAccountsProvider);
     final repo = ref.watch(outboxRepositoryProvider);
+    final syncNow = ref.read(syncNowProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sent Queue')),
@@ -43,10 +46,11 @@ class SentQueueScreen extends ConsumerWidget {
           return ListView.separated(
             itemCount: rows.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (ctx, i) => _SentQueueTile(
+            itemBuilder: (ctx, i) => SentQueueTile(
               message: rows[i],
               account: accountsById[rows[i].accountId],
               repo: repo,
+              syncNow: syncNow,
             ),
           );
         },
@@ -55,16 +59,19 @@ class SentQueueScreen extends ConsumerWidget {
   }
 }
 
-class _SentQueueTile extends StatelessWidget {
-  const _SentQueueTile({
+class SentQueueTile extends StatelessWidget {
+  const SentQueueTile({
+    super.key,
     required this.message,
     required this.account,
     required this.repo,
+    required this.syncNow,
   });
 
   final OutboxMessage message;
   final Account? account;
   final OutboxRepository repo;
+  final SyncNowFn syncNow;
 
   @override
   Widget build(BuildContext context) {
@@ -107,12 +114,16 @@ class _SentQueueTile extends StatelessWidget {
           if (message.lastError != null)
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.xs),
-              child: Text(
-                '${message.isFailed ? 'Failed' : 'Pending'}'
-                ' (attempts: ${message.attempts}): ${message.lastError}',
-                style: TextStyle(color: theme.colorScheme.error),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              child: InkWell(
+                onTap: () => showOutboxErrorDetails(context, message),
+                child: Text(
+                  '${message.isFailed ? 'Failed' : 'Pending'}'
+                  ' (attempts: ${message.attempts}): ${message.lastError} '
+                  '(tap for details)',
+                  style: TextStyle(color: theme.colorScheme.error),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ),
         ],
@@ -123,7 +134,7 @@ class _SentQueueTile extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Retry now',
-            onPressed: () => unawaited(repo.retry(message.id)),
+            onPressed: () => _retry(context),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -131,6 +142,25 @@ class _SentQueueTile extends StatelessWidget {
             onPressed: () => unawaited(repo.discard(message.id)),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _retry(BuildContext context) async {
+    // Capture the messenger BEFORE the async gap so the callback stays
+    // context-safe even if the widget tree rebuilds while retry() awaits.
+    final messenger = ScaffoldMessenger.of(context);
+    await repo.retry(message.id);
+    final kicked = syncNow(message.accountId);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          kicked
+              ? 'Retrying send…'
+              : 'Sync is not running for this account. '
+                  'Enable it to send the queued message.',
+        ),
+        duration: const Duration(seconds: 3),
       ),
     );
   }

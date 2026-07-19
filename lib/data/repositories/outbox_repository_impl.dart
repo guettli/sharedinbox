@@ -48,6 +48,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
+    OutboxFlushObserver? observer,
   }) async {
     final at = now ?? DateTime.now();
     // Pending rows whose next attempt time is null or has already passed.
@@ -67,18 +68,19 @@ class OutboxRepositoryImpl implements OutboxRepository {
     for (final row in rows) {
       final draft = _decodeEnvelope(row.envelopeJson, row.attachmentsJson);
       final mimeBytes = base64.decode(row.mimeBase64);
+      final job = OutboxJob(
+        id: row.id,
+        accountId: row.accountId,
+        draft: draft,
+        mimeBytes: mimeBytes,
+        attempts: row.attempts,
+      );
+      _safeNotify(() => observer?.onAttempt?.call(job));
       try {
-        await sender(
-          OutboxJob(
-            id: row.id,
-            accountId: row.accountId,
-            draft: draft,
-            mimeBytes: mimeBytes,
-            attempts: row.attempts,
-          ),
-        );
+        await sender(job);
         await (_db.delete(_db.outbox)..where((t) => t.id.equals(row.id))).go();
         sent++;
+        _safeNotify(() => observer?.onOk?.call(job));
       } on PermanentSendException catch (e) {
         await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
           OutboxCompanion(
@@ -87,20 +89,33 @@ class OutboxRepositoryImpl implements OutboxRepository {
             attempts: Value(row.attempts + 1),
           ),
         );
-      } catch (e) {
+        _safeNotify(() => observer?.onPermanent?.call(job, e));
+      } catch (e, stack) {
         final attempts = row.attempts + 1;
         final delaySec = _backoffSeconds[
             (attempts - 1).clamp(0, _backoffSeconds.length - 1)];
+        final nextAttemptAt = at.add(Duration(seconds: delaySec));
         await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
           OutboxCompanion(
             attempts: Value(attempts),
             lastError: Value(e.toString()),
-            nextAttemptAt: Value(at.add(Duration(seconds: delaySec))),
+            nextAttemptAt: Value(nextAttemptAt),
           ),
+        );
+        _safeNotify(
+          () => observer?.onTransient?.call(job, e, stack, nextAttemptAt),
         );
       }
     }
     return sent;
+  }
+
+  // Observer hooks are best-effort — a buggy callback (e.g. a logger that
+  // fell over) must never turn a successful send into a stuck queue row.
+  void _safeNotify(void Function() fn) {
+    try {
+      fn();
+    } catch (_) {}
   }
 
   @override

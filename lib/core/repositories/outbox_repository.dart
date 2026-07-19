@@ -14,10 +14,15 @@ abstract class OutboxRepository {
   /// rows that throw [PermanentSendException] are marked `failed`; any other
   /// exception is recorded with exponential backoff for the next attempt.
   /// Returns the number of rows successfully sent.
+  ///
+  /// When [observer] is supplied it is notified of each outcome so callers
+  /// (e.g. the [EmailRepository] flush wrapper) can mirror the events into the
+  /// application log without this repository having to depend on any logger.
   Future<int> flush(
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
+    OutboxFlushObserver? observer,
   });
 
   /// Emits the current list of queued messages for [accountId], live.
@@ -46,6 +51,41 @@ class PermanentSendException implements Exception {
 
   @override
   String toString() => 'PermanentSendException: $message';
+}
+
+/// Callback hooks invoked by [OutboxRepository.flush] for each row so the
+/// caller can mirror send outcomes into the application log. Every hook is
+/// best-effort — thrown exceptions are swallowed so a broken logger cannot
+/// break the flush.
+class OutboxFlushObserver {
+  const OutboxFlushObserver({
+    this.onAttempt,
+    this.onOk,
+    this.onTransient,
+    this.onPermanent,
+  });
+
+  /// Fires once per row just before [OutboxRepository.flush] calls the
+  /// sender. [attempts] is the pre-attempt counter (0 on the first try).
+  final void Function(OutboxJob job)? onAttempt;
+
+  /// Fires once per row when the sender returned normally and the row has
+  /// been deleted from the queue.
+  final void Function(OutboxJob job)? onOk;
+
+  /// Fires when the sender threw a non-[PermanentSendException] and the row
+  /// was rescheduled with backoff. [nextAttemptAt] is the wall-clock time the
+  /// next attempt is eligible.
+  final void Function(
+    OutboxJob job,
+    Object error,
+    StackTrace stack,
+    DateTime nextAttemptAt,
+  )? onTransient;
+
+  /// Fires when the sender threw [PermanentSendException] and the row was
+  /// marked `failed`.
+  final void Function(OutboxJob job, PermanentSendException error)? onPermanent;
 }
 
 /// Decoded payload of a single outbox row — what a sender receives.

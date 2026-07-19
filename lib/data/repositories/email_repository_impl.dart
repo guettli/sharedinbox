@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
@@ -45,6 +46,7 @@ class EmailRepositoryImpl implements EmailRepository {
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
     http.Client? httpClient,
     OutboxRepository? outbox,
+    AppLogger? appLogger,
     Duration sendOperationTimeout = const Duration(seconds: 50),
   })  : _db = db,
         _imapConnect = imapConnect,
@@ -52,6 +54,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _getCacheDir = getCacheDir,
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
+        _appLogger = appLogger,
         _sendOperationTimeout = sendOperationTimeout;
 
   final AppDatabase _db;
@@ -61,6 +64,7 @@ class EmailRepositoryImpl implements EmailRepository {
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
   final OutboxRepository _outbox;
+  final AppLogger? _appLogger;
 
   /// Upper bound on each network call inside [_sendEmailImap]. `SmtpClient`
   /// has no built-in response timeout and `ImapClient.appendMessage` does not
@@ -3151,39 +3155,127 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<int> flushOutbox(String accountId, String password) async {
     final account = (await _accounts.getAccount(accountId))!;
-    return _outbox.flush(accountId, (job) async {
-      // Re-validate any attachment file paths before touching the network so
-      // an obviously-broken queue entry is failed-out fast.
-      for (final filePath in job.draft.attachmentFilePaths) {
-        if (!await File(filePath).exists()) {
-          throw PermanentSendException(
-            'Attachment file no longer exists: $filePath',
-          );
+    return _outbox.flush(
+      accountId,
+      (job) async {
+        // Re-validate any attachment file paths before touching the network so
+        // an obviously-broken queue entry is failed-out fast.
+        for (final filePath in job.draft.attachmentFilePaths) {
+          if (!await File(filePath).exists()) {
+            throw PermanentSendException(
+              'Attachment file no longer exists: $filePath',
+            );
+          }
         }
-      }
-      try {
-        switch (account.type) {
-          case account_model.AccountType.imap:
-            await _sendEmailImap(account, password, job.draft);
-          case account_model.AccountType.jmap:
-            await _sendEmailJmap(account, password, job.draft);
+        try {
+          switch (account.type) {
+            case account_model.AccountType.imap:
+              await _sendEmailImap(account, password, job.draft);
+            case account_model.AccountType.jmap:
+              await _sendEmailJmap(account, password, job.draft);
+          }
+        } on imap.SmtpException catch (e) {
+          // Permanent SMTP rejections come back as 5xx response codes — those
+          // will fail the same way on every retry, so fail the row out.
+          if (_isPermanentSmtpError(e)) {
+            throw PermanentSendException('SMTP rejected: ${e.message}');
+          }
+          rethrow;
+        } on JmapException catch (e) {
+          // EmailSubmission errors that won't recover on retry (invalid
+          // recipient, forbidden identity, missing mailbox).
+          if (_isPermanentJmapError(e)) {
+            throw PermanentSendException('JMAP rejected: ${e.message}');
+          }
+          rethrow;
         }
-      } on imap.SmtpException catch (e) {
-        // Permanent SMTP rejections come back as 5xx response codes — those
-        // will fail the same way on every retry, so fail the row out.
-        if (_isPermanentSmtpError(e)) {
-          throw PermanentSendException('SMTP rejected: ${e.message}');
-        }
-        rethrow;
-      } on JmapException catch (e) {
-        // EmailSubmission errors that won't recover on retry (invalid
-        // recipient, forbidden identity, missing mailbox).
-        if (_isPermanentJmapError(e)) {
-          throw PermanentSendException('JMAP rejected: ${e.message}');
-        }
-        rethrow;
-      }
-    });
+      },
+      observer: _outboxLogObserver(accountId),
+    );
+  }
+
+  // Mirrors every outbox row outcome into the application log so a user who
+  // hits Retry on a queued message actually sees why it did or did not send
+  // (previously the failure was only stored in `outbox.lastError` and the
+  // log stayed silent — see #323).
+  OutboxFlushObserver? _outboxLogObserver(String accountId) {
+    final logger = _appLogger;
+    if (logger == null) return null;
+    String describe(OutboxJob job) {
+      final subject = job.draft.subject.isEmpty
+          ? '(no subject)'
+          : (job.draft.subject.length > 60
+              ? '${job.draft.subject.substring(0, 60)}…'
+              : job.draft.subject);
+      final recipients = job.draft.to.length + job.draft.cc.length;
+      return '"$subject" ($recipients recipient${recipients == 1 ? '' : 's'})';
+    }
+
+    return OutboxFlushObserver(
+      onAttempt: (job) {
+        unawaited(
+          logger.debug(
+            'outbox.send.attempt',
+            'Sending queued message ${describe(job)} (attempt ${job.attempts + 1})',
+            accountId: accountId,
+            emailId: 'outbox:${job.id}',
+            data: {
+              'outboxRowId': job.id,
+              'attempts': job.attempts,
+              'subject': job.draft.subject,
+              'to': job.draft.to.map((a) => a.email).toList(),
+            },
+          ),
+        );
+      },
+      onOk: (job) {
+        unawaited(
+          logger.info(
+            'outbox.send.ok',
+            'Queued message ${describe(job)} sent',
+            accountId: accountId,
+            emailId: 'outbox:${job.id}',
+            data: {
+              'outboxRowId': job.id,
+              'attempts': job.attempts + 1,
+            },
+          ),
+        );
+      },
+      onTransient: (job, error, stack, nextAttemptAt) {
+        unawaited(
+          logger.warn(
+            'outbox.send.transient_error',
+            'Send failed for ${describe(job)}; retrying at '
+                '${nextAttemptAt.toIso8601String()}',
+            accountId: accountId,
+            emailId: 'outbox:${job.id}',
+            data: {
+              'outboxRowId': job.id,
+              'attempts': job.attempts + 1,
+              'nextAttemptAt': nextAttemptAt.toIso8601String(),
+            },
+            error: error,
+            stack: stack,
+          ),
+        );
+      },
+      onPermanent: (job, error) {
+        unawaited(
+          logger.error(
+            'outbox.send.permanent_error',
+            'Send permanently failed for ${describe(job)}: ${error.message}',
+            accountId: accountId,
+            emailId: 'outbox:${job.id}',
+            data: {
+              'outboxRowId': job.id,
+              'attempts': job.attempts + 1,
+            },
+            error: error,
+          ),
+        );
+      },
+    );
   }
 
   bool _isPermanentSmtpError(imap.SmtpException e) {
@@ -3216,25 +3308,24 @@ class EmailRepositoryImpl implements EmailRepository {
       await builder.addFile(file, mediaType);
     }
     final mimeMessage = builder.buildMimeMessage();
-    final smtpClient = await _smtpConnect(
-      account,
-      _effectiveUsername(account),
-      password,
-    ).timeout(
-      _sendOperationTimeout,
-      onTimeout: () => throw TimeoutException(
-        'SMTP connect/auth did not complete',
-        _sendOperationTimeout,
-      ),
+    final smtpEndpoint = '${account.smtpHost}:${account.smtpPort}';
+    final imapEndpoint = '${account.imapHost}:${account.imapPort}';
+    final smtpClient = await _withPhase(
+      'SMTP connect/auth',
+      smtpEndpoint,
+      () => _smtpConnect(
+        account,
+        _effectiveUsername(account),
+        password,
+      ).timeout(_sendOperationTimeout),
     );
     try {
-      await smtpClient.sendMessage(mimeMessage).timeout(
-            _sendOperationTimeout,
-            onTimeout: () => throw TimeoutException(
-              'SMTP sendMessage did not complete',
-              _sendOperationTimeout,
-            ),
-          );
+      await _withPhase(
+        'SMTP send message',
+        smtpEndpoint,
+        () =>
+            smtpClient.sendMessage(mimeMessage).timeout(_sendOperationTimeout),
+      );
     } finally {
       // Quit is a one-liner over the wire — bound it tightly so a wedged
       // server doesn't keep the caller hanging after the message is sent.
@@ -3246,36 +3337,36 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     // Save a copy to the Sent folder via IMAP APPEND.
     // Create the folder first — many servers don't pre-create it.
-    final imapClient = await _imapConnect(
-      account,
-      _effectiveUsername(account),
-      password,
-    ).timeout(
-      _sendOperationTimeout,
-      onTimeout: () => throw TimeoutException(
-        'IMAP connect/login did not complete',
-        _sendOperationTimeout,
-      ),
+    final imapClient = await _withPhase(
+      'IMAP connect/login (to append Sent copy)',
+      imapEndpoint,
+      () => _imapConnect(
+        account,
+        _effectiveUsername(account),
+        password,
+      ).timeout(_sendOperationTimeout),
     );
     try {
       try {
-        await imapClient.createMailbox('Sent').timeout(
-              _sendOperationTimeout,
-              onTimeout: () => throw TimeoutException(
-                'IMAP createMailbox(Sent) did not complete',
-                _sendOperationTimeout,
-              ),
-            );
-      } on TimeoutException {
-        rethrow;
+        await imapClient.createMailbox('Sent').timeout(_sendOperationTimeout);
+      } on TimeoutException catch (e) {
+        throw _wrapPhaseError(
+          'IMAP create Sent folder',
+          imapEndpoint,
+          e,
+        );
       } catch (_) {
         // Already exists — that's fine.
       }
-      await imapClient.appendMessage(
-        mimeMessage,
-        targetMailboxPath: 'Sent',
-        flags: [r'\Seen'],
-        responseTimeout: _sendOperationTimeout,
+      await _withPhase(
+        'IMAP append to Sent folder',
+        imapEndpoint,
+        () => imapClient.appendMessage(
+          mimeMessage,
+          targetMailboxPath: 'Sent',
+          flags: [r'\Seen'],
+          responseTimeout: _sendOperationTimeout,
+        ),
       );
     } finally {
       // Logout is best-effort — bound it so a wedged server can't strand the
@@ -3286,6 +3377,37 @@ class EmailRepositoryImpl implements EmailRepository {
         // Best-effort: the message is already saved to Sent.
       }
     }
+  }
+
+  /// Runs [action] and, if it throws a [TimeoutException], rewraps the error
+  /// so the message carries the phase name and endpoint. This turns opaque
+  /// entries like "TimeoutException after 0:00:50.000000: null" into
+  /// user-legible ones like "SMTP connect/auth timed out after 50s (host:
+  /// smtp.example.com:587)" — the difference between the sent-queue row
+  /// showing "nothing" and showing the actual root cause the user asked for
+  /// in #323.
+  Future<T> _withPhase<T>(
+    String phase,
+    String endpoint,
+    Future<T> Function() action,
+  ) async {
+    try {
+      return await action();
+    } on TimeoutException catch (e) {
+      throw _wrapPhaseError(phase, endpoint, e);
+    }
+  }
+
+  Exception _wrapPhaseError(
+    String phase,
+    String endpoint,
+    TimeoutException e,
+  ) {
+    final seconds = (e.duration ?? _sendOperationTimeout).inSeconds;
+    return TimeoutException(
+      '$phase timed out after ${seconds}s (host: $endpoint)',
+      e.duration,
+    );
   }
 
   Future<void> _sendEmailJmap(

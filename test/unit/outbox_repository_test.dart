@@ -221,6 +221,122 @@ void main() {
       expect(rows, isEmpty);
     });
 
+    group('OutboxFlushObserver', () {
+      test('fires onAttempt + onOk when the send succeeds', () async {
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        final repo = OutboxRepositoryImpl(db);
+        await repo.enqueue(_accountId, _makeDraft(subject: 'Good'));
+
+        final attempts = <int>[];
+        final oks = <int>[];
+        final transients = <String>[];
+        final permanents = <String>[];
+        final observer = OutboxFlushObserver(
+          onAttempt: (job) => attempts.add(job.id),
+          onOk: (job) => oks.add(job.id),
+          onTransient: (j, e, __, ___) => transients.add(e.toString()),
+          onPermanent: (j, e) => permanents.add(e.toString()),
+        );
+
+        await repo.flush(_accountId, (job) async {}, observer: observer);
+
+        expect(attempts, hasLength(1));
+        expect(oks, hasLength(1));
+        expect(attempts.first, oks.first);
+        expect(transients, isEmpty);
+        expect(permanents, isEmpty);
+      });
+
+      test(
+        'fires onAttempt + onTransient with backoff on transient failure',
+        () async {
+          final db = openTestDatabase();
+          await _seedAccount(db);
+          final repo = OutboxRepositoryImpl(db);
+          await repo.enqueue(_accountId, _makeDraft());
+
+          DateTime? capturedNext;
+          Object? capturedErr;
+          var attemptCount = 0;
+          final observer = OutboxFlushObserver(
+            onAttempt: (_) => attemptCount++,
+            onTransient: (job, error, stack, nextAttemptAt) {
+              capturedErr = error;
+              capturedNext = nextAttemptAt;
+            },
+          );
+
+          final t0 = DateTime(2026, 1, 1, 12);
+          await repo.flush(
+            _accountId,
+            (job) async => throw Exception('boom'),
+            now: t0,
+            observer: observer,
+          );
+
+          expect(attemptCount, 1);
+          expect(capturedErr.toString(), contains('boom'));
+          expect(capturedNext, t0.add(const Duration(seconds: 30)));
+        },
+      );
+
+      test(
+        'fires onPermanent (not onTransient) on PermanentSendException',
+        () async {
+          final db = openTestDatabase();
+          await _seedAccount(db);
+          final repo = OutboxRepositoryImpl(db);
+          await repo.enqueue(_accountId, _makeDraft());
+
+          var transientCount = 0;
+          PermanentSendException? captured;
+          final observer = OutboxFlushObserver(
+            onTransient: (_, __, ___, ____) => transientCount++,
+            onPermanent: (_, e) => captured = e,
+          );
+
+          await repo.flush(
+            _accountId,
+            (job) async {
+              throw PermanentSendException('rejected');
+            },
+            observer: observer,
+          );
+
+          expect(transientCount, 0);
+          expect(captured?.message, 'rejected');
+        },
+      );
+
+      test(
+        'observer callbacks that throw are swallowed and do not halt flush',
+        () async {
+          final db = openTestDatabase();
+          await _seedAccount(db);
+          final repo = OutboxRepositoryImpl(db);
+          await repo.enqueue(_accountId, _makeDraft(subject: 'A'));
+          await Future<void>.delayed(const Duration(milliseconds: 1100));
+          await repo.enqueue(_accountId, _makeDraft(subject: 'B'));
+
+          final delivered = <String>[];
+          final observer = OutboxFlushObserver(
+            onAttempt: (_) => throw StateError('logger fell over'),
+            onOk: (job) => delivered.add(job.draft.subject),
+          );
+
+          final sent = await repo.flush(
+            _accountId,
+            (job) async {},
+            observer: observer,
+          );
+
+          expect(sent, 2);
+          expect(delivered, ['A', 'B']);
+        },
+      );
+    });
+
     test('observeOutbox emits the live list', () async {
       final db = openTestDatabase();
       await _seedAccount(db);
