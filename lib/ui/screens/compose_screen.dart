@@ -193,7 +193,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     try {
       final path = _attachments[index].path;
       await OpenFilex.open(path);
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'compose.attachment.open_failed',
+              'Failed to open compose attachment',
+              data: {'index': index},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -262,7 +271,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         );
         context.pop();
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'compose.enqueue_failed',
+              'Failed to enqueue outgoing message',
+              accountId: _accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(

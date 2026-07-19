@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -11,12 +12,14 @@ void _expectLightMode(String html) {
   expect(html, contains('color: #000000'));
 }
 
-Widget _wrap(Widget child) => MaterialApp(
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
+Widget _wrap(Widget child) => ProviderScope(
+      child: MaterialApp(
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+          useMaterial3: true,
+        ),
+        home: Scaffold(body: child),
       ),
-      home: Scaffold(body: child),
     );
 
 void main() {
