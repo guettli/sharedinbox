@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -13,21 +14,23 @@ Widget _harness(
   FolderCreateCallback? onCreate,
   Stream<List<Mailbox>>? stream,
 }) {
-  return MaterialApp(
-    home: Scaffold(
-      body: Builder(
-        builder: (ctx) => ElevatedButton(
-          onPressed: () {
-            capture(
-              showFolderTreePicker(
-                ctx,
-                mailboxesStream: stream ?? Stream.value(mailboxes),
-                initialPath: initialPath,
-                onCreate: onCreate,
-              ),
-            );
-          },
-          child: const Text('open'),
+  return ProviderScope(
+    child: MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (ctx) => ElevatedButton(
+            onPressed: () {
+              capture(
+                showFolderTreePicker(
+                  ctx,
+                  mailboxesStream: stream ?? Stream.value(mailboxes),
+                  initialPath: initialPath,
+                  onCreate: onCreate,
+                ),
+              );
+            },
+            child: const Text('open'),
+          ),
         ),
       ),
     ),

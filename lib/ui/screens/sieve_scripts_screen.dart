@@ -59,7 +59,17 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
           _loading = false;
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.list_failed',
+              'Failed to list sieve scripts',
+              accountId: widget.accountId,
+              data: {'isLocal': widget.isLocal},
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _error = e.toString();
@@ -115,7 +125,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
           ),
         ),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.activate_failed',
+              'Failed to activate sieve script',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': script.id,
+                'scriptName': script.name,
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -155,7 +179,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
           ),
         ),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.deactivate_failed',
+              'Failed to deactivate sieve script',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': script.id,
+                'scriptName': script.name,
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -197,7 +235,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
             .deleteScript(widget.accountId, script.id);
       }
       await _load();
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.delete_failed',
+              'Failed to delete sieve script',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': script.id,
+                'scriptName': script.name,
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

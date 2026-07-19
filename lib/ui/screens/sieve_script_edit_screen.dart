@@ -132,7 +132,20 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         _parseScriptIntoVisual();
         setState(() => _loadingContent = false);
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.script.load_failed',
+              'Failed to load sieve script content',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': widget.script?.id,
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _error = e.toString();
@@ -174,7 +187,21 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
             );
       }
       if (mounted) Navigator.of(context).pop();
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.script.save_failed',
+              'Failed to save sieve script',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': widget.script?.id,
+                'scriptName': _nameController.text.trim(),
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _error = e.toString();

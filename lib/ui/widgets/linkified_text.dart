@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/utils/linkify.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Renders plain [text] and turns any http(s) URL inside it into a tappable
@@ -13,17 +15,17 @@ import 'package:url_launcher/url_launcher.dart';
 /// Tapping a link shows a confirmation dialog with the exact URL before
 /// launching it in the platform browser, matching the safeguard used for
 /// links inside HTML email bodies.
-class LinkifiedText extends StatefulWidget {
+class LinkifiedText extends ConsumerStatefulWidget {
   const LinkifiedText(this.text, {super.key, this.style});
 
   final String text;
   final TextStyle? style;
 
   @override
-  State<LinkifiedText> createState() => _LinkifiedTextState();
+  ConsumerState<LinkifiedText> createState() => _LinkifiedTextState();
 }
 
-class _LinkifiedTextState extends State<LinkifiedText> {
+class _LinkifiedTextState extends ConsumerState<LinkifiedText> {
   final List<TapGestureRecognizer> _recognizers = [];
 
   @override
@@ -105,10 +107,19 @@ class _LinkifiedTextState extends State<LinkifiedText> {
     if (confirmed != true || !mounted) return;
 
     final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open: $url')),
+    if (!launched) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+          'link.open_failed',
+          'Browser refused to open link',
+          data: {'url': url},
+        ),
       );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open: $url')),
+        );
+      }
     }
   }
 }
