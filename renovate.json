@@ -13,7 +13,9 @@
   "packageRules": [
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
-      "addLabels": ["automerge"]
+      "addLabels": ["automerge"],
+      "automerge": true,
+      "platformAutomerge": true
     },
     {
       "matchManagers": ["gomod"],
