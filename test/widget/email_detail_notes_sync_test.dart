@@ -77,10 +77,7 @@ void main() {
       final noteRepo = _ThrowingNoteRepository(
         // Same shape as the crash reported in #319: TimeoutException from
         // ClientBase.connectToServer after 20 s.
-        TimeoutException(
-          'Future not completed',
-          const Duration(seconds: 20),
-        ),
+        TimeoutException('Future not completed', const Duration(seconds: 20)),
       );
 
       final capturedErrors = <Object>[];
