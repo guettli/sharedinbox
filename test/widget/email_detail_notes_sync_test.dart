@@ -12,6 +12,7 @@
 // syncNotes and asserts that no error reaches FlutterError.onError.
 //
 // Mirrors the pattern in test/unit/email_detail_prefetch_test.dart (#232).
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -98,7 +99,9 @@ void main() {
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([kTestAccount]),
             ),
-            mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(
               FakeEmailRepository(
                 emailDetail: email,
