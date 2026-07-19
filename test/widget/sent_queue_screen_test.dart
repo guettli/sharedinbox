@@ -25,9 +25,21 @@ class _RecordingOutboxRepository extends FakeOutboxRepository {
   }
 }
 
-Widget _wrap({required List<Override> overrides}) {
+Widget _wrap({
+  required List<Override> overrides,
+  List<String>? syncedAccounts,
+}) {
   return ProviderScope(
-    overrides: overrides,
+    overrides: [
+      // Avoid materialising a real AccountSyncManager (which pulls in a Drift
+      // database + a stack of other providers) — the tile only needs a plain
+      // callback to record kicks against.
+      syncNowProvider.overrideWithValue((accountId) {
+        syncedAccounts?.add(accountId);
+        return true;
+      }),
+      ...overrides,
+    ],
     child: const MaterialApp(home: SentQueueScreen()),
   );
 }
@@ -127,41 +139,138 @@ void main() {
     );
   });
 
-  testWidgets('retry and discard buttons call the repository', (tester) async {
-    final repo = _RecordingOutboxRepository();
-    repo.messages.add(
-      OutboxMessage(
-        id: 42,
-        accountId: 'acc-1',
-        subject: 'Ping',
-        to: const ['carol@example.com'],
-        cc: const [],
-        createdAt: DateTime.utc(2026, 3, 4, 9),
-        attempts: 0,
-        status: 'pending',
-      ),
-    );
+  testWidgets(
+    'retry resets the queue row, kicks sync, and shows a SnackBar',
+    (tester) async {
+      final repo = _RecordingOutboxRepository();
+      repo.messages.add(
+        OutboxMessage(
+          id: 42,
+          accountId: 'acc-1',
+          subject: 'Ping',
+          to: const ['carol@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 0,
+          status: 'pending',
+        ),
+      );
 
-    await tester.pumpWidget(
-      _wrap(
-        overrides: [
-          accountRepositoryProvider.overrideWithValue(
-            FakeAccountRepository([accountA]),
-          ),
-          outboxRepositoryProvider.overrideWithValue(repo),
-        ],
-      ),
-    );
-    await tester.pumpAndSettle();
+      final synced = <String>[];
+      await tester.pumpWidget(
+        _wrap(
+          syncedAccounts: synced,
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([accountA]),
+            ),
+            outboxRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.refresh));
-    await tester.pump();
-    expect(repo.retried, [42]);
+      await tester.tap(find.byIcon(Icons.refresh));
+      await tester.pump();
+      await tester.pump();
+      expect(repo.retried, [42]);
+      expect(
+        synced,
+        ['acc-1'],
+        reason: 'Retry must kick the sync loop, not just reset the DB row',
+      );
+      expect(find.text('Retrying send…'), findsOneWidget);
 
-    await tester.tap(find.byIcon(Icons.delete_outline));
-    await tester.pump();
-    expect(repo.discarded, [42]);
-  });
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pump();
+      expect(repo.discarded, [42]);
+    },
+  );
+
+  testWidgets(
+    'retry shows an actionable message when the sync loop is not running',
+    (tester) async {
+      final repo = _RecordingOutboxRepository();
+      repo.messages.add(
+        OutboxMessage(
+          id: 7,
+          accountId: 'acc-1',
+          subject: 'Ping',
+          to: const ['carol@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 0,
+          status: 'pending',
+        ),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            syncNowProvider.overrideWithValue((accountId) => false),
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([accountA]),
+            ),
+            outboxRepositoryProvider.overrideWithValue(repo),
+          ],
+          child: const MaterialApp(home: SentQueueScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.refresh));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.textContaining('Sync is not running for this account'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'tapping the last-error line opens the details dialog',
+    (tester) async {
+      final repo = _RecordingOutboxRepository();
+      repo.messages.add(
+        OutboxMessage(
+          id: 9,
+          accountId: 'acc-1',
+          subject: 'Whoops',
+          to: const ['carol@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 3,
+          status: 'failed',
+          lastError:
+              'SMTP connect/auth timed out after 50s (host: smtp.example.com:587)',
+        ),
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([accountA]),
+            ),
+            outboxRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('tap for details'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Send failed'), findsOneWidget);
+      expect(find.text('Attempts: 3'), findsOneWidget);
+      expect(
+        find.textContaining('SMTP connect/auth timed out after 50s'),
+        findsWidgets,
+        reason: 'full error text should be visible in the details dialog',
+      );
+    },
+  );
 
   testWidgets('long subjects are truncated to the preview length', (
     tester,
