@@ -21,6 +21,7 @@ import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
@@ -32,8 +33,15 @@ import 'package:url_launcher/url_launcher.dart';
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 
 class EmailDetailScreen extends ConsumerStatefulWidget {
-  const EmailDetailScreen({super.key, required this.emailId});
+  const EmailDetailScreen({super.key, required this.emailId, this.nav});
   final String emailId;
+
+  /// Ordered list of sibling emails from the caller (mailbox list, search
+  /// results, address filter, …). Powers the prev/next controls and the
+  /// after-action "next message" hop. `null` for deep links / notifications
+  /// — the screen falls back to walking the current mailbox's individual
+  /// emails in that case.
+  final EmailDetailNav? nav;
 
   @override
   ConsumerState<EmailDetailScreen> createState() => _EmailDetailScreenState();
@@ -44,6 +52,69 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
   bool _notesSynced = false;
+
+  /// Fallback nav resolved from `observeEmails(mailbox)` when [widget.nav]
+  /// is null (deep links, notifications). Cached per emailId so the buttons
+  /// don't refetch on every rebuild.
+  EmailDetailNav? _fallbackNav;
+  String? _fallbackNavForEmailId;
+  bool _fallbackNavLoading = false;
+
+  @override
+  void didUpdateWidget(covariant EmailDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.emailId != widget.emailId) {
+      // A different mail is now on screen — its neighbours differ, so drop
+      // the cached fallback list. The provided [widget.nav] indexes by id,
+      // so no invalidation needed for that path.
+      _fallbackNav = null;
+      _fallbackNavForEmailId = null;
+    }
+  }
+
+  /// Returns the active nav — either the one handed in by the caller or a
+  /// mailbox-scoped fallback fetched lazily from the repo. Returns null while
+  /// the fallback is still in flight or when no header is available yet.
+  EmailDetailNav? _activeNav(Email? header) {
+    if (widget.nav != null) return widget.nav;
+    if (header == null) return null;
+    if (_fallbackNavForEmailId == widget.emailId && _fallbackNav != null) {
+      return _fallbackNav;
+    }
+    if (!_fallbackNavLoading) {
+      _fallbackNavLoading = true;
+      unawaited(_loadFallbackNav(header));
+    }
+    return null;
+  }
+
+  Future<void> _loadFallbackNav(Email header) async {
+    try {
+      final emails = await ref
+          .read(emailRepositoryProvider)
+          .observeEmails(header.accountId, header.mailboxPath)
+          .first;
+      if (!mounted) return;
+      setState(() {
+        _fallbackNav = EmailDetailNav.fromEmails(emails);
+        _fallbackNavForEmailId = widget.emailId;
+        _fallbackNavLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _fallbackNavLoading = false);
+    }
+  }
+
+  void _goToNeighbour(EmailDetailNavItem target) {
+    if (!mounted) return;
+    context.go(
+      '/accounts/${target.accountId}'
+      '/mailboxes/${Uri.encodeComponent(target.mailboxPath)}'
+      '/emails/${Uri.encodeComponent(target.emailId)}',
+      extra: widget.nav,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,10 +146,28 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
+    final activeNav = _activeNav(header);
+    final prevItem = activeNav?.prevOf(widget.emailId);
+    final nextItem = activeNav?.nextOf(widget.emailId);
+
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !isMobile,
         actions: [
+          if (!isMobile) ...[
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              tooltip: 'Previous message',
+              onPressed:
+                  prevItem == null ? null : () => _goToNeighbour(prevItem),
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              tooltip: 'Next message',
+              onPressed:
+                  nextItem == null ? null : () => _goToNeighbour(nextItem),
+            ),
+          ],
           IconButton(
             icon: const Icon(Icons.reply),
             tooltip: 'Reply',
@@ -105,7 +194,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             color: Theme.of(context).colorScheme.error,
             onPressed: () async {
               unawaited(HapticFeedback.heavyImpact());
-              final nextEmailId = await _getNextEmailIdIfNeeded(header);
+              final nextEmail = await _getNextEmailIfNeeded(header);
               final destPath = await repo.deleteEmail(widget.emailId);
 
               if (header != null) {
@@ -127,7 +216,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 );
               }
 
-              if (context.mounted) _navigateTo(context, header, nextEmailId);
+              if (context.mounted) _navigateTo(context, header, nextEmail);
             },
           ),
           IconButton(
@@ -194,9 +283,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   context.push('/search', extra: similarFilterFor(header)),
                 );
               } else if (value == 'mark_unread') {
-                final nextEmailId = await _getNextEmailIdIfNeeded(header);
+                final nextEmail = await _getNextEmailIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
-                if (context.mounted) _navigateTo(context, header, nextEmailId);
+                if (context.mounted) _navigateTo(context, header, nextEmail);
               } else if (value == 'headers' && body != null && header != null) {
                 unawaited(_showHeaders(context, body, header.accountId));
               } else if (value == 'structure' && body != null) {
@@ -212,15 +301,49 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
         ],
       ),
-      body: detail.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (d) {
-          final trusted =
-              ref.watch(trustedImageSendersProvider).value ?? const <String>[];
-          return _buildBody(context, d.$1, d.$2, trusted);
-        },
+      body: _wrapWithSwipe(
+        isMobile: isMobile,
+        prev: prevItem,
+        next: nextItem,
+        child: detail.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('Error: $e')),
+          data: (d) {
+            final trusted = ref.watch(trustedImageSendersProvider).value ??
+                const <String>[];
+            return _buildBody(context, d.$1, d.$2, trusted);
+          },
+        ),
       ),
+    );
+  }
+
+  /// On mobile, wraps [child] in a horizontal drag detector so a fling left
+  /// advances to the next message and a fling right returns to the previous
+  /// one. Uses [HitTestBehavior.deferToChild] so vertical scrolls in the mail
+  /// body remain unaffected (#292).
+  Widget _wrapWithSwipe({
+    required bool isMobile,
+    required EmailDetailNavItem? prev,
+    required EmailDetailNavItem? next,
+    required Widget child,
+  }) {
+    if (!isMobile) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onHorizontalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        // Match the ~300 px/s threshold used elsewhere in the app so
+        // accidental drift while scrolling never triggers navigation.
+        if (velocity <= -300 && next != null) {
+          unawaited(HapticFeedback.selectionClick());
+          _goToNeighbour(next);
+        } else if (velocity >= 300 && prev != null) {
+          unawaited(HapticFeedback.selectionClick());
+          _goToNeighbour(prev);
+        }
+      },
+      child: child,
     );
   }
 
@@ -334,40 +457,54 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  Future<String?> _getNextEmailIdIfNeeded(Email? header) async {
+  Future<EmailDetailNavItem?> _getNextEmailIfNeeded(Email? header) async {
     if (header == null) return null;
     final prefs = ref.read(userPreferencesProvider).value;
     final action =
         prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
     if (action != AfterMailViewAction.nextMessage) return null;
 
-    // Restrict to threads that live in the same mailbox as the current mail.
-    // observeThreads is expected to filter server-side, but a defensive
-    // client-side check keeps the "next message" from ever pointing at a
-    // thread in another folder such as Junk (#293).
-    final threads = (await ref
+    // Prefer the caller-supplied nav so "next" respects the source list
+    // (search results, address filter, …) and steps through individual mails
+    // rather than jumping thread-by-thread across the whole mailbox (#292).
+    final providedNav = widget.nav;
+    if (providedNav != null) return providedNav.nextOf(widget.emailId);
+
+    // Fallback for deep links: walk this mailbox's individual mails, keeping
+    // the historical guard that limits the hop to the same folder — the
+    // stream shouldn't leak cross-folder rows, but a client-side filter still
+    // matters when a mailbox rename briefly overlaps (#293).
+    final emails = (await ref
             .read(emailRepositoryProvider)
-            .observeThreads(header.accountId, header.mailboxPath)
+            .observeEmails(header.accountId, header.mailboxPath)
             .first)
-        .where((t) => t.mailboxPath == header.mailboxPath)
+        .where((e) => e.mailboxPath == header.mailboxPath)
         .toList();
 
-    final currentIndex = threads.indexWhere(
-      (t) => t.emailIds.contains(widget.emailId),
-    );
-    if (currentIndex >= 0 && currentIndex + 1 < threads.length) {
-      return threads[currentIndex + 1].latestEmailId;
+    final idx = emails.indexWhere((e) => e.id == widget.emailId);
+    if (idx >= 0 && idx + 1 < emails.length) {
+      final n = emails[idx + 1];
+      return EmailDetailNavItem(
+        accountId: n.accountId,
+        mailboxPath: n.mailboxPath,
+        emailId: n.id,
+      );
     }
     return null;
   }
 
-  void _navigateTo(BuildContext context, Email? header, String? nextEmailId) {
+  void _navigateTo(
+    BuildContext context,
+    Email? header,
+    EmailDetailNavItem? next,
+  ) {
     if (!context.mounted) return;
-    if (nextEmailId != null && header != null) {
+    if (next != null) {
       context.go(
-        '/accounts/${header.accountId}'
-        '/mailboxes/${Uri.encodeComponent(header.mailboxPath)}'
-        '/emails/${Uri.encodeComponent(nextEmailId)}',
+        '/accounts/${next.accountId}'
+        '/mailboxes/${Uri.encodeComponent(next.mailboxPath)}'
+        '/emails/${Uri.encodeComponent(next.emailId)}',
+        extra: widget.nav,
       );
     } else {
       context.pop();
@@ -661,7 +798,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<void> _archive(BuildContext context, Email header) async {
-    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    final nextEmail = await _getNextEmailIfNeeded(header);
     if (!context.mounted) return;
 
     final mailbox = await resolveMailboxByRole(
@@ -695,11 +832,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) _navigateTo(context, header, nextEmailId);
+    if (context.mounted) _navigateTo(context, header, nextEmail);
   }
 
   Future<void> _markAsSpam(BuildContext context, Email header) async {
-    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    final nextEmail = await _getNextEmailIfNeeded(header);
     if (!context.mounted) return;
 
     final mailbox = await resolveMailboxByRole(
@@ -733,7 +870,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) _navigateTo(context, header, nextEmailId);
+    if (context.mounted) _navigateTo(context, header, nextEmail);
   }
 
   Future<void> _forward(
@@ -791,7 +928,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<void> _moveTo(BuildContext context, Email header) async {
-    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    final nextEmail = await _getNextEmailIfNeeded(header);
 
     final mailboxRepo = ref.read(mailboxRepositoryProvider);
     final mailboxes =
@@ -862,11 +999,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
     );
 
-    if (context.mounted) _navigateTo(context, header, nextEmailId);
+    if (context.mounted) _navigateTo(context, header, nextEmail);
   }
 
   Future<void> _snooze(BuildContext context, Email header) async {
-    final nextEmailId = await _getNextEmailIdIfNeeded(header);
+    final nextEmail = await _getNextEmailIfNeeded(header);
     if (!context.mounted) return;
 
     final until = await showModalBottomSheet<DateTime>(
@@ -896,7 +1033,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
         ),
       );
-      _navigateTo(context, header, nextEmailId);
+      _navigateTo(context, header, nextEmail);
     }
   }
 

@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
+import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
@@ -325,6 +326,7 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
         '/accounts/${t.accountId}/mailboxes'
         '/${Uri.encodeComponent(t.mailboxPath)}'
         '/emails/${Uri.encodeComponent(t.latestEmailId)}',
+        extra: EmailDetailNav.fromThreads(widget.controller.visibleThreads),
       ),
     );
   }
