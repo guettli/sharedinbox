@@ -226,8 +226,7 @@ void main() {
       expect(
         landed,
         isTrue,
-        reason:
-            'Expected activated Sieve script to route the message to Trash',
+        reason: 'Expected activated Sieve script to route the message to Trash',
       );
     });
   });
@@ -317,8 +316,7 @@ void main() {
       expect(
         landed,
         isTrue,
-        reason:
-            'Expected activated Sieve script to route the message to Trash',
+        reason: 'Expected activated Sieve script to route the message to Trash',
       );
     });
   });

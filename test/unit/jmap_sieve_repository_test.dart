@@ -232,7 +232,8 @@ void main() {
 
       expect(captured, hasLength(1));
       expect(captured.first.method, 'SieveScript/set');
-      expect(captured.first.args.containsKey('onSuccessActivateScript'), isTrue);
+      expect(
+          captured.first.args.containsKey('onSuccessActivateScript'), isTrue);
       expect(captured.first.args['onSuccessActivateScript'], isNull);
     });
 
