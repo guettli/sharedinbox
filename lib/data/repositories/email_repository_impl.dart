@@ -21,6 +21,7 @@ import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
+import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -349,6 +350,22 @@ class EmailRepositoryImpl implements EmailRepository {
               bodySize: Value(_bodySize(textBody, htmlBody)),
             ),
           );
+
+      // Opportunistic backfill for rows synced before we started writing
+      // previews on the IMAP sync path. Costs no extra IMAP round trip.
+      if ((emailRow.preview ?? '').isEmpty) {
+        final backfill = previewFromBody(textBody, rawHtml);
+        if (backfill != null && backfill.isNotEmpty) {
+          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+              .write(EmailsCompanion(preview: Value(backfill)));
+          await _updateThread(
+            emailRow.accountId,
+            emailRow.mailboxPath,
+            emailRow.threadId ?? emailRow.id,
+          );
+        }
+      }
+
       return model.EmailBody(
         emailId: emailId,
         textBody: textBody,
@@ -644,8 +661,12 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     imap.MessageSequence sequence,
   ) async {
-    const fetchItems =
-        '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
+    // Request the first 8 KB of the body so we can derive an offline preview
+    // snippet without a second round trip. Matches the JMAP `preview` field
+    // (see [_upsertJmapEmails]); IMAP has no standard preview property.
+    const fetchItems = '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE '
+        'BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)] '
+        'BODY.PEEK[TEXT]<0.8192>)';
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -722,6 +743,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
+                preview: Value(_extractImapPreview(msg)),
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
                 hasAttachment: Value(msg.hasAttachments()),
@@ -4346,6 +4368,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 }
+
+/// Derives a JMAP-style preview snippet from an IMAP [imap.MimeMessage].
+/// Prefers the text/plain part; falls back to a tag-stripped text/html part.
+String? _extractImapPreview(imap.MimeMessage msg) =>
+    previewFromBody(msg.decodeTextPlainPart(), msg.decodeTextHtmlPart());
 
 /// Recursively converts an [imap.MimePart] into a JSON-serialisable map.
 Map<String, dynamic> _mimePartToJson(imap.MimePart part) {
