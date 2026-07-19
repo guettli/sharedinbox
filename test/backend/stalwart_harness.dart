@@ -14,6 +14,8 @@
 //   STALWART_URL         — JMAP base URL (e.g. http://127.0.0.1:8080)
 //   STALWART_IMAP_HOST, STALWART_IMAP_PORT
 //   STALWART_SMTP_HOST, STALWART_SMTP_PORT
+//   STALWART_SIEVE_PORT  — ManageSieve port (default 4190, exported by
+//                          stalwart-dev/start when using random ports)
 //   STALWART_POOL_SIZE   — pool size override (default 32, must match config)
 
 import 'dart:io';
@@ -36,7 +38,9 @@ class StalwartTestUser {
   final String email;
   final String password;
 
-  /// Builds an IMAP-backed [Account] rooted at the given [id].
+  /// Builds an IMAP-backed [Account] rooted at the given [id]. Also
+  /// populates the ManageSieve host/port so that Sieve-editing tests can
+  /// reach the dev Stalwart's plain-text ManageSieve listener.
   Account imapAccount({
     required String id,
     required StalwartEnv env,
@@ -50,6 +54,9 @@ class StalwartTestUser {
         imapSsl: false,
         smtpHost: env.smtpHost,
         smtpPort: env.smtpPort,
+        manageSieveHost: env.imapHost,
+        manageSievePort: env.sievePort,
+        manageSieveSsl: false,
       );
 
   /// Builds a JMAP-backed [Account] rooted at the given [id].
@@ -81,6 +88,7 @@ class StalwartEnv {
     required this.imapPort,
     required this.smtpHost,
     required this.smtpPort,
+    required this.sievePort,
     required this.poolSize,
   });
 
@@ -89,6 +97,7 @@ class StalwartEnv {
   final int imapPort;
   final String smtpHost;
   final int smtpPort;
+  final int sievePort;
   final int poolSize;
 
   static StalwartEnv fromPlatform() {
@@ -100,6 +109,7 @@ class StalwartEnv {
       imapPort: int.parse(read('STALWART_IMAP_PORT', '1430')),
       smtpHost: read('STALWART_SMTP_HOST', '127.0.0.1'),
       smtpPort: int.parse(read('STALWART_SMTP_PORT', '1025')),
+      sievePort: int.parse(read('STALWART_SIEVE_PORT', '4190')),
       poolSize: int.parse(
         read('STALWART_POOL_SIZE', '$_defaultPoolSize'),
       ),

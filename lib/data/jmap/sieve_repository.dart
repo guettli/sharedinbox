@@ -192,6 +192,10 @@ class SieveRepository {
     });
   }
 
+  /// Activates the script with [scriptId]. On JMAP this is a `SieveScript/set`
+  /// call with the `onSuccessActivateScript` argument (RFC 9661 §3.3); the
+  /// server atomically deactivates whichever script was previously active. On
+  /// ManageSieve it issues `SETACTIVE "<name>"` per RFC 5804 §2.8.
   Future<void> activateScript(String accountId, String scriptId) async {
     final account = await _requireAccount(accountId);
     if (account.type == AccountType.imap) {
@@ -204,27 +208,24 @@ class SieveRepository {
       final responses = await jmap.call(
         [
           [
-            'SieveScript/activate',
-            {'accountId': jmap.accountId, 'id': scriptId},
+            'SieveScript/set',
+            {
+              'accountId': jmap.accountId,
+              'onSuccessActivateScript': scriptId,
+            },
             '0',
           ],
         ],
         withSieve: true,
       );
-      final result = _responseArgs(responses, 0, 'SieveScript/activate');
-      final notActivated = result['notActivated'] as Map<String, dynamic>?;
-      if (notActivated != null && notActivated.containsKey(scriptId)) {
-        final err = notActivated[scriptId] as Map<String, dynamic>?;
-        throw JmapException(
-          'Failed to activate script: ${err?['type']} — ${err?['description']}',
-        );
-      }
+      final result = _responseArgs(responses, 0, 'SieveScript/set');
+      _throwIfActivationFailed(result, scriptId);
     });
   }
 
-  /// Deactivates the currently active script, if any. On JMAP this passes a
-  /// null id to `SieveScript/activate`; on ManageSieve it issues `SETACTIVE ""`
-  /// per RFC 5804 §2.8.
+  /// Deactivates the currently active script, if any. On JMAP this is a
+  /// `SieveScript/set` call with `onSuccessActivateScript: null` (RFC 9661
+  /// §3.3); on ManageSieve it issues `SETACTIVE ""` per RFC 5804 §2.8.
   Future<void> deactivateScript(String accountId) async {
     final account = await _requireAccount(accountId);
     if (account.type == AccountType.imap) {
@@ -237,15 +238,53 @@ class SieveRepository {
       final responses = await jmap.call(
         [
           [
-            'SieveScript/activate',
-            {'accountId': jmap.accountId, 'id': null},
+            'SieveScript/set',
+            {
+              'accountId': jmap.accountId,
+              'onSuccessActivateScript': null,
+            },
             '0',
           ],
         ],
         withSieve: true,
       );
-      _responseArgs(responses, 0, 'SieveScript/activate');
+      final result = _responseArgs(responses, 0, 'SieveScript/set');
+      _throwIfActivationFailed(result, null);
     });
+  }
+
+  // Extracts a server-reported activation error from a `SieveScript/set`
+  // response, if any. RFC 9661 reports failed side-effect activations via a
+  // top-level `activationFailure` object; some earlier drafts and other
+  // implementations instead expose the failure through `notActivated` or
+  // `notUpdated[<id>]`. Handle all three so the app surfaces the same
+  // `JmapException` regardless of which shape the server uses.
+  void _throwIfActivationFailed(
+    Map<String, dynamic> result,
+    String? scriptId,
+  ) {
+    final failure = result['activationFailure'];
+    if (failure is Map<String, dynamic>) {
+      throw JmapException(
+        'Failed to activate script: '
+        '${failure['type']} — ${failure['description']}',
+      );
+    }
+    if (scriptId == null) return;
+    final notActivated = result['notActivated'] as Map<String, dynamic>?;
+    if (notActivated != null && notActivated.containsKey(scriptId)) {
+      final err = notActivated[scriptId] as Map<String, dynamic>?;
+      throw JmapException(
+        'Failed to activate script: ${err?['type']} — ${err?['description']}',
+      );
+    }
+    final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
+    if (notUpdated != null && notUpdated.containsKey(scriptId)) {
+      final err = notUpdated[scriptId] as Map<String, dynamic>?;
+      throw JmapException(
+        'Failed to activate script: ${err?['type']} — ${err?['description']}',
+      );
+    }
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
