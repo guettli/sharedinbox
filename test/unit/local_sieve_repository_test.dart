@@ -121,6 +121,48 @@ void main() {
       await db.close();
     });
 
+    test('deactivateScript clears active flag on all scripts', () async {
+      final db = openTestDatabase();
+      final repo = LocalSieveRepository(db);
+      final s1 = await repo.saveScript(
+        'acc-1',
+        name: 'Script 1',
+        content: 'stop;',
+      );
+      final s2 = await repo.saveScript(
+        'acc-1',
+        name: 'Script 2',
+        content: 'keep;',
+      );
+      await repo.activateScript('acc-1', s1.id);
+
+      await repo.deactivateScript('acc-1');
+
+      final scripts = await repo.listScripts('acc-1');
+      expect(scripts.firstWhere((s) => s.id == s1.id).isActive, false);
+      expect(scripts.firstWhere((s) => s.id == s2.id).isActive, false);
+
+      await db.close();
+    });
+
+    test('deactivateScript only touches the given account', () async {
+      final db = openTestDatabase();
+      final repo = LocalSieveRepository(db);
+      final s1 = await repo.saveScript('acc-1', name: 'A', content: 'stop;');
+      final s2 = await repo.saveScript('acc-2', name: 'B', content: 'keep;');
+      await repo.activateScript('acc-1', s1.id);
+      await repo.activateScript('acc-2', s2.id);
+
+      await repo.deactivateScript('acc-1');
+
+      final acc1Scripts = await repo.listScripts('acc-1');
+      final acc2Scripts = await repo.listScripts('acc-2');
+      expect(acc1Scripts.first.isActive, false);
+      expect(acc2Scripts.first.isActive, true);
+
+      await db.close();
+    });
+
     test('scripts are isolated per account', () async {
       final db = openTestDatabase();
       final repo = LocalSieveRepository(db);

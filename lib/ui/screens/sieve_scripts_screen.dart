@@ -99,12 +99,68 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
             .activateScript(widget.accountId, script.id);
       }
       await _load();
+      if (!mounted) return;
+      final reloaded = _scripts?.firstWhere(
+        (s) => s.id == script.id,
+        orElse: () => script,
+      );
+      final took = reloaded?.isActive ?? false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(
+            took
+                ? 'Activated "${script.name}"'
+                : 'Activation may not have taken effect — please refresh.',
+          ),
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 5),
             content: Text('Failed to activate: $e'),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deactivate(SieveScript script) async {
+    try {
+      if (widget.isLocal) {
+        await ref
+            .read(localSieveRepositoryProvider)
+            .deactivateScript(widget.accountId);
+      } else {
+        await ref
+            .read(sieveRepositoryProvider)
+            .deactivateScript(widget.accountId);
+      }
+      await _load();
+      if (!mounted) return;
+      final reloaded = _scripts?.firstWhere(
+        (s) => s.id == script.id,
+        orElse: () => script,
+      );
+      final took = !(reloaded?.isActive ?? true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(
+            took
+                ? 'Deactivated "${script.name}"'
+                : 'Deactivation may not have taken effect — please refresh.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 5),
+            content: Text('Failed to deactivate: $e'),
           ),
         );
       }
@@ -213,6 +269,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
                       accountId: widget.accountId,
                       editRoute: _editRoute,
                       onActivate: () => _activate(scripts[i]),
+                      onDeactivate: () => _deactivate(scripts[i]),
                       onDelete: () => _delete(scripts[i]),
                       onEdited: _load,
                     ),
@@ -273,6 +330,7 @@ class _ScriptTile extends StatelessWidget {
     required this.accountId,
     required this.editRoute,
     required this.onActivate,
+    required this.onDeactivate,
     required this.onDelete,
     required this.onEdited,
   });
@@ -281,17 +339,28 @@ class _ScriptTile extends StatelessWidget {
   final String accountId;
   final String editRoute;
   final VoidCallback onActivate;
+  final VoidCallback onDeactivate;
   final VoidCallback onDelete;
   final VoidCallback onEdited;
 
   @override
   Widget build(BuildContext context) {
+    // Inactive scripts read as a warning: most users expect filters to be
+    // active, so a subtle warning tint + orange "Inactive" label make an
+    // all-inactive list impossible to miss.
+    final active = script.isActive;
+    final warningColor = Colors.orange.shade800;
+    final activeColor = Colors.green.shade700;
     return ListTile(
+      tileColor: active ? null : Colors.orange.withValues(alpha: 0.06),
       title: Text(script.name),
-      subtitle: script.isActive ? const Text('Active') : null,
+      subtitle: Text(
+        active ? 'Active' : 'Inactive',
+        style: TextStyle(color: active ? activeColor : warningColor),
+      ),
       leading: Icon(
-        Icons.filter_list,
-        color: script.isActive ? Colors.green : null,
+        active ? Icons.filter_list : Icons.warning_amber_rounded,
+        color: active ? activeColor : warningColor,
       ),
       trailing: PopupMenuButton<_ScriptAction>(
         onSelected: (action) async {
@@ -301,13 +370,20 @@ class _ScriptTile extends StatelessWidget {
               onEdited();
             case _ScriptAction.activate:
               onActivate();
+            case _ScriptAction.deactivate:
+              onDeactivate();
             case _ScriptAction.delete:
               onDelete();
           }
         },
         itemBuilder: (_) => [
           const PopupMenuItem(value: _ScriptAction.edit, child: Text('Edit')),
-          if (!script.isActive)
+          if (active)
+            const PopupMenuItem(
+              value: _ScriptAction.deactivate,
+              child: Text('Set inactive'),
+            )
+          else
             const PopupMenuItem(
               value: _ScriptAction.activate,
               child: Text('Set active'),
@@ -327,4 +403,4 @@ class _ScriptTile extends StatelessWidget {
   }
 }
 
-enum _ScriptAction { edit, activate, delete }
+enum _ScriptAction { edit, activate, deactivate, delete }

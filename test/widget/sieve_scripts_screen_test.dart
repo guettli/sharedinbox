@@ -14,17 +14,67 @@ import '../unit/db_test_helper.dart';
 import 'helpers.dart';
 
 class _FakeSieveRepository extends SieveRepository {
-  _FakeSieveRepository({this.error})
-      : super(FakeAccountRepository(), http.Client());
+  _FakeSieveRepository({this.error, List<SieveScript>? initialScripts})
+      : _scripts = List.of(initialScripts ?? const []),
+        super(FakeAccountRepository(), http.Client());
 
   final Object? error;
+  final List<SieveScript> _scripts;
+
+  /// If set, `activateScript` throws this instead of updating state.
+  Object? activateError;
+
+  /// If set, `activateScript` succeeds (no throw) but leaves the script
+  /// marked inactive — mimics a JMAP server that silently ignores activate.
+  bool activateNoOp = false;
+
+  int activateCalls = 0;
+  int deactivateCalls = 0;
 
   @override
   Future<List<SieveScript>> listScripts(String accountId) async {
     if (error != null) throw error!;
-    return [];
+    return List.of(_scripts);
+  }
+
+  @override
+  Future<void> activateScript(String accountId, String scriptId) async {
+    activateCalls++;
+    if (activateError != null) throw activateError!;
+    if (activateNoOp) return;
+    for (var i = 0; i < _scripts.length; i++) {
+      final s = _scripts[i];
+      _scripts[i] = SieveScript(
+        id: s.id,
+        name: s.name,
+        blobId: s.blobId,
+        isActive: s.id == scriptId,
+      );
+    }
+  }
+
+  @override
+  Future<void> deactivateScript(String accountId) async {
+    deactivateCalls++;
+    for (var i = 0; i < _scripts.length; i++) {
+      final s = _scripts[i];
+      _scripts[i] = SieveScript(
+        id: s.id,
+        name: s.name,
+        blobId: s.blobId,
+        isActive: false,
+      );
+    }
   }
 }
+
+SieveScript _script(String id, {bool isActive = false, String? name}) =>
+    SieveScript(
+      id: id,
+      name: name ?? id,
+      blobId: id,
+      isActive: isActive,
+    );
 
 void main() {
   configureSqliteForTests();
@@ -101,4 +151,197 @@ void main() {
     );
     expect(find.textContaining('Remote Filters'), findsOneWidget);
   });
+
+  testWidgets('shows "Inactive" subtitle for inactive scripts', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith(
+            (ref) => _FakeSieveRepository(
+              initialScripts: [_script('s1', name: 'My filter')],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('My filter'), findsOneWidget);
+    expect(find.text('Inactive'), findsOneWidget);
+    expect(find.text('Active'), findsNothing);
+    expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+  });
+
+  testWidgets('shows "Active" subtitle for active scripts', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith(
+            (ref) => _FakeSieveRepository(
+              initialScripts: [_script('s1', name: 'Prod', isActive: true)],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Active'), findsOneWidget);
+    expect(find.text('Inactive'), findsNothing);
+    expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+  });
+
+  testWidgets('popup menu shows Set active for inactive script', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith(
+            (ref) => _FakeSieveRepository(
+              initialScripts: [_script('s1', name: 'My filter')],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set active'), findsOneWidget);
+    expect(find.text('Set inactive'), findsNothing);
+  });
+
+  testWidgets('popup menu shows Set inactive for active script', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sieveRepositoryProvider.overrideWith(
+            (ref) => _FakeSieveRepository(
+              initialScripts: [_script('s1', name: 'Prod', isActive: true)],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set inactive'), findsOneWidget);
+    expect(find.text('Set active'), findsNothing);
+  });
+
+  testWidgets('tapping "Set active" shows a success snackbar', (tester) async {
+    final repo = _FakeSieveRepository(
+      initialScripts: [_script('s1', name: 'My filter')],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [sieveRepositoryProvider.overrideWith((ref) => repo)],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set active'));
+    await tester.pumpAndSettle();
+
+    expect(repo.activateCalls, 1);
+    expect(find.text('Activated "My filter"'), findsOneWidget);
+    // After activation, tile now reads Active.
+    expect(find.text('Active'), findsOneWidget);
+    expect(find.text('Inactive'), findsNothing);
+  });
+
+  testWidgets('tapping "Set inactive" shows a success snackbar', (
+    tester,
+  ) async {
+    final repo = _FakeSieveRepository(
+      initialScripts: [_script('s1', name: 'Prod', isActive: true)],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [sieveRepositoryProvider.overrideWith((ref) => repo)],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set inactive'));
+    await tester.pumpAndSettle();
+
+    expect(repo.deactivateCalls, 1);
+    expect(find.text('Deactivated "Prod"'), findsOneWidget);
+    expect(find.text('Inactive'), findsOneWidget);
+  });
+
+  testWidgets('activation error surfaces via snackbar, no success message', (
+    tester,
+  ) async {
+    final repo = _FakeSieveRepository(
+      initialScripts: [_script('s1', name: 'My filter')],
+    )..activateError = Exception('server rejected');
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [sieveRepositoryProvider.overrideWith((ref) => repo)],
+        child: const MaterialApp(home: SieveScriptsScreen(accountId: 'acc-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set active'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Failed to activate'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Activated'), findsNothing);
+  });
+
+  testWidgets(
+    'silent no-op activation warns that the change may not have taken effect',
+    (tester) async {
+      final repo = _FakeSieveRepository(
+        initialScripts: [_script('s1', name: 'My filter')],
+      )..activateNoOp = true;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [sieveRepositoryProvider.overrideWith((ref) => repo)],
+          child: const MaterialApp(
+            home: SieveScriptsScreen(accountId: 'acc-1'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set active'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('may not have taken effect'),
+        findsOneWidget,
+      );
+      // Tile still reflects inactive state so user sees the truth.
+      expect(find.text('Inactive'), findsOneWidget);
+    },
+  );
 }
