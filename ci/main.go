@@ -459,7 +459,6 @@ func (m *Ci) duplicationSrc() *dagger.Directory {
 			"server/",
 			"stalwart-dev/",
 			".jscpd.json",
-			".pylintrc-duplication",
 			"duplication-baseline.json",
 		},
 		Exclude: []string{

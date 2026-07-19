@@ -22,7 +22,6 @@ trap 'rm -rf "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/build/duplication"
 cp "$SCRIPT_DIR/detect_duplication.py" "$FIXTURE/scripts/"
 cp "$SCRIPT_DIR/detect_duplication.sh" "$FIXTURE/scripts/"
-cp "$REPO_ROOT/.pylintrc-duplication" "$FIXTURE/"
 
 # Minimal .jscpd.json so run_jscpd sees a valid config even if npx skips it.
 cat >"$FIXTURE/.jscpd.json" <<'EOF'
