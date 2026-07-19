@@ -54,10 +54,13 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  // Each fresh action produces two feedback surfaces owned by UndoShell:
-  // the AppBar flash overlay and the bottom action bar. Both carry the same
-  // label + icon, so every user-visible string appears twice while both are
-  // on screen.
+  // Each fresh action produces two feedback surfaces owned by UndoShell: a
+  // thin coloured strip painted below the AppBar (icon-less, so it does not
+  // obscure the action buttons) and a SnackBar-shaped bottom bar carrying
+  // the label, icon, and inline Undo. Every user-visible label therefore
+  // appears exactly once — in the bottom overlay only.
+  Finder findFlashStrip() => find.byKey(const ValueKey('undoFlashStrip'));
+
   testWidgets(
     'does not show feedback for stale action loaded from persistence on startup',
     (tester) async {
@@ -77,6 +80,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('1 email moved'), findsNothing);
+      expect(findFlashStrip(), findsNothing);
     },
   );
 
@@ -101,8 +105,11 @@ void main() {
         ),
       );
 
-      expect(find.text('1 email moved'), findsNWidgets(2));
-      // Bottom overlay carries an inline Undo button.
+      // Bottom overlay carries the label + icon + Undo; the flash strip is
+      // paint-only so nothing about it appears in the semantic tree beyond
+      // its identifying key.
+      expect(find.text('1 email moved'), findsOneWidget);
+      expect(findFlashStrip(), findsOneWidget);
       expect(find.text('UNDO'), findsOneWidget);
     },
   );
@@ -126,8 +133,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Deleted 2 emails'), findsNWidgets(2));
-    expect(find.byIcon(Icons.delete), findsNWidgets(2));
+    expect(find.text('Deleted 2 emails'), findsOneWidget);
+    expect(find.byIcon(Icons.delete), findsOneWidget);
+    expect(findFlashStrip(), findsOneWidget);
   });
 
   testWidgets('shows "Archived" label for a move with archive role', (
@@ -153,8 +161,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Archived 1 email'), findsNWidgets(2));
-    expect(find.byIcon(Icons.archive), findsNWidgets(2));
+    expect(find.text('Archived 1 email'), findsOneWidget);
+    expect(find.byIcon(Icons.archive), findsOneWidget);
+    expect(findFlashStrip(), findsOneWidget);
   });
 
   testWidgets('shows "Marked as spam" label for a move with junk role', (
@@ -180,40 +189,73 @@ void main() {
       ),
     );
 
-    expect(find.text('Marked 3 emails as spam'), findsNWidgets(2));
-    expect(find.byIcon(Icons.report), findsNWidgets(2));
+    expect(find.text('Marked 3 emails as spam'), findsOneWidget);
+    expect(find.byIcon(Icons.report), findsOneWidget);
+    expect(findFlashStrip(), findsOneWidget);
   });
 
-  testWidgets('flash overlay auto-dismisses after ~1.4 s', (tester) async {
-    when(
-      mockUndoRepo.getHistory(limit: anyNamed('limit')),
-    ).thenAnswer((_) async => []);
+  testWidgets(
+    'flash strip auto-dismisses after ~800 ms without obscuring the AppBar',
+    (tester) async {
+      when(
+        mockUndoRepo.getHistory(limit: anyNamed('limit')),
+      ).thenAnswer((_) async => []);
 
-    await tester.pumpWidget(buildShell(mockUndoRepo));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            undoRepositoryProvider.overrideWithValue(mockUndoRepo),
+            emailRepositoryProvider.overrideWithValue(mockEmailRepo),
+          ],
+          child: MaterialApp(
+            home: UndoShell(
+              child: Scaffold(
+                appBar: AppBar(title: const Text('T')),
+                body: const Text('content'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await pushAction(
-      tester,
-      UndoAction(
-        id: '5',
-        accountId: 'acc1',
-        type: UndoType.move,
-        emailIds: ['e1'],
-        sourceMailboxPath: 'INBOX',
-        destinationMailboxPath: 'Archive',
-        destinationMailboxRole: 'archive',
-      ),
-    );
+      await pushAction(
+        tester,
+        UndoAction(
+          id: '5',
+          accountId: 'acc1',
+          type: UndoType.move,
+          emailIds: ['e1'],
+          sourceMailboxPath: 'INBOX',
+          destinationMailboxPath: 'Archive',
+          destinationMailboxRole: 'archive',
+        ),
+      );
 
-    // Immediately after the push both the flash and the bottom overlay are
-    // visible → text appears twice.
-    expect(find.text('Archived 1 email'), findsNWidgets(2));
+      // Immediately after the push the flash strip is on screen and lives
+      // strictly below the AppBar area (status-bar padding + kToolbarHeight),
+      // so the AppBar action-button row remains visible for chained taps.
+      expect(find.text('Archived 1 email'), findsOneWidget);
+      expect(findFlashStrip(), findsOneWidget);
 
-    // After the flash timer (1400 ms) fires only the bottom overlay remains.
-    await tester.pump(const Duration(milliseconds: 1500));
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('Archived 1 email'), findsOneWidget);
-  });
+      final stripRect = tester.getRect(findFlashStrip());
+      // Strip sits at or below the AppBar's bottom edge — so the trailing
+      // action buttons (reply, archive, delete, ...) stay visible for the
+      // next tap. Test view has no status-bar padding, so kToolbarHeight is
+      // the exact expected top.
+      expect(stripRect.top, greaterThanOrEqualTo(kToolbarHeight));
+      // Strip is a paint-only marker, kept intentionally thin (see
+      // `_AppBarFlashOverlay.stripHeight`) so it never encroaches on body
+      // content.
+      expect(stripRect.height, lessThanOrEqualTo(12.0));
+
+      // After the flash timer (800 ms) fires only the bottom overlay remains.
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(findFlashStrip(), findsNothing);
+      expect(find.text('Archived 1 email'), findsOneWidget);
+    },
+  );
 
   testWidgets('bottom overlay auto-dismisses after ~5 s', (tester) async {
     when(
@@ -234,12 +276,13 @@ void main() {
       ),
     );
 
-    expect(find.text('Deleted 1 email'), findsNWidgets(2));
+    expect(find.text('Deleted 1 email'), findsOneWidget);
 
-    // After 5.5 s both flash and bottom overlay are gone.
+    // After 5.5 s both flash strip and bottom overlay are gone.
     await tester.pump(const Duration(seconds: 6));
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('Deleted 1 email'), findsNothing);
+    expect(findFlashStrip(), findsNothing);
   });
 
   testWidgets(
@@ -284,7 +327,8 @@ void main() {
         ),
       );
 
-      expect(find.text('Deleted 1 email'), findsNWidgets(2));
+      expect(find.text('Deleted 1 email'), findsOneWidget);
+      expect(findFlashStrip(), findsOneWidget);
     },
   );
 
