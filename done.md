@@ -108,6 +108,11 @@ exceptions to its subtree instead of escalating to the global crash screen.
   - `.github/workflows/renovate.yml` — daily cron (06:00 UTC) workflow
   - `Taskfile.yml` — `renovate` task
   - Issue #257 closed.
+  - Follow-up (Issue #301): minor/patch/pin/digest/lockFileMaintenance updates
+    now auto-merge via Renovate's own `automerge` + `platformAutomerge` (GitHub
+    native auto-merge) once CI is green. agentloop's `automerge` label is
+    issue-scoped and never sees Renovate PRs, so relying on it alone left
+    them stuck. `major` updates remain manual.
 
 ## Tasks (2026-05-11)
 
