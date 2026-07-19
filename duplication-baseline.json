@@ -74,57 +74,57 @@
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 82,
-      "end_line": 93,
+      "start_line": 88,
+      "end_line": 99,
       "key": "9b4fa3ff2fbe43be"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 82,
-      "end_line": 139,
+      "start_line": 88,
+      "end_line": 145,
       "key": "255146df81912314"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 93,
-      "end_line": 104,
+      "start_line": 99,
+      "end_line": 110,
       "key": "d3bcce1171ecdeb0"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 104,
-      "end_line": 115,
+      "start_line": 110,
+      "end_line": 121,
       "key": "9b4fa3ff2fbe43be"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 115,
-      "end_line": 126,
+      "start_line": 121,
+      "end_line": 132,
       "key": "d3bcce1171ecdeb0"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 139,
-      "end_line": 152,
+      "start_line": 145,
+      "end_line": 158,
       "key": "33474b15f0c86591"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 152,
-      "end_line": 165,
+      "start_line": 158,
+      "end_line": 171,
       "key": "255146df81912314"
     },
     {
       "tool": "jscpd",
       "file": "lib/core/services/app_logger.dart",
-      "start_line": 165,
-      "end_line": 177,
+      "start_line": 171,
+      "end_line": 183,
       "key": "33474b15f0c86591"
     },
     {
@@ -487,23 +487,37 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/about_screen.dart",
-      "start_line": 75,
+      "start_line": 85,
       "end_line": 101,
-      "key": "d0004d27736358b9"
+      "key": "9ed33a835bd70c85"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/about_screen.dart",
-      "start_line": 101,
-      "end_line": 115,
+      "start_line": 102,
+      "end_line": 119,
+      "key": "740a1ab885dc0e1a"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/about_screen.dart",
+      "start_line": 119,
+      "end_line": 133,
       "key": "8b767bf05bd99fa6"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/about_screen.dart",
-      "start_line": 126,
-      "end_line": 152,
-      "key": "d0004d27736358b9"
+      "start_line": 154,
+      "end_line": 170,
+      "key": "9ed33a835bd70c85"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/about_screen.dart",
+      "start_line": 171,
+      "end_line": 188,
+      "key": "740a1ab885dc0e1a"
     },
     {
       "tool": "jscpd",
@@ -522,29 +536,29 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/account_receive_screen.dart",
-      "start_line": 228,
-      "end_line": 239,
+      "start_line": 236,
+      "end_line": 247,
       "key": "33c90521d3b19d59"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/account_receive_screen.dart",
-      "start_line": 254,
-      "end_line": 264,
+      "start_line": 262,
+      "end_line": 272,
       "key": "3a2af1ecbf6e87ed"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/account_receive_screen.dart",
-      "start_line": 305,
-      "end_line": 319,
+      "start_line": 313,
+      "end_line": 327,
       "key": "681aa2ea05d5108b"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/account_receive_screen.dart",
-      "start_line": 319,
-      "end_line": 333,
+      "start_line": 327,
+      "end_line": 341,
       "key": "37956980f685a9e0"
     },
     {
@@ -669,15 +683,15 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/mailbox_list_screen.dart",
-      "start_line": 317,
-      "end_line": 329,
+      "start_line": 354,
+      "end_line": 366,
       "key": "0dd0bf8ab7ff5657"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/mailbox_list_screen.dart",
-      "start_line": 329,
-      "end_line": 340,
+      "start_line": 366,
+      "end_line": 377,
       "key": "c35100614a4e7c33"
     },
     {
@@ -700,6 +714,48 @@
       "start_line": 127,
       "end_line": 168,
       "key": "880976ffffc9e429"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_script_edit_screen.dart",
+      "start_line": 142,
+      "end_line": 152,
+      "key": "657c39e02780a5fa"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_script_edit_screen.dart",
+      "start_line": 198,
+      "end_line": 208,
+      "key": "657c39e02780a5fa"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_scripts_screen.dart",
+      "start_line": 132,
+      "end_line": 147,
+      "key": "8a76104dce977b01"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_scripts_screen.dart",
+      "start_line": 132,
+      "end_line": 147,
+      "key": "8a76104dce977b01"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_scripts_screen.dart",
+      "start_line": 186,
+      "end_line": 201,
+      "key": "8a76104dce977b01"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/sieve_scripts_screen.dart",
+      "start_line": 242,
+      "end_line": 257,
+      "key": "8a76104dce977b01"
     },
     {
       "tool": "jscpd",
@@ -732,29 +788,29 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/widgets/folder_tree_picker.dart",
-      "start_line": 299,
-      "end_line": 311,
+      "start_line": 314,
+      "end_line": 326,
       "key": "0dd0bf8ab7ff5657"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/widgets/folder_tree_picker.dart",
-      "start_line": 313,
-      "end_line": 324,
+      "start_line": 328,
+      "end_line": 339,
       "key": "c35100614a4e7c33"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/widgets/linkified_text.dart",
-      "start_line": 89,
-      "end_line": 105,
+      "start_line": 91,
+      "end_line": 107,
       "key": "021f8311c0bbcbd0"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/widgets/secure_email_webview.dart",
-      "start_line": 155,
-      "end_line": 171,
+      "start_line": 157,
+      "end_line": 173,
       "key": "021f8311c0bbcbd0"
     },
     {
@@ -1349,22 +1405,15 @@
       "tool": "jscpd",
       "file": "test/unit/app_logger_test.dart",
       "start_line": 9,
-      "end_line": 24,
-      "key": "144c0bb5b010b6d1"
+      "end_line": 28,
+      "key": "15dd77d10536a8f1"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/app_logger_test.dart",
-      "start_line": 35,
-      "end_line": 188,
-      "key": "32167e6d021026ba"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/unit/app_logger_test.dart",
-      "start_line": 36,
-      "end_line": 51,
-      "key": "75a83c96a1d71132"
+      "start_line": 33,
+      "end_line": 52,
+      "key": "1091ae5ee524dcc7"
     },
     {
       "tool": "jscpd",
@@ -1378,7 +1427,7 @@
       "file": "test/unit/app_logger_test.dart",
       "start_line": 152,
       "end_line": 168,
-      "key": "32167e6d021026ba"
+      "key": "0c4b82c08ca36a58"
     },
     {
       "tool": "jscpd",
@@ -2356,43 +2405,43 @@
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 164,
-      "end_line": 175,
+      "start_line": 167,
+      "end_line": 178,
       "key": "8f8679254351037e"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 226,
-      "end_line": 237,
+      "start_line": 229,
+      "end_line": 240,
       "key": "8f8679254351037e"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 277,
-      "end_line": 291,
+      "start_line": 280,
+      "end_line": 294,
       "key": "72686eaeeaec6ecf"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 296,
-      "end_line": 311,
+      "start_line": 299,
+      "end_line": 314,
       "key": "d9844667b70b9f9a"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 325,
-      "end_line": 339,
+      "start_line": 328,
+      "end_line": 342,
       "key": "72686eaeeaec6ecf"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/folder_tree_picker_test.dart",
-      "start_line": 346,
-      "end_line": 361,
+      "start_line": 349,
+      "end_line": 364,
       "key": "d9844667b70b9f9a"
     },
     {
@@ -2447,15 +2496,15 @@
     {
       "tool": "jscpd",
       "file": "test/widget/linkified_text_test.dart",
-      "start_line": 74,
-      "end_line": 84,
+      "start_line": 77,
+      "end_line": 87,
       "key": "ec2a3040e56225be"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/linkified_text_test.dart",
-      "start_line": 93,
-      "end_line": 103,
+      "start_line": 96,
+      "end_line": 106,
       "key": "ec2a3040e56225be"
     },
     {
@@ -2754,13 +2803,6 @@
     },
     {
       "tool": "jscpd",
-      "file": "test/widget/secure_email_webview_test.dart",
-      "start_line": 12,
-      "end_line": 23,
-      "key": "a944332eae0b813b"
-    },
-    {
-      "tool": "jscpd",
       "file": "test/widget/sent_queue_screen_test.dart",
       "start_line": 148,
       "end_line": 159,
@@ -2790,72 +2832,121 @@
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 155,
-      "end_line": 170,
+      "start_line": 18,
+      "end_line": 33,
+      "key": "144c0bb5b010b6d1"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 18,
+      "end_line": 37,
+      "key": "15dd77d10536a8f1"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 38,
+      "end_line": 57,
+      "key": "1091ae5ee524dcc7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 40,
+      "end_line": 188,
+      "key": "0c4b82c08ca36a58"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 41,
+      "end_line": 56,
+      "key": "75a83c96a1d71132"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 196,
+      "end_line": 211,
       "key": "bae32ed253c86d17"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 176,
-      "end_line": 191,
+      "start_line": 217,
+      "end_line": 232,
       "key": "6d0573bf6a225c25"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 198,
-      "end_line": 213,
+      "start_line": 239,
+      "end_line": 254,
       "key": "bae32ed253c86d17"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 204,
-      "end_line": 216,
+      "start_line": 245,
+      "end_line": 257,
       "key": "e2ba3a38a0475e34"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 222,
-      "end_line": 237,
-      "key": "6d0573bf6a225c25"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 228,
-      "end_line": 240,
-      "key": "e2ba3a38a0475e34"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 246,
-      "end_line": 258,
-      "key": "a31c76fed6757869"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
       "start_line": 247,
-      "end_line": 261,
-      "key": "8d7c1de642c10e73"
+      "end_line": 302,
+      "key": "57107f5ba24dd292"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 272,
-      "end_line": 284,
+      "start_line": 263,
+      "end_line": 278,
+      "key": "6d0573bf6a225c25"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 269,
+      "end_line": 281,
+      "key": "e2ba3a38a0475e34"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 287,
+      "end_line": 299,
       "key": "a31c76fed6757869"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/sieve_scripts_screen_test.dart",
-      "start_line": 297,
-      "end_line": 312,
+      "start_line": 288,
+      "end_line": 302,
       "key": "8d7c1de642c10e73"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 313,
+      "end_line": 325,
+      "key": "a31c76fed6757869"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 338,
+      "end_line": 353,
+      "key": "8d7c1de642c10e73"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 370,
+      "end_line": 382,
+      "key": "57107f5ba24dd292"
     },
     {
       "tool": "jscpd",
@@ -3024,13 +3115,6 @@
       "start_line": 148,
       "end_line": 159,
       "key": "6a65dede3c92e214"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/widget/try_connection_button_test.dart",
-      "start_line": 4,
-      "end_line": 15,
-      "key": "a944332eae0b813b"
     },
     {
       "tool": "jscpd",
