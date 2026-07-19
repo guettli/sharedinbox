@@ -129,8 +129,7 @@ void main() {
       expect(
         capturedErrors,
         isEmpty,
-        reason:
-            'a TimeoutException from syncNotes must be swallowed by '
+        reason: 'a TimeoutException from syncNotes must be swallowed by '
             '_syncNotesQuietly, not delivered to FlutterError.onError',
       );
     },
