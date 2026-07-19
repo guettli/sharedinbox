@@ -80,16 +80,18 @@ class _UndoActionTile extends ConsumerWidget {
             .observeMailboxes(action.accountId),
         builder: (ctx, snap) {
           final mailboxes = snap.data ?? const <Mailbox>[];
-          final sourceName = resolveMailboxDisplayPath(
-            mailboxes,
-            action.sourceMailboxPath,
-          );
+          // Move shows the destination (what the user just chose); delete /
+          // snooze have no destination and keep the source for context.
+          final label = action.type == UndoType.move &&
+                  action.destinationMailboxPath != null
+              ? 'MOVE to ${resolveMailboxDisplayPath(mailboxes, action.destinationMailboxPath!)}'
+              : '${action.type.name.toUpperCase()} from ${resolveMailboxDisplayPath(mailboxes, action.sourceMailboxPath)}';
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
               Text(
-                '${action.type.name.toUpperCase()} from $sourceName • ${_timeFmt.format(action.timestamp.toLocal())}',
+                '$label • ${_timeFmt.format(action.timestamp.toLocal())}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
