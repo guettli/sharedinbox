@@ -37,6 +37,16 @@ typedef SmtpConnectFn = Future<imap.SmtpClient> Function(
 );
 typedef GetCacheDirFn = Future<Directory> Function();
 
+/// Selects how [EmailRepositoryImpl._runSieveOverInbox] tallies matches.
+///
+/// * [anyMatch] counts any INBOX row where a rule's test fires, including
+///   pure-`keep` matches with no visible effect. Used by the "preview" and
+///   "apply to inbox now" flows so the count matches user intuition.
+/// * [visibleEffect] counts only rows whose actions would move, discard or
+///   flag the message. Used by the automatic sync-time apply so the number
+///   reported matches the number of pending changes actually enqueued.
+enum _SieveCountMode { anyMatch, visibleEffect }
+
 class EmailRepositoryImpl implements EmailRepository {
   EmailRepositoryImpl(
     AppDatabase db,
@@ -2386,6 +2396,58 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     if (rules.isEmpty) return 0;
 
+    return _runSieveOverInbox(
+      accountId: accountId,
+      rules: rules,
+      skipAlreadyApplied: true,
+      countMode: _SieveCountMode.visibleEffect,
+      enqueueActions: true,
+    );
+  }
+
+  @override
+  Future<int> previewSieveRuleMatches(
+    String accountId,
+    String scriptContent,
+  ) async {
+    final rules = SieveParser().parse(scriptContent);
+    if (rules.isEmpty) return 0;
+    return _runSieveOverInbox(
+      accountId: accountId,
+      rules: rules,
+      skipAlreadyApplied: false,
+      countMode: _SieveCountMode.anyMatch,
+      enqueueActions: false,
+    );
+  }
+
+  @override
+  Future<int> applySieveScriptToInbox(
+    String accountId,
+    String scriptContent,
+  ) async {
+    final rules = SieveParser().parse(scriptContent);
+    if (rules.isEmpty) return 0;
+    return _runSieveOverInbox(
+      accountId: accountId,
+      rules: rules,
+      skipAlreadyApplied: false,
+      countMode: _SieveCountMode.anyMatch,
+      enqueueActions: true,
+    );
+  }
+
+  /// Shared driver used by [applySieveRules], [previewSieveRuleMatches] and
+  /// [applySieveScriptToInbox]. Iterates INBOX messages, runs [rules] against
+  /// each one and — depending on [enqueueActions] — enqueues the resulting
+  /// moves/deletes/flag changes and records the message in LocalSieveApplied.
+  Future<int> _runSieveOverInbox({
+    required String accountId,
+    required List<SieveRule> rules,
+    required bool skipAlreadyApplied,
+    required _SieveCountMode countMode,
+    required bool enqueueActions,
+  }) async {
     final inboxMailbox = await (_db.select(_db.mailboxes)
           ..where(
             (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
@@ -2394,11 +2456,16 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
     final inboxPath = inboxMailbox?.path ?? 'INBOX';
 
-    final alreadyApplied = await (_db.select(
-      _db.localSieveApplied,
-    )..where((t) => t.accountId.equals(accountId)))
-        .get();
-    final appliedIds = alreadyApplied.map((r) => r.messageId).toSet();
+    final Set<String> appliedIds;
+    if (skipAlreadyApplied) {
+      final alreadyApplied = await (_db.select(
+        _db.localSieveApplied,
+      )..where((t) => t.accountId.equals(accountId)))
+          .get();
+      appliedIds = alreadyApplied.map((r) => r.messageId).toSet();
+    } else {
+      appliedIds = const {};
+    }
 
     final inboxEmails = await (_db.select(_db.emails)
           ..where(
@@ -2415,7 +2482,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     for (final row in inboxEmails) {
       final msgId = row.messageId!;
-      if (appliedIds.contains(msgId)) continue;
+      if (skipAlreadyApplied && appliedIds.contains(msgId)) continue;
 
       final emailCtx = _buildSieveContext(row);
 
@@ -2424,22 +2491,30 @@ class EmailRepositoryImpl implements EmailRepository {
         result = interpreter.execute(rules, emailCtx);
       } catch (e) {
         log('Sieve interpreter error for message $msgId: $e');
-        await _markSieveApplied(accountId, msgId);
+        if (enqueueActions) await _markSieveApplied(accountId, msgId);
         continue;
       }
+
+      final counts = switch (countMode) {
+        _SieveCountMode.anyMatch => result.anyRuleMatched,
+        _SieveCountMode.visibleEffect => result.isCancelled ||
+            result.targetFolders.isNotEmpty ||
+            result.flagsToAdd.isNotEmpty,
+      };
+
+      if (counts) matched++;
+
+      if (!enqueueActions) continue;
 
       await _markSieveApplied(accountId, msgId);
 
       if (result.isCancelled) {
         await _enqueueSieveDelete(account, row);
-        matched++;
       } else if (result.targetFolders.isNotEmpty) {
         final dest = result.targetFolders.first;
         await _enqueueSieveMove(account, row, dest);
-        matched++;
       } else if (result.flagsToAdd.isNotEmpty) {
         await _enqueueSieveFlagSeen(account, row);
-        matched++;
       }
     }
     return matched;

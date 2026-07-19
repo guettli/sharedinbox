@@ -1,6 +1,9 @@
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 
+export 'package:sharedinbox/core/sieve/sieve_parser.dart'
+    show SieveParseException;
+
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
     String accountId,
@@ -137,6 +140,23 @@ abstract class EmailRepository {
   /// the same email is never filtered twice (across restarts or re-syncs).
   /// Returns the number of emails where a rule matched and an action was taken.
   Future<int> applySieveRules(String accountId);
+
+  /// Counts how many INBOX messages of [accountId] would be matched by the
+  /// given [scriptContent] if it were run now. A message counts as matched
+  /// whenever any rule's test fires, even when the resulting actions are a
+  /// pure `keep` (no visible effect). Ignores LocalSieveApplied so a previously
+  /// filtered message is still counted.
+  ///
+  /// Throws `SieveParseException` when [scriptContent] cannot be parsed.
+  Future<int> previewSieveRuleMatches(String accountId, String scriptContent);
+
+  /// Runs [scriptContent] against every INBOX message of [accountId] (regardless
+  /// of LocalSieveApplied state) and enqueues the resulting moves/deletes/flag
+  /// changes. Each processed message is recorded in LocalSieveApplied. Returns
+  /// the number of matched messages.
+  ///
+  /// Throws `SieveParseException` when [scriptContent] cannot be parsed.
+  Future<int> applySieveScriptToInbox(String accountId, String scriptContent);
 
   /// Emits the accountId whenever a new change is enqueued locally.
   /// Used by AccountSyncManager to trigger an immediate flush.

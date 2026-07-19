@@ -232,6 +232,18 @@ class _FakeEmails implements EmailRepository {
   Future<void> clearForResync(String accountId) async {}
   @override
   Future<int> applySieveRules(String accountId) async => 0;
+  @override
+  Future<int> previewSieveRuleMatches(
+    String accountId,
+    String scriptContent,
+  ) async =>
+      0;
+  @override
+  Future<int> applySieveScriptToInbox(
+    String accountId,
+    String scriptContent,
+  ) async =>
+      0;
 }
 
 // ---------------------------------------------------------------------------

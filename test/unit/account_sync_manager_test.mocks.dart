@@ -839,6 +839,38 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
       ) as _i5.Future<int>);
 
   @override
+  _i5.Future<int> previewSieveRuleMatches(
+    String? accountId,
+    String? scriptContent,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #previewSieveRuleMatches,
+          [
+            accountId,
+            scriptContent,
+          ],
+        ),
+        returnValue: _i5.Future<int>.value(0),
+      ) as _i5.Future<int>);
+
+  @override
+  _i5.Future<int> applySieveScriptToInbox(
+    String? accountId,
+    String? scriptContent,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #applySieveScriptToInbox,
+          [
+            accountId,
+            scriptContent,
+          ],
+        ),
+        returnValue: _i5.Future<int>.value(0),
+      ) as _i5.Future<int>);
+
+  @override
   _i5.Stream<void> watchJmapPush(
     String? accountId,
     String? password,
