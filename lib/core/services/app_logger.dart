@@ -14,6 +14,12 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 ///
 /// Extra fields can be attached via [data]; the map is JSON-encoded with
 /// unencodable values fall back to `value.toString()` so the call never throws.
+///
+/// Convention: any UI `catch` block that surfaces an error to the user (via
+/// SnackBar, dialog or inline banner) must also call one of the logger
+/// levels below, so the failure is discoverable in the App Log screen and
+/// in bug reports. Fire-and-forget the call with `unawaited(...)` so
+/// logging never blocks the UI response.
 class AppLogger {
   AppLogger(this._repo);
 

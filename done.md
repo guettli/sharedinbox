@@ -4,6 +4,22 @@ This file contains tasks which got implemented.
 
 Tasks get moved from next.md to done.md
 
+## Ten follow-up enhancement issues (Issue #318)
+
+Opened ten `enhancement` issues covering app, CI, code quality, UX and
+offline handling, each referencing #318 with `Part of #318`:
+
+- #328 — FTS5 full-text search for local mail
+- #329 — Recent-searches history in `SearchScreen`
+- #330 — Encrypted at-rest storage via SQLCipher
+- #331 — Draft synchronisation with server Drafts folder
+- #332 — Force full re-sync from Settings
+- #333 — Thread view for IMAP accounts (References / In-Reply-To)
+- #334 — Material 3 consistency pass across screens
+- #335 — Measure and shrink `task check` wall-time on CI
+- #336 — Pending-changes queue visible in Settings
+- #337 — Trim `_excluded` list in `scripts/check_coverage.dart`
+
 ## Folder Deleted on Server (Issue #158)
 
 `syncMailboxes` previously upserted mailboxes returned by the server but never
