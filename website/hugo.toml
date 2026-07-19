@@ -18,6 +18,11 @@ theme = 'PaperMod'
         url = "https://github.com/guettli/sharedinbox"
 
 [[menu.main]]
+    name = "Mail User Agent"
+    url = "/mail-user-agent/"
+    weight = 3
+
+[[menu.main]]
     name = "Builds"
     url = "/builds/"
     weight = 5

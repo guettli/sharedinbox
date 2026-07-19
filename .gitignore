@@ -1,6 +1,9 @@
 # --- Flutter/Dart ---
 coverage/
 screenshots/
+# The rule above is for Flutter integration-test screenshots at the repo root.
+# Docs screenshots for the website live under website/static/ and are tracked.
+!website/static/mail-user-agent/screenshots/
 .dart_tool/
 .dart-tool/
 .packages
