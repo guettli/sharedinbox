@@ -988,6 +988,248 @@ void main() {
         },
       );
     });
+
+    group('rename / delete / move (JMAP)', () {
+      Future<
+          ({
+            AppDatabase db,
+            AccountRepositoryImpl accounts,
+            MailboxRepositoryImpl mailboxes,
+            List<String> requests,
+          })> setupJmap({
+        required Map<String, dynamic> Function() responseFor,
+      }) async {
+        final requests = <String>[];
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {
+                  'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+                },
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          requests.add(req.body);
+          return http.Response(jsonEncode(responseFor()), 200);
+        });
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        return (
+          db: r.db,
+          accounts: r.accounts,
+          mailboxes: r.mailboxes,
+          requests: requests,
+        );
+      }
+
+      test('rename: sends Mailbox/set update with name, updates local row',
+          () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'updated': {'mbx-1': null},
+                },
+                '0',
+              ],
+            ],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Old',
+                displayPath: const Value('Old'),
+              ),
+            );
+
+        final result =
+            await r.mailboxes.renameMailbox('jmap-1', 'mbx-1', 'New');
+
+        expect(result.name, 'New');
+        expect(result.displayPath, 'New');
+        expect(r.requests, hasLength(1));
+        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        final call = (body['methodCalls'] as List<dynamic>).first as List;
+        final args = call[1] as Map<String, dynamic>;
+        final update = args['update'] as Map<String, dynamic>;
+        expect((update['mbx-1'] as Map<String, dynamic>)['name'], 'New');
+      });
+
+      test('delete: sends Mailbox/set destroy and drops the local row',
+          () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'destroyed': ['mbx-1'],
+                },
+                '0',
+              ],
+            ],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Doomed',
+                displayPath: const Value('Doomed'),
+              ),
+            );
+
+        await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1');
+
+        final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
+        expect(surviving, isEmpty);
+        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        final args = (body['methodCalls'] as List<dynamic>).first as List;
+        expect(
+          (args[1] as Map<String, dynamic>)['destroy'],
+          ['mbx-1'],
+        );
+      });
+
+      test(
+          'move: sends Mailbox/set update with parentId and re-parents locally',
+          () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'updated': {'mbx-child': null},
+                },
+                '0',
+              ],
+            ],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-parent',
+                accountId: 'jmap-1',
+                path: 'mbx-parent',
+                name: 'Parent',
+                displayPath: const Value('Parent'),
+              ),
+            );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-child',
+                accountId: 'jmap-1',
+                path: 'mbx-child',
+                name: 'Child',
+                displayPath: const Value('Child'),
+              ),
+            );
+
+        final result = await r.mailboxes.moveMailbox(
+          'jmap-1',
+          'mbx-child',
+          newParentDisplayPath: 'Parent',
+        );
+
+        expect(result.parentId, 'mbx-parent');
+        expect(result.displayPath, 'Parent/Child');
+        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        final args = (body['methodCalls'] as List<dynamic>).first as List;
+        final update =
+            (args[1] as Map<String, dynamic>)['update'] as Map<String, dynamic>;
+        expect(
+          (update['mbx-child'] as Map<String, dynamic>)['parentId'],
+          'mbx-parent',
+        );
+      });
+
+      test(
+          'rename: rejects an empty or slash-bearing name without hitting server',
+          () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Old',
+                displayPath: const Value('Old'),
+              ),
+            );
+
+        await expectLater(
+          r.mailboxes.renameMailbox('jmap-1', 'mbx-1', '  '),
+          throwsA(isA<ArgumentError>()),
+        );
+        await expectLater(
+          r.mailboxes.renameMailbox('jmap-1', 'mbx-1', 'a/b'),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(r.requests, isEmpty);
+      });
+
+      test('rename: surfaces server-side notUpdated errors', () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'notUpdated': {
+                    'mbx-1': {'type': 'forbidden'},
+                  },
+                },
+                '0',
+              ],
+            ],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Old',
+                displayPath: const Value('Old'),
+              ),
+            );
+
+        await expectLater(
+          r.mailboxes.renameMailbox('jmap-1', 'mbx-1', 'New'),
+          throwsA(isA<Exception>()),
+        );
+      });
+    });
   });
 }
 

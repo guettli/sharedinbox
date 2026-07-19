@@ -226,6 +226,58 @@ class FakeMailboxRepository implements MailboxRepository {
     _mailboxes.add(mailbox);
     return mailbox;
   }
+
+  final List<({String path, String newName})> renameCalls = [];
+  final List<String> deleteCalls = [];
+  final List<({String path, String? newParent})> moveCalls = [];
+
+  @override
+  Future<Mailbox> renameMailbox(
+    String accountId,
+    String mailboxPath,
+    String newName,
+  ) async {
+    renameCalls.add((path: mailboxPath, newName: newName));
+    final idx = _mailboxes.indexWhere(
+      (m) => m.accountId == accountId && m.path == mailboxPath,
+    );
+    if (idx < 0) throw Exception('Mailbox "$mailboxPath" not found');
+    final old = _mailboxes[idx];
+    final parts = old.displayPath.split('/');
+    parts[parts.length - 1] = newName;
+    final newDisplay = parts.join('/');
+    final updated = old.copyWith(name: newName, displayPath: newDisplay);
+    _mailboxes[idx] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteMailbox(String accountId, String mailboxPath) async {
+    deleteCalls.add(mailboxPath);
+    _mailboxes.removeWhere(
+      (m) => m.accountId == accountId && m.path == mailboxPath,
+    );
+  }
+
+  @override
+  Future<Mailbox> moveMailbox(
+    String accountId,
+    String mailboxPath, {
+    required String? newParentDisplayPath,
+  }) async {
+    moveCalls.add((path: mailboxPath, newParent: newParentDisplayPath));
+    final idx = _mailboxes.indexWhere(
+      (m) => m.accountId == accountId && m.path == mailboxPath,
+    );
+    if (idx < 0) throw Exception('Mailbox "$mailboxPath" not found');
+    final old = _mailboxes[idx];
+    final newDisplay = newParentDisplayPath == null
+        ? old.name
+        : '$newParentDisplayPath/${old.name}';
+    final updated = old.copyWith(displayPath: newDisplay);
+    _mailboxes[idx] = updated;
+    return updated;
+  }
 }
 
 class FakeOutboxRepository implements OutboxRepository {

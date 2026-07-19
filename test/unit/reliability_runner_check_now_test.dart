@@ -93,6 +93,39 @@ class _FakeMailboxes implements MailboxRepository {
         unreadCount: 0,
         totalCount: 0,
       );
+
+  @override
+  Future<Mailbox> renameMailbox(
+    String accountId,
+    String mailboxPath,
+    String newName,
+  ) async =>
+      Mailbox(
+        id: '$accountId:$mailboxPath',
+        accountId: accountId,
+        path: mailboxPath,
+        name: newName,
+        unreadCount: 0,
+        totalCount: 0,
+      );
+
+  @override
+  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
+
+  @override
+  Future<Mailbox> moveMailbox(
+    String accountId,
+    String mailboxPath, {
+    required String? newParentDisplayPath,
+  }) async =>
+      Mailbox(
+        id: '$accountId:$mailboxPath',
+        accountId: accountId,
+        path: mailboxPath,
+        name: mailboxPath,
+        unreadCount: 0,
+        totalCount: 0,
+      );
 }
 
 class _FakeEmails implements EmailRepository {

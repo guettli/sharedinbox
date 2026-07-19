@@ -706,6 +706,412 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .getSingle();
     return _toModel(row);
   }
+
+  // ── rename / delete / move ──────────────────────────────────────────────
+
+  @override
+  Future<model.Mailbox> renameMailbox(
+    String accountId,
+    String mailboxPath,
+    String newName,
+  ) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(newName, 'newName', 'Name must not be empty');
+    }
+    if (trimmed.contains('/')) {
+      throw ArgumentError.value(
+        newName,
+        'newName',
+        'Name must not contain "/"',
+      );
+    }
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    final row = await _requireRow(accountId, mailboxPath);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        return _renameMailboxImap(account, password, row, trimmed);
+      case account_model.AccountType.jmap:
+        return _renameMailboxJmap(account, password, row, trimmed);
+    }
+  }
+
+  @override
+  Future<void> deleteMailbox(String accountId, String mailboxPath) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    final row = await _requireRow(accountId, mailboxPath);
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        await _deleteMailboxImap(account, password, row);
+      case account_model.AccountType.jmap:
+        await _deleteMailboxJmap(account, password, row);
+    }
+    await removeLocalMailbox(_db, accountId, row.path);
+  }
+
+  @override
+  Future<model.Mailbox> moveMailbox(
+    String accountId,
+    String mailboxPath, {
+    required String? newParentDisplayPath,
+  }) async {
+    final account = (await _accounts.getAccount(accountId))!;
+    final password = await _accounts.getPassword(accountId);
+    final row = await _requireRow(accountId, mailboxPath);
+    final newParent = await _findParent(accountId, newParentDisplayPath);
+    if (newParent != null && newParent.id == row.id) {
+      throw Exception('Cannot move a folder into itself');
+    }
+    if (newParent != null &&
+        newParent.displayPath.startsWith('${row.displayPath}/')) {
+      throw Exception('Cannot move a folder into one of its descendants');
+    }
+    switch (account.type) {
+      case account_model.AccountType.imap:
+        return _moveMailboxImap(account, password, row, newParent);
+      case account_model.AccountType.jmap:
+        return _moveMailboxJmap(account, password, row, newParent);
+    }
+  }
+
+  Future<MailboxRow> _requireRow(String accountId, String mailboxPath) async {
+    final row = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.path.equals(mailboxPath),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) {
+      throw Exception('Mailbox "$mailboxPath" not found in local cache');
+    }
+    return row;
+  }
+
+  // ── IMAP: rename / delete / move ────────────────────────────────────────
+
+  Future<model.Mailbox> _renameMailboxImap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+    String newName,
+  ) async {
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
+    String newServerPath;
+    try {
+      final separator = await _imapPathSeparator(client, row);
+      final parts = row.path.split(separator);
+      parts[parts.length - 1] = newName;
+      newServerPath = parts.join(separator);
+      // IMAP RENAME's second argument is the full destination path.
+      await client.renameMailbox(_imapBoxFor(row), newServerPath);
+    } finally {
+      await client.logout();
+    }
+    return _applyImapPathRewrite(row, newServerPath, newName);
+  }
+
+  Future<void> _deleteMailboxImap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+  ) async {
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
+    try {
+      await client.deleteMailbox(_imapBoxFor(row));
+    } finally {
+      await client.logout();
+    }
+  }
+
+  Future<model.Mailbox> _moveMailboxImap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+    MailboxRow? newParent,
+  ) async {
+    final client = await _imapConnect(
+      account,
+      _effectiveUsername(account),
+      password,
+    );
+    String newServerPath;
+    try {
+      final separator = await _imapPathSeparator(client, row);
+      newServerPath = newParent == null
+          ? row.name
+          : '${newParent.path}$separator${row.name}';
+      // IMAP RENAME can both rename and relocate a mailbox.
+      await client.renameMailbox(_imapBoxFor(row), newServerPath);
+    } finally {
+      await client.logout();
+    }
+    return _applyImapPathRewrite(row, newServerPath, row.name);
+  }
+
+  imap.Mailbox _imapBoxFor(MailboxRow row) => imap.Mailbox(
+        encodedName: row.path,
+        encodedPath: row.path,
+        flags: <imap.MailboxFlag>[],
+        pathSeparator: row.path.contains('.') ? '.' : '/',
+      );
+
+  /// Rewrites the local rows for [row] and every descendant so `path`,
+  /// `displayPath`, and `name` reflect the new server path. IMAP `path`
+  /// equals its hierarchical location, so relocating a folder cascades to
+  /// every child. Also rewrites `emails.mailboxPath`, `threads.mailboxPath`
+  /// and the `IMAP:$path` sync checkpoint so the local cache follows the
+  /// server. Returns the updated [Mailbox] for the top row.
+  Future<model.Mailbox> _applyImapPathRewrite(
+    MailboxRow row,
+    String newPath,
+    String newName,
+  ) async {
+    final oldPath = row.path;
+    if (oldPath == newPath && row.name == newName) {
+      return _toModel(row);
+    }
+    final allRows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(row.accountId)))
+        .get();
+    // Only rewrite the row itself and its actual children; a LIKE prefix
+    // match would also catch unrelated siblings like `INBOX/Workplace`.
+    final descendants = [
+      for (final r in allRows)
+        if (r.path == oldPath ||
+            r.path.startsWith('$oldPath/') ||
+            r.path.startsWith('$oldPath.'))
+          r,
+    ];
+    final newId = '${row.accountId}:$newPath';
+    await _db.transaction(() async {
+      for (final d in descendants) {
+        final suffix = d.path.substring(oldPath.length);
+        final rewrittenPath = '$newPath$suffix';
+        final rewrittenId = '${row.accountId}:$rewrittenPath';
+        final rewrittenName = d.id == row.id ? newName : d.name;
+        await (_db.delete(_db.mailboxes)..where((t) => t.id.equals(d.id))).go();
+        await _db.into(_db.mailboxes).insertOnConflictUpdate(
+              MailboxesCompanion.insert(
+                id: rewrittenId,
+                accountId: d.accountId,
+                path: rewrittenPath,
+                name: rewrittenName,
+                unreadCount: Value(d.unreadCount),
+                totalCount: Value(d.totalCount),
+                role: Value(d.role),
+                displayPath: Value(rewrittenPath),
+                parentId: Value(d.parentId),
+              ),
+            );
+        await (_db.update(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(d.accountId) &
+                    t.mailboxPath.equals(d.path),
+              ))
+            .write(EmailsCompanion(mailboxPath: Value(rewrittenPath)));
+        await (_db.update(_db.threads)
+              ..where(
+                (t) =>
+                    t.accountId.equals(d.accountId) &
+                    t.mailboxPath.equals(d.path),
+              ))
+            .write(ThreadsCompanion(mailboxPath: Value(rewrittenPath)));
+        // resource_type is part of the (accountId, resourceType) primary key,
+        // so UPDATE can hit a collision. Rewriting the row via delete+insert
+        // is safe and avoids a "UNIQUE constraint failed" from Drift.
+        final oldStates = await (_db.select(_db.syncStates)
+              ..where(
+                (t) =>
+                    t.accountId.equals(d.accountId) &
+                    t.resourceType.equals('IMAP:${d.path}'),
+              ))
+            .get();
+        for (final s in oldStates) {
+          await (_db.delete(_db.syncStates)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(s.accountId) &
+                      t.resourceType.equals(s.resourceType),
+                ))
+              .go();
+          await _db.into(_db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: s.accountId,
+                  resourceType: 'IMAP:$rewrittenPath',
+                  state: s.state,
+                  syncedAt: s.syncedAt,
+                ),
+              );
+        }
+      }
+    });
+    final refreshed = await (_db.select(
+      _db.mailboxes,
+    )..where((t) => t.id.equals(newId)))
+        .getSingle();
+    return _toModel(refreshed);
+  }
+
+  // ── JMAP: rename / delete / move ────────────────────────────────────────
+
+  Future<JmapClient> _connectJmap(
+    account_model.Account account,
+    String password,
+  ) async {
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) {
+      throw Exception('JMAP account ${account.id} has no jmapUrl');
+    }
+    return JmapClient.connect(
+      httpClient: _httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: _effectiveUsername(account),
+      password: password,
+    );
+  }
+
+  Future<model.Mailbox> _renameMailboxJmap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+    String newName,
+  ) async {
+    final jmap = await _connectJmap(account, password);
+    final responses = await jmap.call([
+      [
+        'Mailbox/set',
+        {
+          'accountId': jmap.accountId,
+          'update': {
+            row.path: {'name': newName},
+          },
+        },
+        '0',
+      ],
+    ]);
+    _requireJmapUpdated(responses, row.path);
+    await (_db.update(_db.mailboxes)..where((t) => t.id.equals(row.id)))
+        .write(MailboxesCompanion(name: Value(newName)));
+    await _rebuildJmapDisplayPaths(row.accountId);
+    final refreshed = await (_db.select(
+      _db.mailboxes,
+    )..where((t) => t.id.equals(row.id)))
+        .getSingle();
+    return _toModel(refreshed);
+  }
+
+  Future<void> _deleteMailboxJmap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+  ) async {
+    final jmap = await _connectJmap(account, password);
+    final responses = await jmap.call([
+      [
+        'Mailbox/set',
+        {
+          'accountId': jmap.accountId,
+          'destroy': [row.path],
+        },
+        '0',
+      ],
+    ]);
+    _requireJmapDestroyed(responses, row.path);
+  }
+
+  Future<model.Mailbox> _moveMailboxJmap(
+    account_model.Account account,
+    String password,
+    MailboxRow row,
+    MailboxRow? newParent,
+  ) async {
+    final jmap = await _connectJmap(account, password);
+    final responses = await jmap.call([
+      [
+        'Mailbox/set',
+        {
+          'accountId': jmap.accountId,
+          'update': {
+            row.path: {'parentId': newParent?.path},
+          },
+        },
+        '0',
+      ],
+    ]);
+    _requireJmapUpdated(responses, row.path);
+    await (_db.update(_db.mailboxes)..where((t) => t.id.equals(row.id)))
+        .write(MailboxesCompanion(parentId: Value(newParent?.path)));
+    await _rebuildJmapDisplayPaths(row.accountId);
+    final refreshed = await (_db.select(
+      _db.mailboxes,
+    )..where((t) => t.id.equals(row.id)))
+        .getSingle();
+    return _toModel(refreshed);
+  }
+
+  void _requireJmapUpdated(List<dynamic> responses, String jmapId) {
+    final result = _responseArgs(responses, 0, 'Mailbox/set');
+    final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
+    if (notUpdated != null && notUpdated.containsKey(jmapId)) {
+      final err = notUpdated[jmapId] as Map<String, dynamic>;
+      throw Exception('Mailbox/set update failed: ${err['type']}');
+    }
+  }
+
+  void _requireJmapDestroyed(List<dynamic> responses, String jmapId) {
+    final result = _responseArgs(responses, 0, 'Mailbox/set');
+    final notDestroyed = result['notDestroyed'] as Map<String, dynamic>?;
+    if (notDestroyed != null && notDestroyed.containsKey(jmapId)) {
+      final err = notDestroyed[jmapId] as Map<String, dynamic>;
+      throw Exception('Mailbox/set destroy failed: ${err['type']}');
+    }
+  }
+
+  /// Recomputes `displayPath` for every locally cached JMAP mailbox in
+  /// [accountId] by walking the `parentId` chain. Used after a rename or move
+  /// so every descendant of the changed folder reflects the new tree layout.
+  Future<void> _rebuildJmapDisplayPaths(String accountId) async {
+    final rows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    final byPath = {for (final r in rows) r.path: r};
+    String buildDisplayPath(String startId) {
+      final parts = <String>[];
+      var current = startId;
+      final seen = <String>{};
+      while (seen.add(current)) {
+        final r = byPath[current];
+        if (r == null) {
+          parts.insert(0, current);
+          break;
+        }
+        parts.insert(0, r.name);
+        final parent = r.parentId;
+        if (parent == null || parent.isEmpty) break;
+        current = parent;
+      }
+      return parts.join('/');
+    }
+
+    for (final r in rows) {
+      final rebuilt = buildDisplayPath(r.path);
+      if (rebuilt != r.displayPath) {
+        await (_db.update(_db.mailboxes)..where((t) => t.id.equals(r.id)))
+            .write(MailboxesCompanion(displayPath: Value(rebuilt)));
+      }
+    }
+  }
 }
 
 /// Deletes the local cache rows that belong to a single mailbox that no
