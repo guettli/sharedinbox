@@ -381,6 +381,21 @@ void openDebugForSelection(
   unawaited(context.push('/debug/messages', extra: messages));
 }
 
+/// Convenience wrapper around [buildSelectionAppBar] that adds the standard
+/// "Debug messages" entry to the "..." overflow. Every list view uses the
+/// same entry, so wiring it via this helper avoids repeating the boilerplate
+/// (and the resulting jscpd duplicate) at each call site.
+PreferredSizeWidget buildDebugSelectionAppBar(
+  BuildContext context,
+  EmailThreadListController controller,
+) =>
+    buildSelectionAppBar(
+      controller,
+      overflowActions: [
+        ('Debug messages', () => openDebugForSelection(context, controller)),
+      ],
+    );
+
 /// Standard "N selected" AppBar with X-close and select-all actions.
 ///
 /// [overflowActions] adds a "..." overflow menu after "Select all" when

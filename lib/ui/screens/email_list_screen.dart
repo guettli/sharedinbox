@@ -200,12 +200,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     required bool menuAtBottom,
   }) {
     if (_selection.isSelecting) {
-      return buildSelectionAppBar(
-        _selection,
-        overflowActions: [
-          ('Debug messages', () => openDebugForSelection(context, _selection)),
-        ],
-      );
+      return buildDebugSelectionAppBar(context, _selection);
     }
 
     // For JMAP accounts the mailboxPath stores the opaque server id (e.g. "a"),

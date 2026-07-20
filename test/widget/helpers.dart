@@ -366,44 +366,26 @@ class FakeEmailRepository implements EmailRepository {
     String mailboxPath, {
     int limit = 50,
   }) =>
-      observeEmails(accountId, mailboxPath).map((emails) {
-        return emails.map((e) {
-          return EmailThread(
-            threadId: e.threadId ?? e.id,
-            subject: e.subject,
-            preview: e.preview,
-            participants: e.from,
-            latestDate: e.sentAt ?? e.receivedAt,
-            messageCount: 1,
-            hasUnread: !e.isSeen,
-            isFlagged: e.isFlagged,
-            latestEmailId: e.id,
-            emailIds: [e.id],
-            accountId: e.accountId,
-            mailboxPath: e.mailboxPath,
-          );
-        }).toList();
-      });
+      observeEmails(accountId, mailboxPath)
+          .map((emails) => emails.map(_toThread).toList());
 
   @override
   Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
-      Stream.value(
-        _emails.map((e) {
-          return EmailThread(
-            threadId: e.threadId ?? e.id,
-            subject: e.subject,
-            preview: e.preview,
-            participants: e.from,
-            latestDate: e.sentAt ?? e.receivedAt,
-            messageCount: 1,
-            hasUnread: !e.isSeen,
-            isFlagged: e.isFlagged,
-            latestEmailId: e.id,
-            emailIds: [e.id],
-            accountId: e.accountId,
-            mailboxPath: e.mailboxPath,
-          );
-        }).toList(),
+      Stream.value(_emails.map(_toThread).toList());
+
+  static EmailThread _toThread(Email e) => EmailThread(
+        threadId: e.threadId ?? e.id,
+        subject: e.subject,
+        preview: e.preview,
+        participants: e.from,
+        latestDate: e.sentAt ?? e.receivedAt,
+        messageCount: 1,
+        hasUnread: !e.isSeen,
+        isFlagged: e.isFlagged,
+        latestEmailId: e.id,
+        emailIds: [e.id],
+        accountId: e.accountId,
+        mailboxPath: e.mailboxPath,
       );
 
   @override
