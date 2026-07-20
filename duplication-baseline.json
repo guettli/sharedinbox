@@ -325,6 +325,34 @@
     },
     {
       "tool": "jscpd",
+      "file": "lib/data/jmap/sieve_repository.dart",
+      "start_line": 168,
+      "end_line": 179,
+      "key": "09d0016d1bf565ed"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/jmap/sieve_repository.dart",
+      "start_line": 168,
+      "end_line": 214,
+      "key": "45595d765f3c0963"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/jmap/sieve_repository.dart",
+      "start_line": 203,
+      "end_line": 214,
+      "key": "09d0016d1bf565ed"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/jmap/sieve_repository.dart",
+      "start_line": 233,
+      "end_line": 244,
+      "key": "45595d765f3c0963"
+    },
+    {
+      "tool": "jscpd",
       "file": "lib/data/repositories/app_log_repository_impl.dart",
       "start_line": 9,
       "end_line": 23,
@@ -626,13 +654,6 @@
     },
     {
       "tool": "jscpd",
-      "file": "lib/ui/screens/address_emails_screen.dart",
-      "start_line": 58,
-      "end_line": 68,
-      "key": "97f7f763e170fe61"
-    },
-    {
-      "tool": "jscpd",
       "file": "lib/ui/screens/combined_inbox_screen.dart",
       "start_line": 27,
       "end_line": 42,
@@ -669,16 +690,16 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/email_list_screen.dart",
-      "start_line": 463,
-      "end_line": 475,
-      "key": "98ed83be045b0b9b"
+      "start_line": 457,
+      "end_line": 469,
+      "key": "fdb19de8e6770f19"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/email_list_screen.dart",
-      "start_line": 500,
-      "end_line": 511,
-      "key": "98ed83be045b0b9b"
+      "start_line": 478,
+      "end_line": 489,
+      "key": "fdb19de8e6770f19"
     },
     {
       "tool": "jscpd",
@@ -703,13 +724,6 @@
     },
     {
       "tool": "jscpd",
-      "file": "lib/ui/screens/search_screen.dart",
-      "start_line": 210,
-      "end_line": 221,
-      "key": "97f7f763e170fe61"
-    },
-    {
-      "tool": "jscpd",
       "file": "lib/ui/screens/sent_queue_screen.dart",
       "start_line": 127,
       "end_line": 168,
@@ -718,15 +732,15 @@
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/sieve_script_edit_screen.dart",
-      "start_line": 142,
-      "end_line": 152,
+      "start_line": 150,
+      "end_line": 160,
       "key": "657c39e02780a5fa"
     },
     {
       "tool": "jscpd",
       "file": "lib/ui/screens/sieve_script_edit_screen.dart",
-      "start_line": 198,
-      "end_line": 208,
+      "start_line": 210,
+      "end_line": 220,
       "key": "657c39e02780a5fa"
     },
     {
@@ -1013,14 +1027,14 @@
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
       "start_line": 472,
-      "end_line": 498,
-      "key": "075c055db3fcdd9c"
+      "end_line": 512,
+      "key": "817e781e47a09be1"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 498,
-      "end_line": 526,
+      "start_line": 512,
+      "end_line": 540,
       "key": "ad349b083ff4da39"
     },
     {
@@ -1176,6 +1190,20 @@
       "start_line": 143,
       "end_line": 163,
       "key": "7c8300306437fd47"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/sieve_repository_stalwart_test.dart",
+      "start_line": 102,
+      "end_line": 116,
+      "key": "8ed661d7bd7af85d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/sieve_repository_stalwart_test.dart",
+      "start_line": 150,
+      "end_line": 164,
+      "key": "8ed661d7bd7af85d"
     },
     {
       "tool": "jscpd",
@@ -1376,22 +1404,29 @@
     {
       "tool": "jscpd",
       "file": "test/unit/account_sync_manager_test.dart",
-      "start_line": 192,
-      "end_line": 212,
+      "start_line": 177,
+      "end_line": 200,
+      "key": "ac834f9d26be3edf"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/account_sync_manager_test.dart",
+      "start_line": 206,
+      "end_line": 226,
       "key": "0b22b56a111398ff"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/account_sync_manager_test.dart",
-      "start_line": 212,
-      "end_line": 224,
+      "start_line": 226,
+      "end_line": 238,
       "key": "35a0acfc5718ac42"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/account_sync_manager_test.dart",
-      "start_line": 240,
-      "end_line": 308,
+      "start_line": 254,
+      "end_line": 322,
       "key": "81e79feb32b611ec"
     },
     {
@@ -1432,6 +1467,27 @@
     {
       "tool": "jscpd",
       "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 18,
+      "end_line": 34,
+      "key": "996cb1ed9f1e2392"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 34,
+      "end_line": 59,
+      "key": "b4aaab889025cd84"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 59,
+      "end_line": 72,
+      "key": "95de424cd6934ae8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
       "start_line": 112,
       "end_line": 124,
       "key": "f693b9e088aa10ff"
@@ -1460,6 +1516,27 @@
     {
       "tool": "jscpd",
       "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 124,
+      "end_line": 236,
+      "key": "d6cadf14cb9296fd"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 127,
+      "end_line": 137,
+      "key": "a4f4ab1a61857d56"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
+      "start_line": 148,
+      "end_line": 159,
+      "key": "d6cadf14cb9296fd"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_rules_test.dart",
       "start_line": 159,
       "end_line": 171,
       "key": "f693b9e088aa10ff"
@@ -1484,6 +1561,48 @@
       "start_line": 265,
       "end_line": 277,
       "key": "f693b9e088aa10ff"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 19,
+      "end_line": 35,
+      "key": "996cb1ed9f1e2392"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 34,
+      "end_line": 59,
+      "key": "b4aaab889025cd84"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 58,
+      "end_line": 71,
+      "key": "95de424cd6934ae8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 138,
+      "end_line": 147,
+      "key": "d4afce93cf906e63"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 206,
+      "end_line": 216,
+      "key": "a4f4ab1a61857d56"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/apply_sieve_script_to_inbox_test.dart",
+      "start_line": 260,
+      "end_line": 270,
+      "key": "d4afce93cf906e63"
     },
     {
       "tool": "jscpd",
@@ -1565,30 +1684,72 @@
     {
       "tool": "jscpd",
       "file": "test/unit/jmap_sieve_repository_test.dart",
-      "start_line": 92,
-      "end_line": 103,
-      "key": "a86349d985c910fd"
+      "start_line": 110,
+      "end_line": 123,
+      "key": "bb1b79899691ff80"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/jmap_sieve_repository_test.dart",
-      "start_line": 100,
-      "end_line": 113,
-      "key": "812d9d68400b4563"
+      "start_line": 137,
+      "end_line": 150,
+      "key": "0962e1f9758c8170"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/jmap_sieve_repository_test.dart",
-      "start_line": 107,
-      "end_line": 118,
-      "key": "a86349d985c910fd"
+      "start_line": 137,
+      "end_line": 150,
+      "key": "0962e1f9758c8170"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/jmap_sieve_repository_test.dart",
-      "start_line": 141,
-      "end_line": 154,
-      "key": "812d9d68400b4563"
+      "start_line": 139,
+      "end_line": 150,
+      "key": "ac542b09957096c8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 156,
+      "end_line": 169,
+      "key": "0962e1f9758c8170"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 176,
+      "end_line": 189,
+      "key": "0962e1f9758c8170"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 184,
+      "end_line": 199,
+      "key": "d710778aff1b80ee"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 193,
+      "end_line": 204,
+      "key": "ac542b09957096c8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 218,
+      "end_line": 231,
+      "key": "bb1b79899691ff80"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/jmap_sieve_repository_test.dart",
+      "start_line": 269,
+      "end_line": 284,
+      "key": "d710778aff1b80ee"
     },
     {
       "tool": "jscpd",
@@ -1676,6 +1837,13 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/reliability_runner_check_now_test.dart",
+      "start_line": 230,
+      "end_line": 249,
+      "key": "8cc9b8ea6b098b58"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
       "start_line": 32,
       "end_line": 44,
@@ -1733,36 +1901,43 @@
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
-      "start_line": 241,
-      "end_line": 261,
+      "start_line": 233,
+      "end_line": 252,
+      "key": "8cc9b8ea6b098b58"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_test.dart",
+      "start_line": 253,
+      "end_line": 273,
       "key": "0b22b56a111398ff"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
-      "start_line": 242,
-      "end_line": 261,
+      "start_line": 254,
+      "end_line": 273,
       "key": "c639b10ee9ca1d20"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
-      "start_line": 261,
-      "end_line": 273,
+      "start_line": 273,
+      "end_line": 285,
       "key": "35a0acfc5718ac42"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
-      "start_line": 282,
-      "end_line": 295,
+      "start_line": 294,
+      "end_line": 307,
       "key": "f2a386aa0f21ee92"
     },
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
-      "start_line": 341,
-      "end_line": 354,
+      "start_line": 353,
+      "end_line": 366,
       "key": "f2a386aa0f21ee92"
     },
     {
@@ -2447,51 +2622,58 @@
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 120,
-      "end_line": 132,
+      "start_line": 123,
+      "end_line": 135,
       "key": "b4638f9841c37ed8"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 182,
-      "end_line": 193,
+      "start_line": 185,
+      "end_line": 196,
       "key": "ff88c7dfda92742c"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 191,
-      "end_line": 202,
+      "start_line": 194,
+      "end_line": 205,
       "key": "2efa1d91fb6f9c0f"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 213,
-      "end_line": 224,
+      "start_line": 216,
+      "end_line": 227,
       "key": "2efa1d91fb6f9c0f"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 439,
-      "end_line": 461,
+      "start_line": 441,
+      "end_line": 463,
       "key": "63b134475ed29ab4"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 484,
-      "end_line": 497,
+      "start_line": 486,
+      "end_line": 499,
       "key": "3395067f8b6088fe"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 540,
-      "end_line": 566,
-      "key": "075c055db3fcdd9c"
+      "start_line": 542,
+      "end_line": 200,
+      "key": "817e781e47a09be1"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/helpers.dart",
+      "start_line": 559,
+      "end_line": 582,
+      "key": "ac834f9d26be3edf"
     },
     {
       "tool": "jscpd",
@@ -2797,8 +2979,8 @@
     {
       "tool": "jscpd",
       "file": "test/widget/search_screen_test.dart",
-      "start_line": 554,
-      "end_line": 575,
+      "start_line": 560,
+      "end_line": 581,
       "key": "82e7483a19c532a8"
     },
     {

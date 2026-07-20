@@ -68,7 +68,7 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
 
         return Scaffold(
           appBar: selecting
-              ? buildSelectionAppBar(_selection)
+              ? buildDebugSelectionAppBar(context, _selection)
               : _buildAppBar(accounts),
           drawer: selecting
               ? null
