@@ -548,6 +548,12 @@ void main() {
         await tester.tap(find.byIcon(Icons.select_all));
         await tester.pumpAndSettle();
         expect(find.text('2 selected'), findsOneWidget);
+
+        // The "..." overflow surfaces the per-message debug entry point.
+        expect(find.byTooltip('More actions'), findsOneWidget);
+        await tester.tap(find.byTooltip('More actions'));
+        await tester.pumpAndSettle();
+        expect(find.text('Debug messages'), findsOneWidget);
       },
     );
 

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -358,6 +359,26 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
       ),
     );
   }
+}
+
+/// Opens the per-message debug screen for every email in the currently
+/// selected threads. Shared by folder, combined-inbox, search and
+/// address-emails views so the "..." overflow entry behaves the same in each.
+void openDebugForSelection(
+  BuildContext context,
+  EmailThreadListController controller,
+) {
+  final messages = <DebugMessageRef>[
+    for (final t in controller.selectedThreads)
+      for (final emailId in t.emailIds)
+        DebugMessageRef(
+          accountId: t.accountId,
+          mailboxPath: t.mailboxPath,
+          emailId: emailId,
+        ),
+  ];
+  if (messages.isEmpty) return;
+  unawaited(context.push('/debug/messages', extra: messages));
 }
 
 /// Standard "N selected" AppBar with X-close and select-all actions.

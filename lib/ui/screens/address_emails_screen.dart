@@ -64,7 +64,15 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
     final selecting = _selection.isSelecting;
     return Scaffold(
       appBar: selecting
-          ? buildSelectionAppBar(_selection)
+          ? buildSelectionAppBar(
+              _selection,
+              overflowActions: [
+                (
+                  'Debug messages',
+                  () => openDebugForSelection(context, _selection),
+                ),
+              ],
+            )
           : AppBar(title: Text(widget.address)),
       bottomNavigationBar: selecting
           ? buildSelectionBottomBar(

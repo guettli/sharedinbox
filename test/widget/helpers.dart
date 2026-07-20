@@ -34,6 +34,7 @@ import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/data/db/database.dart'
     show AppDatabase, SyncHealthRow;
 import 'package:sharedinbox/di.dart';
@@ -43,12 +44,14 @@ import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 import 'package:sharedinbox/ui/screens/add_account_screen.dart';
 import 'package:sharedinbox/ui/screens/address_emails_screen.dart';
+import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
@@ -384,7 +387,24 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
-      Stream.value([]);
+      Stream.value(
+        _emails.map((e) {
+          return EmailThread(
+            threadId: e.threadId ?? e.id,
+            subject: e.subject,
+            preview: e.preview,
+            participants: e.from,
+            latestDate: e.sentAt ?? e.receivedAt,
+            messageCount: 1,
+            hasUnread: !e.isSeen,
+            isFlagged: e.isFlagged,
+            latestEmailId: e.id,
+            emailIds: [e.id],
+            accountId: e.accountId,
+            mailboxPath: e.mailboxPath,
+          );
+        }).toList(),
+      );
 
   @override
   Stream<List<Email>> observeEmailsInThread(
@@ -733,6 +753,18 @@ Widget buildApp({
             prefillSubject: extra?['prefillSubject'] as String?,
             prefillBody: extra?['prefillBody'] as String?,
           );
+        },
+      ),
+      GoRoute(
+        path: '/inbox',
+        builder: (ctx, state) => const CombinedInboxScreen(),
+      ),
+      GoRoute(
+        path: '/debug/messages',
+        builder: (ctx, state) {
+          final messages =
+              (state.extra as List<DebugMessageRef>?) ?? const [];
+          return MessageDebugScreen(messages: messages);
         },
       ),
     ],

@@ -68,7 +68,15 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
 
         return Scaffold(
           appBar: selecting
-              ? buildSelectionAppBar(_selection)
+              ? buildSelectionAppBar(
+                  _selection,
+                  overflowActions: [
+                    (
+                      'Debug messages',
+                      () => openDebugForSelection(context, _selection),
+                    ),
+                  ],
+                )
               : _buildAppBar(accounts),
           drawer: selecting
               ? null
