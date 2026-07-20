@@ -4251,6 +4251,134 @@ void main() {
       );
     });
   });
+
+  group('IMAP preview (issue #228)', () {
+    test('syncEmails writes a preview snippet on the email and thread rows',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Hello',
+              from: 'sender@example.com',
+              text: 'Line one.\r\nLine two — with a NBSP inside.',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:42')))
+          .getSingle();
+      expect(
+        emailRow.preview,
+        'Line one. Line two — with a NBSP inside.',
+      );
+
+      final threadRow = await r.db.select(r.db.threads).getSingle();
+      expect(threadRow.preview, emailRow.preview);
+    });
+
+    test('syncEmails derives preview from HTML when there is no text part',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(
+          messages: {
+            7: _PreviewTestMessage(
+              subject: 'HTML',
+              from: 'sender@example.com',
+              html: '<p>Hello <b>world</b></p>',
+              messageId: '<m7@example.com>',
+            ),
+          },
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:7')))
+          .getSingle();
+      expect(emailRow.preview, 'Hello world');
+    });
+
+    test('getEmailBody backfills a null preview and refreshes the thread',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Seed a message that predates the preview-on-sync change: the row
+      // exists but its preview column is still NULL and there's no thread
+      // row yet (or one with a null preview).
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              threadId: const Value('t1'),
+            ),
+          );
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 't1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              latestDate: DateTime(2024),
+              latestEmailId: 'acc-1:INBOX:1',
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingle();
+      expect(emailRow.preview, 'Backfilled preview body.');
+
+      final threadRow = await (r.db.select(r.db.threads)
+            ..where((t) => t.id.equals('t1')))
+          .getSingle();
+      expect(threadRow.preview, 'Backfilled preview body.');
+    });
+
+    test('getEmailBody leaves a non-null preview untouched', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              preview: const Value('Existing preview'),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingle();
+      expect(emailRow.preview, 'Existing preview');
+    });
+  });
 }
 
 // ── Fakes for IMAP send hang protection tests ────────────────────────────────
@@ -4440,5 +4568,156 @@ class _SseTestClient extends http.BaseClient {
       return http.StreamedResponse(sseStream, 200);
     }
     return http.StreamedResponse(Stream.value(utf8.encode('{}')), 200);
+  }
+}
+
+// ── Fake IMAP clients for the preview-line tests (issue #228) ───────────────
+
+/// Canned message data used to build synthetic IMAP fetch responses.
+class _PreviewTestMessage {
+  _PreviewTestMessage({
+    required this.subject,
+    required this.from,
+    required this.messageId,
+    this.text,
+    this.html,
+  });
+
+  final String subject;
+  final String from;
+  final String messageId;
+  final String? text;
+  final String? html;
+
+  imap.MimeMessage build(int uid) {
+    // Emit a bare-bones RFC 822 message so `decodeTextPlainPart()` and
+    // `decodeTextHtmlPart()` return the strings we planted here. The IMAP
+    // sync path reads `envelope`, `flags`, `size` etc. separately, so we
+    // populate those on the parsed MimeMessage.
+    final String rawMime;
+    if (text != null && html != null) {
+      const boundary = '----=_Boundary_Preview';
+      rawMime = [
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/alternative; boundary="$boundary"',
+        '',
+        '--$boundary',
+        'Content-Type: text/plain; charset=UTF-8',
+        '',
+        text,
+        '--$boundary',
+        'Content-Type: text/html; charset=UTF-8',
+        '',
+        html,
+        '--$boundary--',
+      ].join('\r\n');
+    } else if (text != null) {
+      rawMime = [
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        '',
+        text,
+      ].join('\r\n');
+    } else {
+      rawMime = [
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=UTF-8',
+        '',
+        html ?? '',
+      ].join('\r\n');
+    }
+    final msg = imap.MimeMessage.parseFromText(rawMime)
+      ..uid = uid
+      ..size = rawMime.length
+      ..flags = <String>[]
+      ..envelope = imap.Envelope(
+        date: DateTime.utc(2024, 6, 15, 12),
+        subject: subject,
+        from: [imap.MailAddress(null, from)],
+        to: const [imap.MailAddress(null, 'alice@example.com')],
+        messageId: messageId,
+      );
+    return msg;
+  }
+}
+
+/// Minimal IMAP client that lets `_syncEmailsImap` run end-to-end: it
+/// implements `selectMailboxByPath`, `uidSearchMessages` (used both for
+/// discovering new UIDs and for deleted-message reconciliation) and
+/// `uidFetchMessages`, returning the synthesized messages passed in.
+class _PreviewSyncImapClient extends FakeImapClient {
+  _PreviewSyncImapClient({required this.messages});
+
+  final Map<int, _PreviewTestMessage> messages;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+        uidValidity: 1,
+      );
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'ALL',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    final uids = messages.keys.toList()..sort();
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
+  }
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final built = <imap.MimeMessage>[
+      for (final uid in sequence.toList())
+        if (messages[uid] != null) messages[uid]!.build(uid),
+    ];
+    return imap.FetchImapResult(built, null);
+  }
+}
+
+/// Serves a canned RFC 822 body for `getEmailBody`'s IMAP branch so we can
+/// exercise the opportunistic preview backfill path.
+class _PreviewBodyImapClient extends FakeImapClient {
+  static const String _kRawMime = 'MIME-Version: 1.0\r\n'
+      'Content-Type: text/plain; charset=UTF-8\r\n'
+      '\r\n'
+      'Backfilled preview body.\r\n';
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+      );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
+    return imap.FetchImapResult([msg], null);
   }
 }
