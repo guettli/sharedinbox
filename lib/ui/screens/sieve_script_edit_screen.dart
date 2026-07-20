@@ -7,6 +7,8 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/filter_sieve_converter.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart'
+    show SieveParseException;
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/di.dart';
@@ -59,6 +61,11 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
   List<SieveAction> _actions = [];
   bool _visualSupported = true;
   int _visualLoadCount = 0;
+
+  /// Script content as it was loaded from the repository, so we can tell
+  /// whether the user actually changed anything on the edit path and only
+  /// prompt "apply to inbox?" when there is a real change.
+  String? _initialContent;
 
   @override
   void initState() {
@@ -129,6 +136,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
               .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
+        _initialContent = content;
         _parseScriptIntoVisual();
         setState(() => _loadingContent = false);
       }
@@ -170,23 +178,27 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       _saving = true;
       _error = null;
     });
+    final content = _contentController.text;
+    final isNew = widget.script == null;
+    final contentChanged =
+        _initialContent == null || _initialContent != content;
+    SieveScript saved;
     try {
       if (widget.isLocal) {
-        await ref.read(localSieveRepositoryProvider).saveScript(
+        saved = await ref.read(localSieveRepositoryProvider).saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
-              content: _contentController.text,
+              content: content,
             );
       } else {
-        await ref.read(sieveRepositoryProvider).saveScript(
+        saved = await ref.read(sieveRepositoryProvider).saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
-              content: _contentController.text,
+              content: content,
             );
       }
-      if (mounted) Navigator.of(context).pop();
     } catch (e, stack) {
       unawaited(
         ref.read(appLoggerProvider).error(
@@ -207,6 +219,124 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
           _error = e.toString();
           _saving = false;
         });
+      }
+      return;
+    }
+
+    // Only offer "apply to inbox" when there is a real change worth applying:
+    // always on create, and on edit only when the script content differs from
+    // what was loaded.
+    if (isNew || contentChanged) {
+      await _offerApplyToInbox(
+        savedScript: saved,
+        wasActive: widget.script?.isActive ?? false,
+        content: content,
+      );
+    }
+
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _offerApplyToInbox({
+    required SieveScript savedScript,
+    required bool wasActive,
+    required String content,
+  }) async {
+    final emails = ref.read(emailRepositoryProvider);
+    final messenger = ScaffoldMessenger.of(context);
+
+    int count;
+    try {
+      count = await emails.previewSieveRuleMatches(widget.accountId, content);
+    } on SieveParseException {
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Could not evaluate this filter against your inbox.'),
+          ),
+        );
+      }
+      return;
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Preview failed: $e')));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    if (count == 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No matching messages'),
+          content: const Text(
+            'This filter does not match any messages currently in your inbox.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final shouldApply = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Apply filter now?'),
+        content: Text(
+          wasActive
+              ? 'This filter matches $count message(s) in your inbox. '
+                  'Apply it to them now?'
+              : 'This filter matches $count message(s) in your inbox. '
+                  'The filter will be activated first. Apply it now?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldApply != true || !mounted) return;
+
+    try {
+      if (!wasActive) {
+        if (widget.isLocal) {
+          await ref
+              .read(localSieveRepositoryProvider)
+              .activateScript(widget.accountId, savedScript.id);
+        } else {
+          await ref
+              .read(sieveRepositoryProvider)
+              .activateScript(widget.accountId, savedScript.id);
+        }
+      }
+      final applied = await emails.applySieveScriptToInbox(
+        widget.accountId,
+        content,
+      );
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Filter applied to $applied message(s).')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to apply filter: $e')),
+        );
       }
     }
   }

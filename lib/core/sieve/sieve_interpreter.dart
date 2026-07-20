@@ -21,6 +21,11 @@ class SieveExecutionContext {
   Set<String> targetFolders = {};
   Set<String> flagsToAdd = {};
   bool keepInInbox = true;
+
+  /// True when at least one non-else rule's test evaluated to true, regardless
+  /// of whether the resulting actions produced a visible effect (a `keep`-only
+  /// branch still counts as a match).
+  bool anyRuleMatched = false;
 }
 
 /// Evaluates a compiled list of [SieveRule]s against a [SieveEmailContext].
@@ -50,6 +55,7 @@ class SieveInterpreter {
       }
 
       if (matches) {
+        if (!rule.isElseBranch) ctx.anyRuleMatched = true;
         _applyActions(rule.actions, ctx);
         if (groupId != null) firedGroups.add(groupId);
         if (ctx.isCancelled) break;
