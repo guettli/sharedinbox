@@ -744,8 +744,7 @@ Widget buildApp({
       GoRoute(
         path: '/debug/messages',
         builder: (ctx, state) {
-          final messages =
-              (state.extra as List<DebugMessageRef>?) ?? const [];
+          final messages = (state.extra as List<DebugMessageRef>?) ?? const [];
           return MessageDebugScreen(messages: messages);
         },
       ),
