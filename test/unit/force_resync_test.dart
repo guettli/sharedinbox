@@ -60,8 +60,7 @@ const _inbox = Mailbox(
   final m = MockMailboxRepository();
   final e = MockEmailRepository();
 
-  when(a.observeAccounts())
-      .thenAnswer((_) => Stream.value(const [_account]));
+  when(a.observeAccounts()).thenAnswer((_) => Stream.value(const [_account]));
   when(a.getPassword(_accountId)).thenAnswer((_) async => 'pw');
 
   when(m.syncMailboxes(_accountId)).thenAnswer((_) async => 1);
@@ -82,7 +81,6 @@ const _inbox = Mailbox(
 }
 
 void main() {
-
   test('forceResync reconciles divergence and preserves cached bodies',
       () async {
     final rig = makeRig();
