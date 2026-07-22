@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
@@ -31,11 +32,13 @@ class AccountSyncManager {
     SyncLogRepository syncLog = const NoOpSyncLogRepository(),
     AppLogger? appLogger,
     DraftRepository? drafts,
+    NoteRepository? notes,
     OnNewMailCallback? onNewMail,
   })  : _imapConnect = imapConnect,
         _syncLog = syncLog,
         _appLogger = appLogger ?? AppLogger(const NoOpAppLogRepository()),
         _drafts = drafts,
+        _notes = notes,
         _onNewMail = onNewMail;
 
   final AccountRepository _accounts;
@@ -45,6 +48,7 @@ class AccountSyncManager {
   final SyncLogRepository _syncLog;
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
+  final NoteRepository? _notes;
   final OnNewMailCallback? _onNewMail;
 
   final Map<String, _SyncLoop> _active = {};
@@ -82,6 +86,7 @@ class AccountSyncManager {
               _syncLog,
               _appLogger,
               _drafts,
+              _notes,
               _onNewMail,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
@@ -94,6 +99,7 @@ class AccountSyncManager {
               _syncLog,
               _appLogger,
               _drafts,
+              _notes,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
@@ -167,6 +173,7 @@ class AccountSyncManager {
           _syncLog,
           _appLogger,
           _drafts,
+          _notes,
           _onNewMail,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
@@ -179,6 +186,7 @@ class AccountSyncManager {
           _syncLog,
           _appLogger,
           _drafts,
+          _notes,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
@@ -208,6 +216,7 @@ class _AccountSync implements _SyncLoop {
     this._syncLog,
     this._appLogger,
     this._drafts,
+    this._notes,
     this._onNewMail, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
@@ -222,6 +231,7 @@ class _AccountSync implements _SyncLoop {
   final SyncLogRepository _syncLog;
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
+  final NoteRepository? _notes;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
@@ -427,6 +437,7 @@ class _AccountSync implements _SyncLoop {
       );
     }
     await _emails.applySieveRules(account.id);
+    await _syncNotesQuietly();
     return _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,
@@ -435,6 +446,26 @@ class _AccountSync implements _SyncLoop {
       bytesTransferred: emailResult.bytesTransferred,
       mailboxStats: mailboxStats,
     );
+  }
+
+  /// Refreshes the per-account Notes cache. A broken Notes folder must not
+  /// stop mail sync, so failures are logged and swallowed.
+  Future<void> _syncNotesQuietly() async {
+    final notes = _notes;
+    if (notes == null) return;
+    try {
+      await notes.syncAllNotes(account.id);
+    } catch (e, st) {
+      unawaited(
+        _appLogger.warn(
+          'sync.notes.failed',
+          'Note sync failed: $e',
+          accountId: account.id,
+          error: e,
+          stack: st,
+        ),
+      );
+    }
   }
 
   Future<void> _idle() async {
@@ -504,7 +535,8 @@ class _JmapAccountSync implements _SyncLoop {
     this._accounts,
     this._syncLog,
     this._appLogger,
-    this._drafts, {
+    this._drafts,
+    this._notes, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
   })  : _onSyncStart = onSyncStart,
@@ -517,6 +549,7 @@ class _JmapAccountSync implements _SyncLoop {
   final SyncLogRepository _syncLog;
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
+  final NoteRepository? _notes;
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
 
@@ -726,6 +759,7 @@ class _JmapAccountSync implements _SyncLoop {
       );
     }
     await _emails.applySieveRules(account.id);
+    await _syncNotesQuietly();
     return _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,
@@ -734,6 +768,26 @@ class _JmapAccountSync implements _SyncLoop {
       bytesTransferred: emailResult.bytesTransferred,
       mailboxStats: mailboxStats,
     );
+  }
+
+  /// Refreshes the per-account Notes cache. A broken Notes folder must not
+  /// stop mail sync, so failures are logged and swallowed.
+  Future<void> _syncNotesQuietly() async {
+    final notes = _notes;
+    if (notes == null) return;
+    try {
+      await notes.syncAllNotes(account.id);
+    } catch (e, st) {
+      unawaited(
+        _appLogger.warn(
+          'sync.notes.failed',
+          'Note sync failed: $e',
+          accountId: account.id,
+          error: e,
+          stack: st,
+        ),
+      );
+    }
   }
 
   Future<void> _wait() async {

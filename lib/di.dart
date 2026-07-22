@@ -254,6 +254,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     appLogger: ref.watch(appLoggerProvider),
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
+    notes: ref.watch(noteRepositoryProvider),
     onNewMail: showNewMailNotification,
   );
   ref.onDispose(manager.dispose);
