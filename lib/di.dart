@@ -26,6 +26,7 @@ import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
@@ -268,6 +269,34 @@ final unifiedPushServiceProvider = Provider<UnifiedPushService>((ref) {
   );
   ref.onDispose(service.dispose);
   return service;
+});
+
+/// Watches offline → online transitions so the outbox is drained as soon as
+/// the device is back on the network (#353). Owned by the running app; a
+/// missing platform channel just makes the reconnect kick a no-op.
+final connectivityServiceProvider = Provider<ConnectivityService>((ref) {
+  final service = ConnectivityService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Installs the subscription that turns each connectivity reconnect into an
+/// immediate outbox flush: clears the per-row backoff (so rows currently
+/// waiting on `nextAttemptAt` are eligible now) and kicks every account's
+/// sync loop (which calls `flushOutbox` at the start of its next iteration).
+///
+/// Reading this provider from app startup installs the subscription; the
+/// `onDispose` hook cancels it on shutdown.
+final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
+  final connectivity = ref.watch(connectivityServiceProvider);
+  final outbox = ref.watch(outboxRepositoryProvider);
+  final syncManager = ref.watch(syncManagerProvider);
+  final sub = connectivity.onOnline.listen((_) async {
+    await outbox.resetPendingBackoff();
+    syncManager.syncAll();
+  });
+  ref.onDispose(sub.cancel);
+  return sub;
 });
 
 final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((
