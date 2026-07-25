@@ -235,6 +235,13 @@
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/app_log_repository_impl.dart",
+      "start_line": 9,
+      "end_line": 27,
+      "key": "5b4182ce162f2f4b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/app_log_repository_impl.dart",
       "start_line": 10,
       "end_line": 24,
       "key": "6dc3c5f4dd4ef70c"
@@ -760,134 +767,155 @@
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 28,
-      "end_line": 40,
+      "start_line": 30,
+      "end_line": 42,
       "key": "f7861d05bfc21bfa"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 49,
-      "end_line": 60,
+      "start_line": 51,
+      "end_line": 62,
       "key": "ea73989386c69435"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 60,
-      "end_line": 72,
+      "start_line": 62,
+      "end_line": 74,
       "key": "f7861d05bfc21bfa"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 79,
-      "end_line": 90,
+      "start_line": 81,
+      "end_line": 92,
       "key": "ea73989386c69435"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 99,
-      "end_line": 114,
+      "start_line": 101,
+      "end_line": 116,
       "key": "ae64bb30ba0024b9"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 138,
-      "end_line": 153,
+      "start_line": 140,
+      "end_line": 155,
       "key": "ae64bb30ba0024b9"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 142,
-      "end_line": 157,
+      "start_line": 144,
+      "end_line": 159,
       "key": "003997eeb9b53d56"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 172,
-      "end_line": 186,
+      "start_line": 174,
+      "end_line": 188,
       "key": "d6c321c26d3f6dd7"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 205,
-      "end_line": 219,
+      "start_line": 207,
+      "end_line": 221,
       "key": "d6c321c26d3f6dd7"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 211,
-      "end_line": 226,
+      "start_line": 213,
+      "end_line": 228,
       "key": "238cb354cfa25554"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 243,
-      "end_line": 258,
+      "start_line": 245,
+      "end_line": 260,
       "key": "238cb354cfa25554"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 282,
-      "end_line": 297,
+      "start_line": 333,
+      "end_line": 348,
       "key": "003997eeb9b53d56"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 377,
-      "end_line": 388,
+      "start_line": 428,
+      "end_line": 439,
       "key": "ff88c7dfda92742c"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 381,
-      "end_line": 448,
+      "start_line": 432,
+      "end_line": 499,
       "key": "69772ce8147a752b"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 496,
-      "end_line": 522,
+      "start_line": 547,
+      "end_line": 573,
       "key": "88b8b740043139c0"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 532,
-      "end_line": 545,
+      "start_line": 583,
+      "end_line": 596,
       "key": "3395067f8b6088fe"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 575,
-      "end_line": 615,
-      "key": "817e781e47a09be1"
+      "start_line": 626,
+      "end_line": 666,
+      "key": "5b4d9deb1b12c575"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 616,
-      "end_line": 636,
+      "start_line": 668,
+      "end_line": 683,
+      "key": "5b4182ce162f2f4b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 684,
+      "end_line": 703,
+      "key": "fff1f551995d5a8b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 699,
+      "end_line": 716,
+      "key": "07a0325b8f3fc96b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 717,
+      "end_line": 737,
       "key": "ca88b1de97b84485"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 637,
-      "end_line": 648,
+      "start_line": 738,
+      "end_line": 749,
       "key": "a6dcb239acf6c955"
     },
     {
@@ -2258,6 +2286,13 @@
     {
       "tool": "jscpd",
       "file": "test/widget/app_log_screen_test.dart",
+      "start_line": 28,
+      "end_line": 47,
+      "key": "fff1f551995d5a8b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/app_log_screen_test.dart",
       "start_line": 95,
       "end_line": 105,
       "key": "296ebf0c5e8fe01c"
@@ -2554,7 +2589,7 @@
       "file": "test/widget/helpers.dart",
       "start_line": 542,
       "end_line": 200,
-      "key": "817e781e47a09be1"
+      "key": "5b4d9deb1b12c575"
     },
     {
       "tool": "jscpd",
@@ -2919,6 +2954,13 @@
       "start_line": 38,
       "end_line": 57,
       "key": "1091ae5ee524dcc7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/sieve_scripts_screen_test.dart",
+      "start_line": 40,
+      "end_line": 57,
+      "key": "07a0325b8f3fc96b"
     },
     {
       "tool": "jscpd",

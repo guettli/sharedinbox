@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show HandshakeException, HttpException, SocketException;
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart' show MissingPluginException;
@@ -16,6 +17,17 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
 import 'package:sharedinbox/data/imap/tls_error.dart' show isTlsConfigError;
+
+/// True when [e] is a routine "device is offline / network hiccup" failure.
+/// Sync failures of this shape are expected on mobile and must not be logged
+/// at `error` level (which would flood the app log with red entries and
+/// suggest a bug where there is none — regression #355).
+bool _isTransientNetworkError(Object e) {
+  return e is SocketException ||
+      e is HttpException ||
+      e is HandshakeException ||
+      e is TimeoutException;
+}
 
 typedef OnNewMailCallback = Future<void> Function(String accountEmail);
 
@@ -518,16 +530,27 @@ class _AccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write IMAP sync log entry: $logErr');
         }
+        final isTransient = _isTransientNetworkError(e);
         unawaited(
-          _appLogger.error(
-            'sync.cycle.failed',
-            'IMAP sync failed: $e',
-            accountId: account.id,
-            syncLogId: syncLogId == 0 ? null : syncLogId,
-            data: {'protocol': 'imap', 'permanent': isPermanent},
-            error: e,
-            stack: st,
-          ),
+          isTransient
+              ? _appLogger.warn(
+                  'sync.cycle.offline',
+                  'IMAP sync skipped (offline): $e',
+                  accountId: account.id,
+                  syncLogId: syncLogId == 0 ? null : syncLogId,
+                  data: {'protocol': 'imap', 'permanent': isPermanent},
+                  error: e,
+                  stack: st,
+                )
+              : _appLogger.error(
+                  'sync.cycle.failed',
+                  'IMAP sync failed: $e',
+                  accountId: account.id,
+                  syncLogId: syncLogId == 0 ? null : syncLogId,
+                  data: {'protocol': 'imap', 'permanent': isPermanent},
+                  error: e,
+                  stack: st,
+                ),
         );
 
         if (isPermanent) {
@@ -838,16 +861,27 @@ class _JmapAccountSync implements _SyncLoop {
         } catch (logErr) {
           log('Failed to write JMAP sync log entry: $logErr');
         }
+        final isTransient = _isTransientNetworkError(e);
         unawaited(
-          _appLogger.error(
-            'sync.cycle.failed',
-            'JMAP sync failed: $e',
-            accountId: account.id,
-            syncLogId: syncLogId == 0 ? null : syncLogId,
-            data: {'protocol': 'jmap', 'permanent': isPermanent},
-            error: e,
-            stack: st,
-          ),
+          isTransient
+              ? _appLogger.warn(
+                  'sync.cycle.offline',
+                  'JMAP sync skipped (offline): $e',
+                  accountId: account.id,
+                  syncLogId: syncLogId == 0 ? null : syncLogId,
+                  data: {'protocol': 'jmap', 'permanent': isPermanent},
+                  error: e,
+                  stack: st,
+                )
+              : _appLogger.error(
+                  'sync.cycle.failed',
+                  'JMAP sync failed: $e',
+                  accountId: account.id,
+                  syncLogId: syncLogId == 0 ? null : syncLogId,
+                  data: {'protocol': 'jmap', 'permanent': isPermanent},
+                  error: e,
+                  stack: st,
+                ),
         );
 
         if (isPermanent) {
