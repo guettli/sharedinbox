@@ -310,6 +310,9 @@ class FakeOutboxRepository implements OutboxRepository {
   Future<void> retry(int id) async {}
 
   @override
+  Future<int> resetPendingBackoff() async => 0;
+
+  @override
   Future<void> discard(int id) async {}
 }
 
