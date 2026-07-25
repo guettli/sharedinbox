@@ -40,3 +40,13 @@ jobs:
           OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
           OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task check-dagger
+      # Publish per-subtask timings as an artefact so we can inspect where the
+      # wall-time is spent (see issue #335). Uploaded even on failure — a slow
+      # step that times out is exactly the case we want to inspect.
+      - name: Upload task check timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-check-timings
+          path: build/task-check-timings.json
+          if-no-files-found: ignore
