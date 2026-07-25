@@ -256,16 +256,9 @@
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/draft_repository_impl.dart",
-      "start_line": 429,
-      "end_line": 444,
-      "key": "613d3f6f200b84a9"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/draft_repository_impl.dart",
-      "start_line": 483,
-      "end_line": 493,
-      "key": "3fc39ed4dedfb92e"
+      "start_line": 427,
+      "end_line": 440,
+      "key": "dcbf7ef9fe94eaea"
     },
     {
       "tool": "jscpd",
@@ -277,64 +270,29 @@
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 69,
-      "end_line": 79,
-      "key": "fc72a0ba24099e74"
+      "start_line": 170,
+      "end_line": 182,
+      "key": "5fa62220c1b7fd47"
     },
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 145,
-      "end_line": 157,
-      "key": "3df7c6fb9e2b750e"
+      "start_line": 216,
+      "end_line": 229,
+      "key": "dcbf7ef9fe94eaea"
     },
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 158,
-      "end_line": 169,
-      "key": "566b24c8a39af2ca"
+      "start_line": 590,
+      "end_line": 602,
+      "key": "5fa62220c1b7fd47"
     },
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 168,
-      "end_line": 183,
-      "key": "613d3f6f200b84a9"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 183,
-      "end_line": 194,
-      "key": "566b24c8a39af2ca"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 206,
-      "end_line": 216,
-      "key": "3fc39ed4dedfb92e"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 438,
-      "end_line": 448,
-      "key": "fc72a0ba24099e74"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 467,
-      "end_line": 479,
-      "key": "3df7c6fb9e2b750e"
-    },
-    {
-      "tool": "jscpd",
-      "file": "lib/data/repositories/note_repository_impl.dart",
-      "start_line": 533,
-      "end_line": 550,
+      "start_line": 815,
+      "end_line": 832,
       "key": "09d19330ac492e82"
     },
     {
@@ -347,16 +305,16 @@
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/sync_log_repository_impl.dart",
-      "start_line": 10,
+      "start_line": 9,
       "end_line": 29,
-      "key": "c639b10ee9ca1d20"
+      "key": "ca88b1de97b84485"
     },
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/sync_log_repository_impl.dart",
       "start_line": 10,
-      "end_line": 120,
-      "key": "ad349b083ff4da39"
+      "end_line": 29,
+      "key": "c639b10ee9ca1d20"
     },
     {
       "tool": "jscpd",
@@ -802,100 +760,135 @@
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 26,
-      "end_line": 38,
+      "start_line": 28,
+      "end_line": 40,
       "key": "f7861d05bfc21bfa"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 47,
-      "end_line": 58,
+      "start_line": 49,
+      "end_line": 60,
       "key": "ea73989386c69435"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 58,
-      "end_line": 70,
+      "start_line": 60,
+      "end_line": 72,
       "key": "f7861d05bfc21bfa"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 77,
-      "end_line": 88,
+      "start_line": 79,
+      "end_line": 90,
       "key": "ea73989386c69435"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 97,
-      "end_line": 112,
+      "start_line": 99,
+      "end_line": 114,
       "key": "ae64bb30ba0024b9"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 136,
-      "end_line": 151,
+      "start_line": 138,
+      "end_line": 153,
       "key": "ae64bb30ba0024b9"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 140,
-      "end_line": 155,
+      "start_line": 142,
+      "end_line": 157,
       "key": "003997eeb9b53d56"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 179,
-      "end_line": 194,
+      "start_line": 172,
+      "end_line": 186,
+      "key": "d6c321c26d3f6dd7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 205,
+      "end_line": 219,
+      "key": "d6c321c26d3f6dd7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 211,
+      "end_line": 226,
+      "key": "238cb354cfa25554"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 243,
+      "end_line": 258,
+      "key": "238cb354cfa25554"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 282,
+      "end_line": 297,
       "key": "003997eeb9b53d56"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 274,
-      "end_line": 285,
+      "start_line": 377,
+      "end_line": 388,
       "key": "ff88c7dfda92742c"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 278,
-      "end_line": 345,
+      "start_line": 381,
+      "end_line": 448,
       "key": "69772ce8147a752b"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 393,
-      "end_line": 419,
+      "start_line": 496,
+      "end_line": 522,
       "key": "88b8b740043139c0"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 429,
-      "end_line": 442,
+      "start_line": 532,
+      "end_line": 545,
       "key": "3395067f8b6088fe"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 472,
-      "end_line": 512,
+      "start_line": 575,
+      "end_line": 615,
       "key": "817e781e47a09be1"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
-      "start_line": 512,
-      "end_line": 540,
-      "key": "ad349b083ff4da39"
+      "start_line": 616,
+      "end_line": 636,
+      "key": "ca88b1de97b84485"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 637,
+      "end_line": 648,
+      "key": "a6dcb239acf6c955"
     },
     {
       "tool": "jscpd",
@@ -1480,13 +1473,6 @@
     },
     {
       "tool": "jscpd",
-      "file": "test/unit/email_detail_prefetch_test.dart",
-      "start_line": 56,
-      "end_line": 68,
-      "key": "182cd4b73f679f28"
-    },
-    {
-      "tool": "jscpd",
       "file": "test/unit/email_model_test.dart",
       "start_line": 79,
       "end_line": 93,
@@ -1669,6 +1655,48 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 301,
+      "end_line": 317,
+      "key": "5f200214619c24d9"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 305,
+      "end_line": 317,
+      "key": "1788595662a1dfaf"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 319,
+      "end_line": 330,
+      "key": "e75e0af08625089c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 463,
+      "end_line": 479,
+      "key": "5f200214619c24d9"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 480,
+      "end_line": 491,
+      "key": "e75e0af08625089c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/note_repository_impl_test.dart",
+      "start_line": 525,
+      "end_line": 537,
+      "key": "1788595662a1dfaf"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/reliability_runner_check_now_test.dart",
       "start_line": 44,
       "end_line": 56,
@@ -1785,6 +1813,13 @@
       "start_line": 273,
       "end_line": 285,
       "key": "35a0acfc5718ac42"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_test.dart",
+      "start_line": 274,
+      "end_line": 238,
+      "key": "a6dcb239acf6c955"
     },
     {
       "tool": "jscpd",
@@ -2422,13 +2457,6 @@
       "start_line": 159,
       "end_line": 171,
       "key": "46f5748a3167ccc9"
-    },
-    {
-      "tool": "jscpd",
-      "file": "test/widget/email_detail_notes_sync_test.dart",
-      "start_line": 80,
-      "end_line": 92,
-      "key": "182cd4b73f679f28"
     },
     {
       "tool": "jscpd",
