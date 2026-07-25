@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart' as _i10;
 import 'package:sharedinbox/core/models/account.dart' as _i6;
 import 'package:sharedinbox/core/models/email.dart' as _i3;
 import 'package:sharedinbox/core/models/mailbox.dart' as _i2;
+import 'package:sharedinbox/core/models/pending_change.dart' as _i11;
 import 'package:sharedinbox/core/repositories/account_repository.dart' as _i4;
 import 'package:sharedinbox/core/repositories/email_repository.dart' as _i9;
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart' as _i8;
@@ -739,6 +740,27 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
         ),
         returnValue: _i5.Stream<List<_i3.FailedMutation>>.empty(),
       ) as _i5.Stream<List<_i3.FailedMutation>>);
+
+  @override
+  _i5.Stream<List<_i11.PendingChange>> observePendingChanges(
+          String? accountId) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #observePendingChanges,
+          [accountId],
+        ),
+        returnValue: _i5.Stream<List<_i11.PendingChange>>.empty(),
+      ) as _i5.Stream<List<_i11.PendingChange>>);
+
+  @override
+  _i5.Stream<List<_i11.PendingChange>> observeAllPendingChanges() =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #observeAllPendingChanges,
+          [],
+        ),
+        returnValue: _i5.Stream<List<_i11.PendingChange>>.empty(),
+      ) as _i5.Stream<List<_i11.PendingChange>>);
 
   @override
   _i5.Future<void> discardMutation(int? id) => (super.noSuchMethod(

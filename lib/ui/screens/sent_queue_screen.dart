@@ -9,7 +9,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart'
-    show SyncNowFn, showOutboxErrorDetails;
+    show QueueRowActions, SyncNowFn, retryQueueRow, showOutboxErrorDetails;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
@@ -128,40 +128,20 @@ class SentQueueTile extends StatelessWidget {
             ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Retry now',
-            onPressed: () => _retry(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Discard',
-            onPressed: () => unawaited(repo.discard(message.id)),
-          ),
-        ],
+      trailing: QueueRowActions(
+        onRetry: () => _retry(context),
+        onDiscard: () => unawaited(repo.discard(message.id)),
       ),
     );
   }
 
-  Future<void> _retry(BuildContext context) async {
-    // Capture the messenger BEFORE the async gap so the callback stays
-    // context-safe even if the widget tree rebuilds while retry() awaits.
-    final messenger = ScaffoldMessenger.of(context);
-    await repo.retry(message.id);
-    final kicked = syncNow(message.accountId);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          kicked
-              ? 'Retrying send…'
-              : 'Sync is not running for this account. '
-                  'Enable it to send the queued message.',
-        ),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
+  Future<void> _retry(BuildContext context) => retryQueueRow(
+        context: context,
+        accountId: message.accountId,
+        retry: () => repo.retry(message.id),
+        syncNow: syncNow,
+        runningMessage: 'Retrying send…',
+        notRunningMessage: 'Sync is not running for this account. '
+            'Enable it to send the queued message.',
+      );
 }

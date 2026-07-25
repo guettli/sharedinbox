@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
+import 'package:sharedinbox/core/models/pending_change.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
@@ -4416,6 +4417,36 @@ class EmailRepositoryImpl implements EmailRepository {
       const PendingChangesCompanion(attempts: Value(0), lastError: Value(null)),
     );
   }
+
+  @override
+  Stream<List<model.PendingChange>> observePendingChanges(String accountId) {
+    return (_db.select(_db.pendingChanges)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows.map(_toPendingChange).toList());
+  }
+
+  @override
+  Stream<List<model.PendingChange>> observeAllPendingChanges() {
+    return (_db.select(_db.pendingChanges)
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows.map(_toPendingChange).toList());
+  }
+
+  static model.PendingChange _toPendingChange(PendingChangeRow r) =>
+      model.PendingChange(
+        id: r.id,
+        accountId: r.accountId,
+        kind: r.changeType,
+        resourceType: r.resourceType,
+        resourceId: r.resourceId,
+        payload: r.payload,
+        createdAt: r.createdAt,
+        attempts: r.attempts,
+        lastError: r.lastError,
+      );
 
   @override
   Future<void> clearForResync(String accountId) async {

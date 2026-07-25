@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -554,6 +555,13 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
       Stream.value([]);
+
+  @override
+  Stream<List<PendingChange>> observePendingChanges(String accountId) =>
+      Stream.value([]);
+
+  @override
+  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
 
   @override
   Future<void> discardMutation(int id) async {}
