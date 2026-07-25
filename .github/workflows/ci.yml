@@ -8,6 +8,48 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Hosted watchdog: the "Full Project Check" job runs on the self-hosted
+  # sharedinbox-arc scale set. When that fleet is down, GitHub leaves the job
+  # "waiting for a runner" for 24h and then fails it with a useless timeout
+  # message. This job runs on an always-available GitHub-hosted runner and,
+  # if no arc runner has picked up the check within 15 min, fails fast with an
+  # actionable error instead. Runs in parallel with `check` (not a dependency),
+  # so it never delays a healthy run.
+  runner-watchdog:
+    name: Runner availability watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.server_url == 'https://github.com'
+    permissions:
+      actions: read
+    steps:
+      - name: Fail fast if no self-hosted runner picks up the check job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          DEADLINE=900   # 15 min; a healthy ARC fleet cold-starts a runner in ~1-3 min
+          echo "Watching for a sharedinbox-arc runner to start 'Full Project Check' (max 15 min)..."
+          while [ "${SECONDS}" -lt "${DEADLINE}" ]; do
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+                        --jq '.jobs[] | select(.name=="Full Project Check") | .status' 2>/dev/null | head -n1 || true)"
+            echo "[$(date -u +%H:%M:%S)] Full Project Check: ${status:-<not scheduled yet>}"
+            case "${status}" in
+              in_progress|completed)
+                echo "A self-hosted runner picked up the job — the ARC fleet is healthy."
+                exit 0 ;;
+            esac
+            sleep 20
+          done
+          echo "::error title=No self-hosted runner available::'Full Project Check' was not picked up by a sharedinbox-arc runner within 15 minutes — failing fast instead of the silent 24h queue timeout."
+          echo "The self-hosted ARC runner fleet is not servicing jobs. Likely causes (see the arc-runner-secrets runbook):" >&2
+          echo "  * the shared guettli GITHUB_ADMIN_TOKEN expired -> ARC listeners crash-loop '401 Bad credentials'" >&2
+          echo "    (kubectl -n arc-systems logs -l app.kubernetes.io/component=runner-scale-set-listener)" >&2
+          echo "  * the ghcr.io/guettli/sharedinbox-ci-runner image can't be pulled -> runner pods in ImagePullBackOff" >&2
+          echo "    (kubectl -n arc-runners get pods)" >&2
+          echo "Fix the fleet, then re-run this workflow." >&2
+          exit 1
+
   check:
     name: Full Project Check
     runs-on: sharedinbox-arc
