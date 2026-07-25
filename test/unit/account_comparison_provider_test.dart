@@ -1,32 +1,22 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mockito/mockito.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/di.dart';
 
+import 'account_sync_manager_test.mocks.dart';
 import 'db_test_helper.dart';
 
-class _FakeAccounts implements AccountRepository {
-  _FakeAccounts(this.accounts);
-  final List<Account> accounts;
-
-  @override
-  Stream<List<Account>> observeAccounts() => Stream.value(accounts);
-  @override
-  Future<Account?> getAccount(String id) async => accounts
-      .cast<Account?>()
-      .firstWhere((a) => a?.id == id, orElse: () => null);
-  @override
-  Future<void> addAccount(Account account, String password) async {}
-  @override
-  Future<void> updateAccount(Account account, {String? password}) async {}
-  @override
-  Future<void> removeAccount(String id) async {}
-  @override
-  Future<String> getPassword(String id) async => 'secret';
+// Reuses the generated MockAccountRepository from
+// account_sync_manager_test.mocks.dart to avoid hand-rolling — and
+// duplicating — another AccountRepository fake (jscpd guard).
+MockAccountRepository _accountRepoWith(List<Account> accounts) {
+  final repo = MockAccountRepository();
+  when(repo.observeAccounts()).thenAnswer((_) => Stream.value(accounts));
+  return repo;
 }
 
 void main() {
@@ -78,8 +68,9 @@ void main() {
         () async {
       final container = ProviderContainer(
         overrides: [
-          accountRepositoryProvider
-              .overrideWithValue(_FakeAccounts([imap, jmap, jmapOther])),
+          accountRepositoryProvider.overrideWithValue(
+            _accountRepoWith([imap, jmap, jmapOther]),
+          ),
         ],
       );
       addTearDown(container.dispose);
@@ -93,7 +84,7 @@ void main() {
         () async {
       final container = ProviderContainer(
         overrides: [
-          accountRepositoryProvider.overrideWithValue(_FakeAccounts([imap])),
+          accountRepositoryProvider.overrideWithValue(_accountRepoWith([imap])),
         ],
       );
       addTearDown(container.dispose);
