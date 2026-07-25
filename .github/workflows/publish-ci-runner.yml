@@ -16,7 +16,13 @@ on:
 jobs:
   publish:
     name: Build & Push sharedinbox-ci-runner
-    runs-on: sharedinbox-arc
+    # Runs on a GitHub-hosted runner ON PURPOSE: this job builds the very image
+    # that the sharedinbox-arc runners boot from, so it must NOT depend on that
+    # runner (otherwise, if the image is ever missing, the only thing that can
+    # rebuild it is itself -- an unrecoverable bootstrap deadlock). Building the
+    # image needs only Docker, not the in-cluster Dagger engine, so a hosted
+    # runner is sufficient. The repo is public, so hosted minutes are free.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.server_url == 'https://github.com'
     permissions:
