@@ -59,11 +59,12 @@ Future<void> runAccountAction(
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Force full sync?'),
+          title: const Text('Force full re-sync?'),
           content: const Text(
-            'This clears all locally-cached emails and mailboxes for this '
-            'account and immediately re-downloads everything from the server. '
-            'Previously viewed email content will not need to be re-downloaded.',
+            'This clears all locally-cached email metadata and mailboxes for '
+            'this account, then re-syncs everything from the server. '
+            'Previously downloaded email bodies and attachments are kept — '
+            'only the metadata is re-fetched.',
           ),
           actions: [
             TextButton(
@@ -72,13 +73,13 @@ Future<void> runAccountAction(
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Force sync'),
+              child: const Text('Force re-sync'),
             ),
           ],
         ),
       );
       if (confirmed == true && context.mounted) {
-        await ref.read(syncManagerProvider).forceResync(account.id);
+        await context.push('/accounts/${account.id}/force-resync');
       }
       break;
     case AccountAction.edit:
