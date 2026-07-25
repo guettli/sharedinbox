@@ -12,11 +12,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/services/body_cache_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:sqlcipher_flutter_libs/sqlcipher_flutter_libs.dart';
 
@@ -104,14 +107,37 @@ Future<void> _doBackgroundSync() async {
       db,
       const FlutterSecureStorageImpl(),
     );
+    final noteRepo = NoteRepositoryImpl(db, accountRepo);
     final accounts = await accountRepo.observeAccounts().first;
     await initNotifications();
     for (final account in accounts) {
-      if (account.type != model.AccountType.imap) continue;
-      await _checkAccount(db, accountRepo, account);
+      // IMAP accounts additionally get the uidNext check that drives the
+      // new-mail notification. JMAP accounts get notes-only.
+      if (account.type == model.AccountType.imap) {
+        await _checkAccount(db, accountRepo, account);
+      }
+      await _syncNotesForAccount(noteRepo, account);
     }
   } finally {
     await db.close();
+  }
+}
+
+/// Refreshes the per-account Notes cache from the WorkManager isolate so
+/// notes arrive even when the app isn't running. Swallows failures so a
+/// broken Notes folder never blocks the new-mail-notification pass.
+Future<void> _syncNotesForAccount(
+  NoteRepository noteRepo,
+  model.Account account,
+) async {
+  try {
+    await noteRepo.syncAllNotes(account.id);
+  } catch (e, st) {
+    log(
+      'background notes sync failed for ${account.email}',
+      error: e,
+      stackTrace: st,
+    );
   }
 }
 

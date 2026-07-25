@@ -8,11 +8,13 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
@@ -166,6 +168,107 @@ void main() {
         manager.dispose();
         async.elapse(const Duration(milliseconds: 10));
       });
+    },
+  );
+
+  test(
+    'IMAP sync cycle also refreshes the Notes cache',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
+      final notes = _FakeNotes();
+
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+        notes: notes,
+        imapConnect: _fakeImapConnect,
+      );
+
+      manager.start();
+      accounts.push([_account('1')]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(
+        notes.syncAllCounts['1'],
+        greaterThanOrEqualTo(1),
+        reason: 'AccountSyncManager must refresh notes each IMAP sync cycle',
+      );
+
+      manager.dispose();
+    },
+  );
+
+  test(
+    'JMAP sync cycle also refreshes the Notes cache',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
+      final notes = _FakeNotes();
+
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+        notes: notes,
+      );
+
+      manager.start();
+      accounts.push([_jmapAccount('1')]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(
+        notes.syncAllCounts['1'],
+        greaterThanOrEqualTo(1),
+        reason: 'AccountSyncManager must refresh notes each JMAP sync cycle',
+      );
+
+      manager.dispose();
+    },
+  );
+
+  test(
+    'Note-sync failure does not abort the sync cycle',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
+      final notes = _FakeNotes()..throwOnSync = StateError('boom');
+
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+        notes: notes,
+      );
+
+      manager.start();
+      accounts.push([_jmapAccount('1')]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // syncAllNotes threw, but mail sync still ran and was logged as success.
+      expect(notes.syncAllCounts['1'], greaterThanOrEqualTo(1));
+      expect(emails.syncCounts['1'], greaterThanOrEqualTo(1));
+      expect(logs.records, isNotEmpty);
+      expect(
+        logs.records.first.success,
+        isTrue,
+        reason: 'A broken Notes folder must not fail the wider sync log entry.',
+      );
+
+      manager.dispose();
     },
   );
 
@@ -619,6 +722,8 @@ class _RecordingAppLogRepo implements AppLogRepository {
 }
 
 class _FakeLogs implements SyncLogRepository {
+  final records = <_FakeLogRecord>[];
+
   @override
   Future<int> log({
     required String accountId,
@@ -636,8 +741,10 @@ class _FakeLogs implements SyncLogRepository {
     required DateTime finishedAt,
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
-  }) async =>
-      0;
+  }) async {
+    records.add(_FakeLogRecord(accountId: accountId, success: success));
+    return 0;
+  }
 
   @override
   Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
@@ -645,4 +752,32 @@ class _FakeLogs implements SyncLogRepository {
 
   @override
   Stream<String?> observeLastError(String accountId) => Stream.value(null);
+}
+
+class _FakeLogRecord {
+  _FakeLogRecord({required this.accountId, required this.success});
+  final String accountId;
+  final bool success;
+}
+
+class _FakeNotes implements NoteRepository {
+  final syncAllCounts = <String, int>{};
+  Object? throwOnSync;
+
+  @override
+  Stream<List<EmailNote>> observeNotes(String accountId, String messageId) =>
+      const Stream.empty();
+
+  @override
+  Future<void> syncAllNotes(String accountId) async {
+    syncAllCounts[accountId] = (syncAllCounts[accountId] ?? 0) + 1;
+    final err = throwOnSync;
+    if (err != null) throw err;
+  }
+
+  @override
+  Future<void> addNote(String accountId, String messageId, String text) async {}
+
+  @override
+  Future<void> deleteNote(String noteId) async {}
 }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:drift/drift.dart';
@@ -10,11 +11,16 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _notesFolder = 'Notes';
 const _headerNoteFor = 'X-SharedInbox-Note-For';
 const _headerNoteId = 'X-SharedInbox-Note-Id';
+
+/// [SyncStates.resourceType] used to store the notes-sync checkpoint per
+/// account. See [NoteRepository.syncAllNotes].
+const _notesResourceType = 'notes';
 
 class NoteRepositoryImpl implements NoteRepository {
   NoteRepositoryImpl(
@@ -50,23 +56,22 @@ class NoteRepositoryImpl implements NoteRepository {
   // ── Sync (server → local cache) ──────────────────────────────────────────
 
   @override
-  Future<void> syncNotes(String accountId, String messageId) async {
+  Future<void> syncAllNotes(String accountId) async {
     final account = await _accounts.getAccount(accountId);
     if (account == null) return;
     final password = await _accounts.getPassword(accountId);
 
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _syncNotesImap(account, password, messageId);
+        await _syncAllNotesImap(account, password);
       case account_model.AccountType.jmap:
-        await _syncNotesJmap(account, password, messageId);
+        await _syncAllNotesJmap(account, password);
     }
   }
 
-  Future<void> _syncNotesImap(
+  Future<void> _syncAllNotesImap(
     account_model.Account account,
     String password,
-    String messageId,
   ) async {
     final client = await _imapConnect(
       account,
@@ -74,75 +79,95 @@ class NoteRepositoryImpl implements NoteRepository {
       password,
     );
     try {
+      final imap.Mailbox selected;
       try {
-        await client.selectMailboxByPath(_notesFolder);
-      } catch (_) {
-        // Notes folder doesn't exist — nothing to sync.
+        selected = await client.selectMailboxByPath(_notesFolder);
+      } catch (e) {
+        if (isImapMailboxNotFound(e)) {
+          // Notes folder doesn't exist yet — clear any stale checkpoint and
+          // drop orphaned local notes so the local cache mirrors reality.
+          await _clearNotesForAccount(account.id);
+          await _clearNotesCheckpoint(account.id);
+          return;
+        }
+        rethrow;
+      }
+
+      final uidValidity = selected.uidValidity ?? 0;
+      final checkpoint = await _loadNotesCheckpoint(account.id);
+      final storedUidValidity = checkpoint?['uidValidity'] as int?;
+      final storedLastUid = checkpoint?['lastUid'] as int?;
+
+      // First run or UID validity changed → full scan.
+      if (storedUidValidity == null || storedUidValidity != uidValidity) {
+        if (storedUidValidity != null) {
+          // UID validity churned — the server reassigned UIDs, so every
+          // cached serverId is stale. Drop them; the fetch below repopulates.
+          await _clearNotesForAccount(account.id);
+        }
+        final allUids = (await client.uidSearchMessages(searchCriteria: 'ALL'))
+                .matchingSequence
+                ?.toList() ??
+            [];
+        final fetchedNoteIds = <String>{};
+        if (allUids.isNotEmpty) {
+          final seq = imap.MessageSequence.fromIds(allUids, isUid: true);
+          final fetch = await client.uidFetchMessages(seq, '(UID BODY.PEEK[])');
+          for (final msg in fetch.messages) {
+            final noteId = await _upsertNoteFromImapMessage(account.id, msg);
+            if (noteId != null) fetchedNoteIds.add(noteId);
+          }
+        }
+        // Purge any local rows for this account that aren't in the fetched set.
+        await _pruneNotesForAccountNotIn(account.id, fetchedNoteIds);
+        final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
+        await _saveNotesCheckpoint(account.id, {
+          'uidValidity': uidValidity,
+          'lastUid': maxUid,
+        });
         return;
       }
 
-      final escaped = messageId.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-      final searchResult = await client.uidSearchMessages(
-        searchCriteria: 'HEADER $_headerNoteFor "$escaped"',
-      );
-      final uids = searchResult.matchingSequence?.toList() ?? [];
-
-      if (uids.isEmpty) {
-        await (_db.delete(_db.emailNotes)
-              ..where(
-                (t) =>
-                    t.accountId.equals(account.id) &
-                    t.messageId.equals(messageId),
-              ))
-            .go();
-        return;
-      }
-
-      final seq = imap.MessageSequence.fromIds(uids, isUid: true);
-      final fetch = await client.uidFetchMessages(seq, '(UID BODY.PEEK[])');
-
-      final fetchedIds = <String>{};
-      for (final msg in fetch.messages) {
-        final uid = msg.uid;
-        if (uid == null) continue;
-        final noteId = msg.getHeaderValue(_headerNoteId)?.trim();
-        if (noteId == null || noteId.isEmpty) continue;
-        fetchedIds.add(noteId);
-        await _db.into(_db.emailNotes).insertOnConflictUpdate(
-              EmailNotesCompanion.insert(
-                id: noteId,
-                accountId: account.id,
-                messageId: messageId,
-                noteText: msg.decodeTextPlainPart() ?? '',
-                serverId: uid.toString(),
-                createdAt: msg.decodeDate() ?? DateTime.now(),
-              ),
-            );
-      }
-
-      // Remove stale local notes (deleted on the server).
-      final local = await (_db.select(_db.emailNotes)
-            ..where(
-              (t) =>
-                  t.accountId.equals(account.id) &
-                  t.messageId.equals(messageId),
-            ))
-          .get();
-      for (final note in local) {
-        if (!fetchedIds.contains(note.id)) {
-          await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(note.id)))
-              .go();
+      // Incremental scan: fetch bodies only for newly appended UIDs.
+      final lastUid = storedLastUid ?? 0;
+      final newUids = (await client.uidSearchMessages(
+            searchCriteria: 'UID ${lastUid + 1}:*',
+          ))
+              .matchingSequence
+              ?.toList() ??
+          [];
+      // Some IMAP servers return the last-seen UID when nothing is newer;
+      // drop anything at or below the checkpoint so we don't refetch.
+      final trulyNew = newUids.where((u) => u > lastUid).toList();
+      if (trulyNew.isNotEmpty) {
+        final seq = imap.MessageSequence.fromIds(trulyNew, isUid: true);
+        final fetch = await client.uidFetchMessages(seq, '(UID BODY.PEEK[])');
+        for (final msg in fetch.messages) {
+          await _upsertNoteFromImapMessage(account.id, msg);
         }
       }
+
+      // Reconcile deletions with a cheap UID-only ALL search (no bodies).
+      final serverUids = (await client.uidSearchMessages(searchCriteria: 'ALL'))
+              .matchingSequence
+              ?.toList() ??
+          [];
+      final serverUidStrings = serverUids.map((u) => u.toString()).toSet();
+      await _pruneNotesForAccountByServerId(account.id, serverUidStrings);
+
+      final maxUid = serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+      await _saveNotesCheckpoint(account.id, {
+        'uidValidity': uidValidity,
+        'lastUid': maxUid,
+      });
     } finally {
       await client.logout();
     }
   }
 
-  Future<void> _syncNotesJmap(
+  Future<void> _syncAllNotesJmap(
     account_model.Account account,
     String password,
-    String messageId,
   ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) return;
@@ -156,16 +181,41 @@ class NoteRepositoryImpl implements NoteRepository {
 
     final mailboxId = await _findNotesMailboxJmap(jmap);
     if (mailboxId == null) {
-      await (_db.delete(_db.emailNotes)
-            ..where(
-              (t) =>
-                  t.accountId.equals(account.id) &
-                  t.messageId.equals(messageId),
-            ))
-          .go();
+      await _clearNotesForAccount(account.id);
+      await _clearNotesCheckpoint(account.id);
       return;
     }
 
+    final checkpoint = await _loadNotesCheckpoint(account.id);
+    final storedQueryState = checkpoint?['queryState'] as String?;
+    final storedEmailState = checkpoint?['emailState'] as String?;
+
+    if (storedQueryState == null || storedEmailState == null) {
+      await _jmapFullNotesSync(account.id, jmap, mailboxId);
+      return;
+    }
+
+    try {
+      await _jmapIncrementalNotesSync(
+        account.id,
+        jmap,
+        mailboxId,
+        sinceQueryState: storedQueryState,
+        sinceEmailState: storedEmailState,
+      );
+    } on _NotesCannotCalculateChanges {
+      // Server can no longer resolve the sinceState token — reset and
+      // re-fetch everything.
+      await _clearNotesCheckpoint(account.id);
+      await _jmapFullNotesSync(account.id, jmap, mailboxId);
+    }
+  }
+
+  Future<void> _jmapFullNotesSync(
+    String accountId,
+    JmapClient jmap,
+    String mailboxId,
+  ) async {
     final queryResp = await jmap.call([
       [
         'Email/query',
@@ -176,94 +226,167 @@ class NoteRepositoryImpl implements NoteRepository {
         '0',
       ],
     ]);
-    final ids = List<String>.from(
-      (_responseArgs(queryResp, 0, 'Email/query')['ids'] as List? ?? []),
-    );
+    final queryArgs = _responseArgs(queryResp, 0, 'Email/query');
+    final queryState = queryArgs['queryState'] as String? ?? '';
+    final ids = List<String>.from(queryArgs['ids'] as List? ?? const []);
 
+    final fetchedIds = <String>{};
+    String emailState = '';
     if (ids.isEmpty) {
-      await (_db.delete(_db.emailNotes)
-            ..where(
-              (t) =>
-                  t.accountId.equals(account.id) &
-                  t.messageId.equals(messageId),
-            ))
-          .go();
-      return;
+      // Still need a starting emailState — Email/get with an empty ids list
+      // returns the current state and an empty list (RFC 8621 §5.1).
+      final getResp = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': <String>[],
+            'properties': _noteProperties,
+            'fetchTextBodyValues': true,
+          },
+          '0',
+        ],
+      ]);
+      emailState =
+          _responseArgs(getResp, 0, 'Email/get')['state'] as String? ?? '';
+    } else {
+      final getResp = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': ids,
+            'properties': _noteProperties,
+            'fetchTextBodyValues': true,
+          },
+          '0',
+        ],
+      ]);
+      final getArgs = _responseArgs(getResp, 0, 'Email/get');
+      emailState = getArgs['state'] as String? ?? '';
+      final list = getArgs['list'] as List<dynamic>;
+
+      for (final e in list) {
+        final noteId = await _upsertNoteFromJmapEmail(
+          accountId,
+          e as Map<String, dynamic>,
+        );
+        if (noteId != null) fetchedIds.add(noteId);
+      }
     }
 
-    final getResp = await jmap.call([
+    // Purge local rows that weren't observed.
+    await _pruneNotesForAccountNotIn(accountId, fetchedIds);
+
+    await _saveNotesCheckpoint(accountId, {
+      'queryState': queryState,
+      'emailState': emailState,
+    });
+  }
+
+  Future<void> _jmapIncrementalNotesSync(
+    String accountId,
+    JmapClient jmap,
+    String mailboxId, {
+    required String sinceQueryState,
+    required String sinceEmailState,
+  }) async {
+    final responses = await jmap.call([
       [
-        'Email/get',
+        'Email/queryChanges',
         {
           'accountId': jmap.accountId,
-          'ids': ids,
-          'properties': [
-            'id',
-            'receivedAt',
-            'textBody',
-            'bodyValues',
-            'header:$_headerNoteFor:asText',
-            'header:$_headerNoteId:asText',
-          ],
-          'fetchTextBodyValues': true,
+          'filter': {'inMailbox': mailboxId},
+          'sinceQueryState': sinceQueryState,
         },
         '0',
       ],
+      [
+        'Email/changes',
+        {'accountId': jmap.accountId, 'sinceState': sinceEmailState},
+        '1',
+      ],
     ]);
-    final list =
-        _responseArgs(getResp, 0, 'Email/get')['list'] as List<dynamic>;
 
-    final fetchedIds = <String>{};
-    for (final e in list) {
-      final m = e as Map<String, dynamic>;
-      final noteFor = (m['header:$_headerNoteFor:asText'] as String?)?.trim();
-      if (noteFor != messageId) continue;
-      final noteId = (m['header:$_headerNoteId:asText'] as String?)?.trim();
-      if (noteId == null || noteId.isEmpty) continue;
-      final jmapEmailId = m['id'] as String;
-
-      final bodyValues = m['bodyValues'] as Map<String, dynamic>? ?? {};
-      final textBodyParts = m['textBody'] as List<dynamic>? ?? [];
-      var noteText = '';
-      if (textBodyParts.isNotEmpty) {
-        final partId =
-            (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
-        if (partId != null) {
-          noteText = (bodyValues[partId] as Map<String, dynamic>?)?['value']
-                  as String? ??
-              '';
-        }
+    final queryChanges = _responseTriple(responses, 0);
+    if (queryChanges[0] == 'error') {
+      final type = (queryChanges[1] as Map<String, dynamic>)['type'] as String?;
+      if (type == 'cannotCalculateChanges') {
+        throw const _NotesCannotCalculateChanges();
       }
-
-      final createdAt =
-          DateTime.tryParse(m['receivedAt'] as String? ?? '') ?? DateTime.now();
-      fetchedIds.add(noteId);
-      await _db.into(_db.emailNotes).insertOnConflictUpdate(
-            EmailNotesCompanion.insert(
-              id: noteId,
-              accountId: account.id,
-              messageId: messageId,
-              noteText: noteText,
-              serverId: jmapEmailId,
-              createdAt: createdAt,
-            ),
-          );
+      throw JmapException('Email/queryChanges error: $type');
+    }
+    final emailChanges = _responseTriple(responses, 1);
+    if (emailChanges[0] == 'error') {
+      final type = (emailChanges[1] as Map<String, dynamic>)['type'] as String?;
+      if (type == 'cannotCalculateChanges') {
+        throw const _NotesCannotCalculateChanges();
+      }
+      throw JmapException('Email/changes error: $type');
     }
 
-    // Remove stale local notes.
-    final local = await (_db.select(_db.emailNotes)
-          ..where(
-            (t) =>
-                t.accountId.equals(account.id) & t.messageId.equals(messageId),
-          ))
-        .get();
-    for (final note in local) {
-      if (!fetchedIds.contains(note.id)) {
-        await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(note.id)))
-            .go();
+    final queryArgs = queryChanges[1] as Map<String, dynamic>;
+    final newQueryState = queryArgs['newQueryState'] as String? ?? '';
+    final added = queryArgs['added'] as List<dynamic>? ?? const [];
+    final removed =
+        List<String>.from(queryArgs['removed'] as List? ?? const []);
+
+    final emailArgs = emailChanges[1] as Map<String, dynamic>;
+    final newEmailState = emailArgs['newState'] as String? ?? '';
+    final created =
+        List<String>.from(emailArgs['created'] as List? ?? const []);
+    final updated =
+        List<String>.from(emailArgs['updated'] as List? ?? const []);
+    final destroyed =
+        List<String>.from(emailArgs['destroyed'] as List? ?? const []);
+
+    // Fetch bodies for anything newly added or updated in the Notes mailbox.
+    final toFetch = <String>{
+      for (final entry in added)
+        (entry as Map<String, dynamic>)['id'] as String,
+      ...created,
+      ...updated,
+    };
+    if (toFetch.isNotEmpty) {
+      final getResp = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': toFetch.toList(),
+            'properties': _noteProperties,
+            'fetchTextBodyValues': true,
+          },
+          '0',
+        ],
+      ]);
+      final list = _responseArgs(getResp, 0, 'Email/get')['list'] as List;
+      for (final e in list) {
+        await _upsertNoteFromJmapEmail(accountId, e as Map<String, dynamic>);
       }
     }
+
+    // Deletions come from two sources: destroyed (globally deleted) and
+    // removed-from-query (moved out of the Notes mailbox). Both mean "not a
+    // note anymore", so drop from the local cache in either case.
+    for (final jmapId in {...destroyed, ...removed}) {
+      await _deleteNoteByServerId(accountId, jmapId);
+    }
+
+    await _saveNotesCheckpoint(accountId, {
+      'queryState': newQueryState,
+      'emailState': newEmailState,
+    });
   }
+
+  static const _noteProperties = [
+    'id',
+    'receivedAt',
+    'textBody',
+    'bodyValues',
+    'header:$_headerNoteFor:asText',
+    'header:$_headerNoteId:asText',
+  ];
 
   // ── Add ───────────────────────────────────────────────────────────────────
 
@@ -493,6 +616,165 @@ class NoteRepositoryImpl implements NoteRepository {
         .go();
   }
 
+  // ── Upsert helpers ────────────────────────────────────────────────────────
+
+  /// Decodes note headers/body from an IMAP fetched message and upserts the
+  /// row. Returns the note id on success, or `null` when the message is
+  /// missing the note-id header (not one of ours).
+  Future<String?> _upsertNoteFromImapMessage(
+    String accountId,
+    imap.MimeMessage msg,
+  ) async {
+    final uid = msg.uid;
+    if (uid == null) return null;
+    final noteId = msg.getHeaderValue(_headerNoteId)?.trim();
+    if (noteId == null || noteId.isEmpty) return null;
+    final messageId = msg.getHeaderValue(_headerNoteFor)?.trim();
+    if (messageId == null || messageId.isEmpty) return null;
+
+    await _db.into(_db.emailNotes).insertOnConflictUpdate(
+          EmailNotesCompanion.insert(
+            id: noteId,
+            accountId: accountId,
+            messageId: messageId,
+            noteText: msg.decodeTextPlainPart() ?? '',
+            serverId: uid.toString(),
+            createdAt: msg.decodeDate() ?? DateTime.now(),
+          ),
+        );
+    return noteId;
+  }
+
+  /// Decodes note headers/body from a JMAP Email/get response entry and
+  /// upserts the row. Returns the note id on success, or `null` when the
+  /// message is missing the note-id header.
+  Future<String?> _upsertNoteFromJmapEmail(
+    String accountId,
+    Map<String, dynamic> m,
+  ) async {
+    final noteId = (m['header:$_headerNoteId:asText'] as String?)?.trim();
+    if (noteId == null || noteId.isEmpty) return null;
+    final messageId = (m['header:$_headerNoteFor:asText'] as String?)?.trim();
+    if (messageId == null || messageId.isEmpty) return null;
+
+    final jmapEmailId = m['id'] as String;
+    final bodyValues = m['bodyValues'] as Map<String, dynamic>? ?? const {};
+    final textBodyParts = m['textBody'] as List<dynamic>? ?? const [];
+    var noteText = '';
+    if (textBodyParts.isNotEmpty) {
+      final partId =
+          (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
+      if (partId != null) {
+        noteText = (bodyValues[partId] as Map<String, dynamic>?)?['value']
+                as String? ??
+            '';
+      }
+    }
+    final createdAt =
+        DateTime.tryParse(m['receivedAt'] as String? ?? '') ?? DateTime.now();
+
+    await _db.into(_db.emailNotes).insertOnConflictUpdate(
+          EmailNotesCompanion.insert(
+            id: noteId,
+            accountId: accountId,
+            messageId: messageId,
+            noteText: noteText,
+            serverId: jmapEmailId,
+            createdAt: createdAt,
+          ),
+        );
+    return noteId;
+  }
+
+  // ── DB helpers ────────────────────────────────────────────────────────────
+
+  Future<void> _clearNotesForAccount(String accountId) async {
+    await (_db.delete(_db.emailNotes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .go();
+  }
+
+  Future<void> _pruneNotesForAccountNotIn(
+    String accountId,
+    Set<String> keptNoteIds,
+  ) async {
+    final rows = await (_db.select(_db.emailNotes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in rows) {
+      if (!keptNoteIds.contains(row.id)) {
+        await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
+            .go();
+      }
+    }
+  }
+
+  Future<void> _pruneNotesForAccountByServerId(
+    String accountId,
+    Set<String> keptServerIds,
+  ) async {
+    final rows = await (_db.select(_db.emailNotes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in rows) {
+      if (!keptServerIds.contains(row.serverId)) {
+        await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
+            .go();
+      }
+    }
+  }
+
+  Future<void> _deleteNoteByServerId(
+    String accountId,
+    String serverId,
+  ) async {
+    await (_db.delete(_db.emailNotes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.serverId.equals(serverId),
+          ))
+        .go();
+  }
+
+  Future<Map<String, dynamic>?> _loadNotesCheckpoint(String accountId) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_notesResourceType),
+          ))
+        .getSingleOrNull();
+    if (row == null) return null;
+    try {
+      return jsonDecode(row.state) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveNotesCheckpoint(
+    String accountId,
+    Map<String, dynamic> checkpoint,
+  ) async {
+    await _db.into(_db.syncStates).insertOnConflictUpdate(
+          SyncStatesCompanion.insert(
+            accountId: accountId,
+            resourceType: _notesResourceType,
+            state: jsonEncode(checkpoint),
+            syncedAt: DateTime.now(),
+          ),
+        );
+  }
+
+  Future<void> _clearNotesCheckpoint(String accountId) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_notesResourceType),
+          ))
+        .go();
+  }
+
   // ── JMAP helpers ──────────────────────────────────────────────────────────
 
   Future<String?> _findNotesMailboxJmap(JmapClient jmap) async {
@@ -547,6 +829,12 @@ class NoteRepositoryImpl implements NoteRepository {
     return triple[1] as Map<String, dynamic>;
   }
 
+  /// Returns the raw `[methodName, args, callId]` triple without throwing on
+  /// method-level errors — used when the caller needs to inspect the error
+  /// type (e.g. to fall back to a full sync on `cannotCalculateChanges`).
+  List<dynamic> _responseTriple(List<dynamic> responses, int index) =>
+      responses[index] as List<dynamic>;
+
   EmailNote _toModel(EmailNoteRow row) => EmailNote(
         id: row.id,
         accountId: row.accountId,
@@ -567,4 +855,10 @@ class NoteRepositoryImpl implements NoteRepository {
         '-${hex.substring(12, 16)}-${hex.substring(16, 20)}'
         '-${hex.substring(20)}';
   }
+}
+
+/// Internal sentinel: the JMAP server can no longer calculate incremental
+/// changes from the stored state token — fall back to a full sync.
+class _NotesCannotCalculateChanges implements Exception {
+  const _NotesCannotCalculateChanges();
 }
