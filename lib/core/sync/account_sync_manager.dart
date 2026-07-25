@@ -30,6 +30,66 @@ bool _isTransientNetworkError(Object e) {
 
 typedef OnNewMailCallback = Future<void> Function(String accountEmail);
 
+/// Coarse-grained phase of a [AccountSyncManager.forceResync] run. The UI
+/// uses this to pick the right message/spinner while the operation runs.
+enum ForceResyncPhase {
+  /// Deleting cached email/mailbox rows and resetting sync checkpoints.
+  clearing,
+
+  /// Re-syncing the mailbox list from the server.
+  syncingMailboxes,
+
+  /// Iterating mailboxes and re-syncing their emails.
+  syncingEmails,
+
+  /// All mailboxes finished without error.
+  complete,
+
+  /// Terminal state — some part of the resync failed. Cached bodies remain
+  /// intact so nothing has to be re-downloaded on the next attempt.
+  failed,
+}
+
+/// A single progress snapshot emitted by [AccountSyncManager.forceResync].
+///
+/// Snapshots are cumulative: [mailboxStats], [totalFetched] and [totalSkipped]
+/// grow as mailboxes finish. A UI can safely render just the latest snapshot
+/// without remembering earlier ones.
+class ForceResyncProgress {
+  const ForceResyncProgress({
+    required this.phase,
+    this.currentMailboxIndex = 0,
+    this.totalMailboxes = 0,
+    this.currentMailboxName,
+    this.mailboxStats = const [],
+    this.totalFetched = 0,
+    this.totalSkipped = 0,
+    this.error,
+  });
+
+  final ForceResyncPhase phase;
+
+  /// Zero-based index of the mailbox currently being processed. Equals
+  /// [totalMailboxes] once every mailbox has finished.
+  final int currentMailboxIndex;
+  final int totalMailboxes;
+  final String? currentMailboxName;
+
+  /// Per-mailbox results collected so far.
+  final List<MailboxSyncStats> mailboxStats;
+
+  final int totalFetched;
+  final int totalSkipped;
+
+  /// Combined error text, one line per failing mailbox. Non-null when
+  /// [phase] is [ForceResyncPhase.failed]; may still be non-null on
+  /// [ForceResyncPhase.complete] never — completion implies no errors.
+  final String? error;
+
+  bool get isTerminal =>
+      phase == ForceResyncPhase.complete || phase == ForceResyncPhase.failed;
+}
+
 /// Manages background sync for all accounts.
 ///
 /// IMAP accounts get an IDLE-based sync loop (_AccountSync).
@@ -154,49 +214,177 @@ class AccountSyncManager {
   }
 
   /// Clears all locally-cached emails and mailboxes for [accountId], then
-  /// immediately starts a fresh sync cycle. Use this as an escape hatch when
-  /// the local DB is believed to be out of sync with the server.
-  Future<void> forceResync(String accountId) async {
-    _active.remove(accountId)?.stop();
+  /// re-syncs mailboxes and every mailbox's emails from the server. Cached
+  /// email bodies and attachments are preserved (see `clearForResync` on the
+  /// email repository) so already-downloaded content is not fetched again.
+  ///
+  /// Returns a single-subscription [Stream] that emits [ForceResyncProgress]
+  /// snapshots as the work advances (one per phase change, plus one per
+  /// mailbox). The stream closes right after the final snapshot whose
+  /// [ForceResyncProgress.isTerminal] is `true`. The regular background sync
+  /// loop for [accountId] is stopped for the duration of the resync and
+  /// restarted once the stream closes.
+  Stream<ForceResyncProgress> forceResync(String accountId) {
+    final ctrl = StreamController<ForceResyncProgress>();
+    ctrl.onListen = () => unawaited(_runForceResync(accountId, ctrl));
+    return ctrl.stream;
+  }
 
-    await _emails.clearForResync(accountId);
-    await _mailboxes.clearForResync(accountId);
+  Future<void> _runForceResync(
+    String accountId,
+    StreamController<ForceResyncProgress> ctrl,
+  ) async {
+    final stats = <MailboxSyncStats>[];
+    final errors = <String>[];
+    var totalFetched = 0;
+    var totalSkipped = 0;
 
-    final accounts = await _accounts.observeAccounts().first;
-    final account = accounts.cast<Account?>().firstWhere(
-          (a) => a?.id == accountId,
-          orElse: () => null,
+    void emit(ForceResyncProgress p) {
+      if (!ctrl.isClosed) ctrl.add(p);
+    }
+
+    Account? account;
+    try {
+      _active.remove(accountId)?.stop();
+      _emitSyncing(accountId, syncing: true);
+
+      emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
+
+      await _emails.clearForResync(accountId);
+      await _mailboxes.clearForResync(accountId);
+
+      final accounts = await _accounts.observeAccounts().first;
+      account = accounts.cast<Account?>().firstWhere(
+            (a) => a?.id == accountId,
+            orElse: () => null,
+          );
+      if (account == null) {
+        emit(
+          const ForceResyncProgress(
+            phase: ForceResyncPhase.failed,
+            error: 'Account not found',
+          ),
         );
-    if (account == null) return;
+        return;
+      }
 
-    final loop = switch (account.type) {
-      AccountType.imap => _AccountSync(
-          account,
-          _accounts,
-          _mailboxes,
-          _emails,
-          _imapConnect,
-          _syncLog,
-          _appLogger,
-          _drafts,
-          _onNewMail,
-          onSyncStart: () => _emitSyncing(accountId, syncing: true),
-          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+      emit(
+        const ForceResyncProgress(phase: ForceResyncPhase.syncingMailboxes),
+      );
+      await _mailboxes.syncMailboxes(accountId);
+
+      final mailboxes = await _mailboxes.observeMailboxes(accountId).first;
+      final total = mailboxes.length;
+
+      for (var i = 0; i < mailboxes.length; i++) {
+        final mailbox = mailboxes[i];
+        emit(
+          ForceResyncProgress(
+            phase: ForceResyncPhase.syncingEmails,
+            currentMailboxIndex: i,
+            totalMailboxes: total,
+            currentMailboxName: mailbox.name,
+            mailboxStats: List.of(stats),
+            totalFetched: totalFetched,
+            totalSkipped: totalSkipped,
+          ),
+        );
+        final start = DateTime.now();
+        try {
+          final r = await _emails.syncEmails(accountId, mailbox.path);
+          stats.add(
+            MailboxSyncStats(
+              mailboxPath: mailbox.path,
+              mailboxName: mailbox.name,
+              fetched: r.fetched,
+              skipped: r.skipped,
+              bytesTransferred: r.bytesTransferred,
+              duration: DateTime.now().difference(start),
+            ),
+          );
+          totalFetched += r.fetched;
+          totalSkipped += r.skipped;
+        } catch (e, st) {
+          log(
+            'forceResync: syncEmails failed for ${mailbox.path}',
+            error: e,
+            stackTrace: st,
+          );
+          errors.add('${mailbox.name}: $e');
+          stats.add(
+            MailboxSyncStats(
+              mailboxPath: mailbox.path,
+              mailboxName: mailbox.name,
+              fetched: 0,
+              skipped: 0,
+              bytesTransferred: 0,
+              duration: DateTime.now().difference(start),
+            ),
+          );
+        }
+      }
+
+      emit(
+        ForceResyncProgress(
+          phase: errors.isEmpty
+              ? ForceResyncPhase.complete
+              : ForceResyncPhase.failed,
+          currentMailboxIndex: total,
+          totalMailboxes: total,
+          mailboxStats: List.of(stats),
+          totalFetched: totalFetched,
+          totalSkipped: totalSkipped,
+          error: errors.isEmpty ? null : errors.join('\n'),
         ),
-      AccountType.jmap => _JmapAccountSync(
-          account,
-          _mailboxes,
-          _emails,
-          _accounts,
-          _syncLog,
-          _appLogger,
-          _drafts,
-          onSyncStart: () => _emitSyncing(accountId, syncing: true),
-          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+      );
+    } catch (e, st) {
+      log('forceResync failed', error: e, stackTrace: st);
+      emit(
+        ForceResyncProgress(
+          phase: ForceResyncPhase.failed,
+          mailboxStats: List.of(stats),
+          totalFetched: totalFetched,
+          totalSkipped: totalSkipped,
+          error: e.toString(),
         ),
-    };
-    _active[accountId] = loop;
-    loop.start();
+      );
+    } finally {
+      _emitSyncing(accountId, syncing: false);
+      // Bring the account's background loop back so IDLE/push resumes even
+      // when the resync itself failed. Skip only if the account vanished
+      // mid-resync.
+      if (account != null) {
+        final loop = switch (account.type) {
+          AccountType.imap => _AccountSync(
+              account,
+              _accounts,
+              _mailboxes,
+              _emails,
+              _imapConnect,
+              _syncLog,
+              _appLogger,
+              _drafts,
+              _onNewMail,
+              onSyncStart: () => _emitSyncing(accountId, syncing: true),
+              onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+            ),
+          AccountType.jmap => _JmapAccountSync(
+              account,
+              _mailboxes,
+              _emails,
+              _accounts,
+              _syncLog,
+              _appLogger,
+              _drafts,
+              onSyncStart: () => _emitSyncing(accountId, syncing: true),
+              onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+            ),
+        };
+        _active[accountId] = loop;
+        loop.start();
+      }
+      await ctrl.close();
+    }
   }
 }
 

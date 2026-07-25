@@ -58,6 +58,7 @@ const _excluded = {
   'lib/ui/screens/edit_account_screen.dart',
   'lib/ui/screens/email_detail_screen.dart',
   'lib/ui/screens/email_list_screen.dart',
+  'lib/ui/screens/force_resync_screen.dart',
   'lib/ui/screens/mailbox_list_screen.dart',
   'lib/ui/screens/message_debug_screen.dart',
   'lib/ui/screens/search_screen.dart',
