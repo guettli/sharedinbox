@@ -217,10 +217,11 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
 		WithExec([]string{"/bin/sh", "-c",
-			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
+			`set -e; ` +
+				`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
 				`chown -R ci:ci "$flutter_dir"; ` +
-				`[ -n "$ANDROID_HOME" ] && chown -R ci:ci "$ANDROID_HOME" || true; ` +
-				`mkdir -p /src && chown ci:ci /src`}).
+				`if [ -n "$ANDROID_HOME" ]; then chown -R ci:ci "$ANDROID_HOME"; fi; ` +
+				`mkdir -p /src; chown ci:ci /src`}).
 		WithEnvVariable("PUB_CACHE", "/home/ci/.pub-cache").
 		WithEnvVariable("HOME", "/home/ci").
 		WithUser("ci").
@@ -1294,18 +1295,28 @@ func (m *Ci) PrintRunnerWait(
 ) (string, error) {
 	const script = `#!/bin/sh
 set -u
-created=$(curl -sf --max-time 30 \
+runner_start=$(date +%s)
+response=$(curl -sf --max-time 30 \
     -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${API_URL:-https://api.github.com}/repos/${REPOSITORY:-}/actions/runs/${RUN_ID:-}" \
-    | python3 -c "import sys,json;print(json.load(sys.stdin).get('created_at',''))" 2>/dev/null) || true
-runner_start=$(date +%s)
+    "${API_URL:-https://api.github.com}/repos/${REPOSITORY:-}/actions/runs/${RUN_ID:-}")
+curl_rc=$?
+if [ "$curl_rc" -ne 0 ]; then
+    echo "Runner wait time: unknown (API lookup failed, curl exit $curl_rc)"
+    exit 0
+fi
+created=$(printf '%s' "$response" | python3 -c "import sys,json;print(json.load(sys.stdin).get('created_at',''))")
+py_rc=$?
+if [ "$py_rc" -ne 0 ]; then
+    echo "Runner wait time: unknown (malformed JSON from GitHub API, python exit $py_rc)" >&2
+    exit 1
+fi
 if [ -n "$created" ]; then
     queued_epoch=$(date -d "$created" +%s)
     echo "Runner wait time: $((runner_start - queued_epoch))s (queued at $created)"
 else
-    echo "Runner wait time: unknown (API lookup failed)"
+    echo "Runner wait time: unknown (created_at missing from response)"
 fi
 `
 	return dag.Container().
@@ -1462,19 +1473,32 @@ USE_SSH="${USE_SSH:-false}"
 echo "Checking that version ${VERSION} is live at ${URL} ..."
 for i in 1 2 3 4 5 6; do
     if [ "$USE_SSH" = "true" ]; then
+        # Run remote curl under 'set -e' so a network error propagates as a
+        # non-zero ssh exit — distinct from HTTP != 200.
         OUT=$(ssh -i /home/deploy/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$SSH_USER@$SSH_HOST" "
-            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}' 2>/dev/null || echo '000')
+            set -e
+            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}')
             echo \"\$HTTP\"
-            cat /tmp/website-verify.html 2>/dev/null || true
-        " || true)
+            cat /tmp/website-verify.html
+        ")
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: ssh/curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
         HTTP=$(echo "$OUT" | head -n 1)
         HTML=$(echo "$OUT" | tail -n +2)
     else
-        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
-        HTML=$(cat /tmp/website-verify.html 2>/dev/null || true)
+        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}")
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
+        HTML=$(cat /tmp/website-verify.html)
     fi
     if [ "${HTTP}" != "200" ]; then
-        echo "HTTP ${HTTP} (attempt ${i}/6); waiting 10s ..."
+        echo "HTTP status ${HTTP} (attempt ${i}/6); waiting 10s ..."
     elif echo "$HTML" | grep -q "x-version.*${VERSION}"; then
         echo "OK: version ${VERSION} is live (HTTP ${HTTP})."
         exit 0

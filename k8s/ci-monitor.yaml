@@ -118,8 +118,12 @@ data:
     # made, 1 if the file already used the wanted label, 2 if no runs-on line
     # was found.
     patch_runs_on() {
-        local file="$1" wanted="$2" current
-        current=$(grep -E '^\s*runs-on:' "$file" | head -n1 | sed -E 's/.*runs-on:[[:space:]]*//' | tr -d '"' | tr -d "'" | xargs || true)
+        local file="$1" wanted="$2" line current
+        line=$(grep -E '^[[:space:]]*runs-on:' "$file" | head -n1)
+        if [ -z "$line" ]; then
+            return 2
+        fi
+        current=$(printf '%s' "$line" | sed -E 's/.*runs-on:[[:space:]]*//' | tr -d '"' | tr -d "'" | xargs)
         if [ -z "$current" ]; then
             return 2
         fi
@@ -159,10 +163,7 @@ data:
         local label
         label=$(printf '%s' "$json" | python3 -c "
     import json, sys
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+    data = json.load(sys.stdin)
     for r in data.get('runners', []):
         if r.get('status') == 'offline':
             continue
@@ -171,7 +172,12 @@ data:
             if name and name not in ('self-hosted', 'Linux', 'X64'):
                 print(name)
                 sys.exit(0)
-    " 2>/dev/null || true)
+    ")
+        local py_rc=$?
+        if [ "$py_rc" -ne 0 ]; then
+            log "ERROR: failed to parse runners JSON from $repo (python exit $py_rc)"
+            exit 1
+        fi
         if [ -n "$label" ]; then
             echo "$label"
             return
