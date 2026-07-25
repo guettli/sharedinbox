@@ -37,6 +37,15 @@ abstract class OutboxRepository {
   /// the next flush. No-op if the row no longer exists.
   Future<void> retry(int id);
 
+  /// Clears `nextAttemptAt` on every `pending` row across every account so
+  /// the next [flush] call picks them up immediately. Used by the reconnect
+  /// handler in `di.dart` — when the device comes back online, waiting for
+  /// the current per-row backoff (up to an hour) to elapse would defeat the
+  /// point of "send as soon as we're back online" (#353). The attempt counter
+  /// is kept so the next backoff still ramps if the send fails again.
+  /// Returns the number of rows whose backoff was cleared.
+  Future<int> resetPendingBackoff();
+
   /// Permanently removes a queued message.
   Future<void> discard(int id);
 }

@@ -166,6 +166,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Resume any saved UnifiedPush distributor registration so push wake-ups
     // start arriving again as soon as possible after launch.
     unawaited(ref.read(unifiedPushServiceProvider).initialize());
+    // Watch offline → online transitions and drain the outbox on reconnect
+    // so mail composed while offline is sent as soon as the network is back
+    // (#353). Reading `reconnectFlushProvider` installs the subscription.
+    unawaited(ref.read(connectivityServiceProvider).initialize());
+    ref.read(reconnectFlushProvider);
     // Handle "compose email" intents (mailto: links, Share → Email) by
     // pushing /compose onto the running router. No-op on non-Android.
     _mailIntentHandler = MailIntentHandler(router: router);
