@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -129,6 +130,32 @@ class ChangedTargetsTests(unittest.TestCase):
             return {}
         result = _run(gh_get=gh_get)
         self.assertEqual(result, {"android": False, "linux": False})
+
+    def test_workflow_runs_lookup_error_propagates(self):
+        """LAST_DEPLOYED_SHA lookup errors must NOT silently trigger a
+        deploy-everything fallback — they should fail the workflow so the
+        underlying API issue is fixed instead of being papered over."""
+        def gh_get(url, token):
+            raise urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
+        with self.assertRaises(urllib.error.HTTPError):
+            _run(gh_get=gh_get)
+
+    def test_compare_api_error_propagates(self):
+        """compare-API errors used to fall back to deploy-everything; that
+        fallback is gone — the exception must reach the caller."""
+        def gh_get(url, token):
+            if "/workflows/" in url:
+                return {"workflow_runs": [{"id": 3, "head_sha": "cafef00d"}]}
+            if "/runs/3/jobs" in url:
+                return {"jobs": [{
+                    "name": "Build & Deploy",
+                    "conclusion": "success",
+                }]}
+            if "/compare/" in url:
+                raise urllib.error.URLError("connection reset by peer")
+            return {}
+        with self.assertRaises(urllib.error.URLError):
+            _run(gh_get=gh_get)
 
     def test_skipped_job_is_not_a_successful_deploy(self):
         """A run whose target job was skipped must not be treated as the last
