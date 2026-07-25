@@ -121,16 +121,7 @@ Test with a Fastmail account
 
 ---
 
-scripts/check_coverage.dart
-reduce files in _excluded.
-
----
-
 Renovate: Is there a way to run it outside Github Actions? On cli?
-
----
-
-Write test which fails, when _excluded contains unknown files.
 
 ---
 
