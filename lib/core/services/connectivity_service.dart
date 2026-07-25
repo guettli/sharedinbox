@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:meta/meta.dart';
 
@@ -42,6 +43,18 @@ class ConnectivityService {
   /// Subscribes to the platform connectivity stream. Idempotent-ish: safe to
   /// call twice, but a second call replaces any prior subscription.
   Future<void> initialize() async {
+    // connectivity_plus is only reliable on mobile. On desktop — especially a
+    // headless Linux CI box with no D-Bus/NetworkManager — its platform channel
+    // throws asynchronously (a SocketException from the D-Bus client) which the
+    // try/catch below cannot swallow, crashing app startup under the E2E test.
+    // The reconnect kick is a mobile concern anyway (see class doc); on desktop
+    // queued mail still drains via the periodic sync cycle. Web is unaffected.
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.windows)) {
+      return;
+    }
     try {
       final connectivity = Connectivity();
       final initial = await connectivity.checkConnectivity();
