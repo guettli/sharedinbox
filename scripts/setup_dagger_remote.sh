@@ -218,7 +218,6 @@ if [ "$verify_rc" -ne 0 ]; then
     else
         echo "(no output captured from \`dagger core --help\`)"
     fi
-    ps aux | grep -F ssh | grep -v grep || true
     exit 1
 fi
 echo "Dagger connection verified successfully (CLI ${CLI_VERSION:-unknown})."
