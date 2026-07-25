@@ -1494,6 +1494,20 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/connectivity_service_test.dart",
+      "start_line": 26,
+      "end_line": 36,
+      "key": "410031bd9754c678"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/connectivity_service_test.dart",
+      "start_line": 111,
+      "end_line": 121,
+      "key": "410031bd9754c678"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/database_path_test.dart",
       "start_line": 13,
       "end_line": 26,
@@ -2587,29 +2601,29 @@
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 442,
-      "end_line": 464,
+      "start_line": 445,
+      "end_line": 467,
       "key": "63b134475ed29ab4"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 487,
-      "end_line": 500,
+      "start_line": 490,
+      "end_line": 503,
       "key": "3395067f8b6088fe"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 543,
+      "start_line": 546,
       "end_line": 206,
       "key": "7a21e45cb787f217"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/helpers.dart",
-      "start_line": 567,
-      "end_line": 590,
+      "start_line": 570,
+      "end_line": 593,
       "key": "ac834f9d26be3edf"
     },
     {
