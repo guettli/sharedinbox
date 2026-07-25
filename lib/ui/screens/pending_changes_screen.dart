@@ -9,7 +9,8 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/outbox_screen.dart' show SyncNowFn;
+import 'package:sharedinbox/ui/screens/outbox_screen.dart'
+    show QueueRowActions, SyncNowFn, retryQueueRow;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
@@ -176,40 +177,17 @@ class PendingChangeTile extends StatelessWidget {
             ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Retry now',
-            onPressed: () => _retry(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Discard',
-            onPressed: () => unawaited(repo.discardMutation(change.id)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _retry(BuildContext context) async {
-    // Capture the messenger BEFORE the async gap so a mid-await rebuild
-    // (queue row disappears once the flush succeeds) does not invalidate the
-    // context we're about to show the snackbar from.
-    final messenger = ScaffoldMessenger.of(context);
-    await repo.retryMutation(change.id);
-    final kicked = syncNow(change.accountId);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          kicked
-              ? 'Retrying change…'
-              : 'Sync is not running for this account. '
-                  'Enable it so the change can be applied.',
+      trailing: QueueRowActions(
+        onRetry: () => retryQueueRow(
+          context: context,
+          accountId: change.accountId,
+          retry: () => repo.retryMutation(change.id),
+          syncNow: syncNow,
+          runningMessage: 'Retrying change…',
+          notRunningMessage: 'Sync is not running for this account. '
+              'Enable it so the change can be applied.',
         ),
-        duration: const Duration(seconds: 3),
+        onDiscard: () => unawaited(repo.discardMutation(change.id)),
       ),
     );
   }

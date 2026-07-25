@@ -97,42 +97,22 @@ class OutboxTile extends StatelessWidget {
             ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Retry now',
-            onPressed: () => _retry(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Discard',
-            onPressed: () => unawaited(repo.discard(message.id)),
-          ),
-        ],
+      trailing: QueueRowActions(
+        onRetry: () => _retry(context),
+        onDiscard: () => unawaited(repo.discard(message.id)),
       ),
     );
   }
 
-  Future<void> _retry(BuildContext context) async {
-    // Capture the messenger BEFORE the async gap so the callback stays
-    // context-safe even if the widget tree rebuilds while retry() awaits.
-    final messenger = ScaffoldMessenger.of(context);
-    await repo.retry(message.id);
-    final kicked = syncNow(message.accountId);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          kicked
-              ? 'Retrying send…'
-              : 'Sync is not running for this account. '
-                  'Enable it to send the queued message.',
-        ),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
+  Future<void> _retry(BuildContext context) => retryQueueRow(
+        context: context,
+        accountId: message.accountId,
+        retry: () => repo.retry(message.id),
+        syncNow: syncNow,
+        runningMessage: 'Retrying send…',
+        notRunningMessage: 'Sync is not running for this account. '
+            'Enable it to send the queued message.',
+      );
 }
 
 class _LastErrorLine extends StatelessWidget {
@@ -159,6 +139,70 @@ class _LastErrorLine extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The trailing Row of Retry/Discard IconButtons used by every queue-row
+/// tile (Outbox, Sent Queue, Pending Changes). Extracted so the three
+/// screens share the same tooltips, icons, and layout without copy-paste.
+class QueueRowActions extends StatelessWidget {
+  const QueueRowActions({
+    super.key,
+    required this.onRetry,
+    required this.onDiscard,
+  });
+
+  final VoidCallback onRetry;
+  final VoidCallback onDiscard;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Retry now',
+          onPressed: onRetry,
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          tooltip: 'Discard',
+          onPressed: onDiscard,
+        ),
+      ],
+    );
+  }
+}
+
+/// Runs [retry] (usually resetting a queue row on the DB), then kicks the
+/// sync loop for [accountId] via [syncNow] and reports the outcome via a
+/// [SnackBar] on the enclosing [Scaffold]. Extracted so both the outbound
+/// send queue (per-account Outbox / global Sent Queue) and the pending
+/// mutation queue (Pending Changes) use identical retry semantics.
+///
+/// [runningMessage] is shown when the sync loop was actually kicked;
+/// [notRunningMessage] is shown when the loop is not currently active (e.g.
+/// bad credentials, account paused).
+Future<void> retryQueueRow({
+  required BuildContext context,
+  required String accountId,
+  required Future<void> Function() retry,
+  required SyncNowFn syncNow,
+  required String runningMessage,
+  required String notRunningMessage,
+}) async {
+  // Capture the messenger BEFORE the async gap so a mid-await rebuild (queue
+  // row disappears once the flush succeeds) does not invalidate the context
+  // we're about to show the snackbar from.
+  final messenger = ScaffoldMessenger.of(context);
+  await retry();
+  final kicked = syncNow(accountId);
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(kicked ? runningMessage : notRunningMessage),
+      duration: const Duration(seconds: 3),
+    ),
+  );
 }
 
 /// Shows the full last-error text alongside a "View in application log"
