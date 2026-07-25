@@ -3957,6 +3957,7 @@ class EmailRepositoryImpl implements EmailRepository {
       // Size is not stored in the local cache; skip silently.
       FilterField.size => const Constant(true),
       FilterField.header => _headerLike(leaf, t),
+      FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
     };
   }
 

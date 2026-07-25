@@ -890,6 +890,63 @@ void main() {
     );
 
     test(
+      'searchEmailsStructured with folder filter matches by mailbox path',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:inbox',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Hello inbox'),
+                receivedAt: DateTime(2026),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:archive',
+                accountId: 'acc-1',
+                mailboxPath: 'Archive',
+                uid: 2,
+                subject: const Value('Hello archive'),
+                receivedAt: DateTime(2026, 2),
+              ),
+            );
+
+        final containsFilter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.folder,
+              comparison: FilterComparison.contains,
+              value: 'inbox',
+            ),
+          ],
+        );
+        final containsResults =
+            await r.emails.searchEmailsStructured('acc-1', containsFilter);
+        expect(containsResults.map((e) => e.id), ['acc-1:inbox']);
+
+        final isFilter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.folder,
+              comparison: FilterComparison.is_,
+              value: 'archive',
+            ),
+          ],
+        );
+        final isResults =
+            await r.emails.searchEmailsStructured('acc-1', isFilter);
+        expect(isResults.map((e) => e.id), ['acc-1:archive']);
+      },
+    );
+
+    test(
       'searchEmailsStructured with similarFilterFor finds near-duplicate spam',
       () async {
         final r = _makeRepos();
