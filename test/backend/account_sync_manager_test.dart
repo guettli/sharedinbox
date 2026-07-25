@@ -9,9 +9,11 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 
 Future<imap.ImapClient> _fakeImapConnect(
@@ -163,6 +165,55 @@ void main() {
         manager.dispose();
         async.elapse(const Duration(milliseconds: 10));
       });
+    },
+  );
+
+  test(
+    'IMAP SocketException is logged at warn level, not error (#355)',
+    () async {
+      final accounts = _FakeAccounts('pw');
+      final mailboxes = _FakeMailboxes();
+      final emails = _FakeEmails();
+      final logs = _FakeLogs();
+      final appLogRepo = _RecordingAppLogRepo();
+
+      final manager = AccountSyncManager(
+        accounts,
+        mailboxes,
+        emails,
+        syncLog: logs,
+        imapConnect: _fakeImapConnect,
+        appLogger: AppLogger(appLogRepo),
+      );
+
+      manager.start();
+      accounts.push([_account('1')]);
+
+      // Give the first sync cycle time to fail through _fakeImapConnect and
+      // the unawaited AppLogger call to flush.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // The fake sync path succeeds through _runSync (no fakes throw), then
+      // fails inside _idle() when it invokes _fakeImapConnect. The catch block
+      // must log the SocketException at `warn` under 'sync.cycle.offline',
+      // NOT at `error` under 'sync.cycle.failed'.
+      final failedEntries =
+          appLogRepo.entries.where((e) => e.event == 'sync.cycle.failed');
+      final offlineEntries =
+          appLogRepo.entries.where((e) => e.event == 'sync.cycle.offline');
+      expect(
+        failedEntries,
+        isEmpty,
+        reason: 'offline is not a bug — must not log as sync.cycle.failed',
+      );
+      expect(
+        offlineEntries,
+        isNotEmpty,
+        reason: 'offline must be logged as sync.cycle.offline',
+      );
+      expect(offlineEntries.first.level, AppLogLevel.warn);
+
+      manager.dispose();
     },
   );
 
@@ -507,6 +558,56 @@ class _FakeEmails implements EmailRepository {
     String scriptContent,
   ) async =>
       0;
+}
+
+class _RecordingAppLogRepo implements AppLogRepository {
+  final entries = <AppLogEntry>[];
+  int _nextId = 1;
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    final id = _nextId++;
+    entries.add(
+      AppLogEntry(
+        id: id,
+        createdAt: createdAt ?? DateTime.now(),
+        level: level,
+        event: event,
+        message: message,
+        dataJson: dataJson,
+        screen: screen,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+        syncLogId: syncLogId,
+      ),
+    );
+    return id;
+  }
+
+  @override
+  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
+      Stream.value(const []);
+
+  @override
+  Future<void> trim({
+    int maxRows = 10000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
+
+  @override
+  Future<void> clearAll() async {}
 }
 
 class _FakeLogs implements SyncLogRepository {

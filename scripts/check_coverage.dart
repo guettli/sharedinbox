@@ -69,6 +69,8 @@ const _excluded = <String, String>{
       'Widget-only per-address inbox view',
   'lib/ui/screens/bug_report_screen.dart':
       'Widget-only in-app bug-report form that POSTs to the bugreport server',
+  'lib/ui/screens/force_resync_screen.dart':
+      'Widget-only progress UI wrapping AccountSyncManager.forceResync (unit-tested)',
   'lib/ui/screens/message_debug_screen.dart':
       'Widget-only debug UI displaying raw message data',
   'lib/ui/screens/sieve_script_edit_screen.dart':

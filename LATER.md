@@ -96,13 +96,6 @@ Thread view (group by `References` / `In-Reply-To`)
 
 ---
 
----
-
-full-sync: Imaging the sync got out-of-sync somehow. Provide a way via UI to force a sync. First
-create a plan. Avoid downloading big bodies/attachments again.
-
----
-
 mailcoach.de
 
 ---
