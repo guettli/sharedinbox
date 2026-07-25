@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// User-facing screen for configuring [UnifiedPush] real-time notifications.
 ///
@@ -154,16 +155,16 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
             const Divider(),
             if (_selected != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.logout),
                   label: const Text('Unregister'),
                   onPressed: _unregister,
                 ),
               ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xl),
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
+              padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               child: Text(
                 'Once you have an endpoint URL, paste it into your relay '
                 'server configuration. The relay watches your IMAP mailbox '
@@ -171,7 +172,7 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
                 'this app for an immediate sync.',
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
           ],
         ],
       ),
