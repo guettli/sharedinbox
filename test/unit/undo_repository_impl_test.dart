@@ -55,7 +55,7 @@ void main() {
       final db = openTestDatabase();
       final repo = UndoRepositoryImpl(db);
 
-      await repo.saveAction(_action('old', timestamp: DateTime.utc(2024, 1)));
+      await repo.saveAction(_action('old', timestamp: DateTime.utc(2024)));
       await repo.saveAction(_action('mid', timestamp: DateTime.utc(2024, 6)));
       await repo.saveAction(_action('new', timestamp: DateTime.utc(2024, 12)));
 
@@ -70,9 +70,7 @@ void main() {
       final db = openTestDatabase();
       final repo = UndoRepositoryImpl(db);
 
-      await repo.saveAction(
-        _action('a', type: UndoType.delete, timestamp: DateTime.utc(2024)),
-      );
+      await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
       await repo.saveAction(
         _action('a', type: UndoType.move, timestamp: DateTime.utc(2024, 2)),
       );
@@ -88,7 +86,7 @@ void main() {
       final db = openTestDatabase();
       final repo = UndoRepositoryImpl(db);
 
-      await repo.saveAction(_action('a', timestamp: DateTime.utc(2024, 1)));
+      await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
       await repo.saveAction(_action('b', timestamp: DateTime.utc(2024, 2)));
 
       await repo.deleteAction('a');

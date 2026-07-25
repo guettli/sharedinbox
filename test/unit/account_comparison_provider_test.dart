@@ -74,6 +74,12 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
+      // .autoDispose fires the moment the read subscription ends. Hold an
+      // explicit listener so the provider survives long enough for the
+      // stream to emit its first value.
+      final sub =
+          container.listen(comparableCounterpartsProvider('imap'), (_, __) {});
+      addTearDown(sub.close);
 
       final counterparts = await container
           .read(comparableCounterpartsProvider('imap').future);
@@ -88,6 +94,9 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
+      final sub = container
+          .listen(comparableCounterpartsProvider('missing'), (_, __) {});
+      addTearDown(sub.close);
 
       final counterparts = await container
           .read(comparableCounterpartsProvider('missing').future);

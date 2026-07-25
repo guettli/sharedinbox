@@ -77,7 +77,7 @@ Set<String> _extractSetLiteral(String content, String header) {
   return paths;
 }
 
-/// Extracts key/value pairs from a Map<String, String> literal.
+/// Extracts key/value pairs from a `Map<String, String>` literal.
 ///
 /// Handles the value on either the same line as the key (`'k': 'v',`) or on
 /// the next line (`'k':\n    'v',`), which is how `dart format` wraps long
