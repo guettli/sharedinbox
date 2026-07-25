@@ -210,6 +210,67 @@ void main() {
       expect(attempts, 1);
     });
 
+    test(
+      'resetPendingBackoff makes waiting rows eligible immediately',
+      () async {
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        final repo = OutboxRepositoryImpl(db);
+        await repo.enqueue(_accountId, _makeDraft(subject: 'Waiting'));
+
+        // Fail once so the row picks up a nextAttemptAt in the future.
+        final t0 = DateTime(2026, 1, 1, 12);
+        await repo.flush(
+          _accountId,
+          (job) async => throw Exception('boom'),
+          now: t0,
+        );
+        final beforeReset = await db.select(db.outbox).get();
+        expect(beforeReset.first.nextAttemptAt, isNotNull);
+        expect(beforeReset.first.attempts, 1);
+
+        // Simulate reconnect: clear backoff while keeping the attempt counter.
+        final cleared = await repo.resetPendingBackoff();
+        expect(cleared, 1);
+
+        final afterReset = await db.select(db.outbox).get();
+        expect(afterReset.first.nextAttemptAt, isNull);
+        expect(
+          afterReset.first.attempts,
+          1,
+          reason: 'attempt counter must be preserved so the next backoff still '
+              'ramps if the send fails again',
+        );
+
+        // The next flush picks the row up immediately, even 1 second later
+        // (well inside the original 30s backoff window).
+        final sentSubjects = <String>[];
+        final sent = await repo.flush(
+          _accountId,
+          (job) async => sentSubjects.add(job.draft.subject),
+          now: t0.add(const Duration(seconds: 1)),
+        );
+        expect(sent, 1);
+        expect(sentSubjects, ['Waiting']);
+      },
+    );
+
+    test('resetPendingBackoff ignores failed rows', () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+      await repo.enqueue(_accountId, _makeDraft(subject: 'Rejected'));
+      await repo.flush(_accountId, (job) async {
+        throw PermanentSendException('nope');
+      });
+
+      final cleared = await repo.resetPendingBackoff();
+      expect(cleared, 0);
+
+      final rows = await db.select(db.outbox).get();
+      expect(rows.first.status, 'failed');
+    });
+
     test('discard removes the row', () async {
       final db = openTestDatabase();
       await _seedAccount(db);
