@@ -216,7 +216,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final selecting = _selection.isSelecting;
     return Scaffold(
       appBar: selecting
-          ? buildSelectionAppBar(_selection)
+          ? buildDebugSelectionAppBar(context, _selection)
           : AppBar(
               title: _advancedMode
                   ? const Text('Advanced Search')

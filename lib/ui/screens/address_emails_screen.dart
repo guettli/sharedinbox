@@ -61,12 +61,9 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final selecting = _selection.isSelecting;
     return Scaffold(
-      appBar: selecting
-          ? buildSelectionAppBar(_selection)
-          : AppBar(title: Text(widget.address)),
-      bottomNavigationBar: selecting
+      appBar: _buildAppBar(context),
+      bottomNavigationBar: _selection.isSelecting
           ? buildSelectionBottomBar(
               context,
               ref,
@@ -84,6 +81,11 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
             ),
     );
   }
+
+  PreferredSizeWidget _buildAppBar(BuildContext context) =>
+      _selection.isSelecting
+          ? buildDebugSelectionAppBar(context, _selection)
+          : AppBar(title: Text(widget.address));
 
   void _onAfterBatchAction(List<String> actedThreadIds) {
     if (_emails == null || !mounted) return;
