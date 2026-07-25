@@ -6,6 +6,14 @@ We use GitHub: https://github.com/guettli/sharedinbox/
 
 The `gh` CLI is available to query issues/PRs/actions.
 
+### Branch protection
+
+`main` is protected by two rulesets. The `Full Project Check` CI job is a
+required status check on the "main" ruleset (id 18026250), so auto-merge
+cannot land a PR while CI is red or still running. To (re)apply that
+requirement — after ruleset drift, or when bootstrapping a fork — run
+`task setup-branch-protection` (needs `gh` auth with admin scope).
+
 ## Issue Label Workflow
 
 Automation is handled by [agentloop](https://github.com/guettli/agentloop) running every 5 minutes via cron. Add a label to trigger an agent:

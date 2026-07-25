@@ -723,6 +723,11 @@ tasks:
     cmds:
       - scripts/check_ci_images.sh
 
+  setup-branch-protection:
+    desc: Require the "Full Project Check" CI job to pass before merge on main (see issue #354). Requires gh CLI with admin scope. Idempotent.
+    cmds:
+      - scripts/setup_branch_protection.sh
+
   duplication:
     desc: Detect duplicated code (jscpd for Dart/Shell, pylint for Python, dupl for Go). Fails on findings not present in duplication-baseline.json.
     cmds:
