@@ -53,6 +53,7 @@ void main({List<Override> overrides = const []}) {
         FlutterError.onError = (details) {
           FlutterError.presentError(details);
           if (_isWidgetTreeError(details)) return;
+          if (isTransientNetworkError(details.exception)) return;
           runApp(
             CrashScreen(
               exception: details.exception,
@@ -92,6 +93,22 @@ void main({List<Override> overrides = const []}) {
 bool _isWidgetTreeError(FlutterErrorDetails details) {
   final lib = details.library;
   return lib == 'widgets library' || lib == 'rendering library';
+}
+
+/// True when [error] is a transient network failure that should not tear the
+/// app down. Going offline mid-sync is a normal condition on mobile — the
+/// sync loop already retries with backoff — so a stray `SocketException`
+/// escaping to `FlutterError.onError` must not replace the running app with
+/// the full-screen [CrashScreen] (regression #355).
+///
+/// We match by runtime type rather than string so localised OS messages
+/// (e.g. "Connection attempt cancelled", "Software caused connection abort",
+/// "No address associated with hostname") all collapse to the same rule.
+bool isTransientNetworkError(Object error) {
+  return error is SocketException ||
+      error is HttpException ||
+      error is HandshakeException ||
+      error is TimeoutException;
 }
 
 /// Reads the stored prefetch preference and registers the WorkManager task
@@ -149,6 +166,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Resume any saved UnifiedPush distributor registration so push wake-ups
     // start arriving again as soon as possible after launch.
     unawaited(ref.read(unifiedPushServiceProvider).initialize());
+    // Watch offline → online transitions and drain the outbox on reconnect
+    // so mail composed while offline is sent as soon as the network is back
+    // (#353). Reading `reconnectFlushProvider` installs the subscription.
+    unawaited(ref.read(connectivityServiceProvider).initialize());
+    ref.read(reconnectFlushProvider);
     // Handle "compose email" intents (mailto: links, Share → Email) by
     // pushing /compose onto the running router. No-op on non-Android.
     _mailIntentHandler = MailIntentHandler(router: router);

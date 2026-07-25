@@ -148,6 +148,15 @@ class OutboxRepositoryImpl implements OutboxRepository {
   }
 
   @override
+  Future<int> resetPendingBackoff() async {
+    return (_db.update(_db.outbox)
+          ..where(
+            (t) => t.status.equals('pending') & t.nextAttemptAt.isNotNull(),
+          ))
+        .write(const OutboxCompanion(nextAttemptAt: Value(null)));
+  }
+
+  @override
   Future<void> discard(int id) async {
     await (_db.delete(_db.outbox)..where((t) => t.id.equals(id))).go();
   }
