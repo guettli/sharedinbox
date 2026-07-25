@@ -3,30 +3,19 @@
 # via the Dagger pipeline. The Play artefact is what users actually install,
 # so any launch-time crash visible in production shows up here too.
 #
-# Cron policy (see .github/workflows/firebase-tests.yml — fires hourly):
-#   1. If LAST_SUCCESSFUL_FIREBASE_RUN was less than SKIP_WINDOW_SECONDS ago
-#      (any versionCode), skip. Keeps hourly polling cheap on a stable alpha.
-#   2. Resolve the latest alpha versionCode. If Play has not yet generated
-#      split APKs for it, skip — no fallback to older bundles, the next
-#      cron tick will retry. (Generation can take an hour or more after
-#      upload.)
-#   3. If that versionCode equals LAST_TESTED_ALPHA_VERSION_CODE, skip — the
-#      build was already exercised, no point retesting the same binary.
-#   4. Otherwise download the APKs and run Firebase Test Lab.
-#   5. On success, update both repo variables. Only an actual test failure
-#      propagates to the workflow so an issue can be opened.
+# Cron policy (see .github/workflows/firebase-tests.yml — controls cadence):
+#   1. Resolve the latest alpha versionCode and download its split APKs from
+#      Play. The fetch polls until Play has generated the split APKs and
+#      fails loudly on timeout — no silent skip, no fallback to older bundles.
+#   2. Run Firebase Test Lab against the fetched APKs.
+#   3. On success, record the versionCode in LAST_TESTED_ALPHA_VERSION_CODE
+#      so callers can tell which alpha was last exercised green. Written
+#      best-effort: GITHUB_TOKEN needs Variables:write (the default workflow
+#      token cannot manage variables) so a 403 degrades to "no cache write".
 #
-# Both repo variables are written best-effort: GITHUB_TOKEN needs
-# Variables:write (the default workflow token cannot manage variables) so a
-# 403 silently degrades to "always run". Retries up to 3 times on transient
-# Dagger engine connectivity errors, and on "No space left on device" after
-# pruning the Dagger cache.
+# Retries up to 3 times on transient Dagger engine connectivity errors, and
+# on "No space left on device" after pruning the Dagger cache.
 set -uo pipefail
-
-# Hourly polling is cheap when broken (catches a fix within ~1h); the 12h
-# window gates the real Firebase Test Lab spend on a stable alpha to ~2
-# runs/day even if no new build ships.
-SKIP_WINDOW_SECONDS=$((12 * 60 * 60))
 
 OUT=$(mktemp)
 RC_FILE=$(mktemp)
@@ -63,38 +52,6 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
 fi
 
 # === GitHub Actions repo-variables helpers (best effort) ========================
-
-_gh_var_get() {
-    local name="$1"
-    if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
-        echo ""
-        return 0
-    fi
-    NAME="$name" python3 - <<'PYEOF'
-import json, os, sys, urllib.error, urllib.request
-name = os.environ["NAME"]
-token = os.environ["GITHUB_TOKEN"]
-api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
-repo = os.environ["GITHUB_REPOSITORY"]
-api = f"{api_base}/repos/{repo}/actions/variables/{name}"
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
-req = urllib.request.Request(api, headers=headers)
-try:
-    with urllib.request.urlopen(req) as r:
-        print(json.loads(r.read()).get("value", ""))
-except urllib.error.HTTPError as e:
-    if e.code == 404:
-        print("")
-    else:
-        # Don't fail the whole job on a lookup error; treat as a miss.
-        print(f"[firebase] {name} lookup HTTP {e.code}: {e.reason}", file=sys.stderr)
-        print("")
-PYEOF
-}
 
 _gh_var_set() {
     local name="$1"
@@ -139,39 +96,17 @@ except urllib.error.HTTPError as e:
 PYEOF
 }
 
-# === Step 1: early skip when a successful run is recent =========================
-
-NOW=$(date +%s)
-LAST_OK=$(_gh_var_get "LAST_SUCCESSFUL_FIREBASE_RUN")
-if [ -n "$LAST_OK" ] && [ "$LAST_OK" -eq "$LAST_OK" ] 2>/dev/null; then
-    AGE=$(( NOW - LAST_OK ))
-    if [ "$AGE" -ge 0 ] && [ "$AGE" -lt "$SKIP_WINDOW_SECONDS" ]; then
-        printf '::notice::[firebase] last successful run %dh%02dm ago — skipping (window=%dh)\n' \
-            $((AGE / 3600)) $(((AGE % 3600) / 60)) $((SKIP_WINDOW_SECONDS / 3600)) >&2
-        exit 0
-    fi
-fi
-
-# === Steps 2–3: fetch (or skip when not ready / already tested) =================
-
-ALREADY_TESTED_VERSION_CODE=$(_gh_var_get "LAST_TESTED_ALPHA_VERSION_CODE")
+# === Step 1: fetch the latest alpha APK set =====================================
 
 echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&2
-# The Dagger function writes <dest>/versionCode and the APKs when there is
-# work to do, or <dest>/.skip when the latest alpha is not ready yet or has
-# already been tested. No fallback to older bundles — the next cron tick
-# picks up whichever build Play has finished processing.
+# The Dagger function writes <dest>/versionCode and the APKs on success, and
+# fails loudly (non-zero exit) when Play never finishes generating the split
+# APKs. No fallback to older bundles — the next cron tick will retry.
 if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
         --play-store-config env:PLAY_STORE_CONFIG_JSON \
-        --already-tested-version-code "$ALREADY_TESTED_VERSION_CODE" \
         -o "$APK_DIR"; then
     echo "ERROR: dagger fetch-play-store-apks failed" >&2
     exit 1
-fi
-if [ -f "$APK_DIR/.skip" ]; then
-    reason=$(tr -d '\n' < "$APK_DIR/.skip")
-    echo "::notice::[firebase] skipping: $reason" >&2
-    exit 0
 fi
 if [ ! -f "$APK_DIR/versionCode" ]; then
     echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
@@ -185,7 +120,7 @@ fi
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2
 
-# === Step 4: run Firebase Test Lab ==============================================
+# === Step 2: run Firebase Test Lab ==============================================
 
 _run() {
     : > "$OUT" ; : > "$RC_FILE"
@@ -216,11 +151,10 @@ for attempt in 1 2 3; do
     fi
 done
 
-# === Step 5: on success, update both repo variables =============================
+# === Step 3: on success, record which versionCode was last exercised green ======
 
 FINAL_RC=$(cat "$RC_FILE" 2>/dev/null || echo 0)
 if [ "$FINAL_RC" -eq 0 ]; then
     _gh_var_set "LAST_TESTED_ALPHA_VERSION_CODE" "$VERSION_CODE"
-    _gh_var_set "LAST_SUCCESSFUL_FIREBASE_RUN" "$NOW"
 fi
 exit "$FINAL_RC"

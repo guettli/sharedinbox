@@ -16,7 +16,9 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
 # Env var pointing at the R8 mapping file (build/app/outputs/mapping/release/mapping.txt).
-# CI (ci/main.go UploadToPlayStore) sets this; local builds may leave it unset.
+# CI (ci/main.go UploadToPlayStore) sets this. Mandatory: uploading a release
+# without a matching mapping file breaks Play Console's stack-trace
+# deobfuscation, so the script refuses to deploy when it is missing.
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
 
 
@@ -128,41 +130,44 @@ def main():
     print(f"Uploaded AAB, version code: {version_code}")
 
     mapping_path = os.environ.get(_MAPPING_PATH_ENV)
-    if mapping_path and os.path.exists(mapping_path):
-        mapping_size = os.path.getsize(mapping_path)
-        last_exc = None
-        uploaded = False
-        for attempt in range(_MAX_UPLOAD_ATTEMPTS):
-            try:
-                _upload_deobfuscation_file(
-                    session, PACKAGE_NAME, edit_id, version_code, mapping_path
-                )
-                uploaded = True
-                break
-            except Exception as exc:
-                last_exc = exc
-                if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
-                    delay = 10 * (2 ** attempt)
-                    print(
-                        f"Deobfuscation upload attempt {attempt + 1} failed "
-                        f"({type(exc).__name__}: {exc}), retrying in {delay}s…"
-                    )
-                    time.sleep(delay)
-        if not uploaded:
-            raise RuntimeError(
-                f"Deobfuscation file upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
-            ) from last_exc
-        print(f"Uploaded deobfuscation file ({mapping_size} bytes)")
-    elif mapping_path:
+    if not mapping_path:
         print(
-            f"Warning: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
-            "does not exist; skipping deobfuscation upload.",
+            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
+            "its R8 mapping file so Play Console can deobfuscate crash traces.",
             file=sys.stderr,
         )
-    else:
+        sys.exit(1)
+    if not os.path.exists(mapping_path):
         print(
-            f"Note: {_MAPPING_PATH_ENV} not set; skipping deobfuscation upload."
+            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
+            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
+            file=sys.stderr,
         )
+        sys.exit(1)
+    mapping_size = os.path.getsize(mapping_path)
+    last_exc = None
+    uploaded = False
+    for attempt in range(_MAX_UPLOAD_ATTEMPTS):
+        try:
+            _upload_deobfuscation_file(
+                session, PACKAGE_NAME, edit_id, version_code, mapping_path
+            )
+            uploaded = True
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
+                delay = 10 * (2 ** attempt)
+                print(
+                    f"Deobfuscation upload attempt {attempt + 1} failed "
+                    f"({type(exc).__name__}: {exc}), retrying in {delay}s…"
+                )
+                time.sleep(delay)
+    if not uploaded:
+        raise RuntimeError(
+            f"Deobfuscation file upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
+        ) from last_exc
+    print(f"Uploaded deobfuscation file ({mapping_size} bytes)")
 
     print(f"Assigning AAB to tracks {TRACKS} with status: completed…")
     for track in TRACKS:
