@@ -154,6 +154,7 @@ class AppDrawer extends ConsumerWidget {
                     },
                   ),
                   const _SentQueueDrawerTile(),
+                  const _PendingChangesDrawerTile(),
                   ListTile(
                     leading: const Icon(Icons.history),
                     title: const Text('Undo Log'),
@@ -276,6 +277,28 @@ class _SentQueueDrawerTile extends ConsumerWidget {
       onTap: () {
         Navigator.pop(context);
         unawaited(context.push('/sent-queue'));
+      },
+    );
+  }
+}
+
+/// Global "Pending Changes" drawer entry — surfaces the outbound queue of
+/// local mutations (flag/move/delete) that have not yet been flushed to the
+/// server. Shows a badge with the total count so a growing queue is visible
+/// without opening the screen.
+class _PendingChangesDrawerTile extends ConsumerWidget {
+  const _PendingChangesDrawerTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(allPendingChangesProvider).value?.length ?? 0;
+    return ListTile(
+      leading: const Icon(Icons.sync_problem),
+      title: const Text('Pending Changes'),
+      trailing: count > 0 ? Badge(label: Text('$count')) : null,
+      onTap: () {
+        Navigator.pop(context);
+        unawaited(context.push('/pending-changes'));
       },
     );
   }

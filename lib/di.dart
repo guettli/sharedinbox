@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -137,6 +138,22 @@ final outboxRepositoryProvider = Provider<OutboxRepository>((ref) {
 /// first. Backs the global "Sent Queue" screen and its drawer badge.
 final allOutboxProvider = StreamProvider<List<OutboxMessage>>((ref) {
   return ref.watch(outboxRepositoryProvider).observeAllOutbox();
+});
+
+/// Every row in the outbound `pending_changes` queue, oldest first. Backs
+/// the global Pending Changes screen and the "Pending Changes" drawer badge.
+final allPendingChangesProvider = StreamProvider<List<PendingChange>>((ref) {
+  return ref.watch(emailRepositoryProvider).observeAllPendingChanges();
+});
+
+/// Per-account pending-change count — powers the badge next to each account
+/// row in the Manage Accounts (Settings) screen.
+final pendingChangeCountForAccountProvider =
+    StreamProvider.autoDispose.family<int, String>((ref, accountId) {
+  return ref
+      .watch(emailRepositoryProvider)
+      .observePendingChanges(accountId)
+      .map((rows) => rows.length);
 });
 
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
