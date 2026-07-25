@@ -75,21 +75,27 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Add remote host to known_hosts. The tunnel below sets StrictHostKeyChecking=no,
-# so a scan failure is not fatal for the tunnel itself — surface any error and
-# keep going instead of silencing stderr and letting `set -e` exit opaquely
-# (which used to turn every transient DNS/network blip on this step into an
-# unattributed exit-1 with zero diagnostics).
+# Populate known_hosts for the Dagger engine. ssh-keyscan must succeed — we
+# used to fall through to StrictHostKeyChecking=no on the tunnel and silently
+# accept whatever host key was presented, which defeats host verification and
+# masks a real infra problem (DNS, firewall, engine down). See issue #372.
 _t0=$SECONDS
 scan_rc=0
 scan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$scan_rc" -ne 0 ]; then
-    echo "::warning::ssh-keyscan failed after ${_elapsed}s (rc=${scan_rc}); relying on StrictHostKeyChecking=no for the tunnel."
+    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${_elapsed}s (rc=${scan_rc})."
     if [ -n "$scan_err" ]; then
-        printf '%s\n' "$scan_err" | sed 's/^/::warning::  /'
+        printf '%s\n' "$scan_err" | sed 's/^/::error::  /'
     fi
-elif [ "$_elapsed" -gt 10 ]; then
+    echo "::error::Runbook: from a sharedinbox-arc runner, re-seed the entry with"
+    echo "::error::  ssh-keyscan -H ${DAGGER_ENGINE_HOST} >> ~/.ssh/known_hosts"
+    echo "::error::A persistent failure means the Dagger engine host is unreachable"
+    echo "::error::from the runner — check DNS, the sharedinbox-arc → engine network"
+    echo "::error::path, and that sshd on the engine host is running."
+    exit 1
+fi
+if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::ssh-keyscan took ${_elapsed}s — Dagger engine host may be slow to respond"
 fi
 
