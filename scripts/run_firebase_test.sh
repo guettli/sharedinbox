@@ -16,11 +16,12 @@
 #   5. On success, update both repo variables. Only an actual test failure
 #      propagates to the workflow so an issue can be opened.
 #
-# Both repo variables are written best-effort: GITHUB_TOKEN needs
-# Variables:write (the default workflow token cannot manage variables) so a
-# 403 silently degrades to "always run". Retries up to 3 times on transient
-# Dagger engine connectivity errors, and on "No space left on device" after
-# pruning the Dagger cache.
+# GITHUB_TOKEN must have Variables:write on GITHUB_REPOSITORY (the default
+# workflow token cannot manage variables; the workflow injects a PAT). Any
+# GitHub API error other than 404-on-read fails the job so a broken
+# skip-window can't silently degrade to "always run". Retries up to 3 times
+# on transient Dagger engine connectivity errors, and on "No space left on
+# device" after pruning the Dagger cache.
 set -uo pipefail
 
 # Hourly polling is cheap when broken (catches a fix within ~1h); the 12h
@@ -62,14 +63,16 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
     exit 1
 fi
 
-# === GitHub Actions repo-variables helpers (best effort) ========================
+# === GitHub Actions repo-variables helpers ======================================
+# GITHUB_TOKEN and GITHUB_REPOSITORY are hard requirements: without them the
+# skip-window/last-tested checks would silently degrade to "always run", which
+# would blow through the Firebase Test Lab quota.
+
+: "${GITHUB_TOKEN:?GITHUB_TOKEN must be set (needs Variables:write on GITHUB_REPOSITORY)}"
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set (owner/repo)}"
 
 _gh_var_get() {
     local name="$1"
-    if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
-        echo ""
-        return 0
-    fi
     NAME="$name" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.request
 name = os.environ["NAME"]
@@ -88,20 +91,22 @@ try:
         print(json.loads(r.read()).get("value", ""))
 except urllib.error.HTTPError as e:
     if e.code == 404:
+        # 404 means "variable not set yet" — expected on the first run.
         print("")
     else:
-        # Don't fail the whole job on a lookup error; treat as a miss.
-        print(f"[firebase] {name} lookup HTTP {e.code}: {e.reason}", file=sys.stderr)
-        print("")
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        print(f"[firebase] {name} lookup HTTP {e.code}: {e.reason}\n{body}", file=sys.stderr)
+        sys.exit(1)
 PYEOF
 }
 
 _gh_var_set() {
     local name="$1"
     local value="$2"
-    if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
-        return 0
-    fi
     NAME="$name" VALUE="$value" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.request
 
@@ -121,7 +126,17 @@ headers = {
 def request(url, method, body):
     return urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method=method)
 
-# GitHub: PATCH an existing variable, POST to create a missing one.
+def die(prefix, err):
+    body = ""
+    try:
+        body = err.read().decode("utf-8", "replace")
+    except Exception:
+        pass
+    print(f"[firebase] {prefix} HTTP {err.code}: {err.reason}\n{body}", file=sys.stderr)
+    sys.exit(1)
+
+# GitHub: PATCH an existing variable; only fall through to POST on 404
+# ("variable does not exist yet"). Any other status is a hard failure.
 try:
     with urllib.request.urlopen(request(f"{base}/{name}", "PATCH", {"name": name, "value": value})) as r:
         r.read()
@@ -129,13 +144,14 @@ try:
     sys.exit(0)
 except urllib.error.HTTPError as e:
     if e.code != 404:
-        print(f"[firebase] PATCH {name} failed HTTP {e.code}: {e.reason} — trying POST", file=sys.stderr)
+        die(f"PATCH {name} failed", e)
+
 try:
     with urllib.request.urlopen(request(base, "POST", {"name": name, "value": value})) as r:
         r.read()
     print(f"[firebase] created {name}={value}", file=sys.stderr)
 except urllib.error.HTTPError as e:
-    print(f"[firebase] WARNING: {name} write failed HTTP {e.code}: {e.reason}", file=sys.stderr)
+    die(f"POST {name} failed", e)
 PYEOF
 }
 

@@ -6,7 +6,9 @@ Replaces the inline Python that used to live in deploy.yml's
 ``label-deploy-health`` job. Reads from the environment:
 
   GITHUB_TOKEN            — token with repo:issues write
-  GITHUB_API_URL          — https://api.github.com (runner-provided)
+  GITHUB_API_URL          — GitHub API base URL (required — pin it in the
+                            workflow ``env:`` block, e.g. ``$GITHUB_API_URL``
+                            on hosted runners)
   GITHUB_REPOSITORY       — owner/repo
   DEPLOY_HEALTH_ISSUE     — issue number, e.g. "42"; empty disables this script
   ALL_SUCCEEDED           — "true" if every deploy job succeeded or was
@@ -31,7 +33,7 @@ def main():
         return 0
 
     token = os.environ["GITHUB_TOKEN"]
-    api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    api_base = os.environ["GITHUB_API_URL"].rstrip("/")
     repo = os.environ["GITHUB_REPOSITORY"]
     succeeded = os.environ.get("ALL_SUCCEEDED", "false").lower() == "true"
     add_label = "CI/Full-Pass" if succeeded else "CI/Full-Fail"

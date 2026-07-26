@@ -123,6 +123,54 @@ _assert "patch: quoted current label still detected" 0 "$rc"
 _assert "patch: quoted -> bare new label" 1 \
     "$(grep -c '^    runs-on: self-hosted$' "$wf")"
 
+# --- discover_runner_label ---
+# Stub gh_api so the function can be exercised without a real GitHub token.
+# discover_runner_label must return non-zero (no silent 'ubuntu-latest'
+# fallback) if the API errors OR if no online, non-generic label exists.
+
+gh_api() { printf '%s' "$__STUB_JSON"; return "$__STUB_RC"; }
+
+__STUB_JSON=''
+__STUB_RC=1
+if discover_runner_label anything >/dev/null 2>&1; then
+    echo "FAIL: discover: expected non-zero on API failure"
+    FAIL=$((FAIL + 1))
+else
+    PASS=$((PASS + 1))
+fi
+
+__STUB_JSON='{"runners": []}'
+__STUB_RC=0
+if discover_runner_label anything >/dev/null 2>&1; then
+    echo "FAIL: discover: expected non-zero when no runners"
+    FAIL=$((FAIL + 1))
+else
+    PASS=$((PASS + 1))
+fi
+
+__STUB_JSON='{"runners": [{"status":"offline","labels":[{"name":"codeberg-runner"}]}]}'
+__STUB_RC=0
+if discover_runner_label anything >/dev/null 2>&1; then
+    echo "FAIL: discover: expected non-zero when all runners offline"
+    FAIL=$((FAIL + 1))
+else
+    PASS=$((PASS + 1))
+fi
+
+__STUB_JSON='{"runners": [{"status":"online","labels":[{"name":"self-hosted"},{"name":"Linux"},{"name":"X64"}]}]}'
+__STUB_RC=0
+if discover_runner_label anything >/dev/null 2>&1; then
+    echo "FAIL: discover: expected non-zero when only generic labels present"
+    FAIL=$((FAIL + 1))
+else
+    PASS=$((PASS + 1))
+fi
+
+__STUB_JSON='{"runners": [{"status":"online","labels":[{"name":"self-hosted"},{"name":"codeberg-runner"}]}]}'
+__STUB_RC=0
+_assert "discover: emits first non-generic label" "codeberg-runner" \
+    "$(discover_runner_label anything 2>/dev/null)"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

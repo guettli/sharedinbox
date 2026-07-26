@@ -23,6 +23,13 @@ for _ in range(4):
 print(" ".join(ports))
 PY
     )
+    # read succeeds even when the process substitution produced only a partial
+    # line, leaving trailing vars empty — an empty port would then propagate
+    # into ports.env and docker's `-p :8080` would silently rebind. Fail loudly.
+    : "${STALWART_PORT:?failed to allocate a random JMAP port}"
+    : "${STALWART_IMAP_PORT:?failed to allocate a random IMAP port}"
+    : "${STALWART_SMTP_PORT:?failed to allocate a random SMTP port}"
+    : "${STALWART_SIEVE_PORT:?failed to allocate a random SIEVE port}"
 else
     : "${STALWART_PORT:?STALWART_PORT is not set — run this inside nix develop}"
     STALWART_IMAP_PORT="${STALWART_IMAP_PORT:-$((STALWART_PORT + 1))}"
