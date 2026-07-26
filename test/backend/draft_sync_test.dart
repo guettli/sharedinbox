@@ -238,8 +238,7 @@ void main() {
       AppDatabase db,
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
-    })
-    makeRepo() {
+    }) makeRepo() {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final drafts = DraftRepositoryImpl(
@@ -345,7 +344,8 @@ void main() {
 
         final rows = await (r.db.select(
           r.db.drafts,
-        )..where((t) => t.accountId.equals(imapAccount.id))).get();
+        )..where((t) => t.accountId.equals(imapAccount.id)))
+            .get();
         expect(rows, hasLength(1));
         expect(rows.single.subjectText, 'imap-server-only');
         expect(rows.single.bodyText, contains('from webmail'));
@@ -384,8 +384,7 @@ void main() {
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
       LocalhostMappingClient http,
-    })
-    makeRepo() {
+    }) makeRepo() {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final http = LocalhostMappingClient();
@@ -509,10 +508,10 @@ void main() {
 
         final rows = await (r.db.select(
           r.db.drafts,
-        )..where((t) => t.accountId.equals(jmapAccount.id))).get();
-        final serverOnly = rows
-            .where((row) => row.subjectText == 'jmap-server-only')
-            .toList();
+        )..where((t) => t.accountId.equals(jmapAccount.id)))
+            .get();
+        final serverOnly =
+            rows.where((row) => row.subjectText == 'jmap-server-only').toList();
         expect(serverOnly, hasLength(1));
         expect(serverOnly.single.bodyText, contains('from webmail'));
         expect(serverOnly.single.jmapServerId, isNotNull);
