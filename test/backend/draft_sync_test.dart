@@ -34,8 +34,9 @@ Future<int> _serverDraftCountImap(
     } catch (_) {
       return 0;
     }
-    final result =
-        await client.uidSearchMessages(searchCriteria: 'NOT DELETED');
+    final result = await client.uidSearchMessages(
+      searchCriteria: 'NOT DELETED',
+    );
     return (result.matchingSequence?.toList() ?? const <int>[]).length;
   } finally {
     await client.logout();
@@ -53,13 +54,16 @@ Future<List<MimeMessage>> _fetchServerDraftsImap(
     } catch (_) {
       return const [];
     }
-    final search =
-        await client.uidSearchMessages(searchCriteria: 'NOT DELETED');
+    final search = await client.uidSearchMessages(
+      searchCriteria: 'NOT DELETED',
+    );
     final uids = search.matchingSequence?.toList() ?? const <int>[];
     if (uids.isEmpty) return const [];
     final seq = MessageSequence.fromIds(uids, isUid: true);
-    final fetch =
-        await client.uidFetchMessages(seq, '(UID FLAGS ENVELOPE BODY.PEEK[])');
+    final fetch = await client.uidFetchMessages(
+      seq,
+      '(UID FLAGS ENVELOPE BODY.PEEK[])',
+    );
     return fetch.messages;
   } finally {
     await client.logout();
@@ -141,8 +145,7 @@ Future<List<Map<String, dynamic>>> _fetchServerDraftsJmap(
       '0',
     ],
   ]);
-  final queryArgs =
-      (queryResp[0] as List<dynamic>)[1] as Map<String, dynamic>;
+  final queryArgs = (queryResp[0] as List<dynamic>)[1] as Map<String, dynamic>;
   final ids = List<String>.from((queryArgs['ids'] as List? ?? []));
   if (ids.isEmpty) return const [];
 
@@ -152,13 +155,7 @@ Future<List<Map<String, dynamic>>> _fetchServerDraftsJmap(
       {
         'accountId': jmap.accountId,
         'ids': ids,
-        'properties': [
-          'id',
-          'subject',
-          'keywords',
-          'textBody',
-          'bodyValues',
-        ],
+        'properties': ['id', 'subject', 'keywords', 'textBody', 'bodyValues'],
         'fetchTextBodyValues': true,
       },
       '0',
@@ -241,7 +238,8 @@ void main() {
       AppDatabase db,
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
-    }) makeRepo() {
+    })
+    makeRepo() {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final drafts = DraftRepositoryImpl(
@@ -345,9 +343,9 @@ void main() {
         );
         await r.drafts.syncDrafts(imapAccount.id);
 
-        final rows = await (r.db.select(r.db.drafts)
-              ..where((t) => t.accountId.equals(imapAccount.id)))
-            .get();
+        final rows = await (r.db.select(
+          r.db.drafts,
+        )..where((t) => t.accountId.equals(imapAccount.id))).get();
         expect(rows, hasLength(1));
         expect(rows.single.subjectText, 'imap-server-only');
         expect(rows.single.bodyText, contains('from webmail'));
@@ -386,7 +384,8 @@ void main() {
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
       LocalhostMappingClient http,
-    }) makeRepo() {
+    })
+    makeRepo() {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final http = LocalhostMappingClient();
@@ -439,46 +438,43 @@ void main() {
       },
     );
 
-    test(
-      'editing a synced draft destroys the old JMAP email id',
-      () async {
-        final r = makeRepo();
-        await r.accounts.addAccount(jmapAccount, user.password);
-        final first = await r.drafts.saveDraft(
-          accountId: jmapAccount.id,
-          toText: user.email,
-          ccText: '',
-          subjectText: 'jmap-edit-original',
-          bodyText: 'first',
-        );
-        await r.drafts.syncDrafts(jmapAccount.id);
-        final firstId = (await r.drafts.getDraft(first.id))!.jmapServerId;
+    test('editing a synced draft destroys the old JMAP email id', () async {
+      final r = makeRepo();
+      await r.accounts.addAccount(jmapAccount, user.password);
+      final first = await r.drafts.saveDraft(
+        accountId: jmapAccount.id,
+        toText: user.email,
+        ccText: '',
+        subjectText: 'jmap-edit-original',
+        bodyText: 'first',
+      );
+      await r.drafts.syncDrafts(jmapAccount.id);
+      final firstId = (await r.drafts.getDraft(first.id))!.jmapServerId;
 
-        await r.drafts.saveDraft(
-          id: first.id,
-          accountId: jmapAccount.id,
-          toText: user.email,
-          ccText: '',
-          subjectText: 'jmap-edit-updated',
-          bodyText: 'second',
-        );
-        await r.drafts.syncDrafts(jmapAccount.id);
+      await r.drafts.saveDraft(
+        id: first.id,
+        accountId: jmapAccount.id,
+        toText: user.email,
+        ccText: '',
+        subjectText: 'jmap-edit-updated',
+        bodyText: 'second',
+      );
+      await r.drafts.syncDrafts(jmapAccount.id);
 
-        final jmap = await openJmap(r.http);
-        final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
-        final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId);
-        expect(
-          serverDrafts,
-          hasLength(1),
-          reason: 'Edit should destroy the old copy',
-        );
-        expect(serverDrafts.single['subject'], 'jmap-edit-updated');
+      final jmap = await openJmap(r.http);
+      final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
+      final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId);
+      expect(
+        serverDrafts,
+        hasLength(1),
+        reason: 'Edit should destroy the old copy',
+      );
+      expect(serverDrafts.single['subject'], 'jmap-edit-updated');
 
-        final updated = (await r.drafts.getDraft(first.id))!;
-        expect(updated.dirty, isFalse);
-        expect(updated.jmapServerId, isNot(firstId));
-      },
-    );
+      final updated = (await r.drafts.getDraft(first.id))!;
+      expect(updated.dirty, isFalse);
+      expect(updated.jmapServerId, isNot(firstId));
+    });
 
     test(
       'a JMAP-only draft (from webmail) shows up locally after syncDrafts',
@@ -511,9 +507,9 @@ void main() {
 
         await r.drafts.syncDrafts(jmapAccount.id);
 
-        final rows = await (r.db.select(r.db.drafts)
-              ..where((t) => t.accountId.equals(jmapAccount.id)))
-            .get();
+        final rows = await (r.db.select(
+          r.db.drafts,
+        )..where((t) => t.accountId.equals(jmapAccount.id))).get();
         final serverOnly = rows
             .where((row) => row.subjectText == 'jmap-server-only')
             .toList();
