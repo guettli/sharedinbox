@@ -1014,7 +1014,6 @@ emulator -avd smoke -no-window -no-audio -no-boot-anim -no-snapshot \
     > /tmp/emulator.log 2>&1 &
 EMU_PID=$!
 
-adb start-server >/dev/null 2>&1 || true
 for _i in $(seq 1 60); do
     adb get-state 2>/dev/null | grep -q device && break
     kill -0 "$EMU_PID" 2>/dev/null || { echo "ERROR: emulator exited early"; tail -50 /tmp/emulator.log; exit 1; }
@@ -1044,7 +1043,9 @@ adb shell am start -W -n "$PACKAGE/.MainActivity"
 WATCH=20
 echo "Watching crash logcat for ${WATCH}s…"
 sleep "$WATCH"
-CRASH=$(adb logcat -b crash -d 2>/dev/null || true)
+crash_rc=0
+CRASH=$(adb logcat -b crash -d 2>&1) || crash_rc=$?
+[ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH"; exit 1; }
 if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
     echo "----- CRASH DETECTED -----"
     echo "$CRASH"

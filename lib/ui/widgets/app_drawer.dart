@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 /// Identifies the currently-active destination so the drawer can highlight
@@ -100,11 +101,11 @@ class AppDrawer extends ConsumerWidget {
                   const Divider(height: 1),
                   accountsAsync.when(
                     loading: () => const Padding(
-                      padding: EdgeInsets.all(16),
+                      padding: EdgeInsets.all(AppSpacing.lg),
                       child: Center(child: CircularProgressIndicator()),
                     ),
                     error: (e, _) => Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(AppSpacing.lg),
                       child: Text('Error loading accounts: $e'),
                     ),
                     data: (accounts) => Column(
@@ -346,7 +347,7 @@ class _FolderList extends ConsumerWidget {
       builder: (ctx, snap) {
         if (!snap.hasData) {
           return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
             child: Center(child: CircularProgressIndicator()),
           );
         }
@@ -356,7 +357,7 @@ class _FolderList extends ConsumerWidget {
           children: [
             for (final mb in mailboxes)
               Padding(
-                padding: const EdgeInsets.only(left: 16),
+                padding: const EdgeInsets.only(left: AppSpacing.lg),
                 child: ListTile(
                   leading: const Icon(Icons.folder),
                   title: Text(
@@ -381,7 +382,7 @@ class _FolderList extends ConsumerWidget {
               ),
             // Local-only "folder" surfacing queued offline sends.
             Padding(
-              padding: const EdgeInsets.only(left: 16),
+              padding: const EdgeInsets.only(left: AppSpacing.lg),
               child: _OutboxTile(accountId: accountId),
             ),
           ],

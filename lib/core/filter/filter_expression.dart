@@ -4,7 +4,8 @@ enum FilterField {
   cc,
   subject,
   size,
-  header;
+  header,
+  folder;
 
   String get label => switch (this) {
         FilterField.from_ => 'From',
@@ -13,6 +14,7 @@ enum FilterField {
         FilterField.subject => 'Subject',
         FilterField.size => 'Size (bytes)',
         FilterField.header => 'Header',
+        FilterField.folder => 'Folder',
       };
 
   List<FilterComparison> get allowedComparisons => switch (this) {

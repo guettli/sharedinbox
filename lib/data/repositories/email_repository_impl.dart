@@ -15,15 +15,18 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/pending_change.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -720,10 +723,11 @@ class EmailRepositoryImpl implements EmailRepository {
         final refs = _cleanReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
         final threadId = _computeThreadId(
-              emailId: emailId,
               messageId: msgId,
               inReplyTo: inReplyTo,
               references: refs,
+              subject: envelope.subject,
+              date: envelope.date,
             ) ??
             emailId;
         affectedThreads.add(threadId);
@@ -1813,6 +1817,28 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── JMAP push ────────────────────────────────────────────────────────────
 
+  /// Records the outcome of a `watchJmapPush` subscription as a
+  /// `sync.jmap.push` app-log row. The `status` value is stable and used by
+  /// the sync-state view to render a human-readable "Push" row — see
+  /// `push_status.dart` for the enum of accepted values.
+  Future<void> _logPushStatus(
+    String accountId,
+    String status,
+    String message, {
+    AppLogLevel level = AppLogLevel.info,
+    Map<String, Object?>? data,
+  }) async {
+    final logger = _appLogger;
+    if (logger == null) return;
+    await logger.log(
+      level: level,
+      event: 'sync.jmap.push',
+      message: message,
+      accountId: accountId,
+      data: {'push_status': status, ...?data},
+    );
+  }
+
   @override
   Stream<void> watchJmapPush(String accountId, String password) {
     final controller = StreamController<void>();
@@ -1830,6 +1856,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
         final jmapUrl = account.jmapUrl;
         if (jmapUrl == null || jmapUrl.isEmpty) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push disabled: account has no JMAP URL',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1844,12 +1877,29 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         } catch (e) {
           log('JMAP push: connect failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.connectFailed.wireName,
+              'JMAP push: session connect failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
 
         final sseUrl = jmap.eventSourceUrl;
         if (sseUrl == null) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push unavailable: server does not advertise '
+              'an eventSourceUrl (falling back to poll)',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1867,14 +1917,42 @@ class EmailRepositoryImpl implements EmailRepository {
               .send(request)
               .timeout(const Duration(seconds: 10));
           if (response.statusCode != 200) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                '${JmapPushStatus.sseStatusPrefix.wireName}'
+                    '${response.statusCode}',
+                'JMAP push: SSE endpoint returned HTTP '
+                    '${response.statusCode}',
+                level: AppLogLevel.warn,
+                data: {'httpStatus': response.statusCode},
+              ),
+            );
             await controller.close();
             return;
           }
         } catch (e) {
           log('JMAP push: SSE request failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.sseFailed.wireName,
+              'JMAP push: SSE request failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
+
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.connected.wireName,
+            'JMAP push connected — waiting for StateChange events',
+          ),
+        );
 
         var buffer = '';
         innerSub = response.stream
@@ -1898,12 +1976,42 @@ class EmailRepositoryImpl implements EmailRepository {
               }
             }
           },
-          onDone: () => controller.close(),
-          onError: (_) => controller.close(),
+          onDone: () {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.closed.wireName,
+                'JMAP push stream ended (server closed connection '
+                'or 25-min cap reached)',
+              ),
+            );
+            unawaited(controller.close());
+          },
+          onError: (Object e) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.errored.wireName,
+                'JMAP push stream errored: $e',
+                level: AppLogLevel.warn,
+                data: {'error': e.toString()},
+              ),
+            );
+            unawaited(controller.close());
+          },
           cancelOnError: true,
         );
       } catch (e) {
         log('JMAP push: unexpected error: $e');
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.errored.wireName,
+            'JMAP push: unexpected error: $e',
+            level: AppLogLevel.warn,
+            data: {'error': e.toString()},
+          ),
+        );
         await controller.close();
       }
     }());
@@ -3957,6 +4065,7 @@ class EmailRepositoryImpl implements EmailRepository {
       // Size is not stored in the local cache; skip silently.
       FilterField.size => const Constant(true),
       FilterField.header => _headerLike(leaf, t),
+      FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
     };
   }
 
@@ -4209,10 +4318,6 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /// Computes a stable threadId from RFC 2822 headers.
-  /// Uses the first entry in References (= oldest ancestor) so all messages
-  /// in a thread share the same root Message-ID as their threadId.
-  /// Falls back to In-Reply-To, then own Message-ID, then internal emailId.
   /// JMAP header fields like messageId/inReplyTo/references come as arrays.
   /// We join them space-separated to match the IMAP convention.
   static String? _joinJmapStringList(List<dynamic>? list) {
@@ -4239,18 +4344,61 @@ class EmailRepositoryImpl implements EmailRepository {
     return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
   }
 
-  static String? _computeThreadId({
-    required String emailId,
+  @visibleForTesting
+  static String? computeThreadIdForTest({
     required String? messageId,
     required String? inReplyTo,
     required String? references,
+    String? subject,
+    DateTime? date,
+  }) =>
+      _computeThreadId(
+        messageId: messageId,
+        inReplyTo: inReplyTo,
+        references: references,
+        subject: subject,
+        date: date,
+      );
+
+  /// Derives a stable thread key from RFC 2822 headers.
+  ///
+  /// Precedence, matching JWZ-style threading:
+  ///   1. First entry of `References` — the oldest ancestor, so every message
+  ///      down the chain agrees on the same root Message-ID.
+  ///   2. `In-Reply-To` — used when `References` is missing but the client
+  ///      still recorded the immediate parent.
+  ///   3. Own `Message-ID` — starts a fresh thread that later replies will
+  ///      attach to via their `In-Reply-To`.
+  ///   4. Subject fallback — when a message has no Message-ID/References/
+  ///      In-Reply-To at all (rare, non-conformant senders), group by
+  ///      normalised subject bucketed into a `yyyy-mm` window so unrelated
+  ///      re-uses of the same subject in a different month land in a
+  ///      separate thread. See [normalizedSubject] for the strip rules.
+  ///
+  /// Returns `null` only when nothing usable is available (no headers, no
+  /// subject); the caller then falls back to the per-message `emailId` so the
+  /// thread contains just this message.
+  static String? _computeThreadId({
+    required String? messageId,
+    required String? inReplyTo,
+    required String? references,
+    String? subject,
+    DateTime? date,
   }) {
     if (references != null && references.isNotEmpty) {
       final first = references.trim().split(RegExp(r'\s+')).firstOrNull;
       if (first != null && first.isNotEmpty) return first;
     }
     if (inReplyTo != null && inReplyTo.isNotEmpty) return inReplyTo;
-    return messageId; // null for messages with no Message-ID (rare)
+    if (messageId != null && messageId.isNotEmpty) return messageId;
+    final subj = normalizedSubject(subject);
+    if (subj.isNotEmpty && date != null) {
+      final utc = date.toUtc();
+      final bucket = '${utc.year.toString().padLeft(4, '0')}-'
+          '${utc.month.toString().padLeft(2, '0')}';
+      return 'subj:$bucket:$subj';
+    }
+    return null;
   }
 
   String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(

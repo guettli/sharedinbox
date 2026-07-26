@@ -14,7 +14,7 @@ import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import '../unit/db_test_helper.dart';
 import 'helpers.dart';
 
-class _RecordingAppLogRepository implements AppLogRepository {
+class _RecordingAppLogRepository extends NoOpAppLogRepository {
   final List<Map<String, Object?>> inserts = [];
 
   @override
@@ -39,19 +39,6 @@ class _RecordingAppLogRepository implements AppLogRepository {
     });
     return inserts.length;
   }
-
-  @override
-  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
-      Stream.value(const []);
-
-  @override
-  Future<void> trim({
-    int maxRows = 10000,
-    Duration maxAge = const Duration(days: 14),
-  }) async {}
-
-  @override
-  Future<void> clearAll() async {}
 }
 
 class _FakeSieveRepository extends SieveRepository {

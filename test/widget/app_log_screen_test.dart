@@ -7,7 +7,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/app_log_screen.dart';
 
-class _MemRepo implements AppLogRepository {
+class _MemRepo extends NoOpAppLogRepository {
   _MemRepo(this._rows);
   final List<AppLogEntry> _rows;
 
@@ -66,12 +66,6 @@ class _MemRepo implements AppLogRepository {
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Stream.value(filtered.take(filter.limit).toList());
   }
-
-  @override
-  Future<void> trim({
-    int maxRows = 10000,
-    Duration maxAge = const Duration(days: 14),
-  }) async {}
 
   @override
   Future<void> clearAll() async => _rows.clear();

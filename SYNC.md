@@ -136,6 +136,62 @@ a full re-fetch.
 **JMAP send** — outgoing mail uses `EmailSubmission/set` when the server advertises the
 `urn:ietf:params:jmap:submission` capability; falls back to SMTP otherwise.
 
+**Diagnosing push** — every branch of `watchJmapPush` writes an app-log row
+tagged with the `sync.jmap.push` event and a `push_status` data field
+(`connected`, `unsupported`, `connect_failed`, `sse_failed`, `sse_status_<N>`,
+`closed`, `errored` — see `lib/core/sync/push_status.dart`). The sync-state
+view (Settings → Accounts → your account → Sync state) surfaces the latest
+row as a "Push connected" / "Falling back to 30 s poll" card so the user can
+tell whether the 30 s cadence is a bug or the server simply not offering an
+`eventSourceUrl`. `_JmapAccountSync._wait()` additionally logs a `sync.jmap.wait`
+debug row with `sync_wait=push_event | poll_fallback | stop` explaining why
+each cycle woke.
+
+---
+
+## 4a. Thread derivation
+
+Threads are stored in the `threads` aggregate table so that folder listings can
+show a single row per conversation. The `threadId` written on each `emails`
+row drives that grouping and is updated in the same transaction as the email
+upsert; the surrounding `_updateThread` call then recomputes the aggregate
+(subject, participants, latest date, unread/flagged rollups) from the emails
+that share the id.
+
+**JMAP** — the server reports a `threadId` on every `Email` object and we use
+it verbatim. Cases where the server omits it fall back to the per-email
+`accountId:jmapId` so the message ends up in a singleton thread.
+
+**IMAP** — IMAP has no `threadId`, so the sync loop derives one from the
+already-fetched RFC 2822 headers (`References`, `In-Reply-To`, `Message-ID`).
+The rule mirrors the classic JWZ algorithm, in order:
+
+1. **First entry of `References`** — the oldest ancestor. Every reply down
+   the chain carries the whole chain oldest-first, so all replies agree on
+   the same root Message-ID.
+2. **`In-Reply-To`** — some clients drop `References` but keep the immediate
+   parent; using it keeps the reply attached to that parent's thread.
+3. **Own `Message-ID`** — starts a fresh thread. Later replies attach to it
+   via steps 1 or 2.
+4. **Subject fallback** — for non-conformant senders that emit neither a
+   Message-ID nor any reference header, group by
+   `subj:<yyyy-mm>:<normalised subject>` bucketed on the message's `Date:`
+   header. [`normalizedSubject`](lib/core/utils/subject_normalize.dart)
+   strips stacked `Re:`/`Fwd:`/`AW:`/`WG:` prefixes, ticket tokens and
+   bracketed noise, then lowercases the result. Bucketing by year-month
+   bounds the time window so a subject that gets reused a year later
+   starts a new thread instead of resurrecting an old one.
+5. **Emailless singleton** — if every input is missing (no headers, no
+   subject) the caller uses the per-message `accountId:mailboxPath:uid` so
+   the message still has a stable, unique thread id.
+
+The helper lives at `EmailRepositoryImpl._computeThreadId` (exposed via
+`computeThreadIdForTest` for the unit tests in
+`test/unit/email_repository_impl_test.dart`). The IMAP fetch loop
+(`_fetchAndUpsertImap`) calls it inside the same DB transaction that upserts
+the email row, then calls `_updateThread` once per affected thread key —
+mirroring the JMAP path.
+
 ---
 
 ## 5. Exponential backoff
