@@ -3,6 +3,12 @@ import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/data/db/database.dart';
 
+// [Email] and [MailboxRow] are already part of this file's public API (they
+// appear as the row fields of [EmailDiff], [MailboxDiff], [BodyDiff] and
+// [UnmatchableEmail]). Re-exporting them lets the UI layer name them without
+// importing the data-layer package directly, which the layer check forbids.
+export 'package:sharedinbox/data/db/database.dart' show Email, MailboxRow;
+
 /// Compares the local-DB state of two accounts that should mirror the same
 /// mailbox on the server (one IMAP, one JMAP). Both sides are read from the
 /// local Drift database, so this measures whether the two protocol-specific
@@ -159,6 +165,16 @@ class AccountComparison {
       );
     }
 
+    // Sort by newest date first — otherwise entries would be grouped by
+    // "missing in A" then "missing in B" (the order the compare loops
+    // produce), which is unhelpful when scanning a long diff.
+    emailDiffs
+        .sort((x, y) => _dateOfEmailDiff(y).compareTo(_dateOfEmailDiff(x)));
+    bodyDiffs.sort((x, y) => _dateOfEmail(y.a).compareTo(_dateOfEmail(x.a)));
+    unmatchable.sort(
+      (x, y) => _dateOfEmail(y.email).compareTo(_dateOfEmail(x.email)),
+    );
+
     return AccountComparisonResult(
       accountIdA: accountIdA,
       accountIdB: accountIdB,
@@ -167,6 +183,14 @@ class AccountComparison {
       bodies: bodyDiffs,
       unmatchable: unmatchable,
     );
+  }
+
+  static DateTime _dateOfEmail(Email e) => e.sentAt ?? e.receivedAt;
+
+  static DateTime _dateOfEmailDiff(EmailDiff d) {
+    final e = d.a ?? d.b;
+    if (e == null) return DateTime.fromMillisecondsSinceEpoch(0);
+    return _dateOfEmail(e);
   }
 
   Future<List<MailboxRow>> _mailboxesFor(String accountId) {
@@ -200,8 +224,7 @@ class AccountComparison {
           UnmatchableEmail(
             side: ComparisonSide.a,
             mailboxKey: mailboxKey,
-            emailId: e.id,
-            subject: e.subject,
+            email: e,
           ),
         );
         continue;
@@ -217,8 +240,7 @@ class AccountComparison {
           UnmatchableEmail(
             side: ComparisonSide.b,
             mailboxKey: mailboxKey,
-            emailId: e.id,
-            subject: e.subject,
+            email: e,
           ),
         );
         continue;
@@ -378,14 +400,15 @@ class UnmatchableEmail {
   const UnmatchableEmail({
     required this.side,
     required this.mailboxKey,
-    required this.emailId,
-    required this.subject,
+    required this.email,
   });
 
   final ComparisonSide side;
   final String mailboxKey;
-  final String emailId;
-  final String? subject;
+  final Email email;
+
+  String get emailId => email.id;
+  String? get subject => email.subject;
 }
 
 class AccountComparisonResult {
