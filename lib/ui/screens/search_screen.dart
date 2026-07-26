@@ -78,9 +78,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void _onAfterBatchAction(List<String> actedThreadIds) {
     if (_results == null || !mounted) return;
     final actedSet = actedThreadIds.toSet();
-    final remaining = _results!
-        .where((e) => !actedSet.contains(e.threadId ?? e.id))
-        .toList();
+    final remaining =
+        _results!.where((e) => !actedSet.contains(e.threadId ?? e.id)).toList();
     setState(() => _results = remaining);
   }
 

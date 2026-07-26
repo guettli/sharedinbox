@@ -133,10 +133,8 @@ void main() {
         // matches (To/Cc) reach the UI only through getEmailsByAddress, so
         // the two streams must be merged. Overlap must appear once.
         final overlap = testEmail(id: 'acc-1:1', subject: 'Sender + recipient');
-        final globalOnly =
-            testEmail(id: 'acc-1:2', subject: 'From-side only');
-        final addressOnly =
-            testEmail(id: 'acc-1:3', subject: 'To-side only');
+        final globalOnly = testEmail(id: 'acc-1:2', subject: 'From-side only');
+        final addressOnly = testEmail(id: 'acc-1:3', subject: 'To-side only');
         await tester.pumpWidget(
           buildApp(
             initialLocation: '/accounts/acc-1/search',
