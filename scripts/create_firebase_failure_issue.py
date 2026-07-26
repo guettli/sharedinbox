@@ -11,12 +11,24 @@ Replaces the inline Python that used to live in firebase-tests.yml's
 
 Skips creation when an open issue with the canonical title already exists,
 so hourly runs cannot pile up duplicate failure issues until a fix lands.
+Also skips creation when a matching issue was closed within
+``_RECENT_CLOSED_WINDOW`` — a scheduled run that fired before a fix merged
+(or a manual re-run pinned to the pre-fix SHA) will trip the just-fixed
+failure again, and we don't want that stale run to spawn a fresh duplicate
+seconds after the fix landed (see #399).
 """
 
+import datetime
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
+
+# Window during which a just-closed matching issue suppresses re-filing.
+# Firebase Tests runs every 12 h, so genuine back-to-back failures cannot
+# fall inside this window — only re-runs of the same failing schedule can.
+_RECENT_CLOSED_WINDOW = datetime.timedelta(hours=1)
 
 
 def main():
@@ -56,6 +68,33 @@ def main():
     if existing:
         print(f"Existing open issue #{existing[0]['number']} — not creating duplicate")
         return 0
+
+    # If a matching issue was closed within the recent window, treat this
+    # failure as the tail of that same incident and skip. `since` on the
+    # issues API returns issues updated after the given time; we still
+    # verify `closed_at` explicitly so an old issue with a fresh comment
+    # cannot suppress a legitimate new failure.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    window_start = now - _RECENT_CLOSED_WINDOW
+    since_q = urllib.parse.quote(window_start.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    for i in api_get(
+        f"/issues?state=closed&labels=loop/code&since={since_q}&per_page=100"
+    ):
+        if i.get("pull_request") or i["title"] != title:
+            continue
+        closed_at_str = i.get("closed_at")
+        if not closed_at_str:
+            continue
+        closed_at = datetime.datetime.fromisoformat(
+            closed_at_str.replace("Z", "+00:00")
+        )
+        if closed_at >= window_start:
+            print(
+                f"Recently closed issue #{i['number']} (at {closed_at_str}) — "
+                f"skipping duplicate; likely a stale re-run pinned to a "
+                f"pre-fix commit, the next scheduled run will re-verify"
+            )
+            return 0
 
     body = (
         "Firebase robo crawl of the Play Store **alpha** APK failed in the hourly run.\n\n"
