@@ -191,8 +191,9 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
 
 /// Minimal in-memory [AppLogRepository] used by the JMAP push tests to
 /// observe the `push_status` sequence written by `watchJmapPush`. Only the
-/// insert path is exercised — everything else is a no-op.
-class _PushStatusRecorder implements AppLogRepository {
+/// insert path is exercised — everything else is inherited as a no-op from
+/// [NoOpAppLogRepository].
+class _PushStatusRecorder extends NoOpAppLogRepository {
   final List<AppLogEntry> entries = [];
   int _nextId = 1;
 
@@ -227,26 +228,6 @@ class _PushStatusRecorder implements AppLogRepository {
     );
     return id;
   }
-
-  @override
-  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
-      Stream.value(const []);
-
-  @override
-  Stream<AppLogEntry?> watchLatestForAccount({
-    required String accountId,
-    required String event,
-  }) =>
-      Stream.value(null);
-
-  @override
-  Future<void> trim({
-    int maxRows = 10000,
-    Duration maxAge = const Duration(days: 14),
-  }) async {}
-
-  @override
-  Future<void> clearAll() async {}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

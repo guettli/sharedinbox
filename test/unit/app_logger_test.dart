@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 
-class _RecordingRepo implements AppLogRepository {
+class _RecordingRepo extends NoOpAppLogRepository {
   final inserts = <Map<String, Object?>>[];
 
   @override
@@ -34,26 +34,6 @@ class _RecordingRepo implements AppLogRepository {
     });
     return inserts.length;
   }
-
-  @override
-  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
-      Stream.value(const []);
-
-  @override
-  Stream<AppLogEntry?> watchLatestForAccount({
-    required String accountId,
-    required String event,
-  }) =>
-      Stream.value(null);
-
-  @override
-  Future<void> trim({
-    int maxRows = 10000,
-    Duration maxAge = const Duration(days: 14),
-  }) async {}
-
-  @override
-  Future<void> clearAll() async {}
 }
 
 void main() {
@@ -142,7 +122,7 @@ class _NotJson {
   String toString() => 'not-json';
 }
 
-class _ThrowingRepo implements AppLogRepository {
+class _ThrowingRepo extends NoOpAppLogRepository {
   @override
   Future<int?> insert({
     required AppLogLevel level,
@@ -158,24 +138,4 @@ class _ThrowingRepo implements AppLogRepository {
   }) async {
     throw StateError('db gone');
   }
-
-  @override
-  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
-      Stream.value(const []);
-
-  @override
-  Stream<AppLogEntry?> watchLatestForAccount({
-    required String accountId,
-    required String event,
-  }) =>
-      Stream.value(null);
-
-  @override
-  Future<void> trim({
-    int maxRows = 10000,
-    Duration maxAge = const Duration(days: 14),
-  }) async {}
-
-  @override
-  Future<void> clearAll() async {}
 }
