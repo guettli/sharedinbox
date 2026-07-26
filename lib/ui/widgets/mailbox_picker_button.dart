@@ -71,9 +71,8 @@ class MailboxPickerButton extends ConsumerWidget {
       builder: (ctx, snap) {
         final mailboxes = snap.data ?? const <Mailbox>[];
         final match = resolveMailbox(mailboxes, value);
-        final label = value.isEmpty
-            ? placeholder
-            : (match?.displayPath ?? value);
+        final label =
+            value.isEmpty ? placeholder : (match?.displayPath ?? value);
         final isUnknown = value.isNotEmpty && match == null;
         return OutlinedButton.icon(
           onPressed: mailboxes.isEmpty ? null : () => _pick(context, ref),
@@ -83,9 +82,8 @@ class MailboxPickerButton extends ConsumerWidget {
             child: Text(
               label,
               overflow: TextOverflow.ellipsis,
-              style: isUnknown
-                  ? TextStyle(color: theme.colorScheme.error)
-                  : null,
+              style:
+                  isUnknown ? TextStyle(color: theme.colorScheme.error) : null,
             ),
           ),
           style: OutlinedButton.styleFrom(

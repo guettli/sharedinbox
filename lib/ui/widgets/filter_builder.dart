@@ -160,22 +160,22 @@ class _GroupEditor extends StatelessWidget {
     final child = group.children[i];
     return switch (child) {
       final FilterLeaf leaf => _LeafRow(
-        key: ValueKey(i),
-        leaf: leaf,
-        onChanged: (l) => _replaceChild(i, l),
-        onDelete: () => _removeChild(i),
-        availableFields: availableFields,
-        accountId: accountId,
-      ),
+          key: ValueKey(i),
+          leaf: leaf,
+          onChanged: (l) => _replaceChild(i, l),
+          onDelete: () => _removeChild(i),
+          availableFields: availableFields,
+          accountId: accountId,
+        ),
       final FilterGroup sub => _GroupEditor(
-        key: ValueKey(i),
-        group: sub,
-        onChanged: (g) => _replaceChild(i, g),
-        depth: depth + 1,
-        availableFields: availableFields,
-        accountId: accountId,
-        onRemoveGroup: () => _removeChild(i),
-      ),
+          key: ValueKey(i),
+          group: sub,
+          onChanged: (g) => _replaceChild(i, g),
+          depth: depth + 1,
+          availableFields: availableFields,
+          accountId: accountId,
+          onRemoveGroup: () => _removeChild(i),
+        ),
     };
   }
 }
@@ -370,11 +370,11 @@ class _LeafRowState extends State<_LeafRow> {
 /// hoisted out so the two nearly-identical [InputDecoration] literals don't
 /// trip the duplication detector.
 InputDecoration _leafFieldDecoration(String hint) => InputDecoration(
-  hintText: hint,
-  isDense: true,
-  border: const OutlineInputBorder(),
-  contentPadding: const EdgeInsets.symmetric(
-    horizontal: AppSpacing.sm,
-    vertical: AppSpacing.sm,
-  ),
-);
+      hintText: hint,
+      isDense: true,
+      border: const OutlineInputBorder(),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.sm,
+      ),
+    );

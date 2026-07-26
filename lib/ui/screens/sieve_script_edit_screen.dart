@@ -143,11 +143,11 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     try {
       final content = widget.isLocal
           ? await ref
-                .read(localSieveRepositoryProvider)
-                .getScriptContent(widget.accountId, widget.script!.blobId)
+              .read(localSieveRepositoryProvider)
+              .getScriptContent(widget.accountId, widget.script!.blobId)
           : await ref
-                .read(sieveRepositoryProvider)
-                .getScriptContent(widget.accountId, widget.script!.blobId);
+              .read(sieveRepositoryProvider)
+              .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
         _initialContent = content;
@@ -156,9 +156,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       }
     } catch (e, stack) {
       unawaited(
-        ref
-            .read(appLoggerProvider)
-            .error(
+        ref.read(appLoggerProvider).error(
               'sieve.script.load_failed',
               'Failed to load sieve script content',
               accountId: widget.accountId,
@@ -200,18 +198,14 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     SieveScript saved;
     try {
       if (widget.isLocal) {
-        saved = await ref
-            .read(localSieveRepositoryProvider)
-            .saveScript(
+        saved = await ref.read(localSieveRepositoryProvider).saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
               content: content,
             );
       } else {
-        saved = await ref
-            .read(sieveRepositoryProvider)
-            .saveScript(
+        saved = await ref.read(sieveRepositoryProvider).saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
@@ -220,9 +214,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       }
     } catch (e, stack) {
       unawaited(
-        ref
-            .read(appLoggerProvider)
-            .error(
+        ref.read(appLoggerProvider).error(
               'sieve.script.save_failed',
               'Failed to save sieve script',
               accountId: widget.accountId,
@@ -313,9 +305,9 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         content: Text(
           wasActive
               ? 'This filter matches $count message(s) in your inbox. '
-                    'Apply it to them now?'
+                  'Apply it to them now?'
               : 'This filter matches $count message(s) in your inbox. '
-                    'The filter will be activated first. Apply it now?',
+                  'The filter will be activated first. Apply it now?',
         ),
         actions: [
           TextButton(
@@ -503,21 +495,21 @@ class _ActionEditor extends StatelessWidget {
   final void Function(List<SieveAction>) onChanged;
 
   _ActionType _typeOf(SieveAction a) => switch (a) {
-    KeepAction() => _ActionType.keep,
-    DiscardAction() => _ActionType.discard,
-    MarkAsSeenAction() => _ActionType.markAsRead,
-    StarMessageAction() => _ActionType.starMessage,
-    FileIntoAction() => _ActionType.fileInto,
-    FlagAction() => _ActionType.keep,
-  };
+        KeepAction() => _ActionType.keep,
+        DiscardAction() => _ActionType.discard,
+        MarkAsSeenAction() => _ActionType.markAsRead,
+        StarMessageAction() => _ActionType.starMessage,
+        FileIntoAction() => _ActionType.fileInto,
+        FlagAction() => _ActionType.keep,
+      };
 
   SieveAction _defaultFor(_ActionType t) => switch (t) {
-    _ActionType.keep => KeepAction(),
-    _ActionType.discard => DiscardAction(),
-    _ActionType.markAsRead => MarkAsSeenAction(),
-    _ActionType.starMessage => StarMessageAction(),
-    _ActionType.fileInto => FileIntoAction(''),
-  };
+        _ActionType.keep => KeepAction(),
+        _ActionType.discard => DiscardAction(),
+        _ActionType.markAsRead => MarkAsSeenAction(),
+        _ActionType.starMessage => StarMessageAction(),
+        _ActionType.fileInto => FileIntoAction(''),
+      };
 
   void _changeType(int i, _ActionType t) {
     final next = List<SieveAction>.from(actions);
