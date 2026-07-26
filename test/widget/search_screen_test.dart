@@ -126,52 +126,12 @@ void main() {
     });
 
     testWidgets(
-      'recipient-only address matches surface as messages '
-      '(searchEmailsGlobal misses To/Cc, so getEmailsByAddress fills the gap)',
+      'merges searchEmailsGlobal + getEmailsByAddress into one message list, '
+      'de-duplicated by id and with no folder/address sections',
       (tester) async {
-        // Match reaches the UI only through `getEmailsByAddress`, not through
-        // FTS. The two result streams must be merged into one message list.
-        final recipientHit =
-            testEmail(id: 'acc-1:7', subject: 'To-only recipient hit');
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/search',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository(),
-              ),
-              emailRepositoryProvider.overrideWithValue(
-                FakeEmailRepository(byAddressResults: [recipientHit]),
-              ),
-              searchHistoryRepositoryProvider.overrideWithValue(
-                FakeSearchHistoryRepository(),
-              ),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await tester.enterText(find.byType(TextField), 'alice');
-        await tester.pump(const Duration(milliseconds: 400));
-        await tester.pumpAndSettle();
-
-        // No section headers — search now renders a single message list, same
-        // as combined-inbox and folder views.
-        expect(find.text('Folders'), findsNothing);
-        expect(find.text('Addresses'), findsNothing);
-        expect(find.text('Messages'), findsNothing);
-        expect(find.text('To-only recipient hit'), findsOneWidget);
-      },
-    );
-
-    testWidgets(
-      'merges global + by-address results, de-duplicated by id',
-      (tester) async {
-        // Same email appears in both result streams. It must render once, not
-        // twice.
+        // `email_fts` covers subject/preview/from_json only. Recipient-side
+        // matches (To/Cc) reach the UI only through getEmailsByAddress, so
+        // the two streams must be merged. Overlap must appear once.
         final overlap = testEmail(id: 'acc-1:1', subject: 'Sender + recipient');
         final globalOnly =
             testEmail(id: 'acc-1:2', subject: 'From-side only');
@@ -205,9 +165,16 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         await tester.pumpAndSettle();
 
+        // Every match surfaces, including the address-only recipient hit.
         expect(find.text('Sender + recipient'), findsOneWidget);
         expect(find.text('From-side only'), findsOneWidget);
         expect(find.text('To-side only'), findsOneWidget);
+
+        // No section headers — search now renders a single message list,
+        // same as combined-inbox and folder views.
+        expect(find.text('Folders'), findsNothing);
+        expect(find.text('Addresses'), findsNothing);
+        expect(find.text('Messages'), findsNothing);
       },
     );
 
