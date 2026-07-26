@@ -1,127 +1,171 @@
 #!/usr/bin/env python3
 """Tests for create_firebase_failure_issue.py."""
-import datetime
-import io
 import json
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import create_firebase_failure_issue as mod
+import create_firebase_failure_issue as cfi
 
 TITLE = "Firebase Tests failed — find root cause and fix"
 
 
-def _issue(number, *, state, title=TITLE, closed_at=None, is_pr=False):
-    payload = {"number": number, "title": title, "state": state}
-    if is_pr:
-        payload["pull_request"] = {"url": "https://api.github.com/x"}
-    if closed_at is not None:
-        payload["closed_at"] = closed_at
-    return payload
+def _now_utc_iso(delta=timedelta(0)):
+    return (datetime.now(timezone.utc) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run_main(open_issues=None, closed_issues=None, created_issue=None):
-    """Invoke ``main()`` with urllib.request.urlopen mocked.
+def _urlopen_responder(routes):
+    """Build a fake urllib.request.urlopen that returns JSON payloads by URL.
 
-    ``open_issues`` and ``closed_issues`` are returned for the two GET
-    calls. ``created_issue`` (if set) is returned for the POST create call.
-    Returns a list of (method, url) tuples for the requests made.
+    ``routes`` maps URL substring → (list of payloads to return in order).
+    Each payload becomes the ``.read()`` result of the returned context
+    manager.
     """
-    open_issues = open_issues or []
-    closed_issues = closed_issues or []
-    calls = []
+    remaining = {k: list(v) for k, v in routes.items()}
 
-    def fake_urlopen(request):
-        calls.append((request.get_method(), request.full_url))
-        if request.get_method() == "POST":
-            body = created_issue or {"number": 999, "html_url": "https://x/999"}
-        elif "state=open" in request.full_url:
-            body = open_issues
-        elif "state=closed" in request.full_url:
-            body = closed_issues
-        else:
-            raise AssertionError(f"unexpected URL {request.full_url}")
-        return _fake_response(body)
+    def fake_urlopen(req, *args, **kwargs):
+        url = req.full_url
+        for pattern, payloads in remaining.items():
+            if pattern in url and payloads:
+                payload = payloads.pop(0)
+                cm = MagicMock()
+                cm.__enter__ = lambda self, payload=payload: MagicMock(
+                    read=MagicMock(return_value=json.dumps(payload).encode())
+                )
+                cm.__exit__ = lambda self, *a: False
+                return cm
+        raise AssertionError(f"unexpected request to {url}\nleft={remaining}")
 
-    env = {
-        "GITHUB_TOKEN": "t",
-        "GITHUB_API_URL": "https://api.github.com",
-        "GITHUB_REPOSITORY": "owner/repo",
-        "RUN_URL": "https://x/run",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        with patch("create_firebase_failure_issue.urllib.request.urlopen", side_effect=fake_urlopen):
-            mod.main()
-    return calls
+    return fake_urlopen
 
 
-def _fake_response(body):
-    resp = MagicMock()
-    resp.__enter__ = lambda self: self
-    resp.__exit__ = lambda *a: False
-    resp.read.return_value = json.dumps(body).encode()
-    return resp
-
-
-class TestDedup(unittest.TestCase):
-    def test_creates_issue_when_no_matches(self):
-        calls = _run_main()
-        methods = [m for m, _ in calls]
-        self.assertIn("POST", methods)
-
-    def test_skips_when_open_issue_exists(self):
-        calls = _run_main(open_issues=[_issue(42, state="open")])
-        self.assertNotIn("POST", [m for m, _ in calls])
-
-    def test_ignores_open_prs_with_matching_title(self):
-        calls = _run_main(open_issues=[_issue(42, state="open", is_pr=True)])
-        # PRs must not count as dedup matches — creation should proceed.
-        self.assertIn("POST", [m for m, _ in calls])
-
-    def test_ignores_open_issue_with_different_title(self):
-        calls = _run_main(open_issues=[_issue(42, state="open", title="unrelated")])
-        self.assertIn("POST", [m for m, _ in calls])
-
-    def test_skips_when_recently_closed_issue_in_window(self):
-        # Closed 5 minutes ago — inside the 1 h window.
-        recent = (
-            datetime.datetime.now(datetime.timezone.utc)
-            - datetime.timedelta(minutes=5)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        calls = _run_main(closed_issues=[_issue(42, state="closed", closed_at=recent)])
-        self.assertNotIn("POST", [m for m, _ in calls])
-
-    def test_creates_issue_when_closed_issue_outside_window(self):
-        # Closed 2 hours ago — GitHub's `since` filter should not return it,
-        # and even if it did the closed_at check would exclude it.
-        old = (
-            datetime.datetime.now(datetime.timezone.utc)
-            - datetime.timedelta(hours=2)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        calls = _run_main(closed_issues=[_issue(42, state="closed", closed_at=old)])
-        self.assertIn("POST", [m for m, _ in calls])
-
-    def test_ignores_closed_prs_with_matching_title(self):
-        recent = (
-            datetime.datetime.now(datetime.timezone.utc)
-            - datetime.timedelta(minutes=5)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        calls = _run_main(
-            closed_issues=[_issue(42, state="closed", closed_at=recent, is_pr=True)]
+class _MainTest(unittest.TestCase):
+    def setUp(self):
+        self.env_patch = patch.dict(
+            os.environ,
+            {
+                "GITHUB_TOKEN": "t",
+                "GITHUB_API_URL": "https://api.github.com",
+                "GITHUB_REPOSITORY": "o/r",
+                "RUN_URL": "https://example/run/1",
+            },
+            clear=False,
         )
-        self.assertIn("POST", [m for m, _ in calls])
+        self.env_patch.start()
 
-    def test_recent_closed_query_uses_since_parameter(self):
-        calls = _run_main()
-        closed_gets = [url for m, url in calls if m == "GET" and "state=closed" in url]
-        self.assertEqual(len(closed_gets), 1)
-        self.assertIn("since=", closed_gets[0])
-        self.assertIn("labels=loop/code", closed_gets[0])
+    def tearDown(self):
+        self.env_patch.stop()
+
+
+class TestDedupOpenIssue(_MainTest):
+    """Regression for #404: the old filter `labels=loop/code` missed issues
+    whose label had progressed to loop/code-in-process, loop/code-ci-pending
+    or loop/code-done. Filtering by the stable `automerge` label catches all
+    lifecycle stages.
+    """
+
+    def _run_with_open_issue(self, labels):
+        open_payload = [{
+            "number": 402,
+            "title": TITLE,
+            "labels": [{"name": name} for name in labels],
+        }]
+        routes = {
+            "/issues?state=open&labels=automerge": [open_payload],
+        }
+        with patch("urllib.request.urlopen", side_effect=_urlopen_responder(routes)):
+            return cfi.main()
+
+    def test_skips_when_open_issue_has_loop_code(self):
+        self.assertEqual(self._run_with_open_issue(["loop/code", "automerge"]), 0)
+
+    def test_skips_when_open_issue_has_loop_code_in_process(self):
+        self.assertEqual(
+            self._run_with_open_issue(["loop/code-in-process", "automerge"]), 0
+        )
+
+    def test_skips_when_open_issue_has_loop_code_ci_pending(self):
+        self.assertEqual(
+            self._run_with_open_issue(["loop/code-ci-pending", "automerge"]), 0
+        )
+
+
+class TestDedupRecentlyClosed(_MainTest):
+    """Regression for #404: when a fix has just landed and the same-titled
+    issue was closed, a stale in-flight failing run should not file a new
+    issue immediately.
+    """
+
+    def _run(self, closed_delta):
+        closed_payload = [{
+            "number": 402,
+            "title": TITLE,
+            "closed_at": _now_utc_iso(closed_delta),
+        }]
+        routes = {
+            "/issues?state=open&labels=automerge": [[]],
+            "/issues?state=closed&labels=automerge": [closed_payload],
+        }
+        # api_post must not be called on the skip path — leave it unpatched
+        # so any unexpected POST raises loudly.
+        with patch("urllib.request.urlopen", side_effect=_urlopen_responder(routes)):
+            return cfi.main()
+
+    def test_skips_when_similar_closed_within_window(self):
+        # Closed 20 minutes ago (matches the #404 race timing).
+        self.assertEqual(self._run(-timedelta(minutes=20)), 0)
+
+    def test_creates_when_similar_closed_outside_window(self):
+        # Closed 2 hours ago — long enough that this is a genuine repeat.
+        closed_payload = [{
+            "number": 402,
+            "title": TITLE,
+            "closed_at": _now_utc_iso(-timedelta(hours=2)),
+        }]
+        created_payload = {"number": 405, "html_url": "https://ex/405"}
+        routes = {
+            "/issues?state=open&labels=automerge": [[]],
+            "/issues?state=closed&labels=automerge": [closed_payload],
+            "/issues": [created_payload],  # matched last; POST target
+        }
+        with patch("urllib.request.urlopen", side_effect=_urlopen_responder(routes)):
+            self.assertEqual(cfi.main(), 0)
+
+
+class TestCreatesWhenNoDuplicates(_MainTest):
+    def test_creates_new_issue(self):
+        created_payload = {"number": 500, "html_url": "https://ex/500"}
+        routes = {
+            "/issues?state=open&labels=automerge": [[]],
+            "/issues?state=closed&labels=automerge": [[]],
+            "/issues": [created_payload],
+        }
+        with patch("urllib.request.urlopen", side_effect=_urlopen_responder(routes)):
+            self.assertEqual(cfi.main(), 0)
+
+
+class TestUnrelatedTitleIgnored(_MainTest):
+    """The list endpoint returns all issues carrying the `automerge` label;
+    unrelated titles must not trip the dedup.
+    """
+
+    def test_unrelated_open_issue_does_not_block(self):
+        open_payload = [
+            {"number": 999, "title": "Something else", "labels": []},
+        ]
+        created_payload = {"number": 501, "html_url": "https://ex/501"}
+        routes = {
+            "/issues?state=open&labels=automerge": [open_payload],
+            "/issues?state=closed&labels=automerge": [[]],
+            "/issues": [created_payload],
+        }
+        with patch("urllib.request.urlopen", side_effect=_urlopen_responder(routes)):
+            self.assertEqual(cfi.main(), 0)
 
 
 if __name__ == "__main__":

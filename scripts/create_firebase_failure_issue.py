@@ -9,26 +9,29 @@ Replaces the inline Python that used to live in firebase-tests.yml's
   GITHUB_REPOSITORY — owner/repo
   RUN_URL           — link to the failing run, included in the body
 
-Skips creation when an open issue with the canonical title already exists,
-so hourly runs cannot pile up duplicate failure issues until a fix lands.
-Also skips creation when a matching issue was closed within
-``_RECENT_CLOSED_WINDOW`` — a scheduled run that fired before a fix merged
-(or a manual re-run pinned to the pre-fix SHA) will trip the just-fixed
-failure again, and we don't want that stale run to spawn a fresh duplicate
-seconds after the fix landed (see #399).
+Skips creation when:
+  * an open issue with the canonical title already exists, so hourly runs
+    cannot pile up duplicates until a fix lands; or
+  * a similar-titled issue was closed within the last hour, on the
+    assumption that its fix has just landed and this failing run started
+    against pre-fix code (see #404 for the exact race).
 """
 
-import datetime
 import json
 import os
 import sys
-import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
-# Window during which a just-closed matching issue suppresses re-filing.
-# Firebase Tests runs every 12 h, so genuine back-to-back failures cannot
-# fall inside this window — only re-runs of the same failing schedule can.
-_RECENT_CLOSED_WINDOW = datetime.timedelta(hours=1)
+# Window during which a just-closed similar issue suppresses a new one.
+# Long enough to cover an in-flight run that started before the fix merged
+# (the #404 case: ~20 min gap), short enough that a genuine repeat failure
+# on the next scheduled run still surfaces.
+_RECENT_CLOSE_WINDOW = timedelta(hours=1)
+
+
+def _parse_github_ts(s):
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
 def main():
@@ -60,41 +63,43 @@ def main():
 
     title = "Firebase Tests failed — find root cause and fix"
 
+    # Filter by `automerge` rather than `loop/code`: the loop/code label
+    # progresses to loop/code-in-process → loop/code-ci-pending → loop/code-done
+    # as the agent works, and an exact-match `labels=loop/code` filter would
+    # miss any issue past the first stage. `automerge` is set once at creation
+    # and never removed, so it is a stable handle across the loop lifecycle.
     # The list endpoint returns both issues and PRs — filter PRs.
     existing = [
-        i for i in api_get("/issues?state=open&labels=loop/code&per_page=100")
+        i for i in api_get("/issues?state=open&labels=automerge&per_page=100")
         if i["title"] == title and not i.get("pull_request")
     ]
     if existing:
         print(f"Existing open issue #{existing[0]['number']} — not creating duplicate")
         return 0
 
-    # If a matching issue was closed within the recent window, treat this
-    # failure as the tail of that same incident and skip. `since` on the
-    # issues API returns issues updated after the given time; we still
-    # verify `closed_at` explicitly so an old issue with a fresh comment
-    # cannot suppress a legitimate new failure.
-    now = datetime.datetime.now(datetime.timezone.utc)
-    window_start = now - _RECENT_CLOSED_WINDOW
-    since_q = urllib.parse.quote(window_start.strftime("%Y-%m-%dT%H:%M:%SZ"))
-    for i in api_get(
-        f"/issues?state=closed&labels=loop/code&since={since_q}&per_page=100"
-    ):
-        if i.get("pull_request") or i["title"] != title:
-            continue
-        closed_at_str = i.get("closed_at")
-        if not closed_at_str:
-            continue
-        closed_at = datetime.datetime.fromisoformat(
-            closed_at_str.replace("Z", "+00:00")
+    # A similar issue closed very recently means the fix has just landed but
+    # this failing run started against pre-fix code and could not benefit
+    # from it (see #404). The next scheduled run will confirm whether the
+    # fix works — creating a new issue now would just be noise.
+    recent_closed = [
+        i for i in api_get(
+            "/issues?state=closed&labels=automerge&per_page=20"
+            "&sort=updated&direction=desc"
         )
-        if closed_at >= window_start:
+        if i["title"] == title and not i.get("pull_request") and i.get("closed_at")
+    ]
+    now = datetime.now(timezone.utc)
+    for issue in recent_closed:
+        closed_at = _parse_github_ts(issue["closed_at"])
+        if now - closed_at <= _RECENT_CLOSE_WINDOW:
+            age_min = int((now - closed_at).total_seconds() / 60)
             print(
-                f"Recently closed issue #{i['number']} (at {closed_at_str}) — "
-                f"skipping duplicate; likely a stale re-run pinned to a "
-                f"pre-fix commit, the next scheduled run will re-verify"
+                f"Similar issue #{issue['number']} closed {age_min}m ago — "
+                f"skipping; fix is presumably in flight"
             )
             return 0
+        # Closed list is sorted newest-first; older ones can't be recent.
+        break
 
     body = (
         "Firebase robo crawl of the Play Store **alpha** APK failed in the hourly run.\n\n"
