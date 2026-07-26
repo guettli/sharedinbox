@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
-import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -180,30 +179,13 @@ class _MailboxDiffTile extends StatelessWidget {
       leading: const Icon(Icons.folder_outlined),
       title: Text(title),
       subtitle: Text(subtitle),
-      childrenPadding: const EdgeInsets.fromLTRB(
-        AppSpacing.xl,
-        0,
-        AppSpacing.lg,
-        AppSpacing.sm,
-      ),
+      childrenPadding: _childrenPadding,
       children: [
         _DetailRow(label: 'Key', value: diff.key),
-        if (diff.a != null) ..._mailboxSideDetails('A', diff.a!),
-        if (diff.b != null) ..._mailboxSideDetails('B', diff.b!),
+        if (diff.a != null) ..._mailboxSideRows('A', diff.a!),
+        if (diff.b != null) ..._mailboxSideRows('B', diff.b!),
       ],
     );
-  }
-
-  List<Widget> _mailboxSideDetails(String side, MailboxRow row) {
-    return [
-      _DetailRow(label: '$side · name', value: row.name),
-      _DetailRow(label: '$side · path', value: row.path),
-      _DetailRow(label: '$side · role', value: row.role ?? '(none)'),
-      _DetailRow(
-        label: '$side · counts',
-        value: 'unread ${row.unreadCount}, total ${row.totalCount}',
-      ),
-    ];
   }
 }
 
@@ -232,27 +214,7 @@ class _EmailDiffTile extends StatelessWidget {
         subtitle = _subtitleFor(diff.a ?? diff.b);
         break;
     }
-    return ExpansionTile(
-      dense: true,
-      leading: const Icon(Icons.email_outlined),
-      title: Text(title),
-      subtitle: Text(subtitle),
-      childrenPadding: const EdgeInsets.fromLTRB(
-        AppSpacing.xl,
-        0,
-        AppSpacing.lg,
-        AppSpacing.sm,
-      ),
-      children: _emailDetails(diff),
-    );
-  }
 
-  String _subtitleFor(Email? e) {
-    final date = e == null ? '' : '${_dateFmt.format(_dateOf(e))} · ';
-    return '$date${diff.mailboxKey} · ${diff.messageId}';
-  }
-
-  List<Widget> _emailDetails(EmailDiff diff) {
     final rows = <Widget>[
       _DetailRow(label: 'Message-ID', value: diff.messageId),
       _DetailRow(label: 'Folder', value: diff.mailboxKey),
@@ -267,13 +229,26 @@ class _EmailDiffTile extends StatelessWidget {
     }
     if (diff.a != null) {
       rows.add(const Divider(height: AppSpacing.lg));
-      rows.addAll(_emailSideDetails('A', diff.a!));
+      rows.addAll(_emailSideRows('A', diff.a!));
     }
     if (diff.b != null) {
       rows.add(const Divider(height: AppSpacing.lg));
-      rows.addAll(_emailSideDetails('B', diff.b!));
+      rows.addAll(_emailSideRows('B', diff.b!));
     }
-    return rows;
+
+    return ExpansionTile(
+      dense: true,
+      leading: const Icon(Icons.email_outlined),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      childrenPadding: _childrenPadding,
+      children: rows,
+    );
+  }
+
+  String _subtitleFor(Email? e) {
+    final date = e == null ? '' : '${_dateFmt.format(_dateOf(e))} · ';
+    return '$date${diff.mailboxKey} · ${diff.messageId}';
   }
 }
 
@@ -289,18 +264,13 @@ class _BodyDiffTile extends StatelessWidget {
       leading: const Icon(Icons.description_outlined),
       title: Text('Body differs: ${diff.a.subject ?? '(no subject)'}'),
       subtitle: Text('${_dateFmt.format(_dateOf(diff.a))} · ${diff.messageId}'),
-      childrenPadding: const EdgeInsets.fromLTRB(
-        AppSpacing.xl,
-        0,
-        AppSpacing.lg,
-        AppSpacing.sm,
-      ),
+      childrenPadding: _childrenPadding,
       children: [
         _DetailRow(label: 'Message-ID', value: diff.messageId),
         const Divider(height: AppSpacing.lg),
-        ..._emailSideDetails('A', diff.a),
+        ..._emailSideRows('A', diff.a),
         const Divider(height: AppSpacing.lg),
-        ..._emailSideDetails('B', diff.b),
+        ..._emailSideRows('B', diff.b),
       ],
     );
   }
@@ -321,16 +291,11 @@ class _UnmatchableTile extends StatelessWidget {
       subtitle: Text(
         '${_dateFmt.format(_dateOf(entry.email))} · ${entry.mailboxKey}',
       ),
-      childrenPadding: const EdgeInsets.fromLTRB(
-        AppSpacing.xl,
-        0,
-        AppSpacing.lg,
-        AppSpacing.sm,
-      ),
+      childrenPadding: _childrenPadding,
       children: [
         _DetailRow(label: 'Side', value: side),
         _DetailRow(label: 'Folder', value: entry.mailboxKey),
-        ..._emailSideDetails(side, entry.email),
+        ..._emailSideRows(side, entry.email),
       ],
     );
   }
@@ -371,7 +336,14 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-List<Widget> _emailSideDetails(String side, Email e) {
+const _childrenPadding = EdgeInsets.fromLTRB(
+  AppSpacing.xl,
+  0,
+  AppSpacing.lg,
+  AppSpacing.sm,
+);
+
+List<Widget> _emailSideRows(String side, Email e) {
   return [
     _DetailRow(label: '$side · date', value: _dateFmt.format(_dateOf(e))),
     _DetailRow(label: '$side · from', value: _formatAddresses(e.fromJson)),
@@ -383,6 +355,18 @@ List<Widget> _emailSideDetails(String side, Email e) {
     _DetailRow(
       label: '$side · flags',
       value: 'seen=${e.isSeen} flagged=${e.isFlagged}',
+    ),
+  ];
+}
+
+List<Widget> _mailboxSideRows(String side, MailboxRow row) {
+  return [
+    _DetailRow(label: '$side · name', value: row.name),
+    _DetailRow(label: '$side · path', value: row.path),
+    _DetailRow(label: '$side · role', value: row.role ?? '(none)'),
+    _DetailRow(
+      label: '$side · counts',
+      value: 'unread ${row.unreadCount}, total ${row.totalCount}',
     ),
   ];
 }

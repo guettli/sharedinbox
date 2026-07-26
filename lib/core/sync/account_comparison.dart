@@ -3,6 +3,12 @@ import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/data/db/database.dart';
 
+// [Email] and [MailboxRow] are already part of this file's public API (they
+// appear as the row fields of [EmailDiff], [MailboxDiff], [BodyDiff] and
+// [UnmatchableEmail]). Re-exporting them lets the UI layer name them without
+// importing the data-layer package directly, which the layer check forbids.
+export 'package:sharedinbox/data/db/database.dart' show Email, MailboxRow;
+
 /// Compares the local-DB state of two accounts that should mirror the same
 /// mailbox on the server (one IMAP, one JMAP). Both sides are read from the
 /// local Drift database, so this measures whether the two protocol-specific

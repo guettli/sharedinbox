@@ -527,46 +527,8 @@ void main() {
     test('sorts body diffs newest-first', () async {
       await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
       await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
-      await _seedEmail(
-        db,
-        accountId: 'imap-1',
-        id: 'imap-1:old',
-        mailboxPath: 'INBOX',
-        uid: 1,
-        messageId: '<old@example.com>',
-        subject: 'Old',
-        sentAt: DateTime.utc(2025),
-      );
-      await _seedEmail(
-        db,
-        accountId: 'jmap-1',
-        id: 'jmap-1:old',
-        mailboxPath: 'a',
-        uid: 0,
-        messageId: '<old@example.com>',
-        subject: 'Old',
-        sentAt: DateTime.utc(2025),
-      );
-      await _seedEmail(
-        db,
-        accountId: 'imap-1',
-        id: 'imap-1:new',
-        mailboxPath: 'INBOX',
-        uid: 2,
-        messageId: '<new@example.com>',
-        subject: 'New',
-        sentAt: DateTime.utc(2026, 6),
-      );
-      await _seedEmail(
-        db,
-        accountId: 'jmap-1',
-        id: 'jmap-1:new',
-        mailboxPath: 'a',
-        uid: 0,
-        messageId: '<new@example.com>',
-        subject: 'New',
-        sentAt: DateTime.utc(2026, 6),
-      );
+      await _seedMatchedPair(db, suffix: 'old', sentAt: DateTime.utc(2025));
+      await _seedMatchedPair(db, suffix: 'new', sentAt: DateTime.utc(2026, 6));
       await _seedBody(db, emailId: 'imap-1:old', textBody: 'old A');
       await _seedBody(db, emailId: 'jmap-1:old', textBody: 'old B');
       await _seedBody(db, emailId: 'imap-1:new', textBody: 'new A');
@@ -723,4 +685,39 @@ Future<void> _seedEmail(
           messageId: Value(messageId),
         ),
       );
+}
+
+/// Seeds one email on each side (imap-1 in INBOX, jmap-1 in "a") with the
+/// same Message-ID so they match during comparison. Row IDs are suffixed
+/// with [suffix]; Message-ID and subject default to `<[suffix]@example.com>`
+/// and `[suffix]`.
+Future<void> _seedMatchedPair(
+  AppDatabase db, {
+  required String suffix,
+  required DateTime sentAt,
+  String? messageId,
+  String? subject,
+}) async {
+  final mid = messageId ?? '<$suffix@example.com>';
+  final subj = subject ?? suffix;
+  await _seedEmail(
+    db,
+    accountId: 'imap-1',
+    id: 'imap-1:$suffix',
+    mailboxPath: 'INBOX',
+    uid: suffix.hashCode.abs(),
+    messageId: mid,
+    subject: subj,
+    sentAt: sentAt,
+  );
+  await _seedEmail(
+    db,
+    accountId: 'jmap-1',
+    id: 'jmap-1:$suffix',
+    mailboxPath: 'a',
+    uid: 0,
+    messageId: mid,
+    subject: subj,
+    sentAt: sentAt,
+  );
 }
