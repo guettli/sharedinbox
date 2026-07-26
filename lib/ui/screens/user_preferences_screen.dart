@@ -317,7 +317,12 @@ class _EncryptionSectionState extends ConsumerState<_EncryptionSection> {
         ),
         if (status.hasPendingChange)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              0,
+              AppSpacing.lg,
+              AppSpacing.lg,
+            ),
             child: Row(
               children: [
                 Expanded(

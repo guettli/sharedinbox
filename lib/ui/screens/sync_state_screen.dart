@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -50,10 +55,11 @@ class SyncStateScreen extends ConsumerWidget {
             onRefresh: () async =>
                 ref.invalidate(syncStateForAccountProvider(accountId)),
             child: ListView.builder(
-              itemCount: states.length + 1,
+              itemCount: states.length + 2,
               itemBuilder: (ctx, i) {
-                if (i == 0) return _AccountSummaryCard(states: states);
-                return _MailboxSyncStateTile(state: states[i - 1]);
+                if (i == 0) return _JmapPushStatusCard(accountId: accountId);
+                if (i == 1) return _AccountSummaryCard(states: states);
+                return _MailboxSyncStateTile(state: states[i - 2]);
               },
             ),
           );
@@ -311,4 +317,124 @@ class _Segment {
   const _Segment(this.value, this.color);
   final int value;
   final Color color;
+}
+
+/// Renders the current JMAP push (RFC 8887 EventSource) state so the user can
+/// tell at a glance whether the account is push-driven or falling back to the
+/// 30 s poll — see [JmapPushStatus] for the vocabulary. Invisible for IMAP
+/// accounts and for JMAP accounts that have never logged a status yet.
+class _JmapPushStatusCard extends ConsumerWidget {
+  const _JmapPushStatusCard({required this.accountId});
+
+  final String accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final account = ref.watch(accountByIdProvider(accountId)).value;
+    if (account == null || account.type != AccountType.jmap) {
+      return const SizedBox.shrink();
+    }
+    final entry = ref.watch(jmapPushStatusProvider(accountId)).value;
+    final render = _renderPushStatus(context, entry);
+    if (render == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.md,
+        AppSpacing.md,
+        0,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(render.icon, color: render.color),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(render.title, style: theme.textTheme.titleMedium),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(render.detail, style: theme.textTheme.bodyMedium),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PushStatusRender {
+  const _PushStatusRender({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.detail,
+  });
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String detail;
+}
+
+/// Turns a raw `sync.jmap.push` log entry into an icon + title + one-line
+/// explanation. Returns null when the account has never logged a status
+/// (fresh account, or push code not exercised yet) so the caller can
+/// suppress the card entirely.
+_PushStatusRender? _renderPushStatus(BuildContext context, AppLogEntry? entry) {
+  if (entry == null) return null;
+  final theme = Theme.of(context);
+  final status = _decodePushStatus(entry.dataJson);
+  if (status == null) return null;
+
+  if (status == JmapPushStatus.connected.wireName) {
+    return const _PushStatusRender(
+      icon: Icons.cloud_done,
+      color: Colors.green,
+      title: 'Push connected',
+      detail: 'Waiting for server events — no periodic polling.',
+    );
+  }
+
+  final reason = switch (status) {
+    'unsupported' => 'server does not advertise an eventSourceUrl',
+    'connect_failed' => 'JMAP session could not be reached',
+    'sse_failed' => 'SSE request failed (network or TLS)',
+    'closed' => 'push stream ended (server closed or 25-min cap)',
+    'errored' => 'push stream errored',
+    _ => status.startsWith(JmapPushStatus.sseStatusPrefix.wireName)
+        ? 'SSE endpoint returned HTTP ${status.substring(
+            JmapPushStatus.sseStatusPrefix.wireName.length,
+          )}'
+        : status,
+  };
+  return _PushStatusRender(
+    icon: Icons.cloud_off,
+    color: theme.colorScheme.error,
+    title: 'Falling back to 30 s poll',
+    detail: 'Push unavailable: $reason.',
+  );
+}
+
+/// Pulls the `push_status` field out of an AppLogEntry's JSON data blob.
+/// Returns null when the blob is missing, malformed, or the field is not a
+/// string — callers treat that as "no known status".
+String? _decodePushStatus(String? dataJson) {
+  if (dataJson == null) return null;
+  try {
+    final decoded = jsonDecode(dataJson);
+    if (decoded is Map) {
+      final value = decoded['push_status'];
+      if (value is String) return value;
+    }
+  } catch (_) {
+    // Malformed JSON — treat as unknown.
+  }
+  return null;
 }

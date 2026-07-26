@@ -16,6 +16,17 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 
+/// Fields the Sieve builder exposes — excludes those that make no sense at
+/// delivery time (e.g. [FilterField.folder]).
+const List<FilterField> _sieveFilterFields = [
+  FilterField.from_,
+  FilterField.to,
+  FilterField.cc,
+  FilterField.subject,
+  FilterField.size,
+  FilterField.header,
+];
+
 class SieveScriptEditScreen extends ConsumerStatefulWidget {
   const SieveScriptEditScreen({
     super.key,
@@ -431,6 +442,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
             key: ValueKey(_visualLoadCount),
             initialValue: _filterGroup,
             onChanged: (g) => setState(() => _filterGroup = g),
+            availableFields: _sieveFilterFields,
           ),
           const SizedBox(height: AppSpacing.md),
           _ActionEditor(

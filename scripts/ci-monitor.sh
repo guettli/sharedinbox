@@ -12,24 +12,19 @@
 #   GITHUB_TOKEN             token for GitHub, owned by guettlibot
 #                            (push access to guettli/sharedinbox)
 #   NTFY_ALERT_MESSAGE_URL   ntfy topic URL for human-readable alerts
+#   CI_MONITOR_API           GitHub API base (e.g. https://api.github.com)
+#   CI_MONITOR_REPO          owner/repo  (e.g. guettli/sharedinbox)
+#   CI_MONITOR_BRANCH        branch to monitor (e.g. main)
+#   CI_MONITOR_AUTO_FIX      "true" to push Pattern A fixes, else "false"
+#                            (alert-only until the runner pool is stable)
 #
 # Optional env:
-#   CI_MONITOR_AUTO_FIX      "true" to push Pattern A fixes; default "false"
-#                            (alert-only until the runner pool is stable)
-#   CI_MONITOR_API           GitHub API base (default https://api.github.com)
-#   CI_MONITOR_REPO          owner/repo  (default guettli/sharedinbox)
-#   CI_MONITOR_BRANCH        branch to monitor (default main)
 #   CI_MONITOR_WORKDIR       scratch dir (default mktemp -d)
 #
 # When sourced (BASH_SOURCE != argv0) the file exposes the pure helpers
 # without running main() — used by scripts/test_ci_monitor.sh.
 
 set -uo pipefail
-
-CI_MONITOR_API="${CI_MONITOR_API:-https://api.github.com}"
-CI_MONITOR_REPO="${CI_MONITOR_REPO:-guettli/sharedinbox}"
-CI_MONITOR_BRANCH="${CI_MONITOR_BRANCH:-main}"
-CI_MONITOR_AUTO_FIX="${CI_MONITOR_AUTO_FIX:-false}"
 
 log() {
     printf '%s ci-monitor: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -125,21 +120,15 @@ ntfy_alert() {
 }
 
 # Echo the first registered, non-offline self-hosted runner label visible for
-# the repo. Falls back to 'ubuntu-latest' if no labels can be discovered.
+# the repo, or return non-zero on failure. Callers must check the exit
+# status — no silent fallback, since guessing a label the runner pool
+# doesn't actually publish would just push a broken workflow.
 discover_runner_label() {
-    local repo="$1" json
-    json=$(gh_api "repos/$repo/actions/runners" 2>/dev/null) || true
-    if [ -z "$json" ]; then
-        echo "ubuntu-latest"
-        return
-    fi
-    local label
+    local repo="$1" json label
+    json=$(gh_api "repos/$repo/actions/runners") || return 1
     label=$(printf '%s' "$json" | python3 -c "
 import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
+data = json.load(sys.stdin)
 for r in data.get('runners', []):
     if r.get('status') == 'offline':
         continue
@@ -148,16 +137,17 @@ for r in data.get('runners', []):
         if name and name not in ('self-hosted', 'Linux', 'X64'):
             print(name)
             sys.exit(0)
-" 2>/dev/null || true)
-    if [ -n "$label" ]; then
-        echo "$label"
-        return
-    fi
-    echo "ubuntu-latest"
+") || return 1
+    [ -n "$label" ] || return 1
+    echo "$label"
 }
 
 main() {
     : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
+    : "${CI_MONITOR_API:?CI_MONITOR_API must be set (e.g. https://api.github.com)}"
+    : "${CI_MONITOR_REPO:?CI_MONITOR_REPO must be set (e.g. guettli/sharedinbox)}"
+    : "${CI_MONITOR_BRANCH:?CI_MONITOR_BRANCH must be set (e.g. main)}"
+    : "${CI_MONITOR_AUTO_FIX:?CI_MONITOR_AUTO_FIX must be set (true or false)}"
 
     local workdir="${CI_MONITOR_WORKDIR:-$(mktemp -d)}"
     trap 'rm -rf "$workdir"' EXIT
@@ -211,20 +201,19 @@ for r in data.get('workflow_runs', []):
     fi
 
     local logs_url="https://github.com/$repo/actions/runs/$run_id"
-    # Fetch the failed-step logs via the gh CLI if available, else fall back to
-    # the REST logs endpoint (returns a zip; grep tolerates the binary).
-    local logs=""
-    if command -v gh >/dev/null 2>&1; then
-        logs=$(GH_TOKEN="$GITHUB_TOKEN" gh run view "$run_id" --log-failed -R "$repo" 2>/dev/null || true)
-        if [ -z "$logs" ]; then
-            logs=$(GH_TOKEN="$GITHUB_TOKEN" gh run view "$run_id" --log -R "$repo" 2>/dev/null || true)
-        fi
+    # Fetch the failed-step logs via the gh CLI. Required — the previous REST
+    # fallback returned a zip that grep would happily "match" against binary
+    # noise, silently producing bogus classifications.
+    if ! command -v gh >/dev/null 2>&1; then
+        log "ERROR: gh CLI is required to fetch run logs"
+        ntfy_alert "GitHub CI monitor: gh CLI missing" \
+            "ci-monitor requires the gh CLI on the pod image to fetch run logs."
+        exit 1
     fi
+    local logs
+    logs=$(GH_TOKEN="$GITHUB_TOKEN" gh run view "$run_id" --log-failed -R "$repo" 2>/dev/null || true)
     if [ -z "$logs" ]; then
-        logs=$(curl -sfL \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "$CI_MONITOR_API/repos/$repo/actions/runs/$run_id/logs" 2>/dev/null | tr -cd '[:print:]\n\t' || true)
+        logs=$(GH_TOKEN="$GITHUB_TOKEN" gh run view "$run_id" --log -R "$repo" 2>/dev/null || true)
     fi
 
     local pattern
@@ -240,7 +229,12 @@ for r in data.get('workflow_runs', []):
             fi
             log "Pattern A: attempting auto-fix"
             local label
-            label=$(discover_runner_label "$repo")
+            if ! label=$(discover_runner_label "$repo"); then
+                log "ERROR: could not discover a runner label for $repo"
+                ntfy_alert "GitHub CI monitor: runner label lookup failed" \
+                    "Pattern A on run #$run_number but no online non-generic runner label could be discovered in $repo — manual fix required."
+                exit 1
+            fi
             log "discovered runner label: $label"
 
             local clone="$workdir/repo"

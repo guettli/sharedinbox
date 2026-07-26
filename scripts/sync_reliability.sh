@@ -19,8 +19,9 @@ command -v stalwart >/dev/null || {
     exit 1
 }
 
-export STALWART_USER_B="${STALWART_USER_B:-alice@example.com}"
-export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
+: "${STALWART_USER_B:?STALWART_USER_B must be set (test account B email)}"
+: "${STALWART_PASS_B:?STALWART_PASS_B must be set (test account B password)}"
+export STALWART_USER_B STALWART_PASS_B
 export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-sync-reliability-XXXXXX)"
 export STALWART_TMPDIR
@@ -43,9 +44,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# start writes ports.env before it execs the container, but runs in the
+# background — wait for the file to appear so the readiness loop below can
+# source it unconditionally. A missing ports.env after the wait means start
+# failed to produce it; source without a guard so set -e fails loudly rather
+# than silently skipping every readiness check.
+for _i in $(seq 1 40); do
+    [ -s "${STALWART_TMPDIR}/ports.env" ] && break
+    kill -0 "$STALWART_PID" 2>/dev/null || {
+        cat "$LOGFILE"
+        echo "Stalwart process died before writing ports.env"
+        exit 1
+    }
+    sleep 0.25
+done
+# shellcheck source=/dev/null
+. "${STALWART_TMPDIR}/ports.env"
+
 for _i in $(seq 1 20); do
-    # shellcheck source=/dev/null
-    [ -f "${STALWART_TMPDIR}/ports.env" ] && . "${STALWART_TMPDIR}/ports.env"
     grep -E "Configuration build error|Build error for key|already in use" "$LOGFILE" >/dev/null 2>&1 && {
         cat "$LOGFILE"
         echo "Stalwart reported a startup error"
@@ -56,18 +72,11 @@ for _i in $(seq 1 20); do
         echo "Stalwart process died unexpectedly"
         exit 1
     }
-    if [ -n "${STALWART_URL:-}" ] &&
-        curl -s --max-time 1 -o /dev/null "${STALWART_URL}/.well-known/jmap" 2>/dev/null; then
+    if curl -s --max-time 1 -o /dev/null "${STALWART_URL}/.well-known/jmap" 2>/dev/null; then
         break
     fi
     sleep 0.5
 done
-
-[ -n "${STALWART_URL:-}" ] || {
-    cat "$LOGFILE"
-    echo "Stalwart did not publish its chosen ports"
-    exit 1
-}
 
 curl -s --max-time 1 -o /dev/null "${STALWART_URL}/.well-known/jmap" || {
     cat "$LOGFILE"

@@ -206,6 +206,17 @@ final appLogEntriesProvider = StreamProvider.autoDispose
   return ref.watch(appLogRepositoryProvider).watchEntries(filter);
 });
 
+/// Streams the newest `sync.jmap.push` log entry for [accountId]. Backs the
+/// "Push" row on the sync-state view — see `push_status.dart` for the
+/// vocabulary of values encoded in the entry's `push_status` data field.
+final jmapPushStatusProvider =
+    StreamProvider.autoDispose.family<AppLogEntry?, String>((ref, accountId) {
+  return ref.watch(appLogRepositoryProvider).watchLatestForAccount(
+        accountId: accountId,
+        event: 'sync.jmap.push',
+      );
+});
+
 final syncLastErrorProvider =
     StreamProvider.autoDispose.family<String?, String>((ref, accountId) {
   return ref.watch(syncLogRepositoryProvider).observeLastError(accountId);
