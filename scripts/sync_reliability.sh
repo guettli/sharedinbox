@@ -19,8 +19,9 @@ command -v stalwart >/dev/null || {
     exit 1
 }
 
-export STALWART_USER_B="${STALWART_USER_B:-alice@example.com}"
-export STALWART_PASS_B="${STALWART_PASS_B:-secret}"
+: "${STALWART_USER_B:?STALWART_USER_B must be set (test account B email)}"
+: "${STALWART_PASS_B:?STALWART_PASS_B must be set (test account B password)}"
+export STALWART_USER_B STALWART_PASS_B
 export STALWART_RANDOM_PORTS=1
 STALWART_TMPDIR="$(mktemp -d /tmp/stalwart-dev-sync-reliability-XXXXXX)"
 export STALWART_TMPDIR
