@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
-import 'package:sharedinbox/core/models/mailbox.dart';
-import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
-import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
 
 /// A widget that lets the user build a structured [FilterGroup] interactively.
 ///
@@ -98,10 +95,7 @@ class _GroupEditor extends StatelessWidget {
   }
 
   void _addSubGroup() {
-    final sub = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [],
-    );
+    final sub = FilterGroup(operator: FilterOperator.and_, children: []);
     onChanged(group.copyWith(children: [...group.children, sub]));
   }
 
@@ -166,22 +160,22 @@ class _GroupEditor extends StatelessWidget {
     final child = group.children[i];
     return switch (child) {
       final FilterLeaf leaf => _LeafRow(
-          key: ValueKey(i),
-          leaf: leaf,
-          onChanged: (l) => _replaceChild(i, l),
-          onDelete: () => _removeChild(i),
-          availableFields: availableFields,
-          accountId: accountId,
-        ),
+        key: ValueKey(i),
+        leaf: leaf,
+        onChanged: (l) => _replaceChild(i, l),
+        onDelete: () => _removeChild(i),
+        availableFields: availableFields,
+        accountId: accountId,
+      ),
       final FilterGroup sub => _GroupEditor(
-          key: ValueKey(i),
-          group: sub,
-          onChanged: (g) => _replaceChild(i, g),
-          depth: depth + 1,
-          availableFields: availableFields,
-          accountId: accountId,
-          onRemoveGroup: () => _removeChild(i),
-        ),
+        key: ValueKey(i),
+        group: sub,
+        onChanged: (g) => _replaceChild(i, g),
+        depth: depth + 1,
+        availableFields: availableFields,
+        accountId: accountId,
+        onRemoveGroup: () => _removeChild(i),
+      ),
     };
   }
 }
@@ -311,9 +305,7 @@ class _LeafRowState extends State<_LeafRow> {
             isDense: true,
             underline: const SizedBox.shrink(),
             items: widget.availableFields
-                .map(
-                  (f) => DropdownMenuItem(value: f, child: Text(f.label)),
-                )
+                .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
                 .toList(),
           ),
           if (isHeader) ...[
@@ -324,28 +316,23 @@ class _LeafRowState extends State<_LeafRow> {
                 controller: _headerNameCtrl,
                 onChanged: (v) =>
                     widget.onChanged(widget.leaf.copyWith(headerName: v)),
-                decoration: const InputDecoration(
-                  hintText: 'header name',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.sm,
-                  ),
-                ),
+                decoration: _leafFieldDecoration('header name'),
               ),
             ),
           ],
           const SizedBox(width: AppSpacing.sm),
           if (isFolder)
             // Folder is always an exact match against the picked mailbox, so
-            // there is no comparison dropdown — just the picker button.
+            // there is no comparison dropdown — just the picker button, which
+            // stores the mailbox's raw `path` (opaque JMAP id or IMAP path)
+            // so the LIKE against `emails.mailbox_path` matches.
             Expanded(
-              child: _FolderPickerField(
+              child: MailboxPickerButton(
                 accountId: widget.accountId,
                 value: widget.leaf.value,
-                onChanged: (v) =>
-                    widget.onChanged(widget.leaf.copyWith(value: v)),
+                onPicked: (picked, displayPath) => widget.onChanged(
+                  widget.leaf.copyWith(value: picked?.path ?? displayPath),
+                ),
               ),
             )
           else ...[
@@ -355,9 +342,7 @@ class _LeafRowState extends State<_LeafRow> {
               isDense: true,
               underline: const SizedBox.shrink(),
               items: widget.leaf.field.allowedComparisons
-                  .map(
-                    (c) => DropdownMenuItem(value: c, child: Text(c.label)),
-                  )
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
                   .toList(),
             ),
             const SizedBox(width: AppSpacing.sm),
@@ -366,15 +351,7 @@ class _LeafRowState extends State<_LeafRow> {
                 controller: _ctrl,
                 onChanged: (v) =>
                     widget.onChanged(widget.leaf.copyWith(value: v)),
-                decoration: const InputDecoration(
-                  hintText: 'value',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.sm,
-                  ),
-                ),
+                decoration: _leafFieldDecoration('value'),
               ),
             ),
           ],
@@ -389,98 +366,15 @@ class _LeafRowState extends State<_LeafRow> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Folder picker field (advanced-search "Folder" condition)
-// ---------------------------------------------------------------------------
-
-/// Button that opens a [showFolderTreePicker] and stores the picked mailbox's
-/// [Mailbox.path] (opaque JMAP id or IMAP path) in the leaf value, since that
-/// is what the `emails.mailbox_path` column contains. The label shows the
-/// human-readable [Mailbox.displayPath] so the JMAP opaque id never leaks.
-class _FolderPickerField extends ConsumerWidget {
-  const _FolderPickerField({
-    required this.accountId,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String? accountId;
-  final String value;
-  final void Function(String) onChanged;
-
-  Future<void> _pick(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(mailboxRepositoryProvider);
-    final picked = await showFolderTreePicker(
-      context,
-      mailboxesStream: repo.observeMailboxes(accountId),
-      initialPath: value.isEmpty ? null : value,
-    );
-    if (picked == null) return;
-    // The picker returns the `displayPath`; resolve it back to the mailbox's
-    // `path` so the LIKE against `emails.mailbox_path` matches (for JMAP the
-    // two differ — displayPath is "Archive/2026", path is the opaque id "a").
-    final mailboxes = await repo.observeMailboxes(accountId).first;
-    final match = _resolveByDisplayPath(mailboxes, picked);
-    onChanged(match?.path ?? picked);
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    return StreamBuilder<List<Mailbox>>(
-      stream: ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId),
-      builder: (ctx, snap) {
-        final mailboxes = snap.data ?? const <Mailbox>[];
-        final match = _resolve(mailboxes, value);
-        final label =
-            value.isEmpty ? 'Select folder…' : (match?.displayPath ?? value);
-        final isUnknown = value.isNotEmpty && match == null;
-        return OutlinedButton.icon(
-          onPressed: mailboxes.isEmpty ? null : () => _pick(context, ref),
-          icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
-          label: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: Text(
-              label,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  isUnknown ? TextStyle(color: theme.colorScheme.error) : null,
-            ),
-          ),
-          style: OutlinedButton.styleFrom(
-            alignment: AlignmentDirectional.centerStart,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm,
-              vertical: AppSpacing.xs,
-            ),
-            visualDensity: VisualDensity.compact,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        );
-      },
-    );
-  }
-
-  /// Matches the stored value against a mailbox. New picks store the raw
-  /// [Mailbox.path]; we still accept a [Mailbox.displayPath] as a fallback so
-  /// the button renders a readable name for any pre-existing text-based value.
-  static Mailbox? _resolve(List<Mailbox> mailboxes, String value) {
-    for (final m in mailboxes) {
-      if (m.path == value) return m;
-    }
-    for (final m in mailboxes) {
-      if (m.displayPath == value) return m;
-    }
-    return null;
-  }
-
-  static Mailbox? _resolveByDisplayPath(
-    List<Mailbox> mailboxes,
-    String displayPath,
-  ) {
-    for (final m in mailboxes) {
-      if (m.displayPath == displayPath) return m;
-    }
-    return null;
-  }
-}
+/// Shared decoration for the leaf-row text inputs (header name and value),
+/// hoisted out so the two nearly-identical [InputDecoration] literals don't
+/// trip the duplication detector.
+InputDecoration _leafFieldDecoration(String hint) => InputDecoration(
+  hintText: hint,
+  isDense: true,
+  border: const OutlineInputBorder(),
+  contentPadding: const EdgeInsets.symmetric(
+    horizontal: AppSpacing.sm,
+    vertical: AppSpacing.sm,
+  ),
+);

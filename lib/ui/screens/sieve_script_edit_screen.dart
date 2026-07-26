@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/filter_sieve_converter.dart';
-import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SieveParseException;
@@ -14,7 +13,7 @@ import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
-import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
 
 /// Fields the Sieve builder exposes — excludes those that make no sense at
 /// delivery time (e.g. [FilterField.folder]).
@@ -92,8 +91,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     } else if (widget.initialFilter != null) {
       _filterGroup = widget.initialFilter!;
       _actions = [KeepAction()];
-      _contentController.text =
-          SieveSerializer().serialize(_filterGroup, _actions);
+      _contentController.text = SieveSerializer().serialize(
+        _filterGroup,
+        _actions,
+      );
     }
   }
 
@@ -112,8 +113,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (_tabController.index == 1) {
       // Switched to Script tab: serialize visual state.
       if (_visualSupported) {
-        _contentController.text =
-            SieveSerializer().serialize(_filterGroup, _actions);
+        _contentController.text = SieveSerializer().serialize(
+          _filterGroup,
+          _actions,
+        );
       }
     } else {
       // Switched to Visual tab: parse script into visual state.
@@ -140,11 +143,11 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     try {
       final content = widget.isLocal
           ? await ref
-              .read(localSieveRepositoryProvider)
-              .getScriptContent(widget.accountId, widget.script!.blobId)
+                .read(localSieveRepositoryProvider)
+                .getScriptContent(widget.accountId, widget.script!.blobId)
           : await ref
-              .read(sieveRepositoryProvider)
-              .getScriptContent(widget.accountId, widget.script!.blobId);
+                .read(sieveRepositoryProvider)
+                .getScriptContent(widget.accountId, widget.script!.blobId);
       if (mounted) {
         _contentController.text = content;
         _initialContent = content;
@@ -153,14 +156,13 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       }
     } catch (e, stack) {
       unawaited(
-        ref.read(appLoggerProvider).error(
+        ref
+            .read(appLoggerProvider)
+            .error(
               'sieve.script.load_failed',
               'Failed to load sieve script content',
               accountId: widget.accountId,
-              data: {
-                'scriptId': widget.script?.id,
-                'isLocal': widget.isLocal,
-              },
+              data: {'scriptId': widget.script?.id, 'isLocal': widget.isLocal},
               error: e,
               stack: stack,
             ),
@@ -177,8 +179,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
   Future<void> _save() async {
     // Sync visual → script if on visual tab.
     if (_tabController.index == 0 && _visualSupported) {
-      _contentController.text =
-          SieveSerializer().serialize(_filterGroup, _actions);
+      _contentController.text = SieveSerializer().serialize(
+        _filterGroup,
+        _actions,
+      );
     }
     final name = _nameController.text.trim();
     if (name.isEmpty) {
@@ -196,14 +200,18 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     SieveScript saved;
     try {
       if (widget.isLocal) {
-        saved = await ref.read(localSieveRepositoryProvider).saveScript(
+        saved = await ref
+            .read(localSieveRepositoryProvider)
+            .saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
               content: content,
             );
       } else {
-        saved = await ref.read(sieveRepositoryProvider).saveScript(
+        saved = await ref
+            .read(sieveRepositoryProvider)
+            .saveScript(
               widget.accountId,
               id: widget.script?.id,
               name: name,
@@ -212,7 +220,9 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       }
     } catch (e, stack) {
       unawaited(
-        ref.read(appLoggerProvider).error(
+        ref
+            .read(appLoggerProvider)
+            .error(
               'sieve.script.save_failed',
               'Failed to save sieve script',
               accountId: widget.accountId,
@@ -303,9 +313,9 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         content: Text(
           wasActive
               ? 'This filter matches $count message(s) in your inbox. '
-                  'Apply it to them now?'
+                    'Apply it to them now?'
               : 'This filter matches $count message(s) in your inbox. '
-                  'The filter will be activated first. Apply it now?',
+                    'The filter will be activated first. Apply it now?',
         ),
         actions: [
           TextButton(
@@ -360,7 +370,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         title: Text(isNew ? 'New script' : 'Edit script'),
         bottom: TabBar(
           controller: _tabController,
-          tabs: const [Tab(text: 'Visual'), Tab(text: 'Script')],
+          tabs: const [
+            Tab(text: 'Visual'),
+            Tab(text: 'Script'),
+          ],
         ),
         actions: [
           if (_saving)
@@ -490,21 +503,21 @@ class _ActionEditor extends StatelessWidget {
   final void Function(List<SieveAction>) onChanged;
 
   _ActionType _typeOf(SieveAction a) => switch (a) {
-        KeepAction() => _ActionType.keep,
-        DiscardAction() => _ActionType.discard,
-        MarkAsSeenAction() => _ActionType.markAsRead,
-        StarMessageAction() => _ActionType.starMessage,
-        FileIntoAction() => _ActionType.fileInto,
-        FlagAction() => _ActionType.keep,
-      };
+    KeepAction() => _ActionType.keep,
+    DiscardAction() => _ActionType.discard,
+    MarkAsSeenAction() => _ActionType.markAsRead,
+    StarMessageAction() => _ActionType.starMessage,
+    FileIntoAction() => _ActionType.fileInto,
+    FlagAction() => _ActionType.keep,
+  };
 
   SieveAction _defaultFor(_ActionType t) => switch (t) {
-        _ActionType.keep => KeepAction(),
-        _ActionType.discard => DiscardAction(),
-        _ActionType.markAsRead => MarkAsSeenAction(),
-        _ActionType.starMessage => StarMessageAction(),
-        _ActionType.fileInto => FileIntoAction(''),
-      };
+    _ActionType.keep => KeepAction(),
+    _ActionType.discard => DiscardAction(),
+    _ActionType.markAsRead => MarkAsSeenAction(),
+    _ActionType.starMessage => StarMessageAction(),
+    _ActionType.fileInto => FileIntoAction(''),
+  };
 
   void _changeType(int i, _ActionType t) {
     final next = List<SieveAction>.from(actions);
@@ -604,6 +617,8 @@ class _ActionEditor extends StatelessWidget {
   }
 }
 
+/// Sieve `fileinto` stores the mailbox's `displayPath`, so we forward the
+/// raw string the picker returned back to [onChanged] unchanged.
 class _FolderField extends ConsumerWidget {
   const _FolderField({
     required this.accountId,
@@ -615,69 +630,18 @@ class _FolderField extends ConsumerWidget {
   final String value;
   final void Function(String) onChanged;
 
-  Future<void> _pick(BuildContext context, WidgetRef ref) async {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.read(mailboxRepositoryProvider);
-    final picked = await showFolderTreePicker(
-      context,
-      mailboxesStream: repo.observeMailboxes(accountId),
-      initialPath: value.isEmpty ? null : value,
+    return MailboxPickerButton(
+      accountId: accountId,
+      value: value,
       onCreate: ({required name, parentDisplayPath}) => repo.createMailbox(
         accountId,
         name,
         parentDisplayPath: parentDisplayPath,
       ),
+      onPicked: (_, displayPath) => onChanged(displayPath),
     );
-    if (picked != null) onChanged(picked);
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    return StreamBuilder<List<Mailbox>>(
-      stream: ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId),
-      builder: (ctx, snap) {
-        final mailboxes = snap.data ?? const <Mailbox>[];
-        final match = _resolve(mailboxes, value);
-        final label =
-            value.isEmpty ? 'Select folder…' : (match?.displayPath ?? value);
-        final isUnknown = value.isNotEmpty && match == null;
-        return OutlinedButton.icon(
-          onPressed: mailboxes.isEmpty ? null : () => _pick(context, ref),
-          icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
-          label: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: Text(
-              label,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  isUnknown ? TextStyle(color: theme.colorScheme.error) : null,
-            ),
-          ),
-          style: OutlinedButton.styleFrom(
-            alignment: AlignmentDirectional.centerStart,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm,
-              vertical: AppSpacing.xs,
-            ),
-            visualDensity: VisualDensity.compact,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        );
-      },
-    );
-  }
-
-  /// Matches the fileinto value against a mailbox. New scripts store the
-  /// mailbox's `displayPath`; legacy JMAP scripts stored the opaque server
-  /// `path` (e.g. `"a"`), so we fall back to that so the button still shows
-  /// a readable name instead of the raw ID.
-  static Mailbox? _resolve(List<Mailbox> mailboxes, String value) {
-    for (final m in mailboxes) {
-      if (m.displayPath == value) return m;
-    }
-    for (final m in mailboxes) {
-      if (m.path == value) return m;
-    }
-    return null;
   }
 }
