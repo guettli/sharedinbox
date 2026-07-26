@@ -442,8 +442,7 @@ void main() {
         );
       });
 
-      test('deep chain: References first entry (= oldest ancestor) wins',
-          () {
+      test('deep chain: References first entry (= oldest ancestor) wins', () {
         // JWZ: every reply carries the whole chain in References, oldest first.
         expect(
           EmailRepositoryImpl.computeThreadIdForTest(
