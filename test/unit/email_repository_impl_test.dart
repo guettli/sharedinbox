@@ -436,7 +436,7 @@ void main() {
             inReplyTo: null,
             references: null,
             subject: 'Original',
-            date: DateTime.utc(2024, 3, 1),
+            date: DateTime.utc(2024, 3),
           ),
           'root@example.com',
         );
@@ -492,7 +492,7 @@ void main() {
           inReplyTo: null,
           references: null,
           subject: 'Project Alpha',
-          date: DateTime.utc(2024, 5, 2, 8, 0),
+          date: DateTime.utc(2024, 5, 2, 8),
         );
         final key2 = EmailRepositoryImpl.computeThreadIdForTest(
           messageId: null,
@@ -518,22 +518,23 @@ void main() {
           inReplyTo: null,
           references: null,
           subject: 'Project Alpha',
-          date: DateTime.utc(2024, 6, 1),
+          date: DateTime.utc(2024, 6),
         );
         expect(key1, isNot(key2));
       });
 
       test('everything missing: returns null so caller uses emailId', () {
+        // Subject omitted (defaults to null) — the true "no signal" case.
         expect(
           EmailRepositoryImpl.computeThreadIdForTest(
             messageId: null,
             inReplyTo: null,
             references: null,
-            subject: null,
             date: DateTime.utc(2024),
           ),
           isNull,
         );
+        // Empty subject after normalisation also yields null.
         expect(
           EmailRepositoryImpl.computeThreadIdForTest(
             messageId: null,
