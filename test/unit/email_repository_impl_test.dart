@@ -428,6 +428,126 @@ void main() {
       expect(emails.map((e) => e.id).toSet(), {'acc-1:1', 'acc-1:2'});
     });
 
+    group('computeThreadIdForTest (IMAP reference-chain walking)', () {
+      test('root-only: no References/In-Reply-To → own Message-ID', () {
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'root@example.com',
+            inReplyTo: null,
+            references: null,
+            subject: 'Original',
+            date: DateTime.utc(2024, 3),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('deep chain: References first entry (= oldest ancestor) wins', () {
+        // JWZ: every reply carries the whole chain in References, oldest first.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'reply3@example.com',
+            inReplyTo: 'reply2@example.com',
+            references: 'root@example.com reply1@example.com '
+                'reply2@example.com',
+            subject: 'Re: Original',
+            date: DateTime.utc(2024, 3, 3),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('broken chain: no References → falls back to In-Reply-To', () {
+        // Some clients drop References but keep In-Reply-To. The reply must
+        // still land in the same thread as its immediate parent.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'reply@example.com',
+            inReplyTo: 'root@example.com',
+            references: null,
+            subject: 'Re: Original',
+            date: DateTime.utc(2024, 3, 2),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('subject fallback: no headers → subj:yyyy-mm:<normalised subject>',
+          () {
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            subject: 'Re: Fwd: Project Alpha',
+            date: DateTime.utc(2024, 5, 15),
+          ),
+          'subj:2024-05:project alpha',
+        );
+      });
+
+      test('subject fallback groups matching subjects within same month', () {
+        final key1 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 5, 2, 8),
+        );
+        final key2 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Re: Project Alpha',
+          date: DateTime.utc(2024, 5, 30, 23, 59),
+        );
+        expect(key1, isNotNull);
+        expect(key1, key2);
+      });
+
+      test('subject fallback splits threads across month boundaries', () {
+        final key1 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 5, 31),
+        );
+        final key2 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 6),
+        );
+        expect(key1, isNot(key2));
+      });
+
+      test('everything missing: returns null so caller uses emailId', () {
+        // Subject omitted (defaults to null) — the true "no signal" case.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            date: DateTime.utc(2024),
+          ),
+          isNull,
+        );
+        // Empty subject after normalisation also yields null.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            subject: '',
+            date: DateTime.utc(2024),
+          ),
+          isNull,
+        );
+      });
+    });
+
     // ── Search tests ─────────────────────────────────────────────────────────
 
     test('searchEmailsGlobal filters by query across accounts', () async {

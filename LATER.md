@@ -73,26 +73,7 @@ Key files to change:
 
 ---
 
-Implement thread-view.
-
-First create a plan.
-
-For JMAP this is easy.
-
-But for IMAP?
-
-Threads should be synced to the DB, too. Use JMAP as an example. Then think about getting this data
-structure from imap.
-
-
----
-
-
 docs
-
----
-
-Thread view (group by `References` / `In-Reply-To`)
 
 ---
 
