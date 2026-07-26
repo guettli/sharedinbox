@@ -125,115 +125,91 @@ void main() {
       expect(find.text('Invoice Q3'), findsOneWidget);
     });
 
-    testWidgets('shows folder results under "Folders" section', (tester) async {
-      const archiveMailbox = Mailbox(
-        id: 'acc-1:Archive',
-        accountId: 'acc-1',
-        path: 'Archive',
-        name: 'Archive',
-        unreadCount: 0,
-        totalCount: 5,
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([archiveMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            searchHistoryRepositoryProvider.overrideWithValue(
-              FakeSearchHistoryRepository(),
-            ),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+    testWidgets(
+      'recipient-only address matches surface as messages '
+      '(searchEmailsGlobal misses To/Cc, so getEmailsByAddress fills the gap)',
+      (tester) async {
+        // Match reaches the UI only through `getEmailsByAddress`, not through
+        // FTS. The two result streams must be merged into one message list.
+        final recipientHit =
+            testEmail(id: 'acc-1:7', subject: 'To-only recipient hit');
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/search',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(byAddressResults: [recipientHit]),
+              ),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.enterText(find.byType(TextField), 'arc');
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'alice');
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Folders'), findsOneWidget);
-      expect(find.text('Archive'), findsOneWidget);
-    });
+        // No section headers — search now renders a single message list, same
+        // as combined-inbox and folder views.
+        expect(find.text('Folders'), findsNothing);
+        expect(find.text('Addresses'), findsNothing);
+        expect(find.text('Messages'), findsNothing);
+        expect(find.text('To-only recipient hit'), findsOneWidget);
+      },
+    );
 
-    testWidgets('folder with query as word prefix is matched', (tester) async {
-      const foobarMailbox = Mailbox(
-        id: 'acc-1:Foobar',
-        accountId: 'acc-1',
-        path: 'Foobar',
-        name: 'Foobar',
-        unreadCount: 0,
-        totalCount: 0,
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([foobarMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            searchHistoryRepositoryProvider.overrideWithValue(
-              FakeSearchHistoryRepository(),
-            ),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+    testWidgets(
+      'merges global + by-address results, de-duplicated by id',
+      (tester) async {
+        // Same email appears in both result streams. It must render once, not
+        // twice.
+        final overlap = testEmail(id: 'acc-1:1', subject: 'Sender + recipient');
+        final globalOnly =
+            testEmail(id: 'acc-1:2', subject: 'From-side only');
+        final addressOnly =
+            testEmail(id: 'acc-1:3', subject: 'To-side only');
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/search',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  searchResults: [overlap, globalOnly],
+                  byAddressResults: [overlap, addressOnly],
+                ),
+              ),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      await tester.enterText(find.byType(TextField), 'foo');
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'bob');
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Folders'), findsOneWidget);
-      expect(find.text('Foobar'), findsOneWidget);
-    });
-
-    testWidgets('folder whose name ends with query is not matched', (
-      tester,
-    ) async {
-      const blafooMailbox = Mailbox(
-        id: 'acc-1:Blafoo',
-        accountId: 'acc-1',
-        path: 'Blafoo',
-        name: 'Blafoo',
-        unreadCount: 0,
-        totalCount: 0,
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([blafooMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            searchHistoryRepositoryProvider.overrideWithValue(
-              FakeSearchHistoryRepository(),
-            ),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.enterText(find.byType(TextField), 'foo');
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Blafoo'), findsNothing);
-      expect(find.text('No results'), findsOneWidget);
-    });
+        expect(find.text('Sender + recipient'), findsOneWidget);
+        expect(find.text('From-side only'), findsOneWidget);
+        expect(find.text('To-side only'), findsOneWidget);
+      },
+    );
 
     testWidgets('tapping clear button resets results to placeholder', (
       tester,
