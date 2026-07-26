@@ -28,6 +28,7 @@ const _noCode = {
   'lib/core/models/note.dart',
   'lib/core/repositories/note_repository.dart',
   'lib/core/storage/secure_storage.dart',
+  'lib/core/sync/push_status.dart',
   'lib/ui/theme/spacing.dart',
 };
 
