@@ -8,28 +8,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/db_encryption_migration.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
-/// In-memory [SecureStorage] stand-in — mirrors the fake used in
-/// db_encryption_test.dart so the two suites keep the same shape.
-class _FakeSecureStorage implements SecureStorage {
-  final Map<String, String> _data = {};
-
-  @override
-  Future<String?> read({required String key}) async => _data[key];
-
-  @override
-  Future<void> write({required String key, required String? value}) async {
-    if (value == null) {
-      _data.remove(key);
-      return;
-    }
-    _data[key] = value;
-  }
-
-  @override
-  Future<void> delete({required String key}) async {
-    _data.remove(key);
-  }
-}
+import 'helpers/fake_secure_storage.dart';
 
 /// SecureStorage that throws on write. Used to exercise the failure branch
 /// of [processPendingDbEncryptionChange] without touching sqlite.
@@ -90,7 +69,7 @@ void main() {
 
   group('processPendingDbEncryptionChange — pure Dart branches', () {
     test('no pending change is a no-op', () async {
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       await processPendingDbEncryptionChange(dbPath: dbPath, storage: storage);
       expect(isDbEncrypted(dbPath), isFalse);
       expect(await readDbCipherKey(storage), isNull);
@@ -100,7 +79,7 @@ void main() {
       'enable with no existing DB file mints a key + marker and skips the '
       'sqlcipher_export path',
       () async {
-        final storage = _FakeSecureStorage();
+        final storage = FakeSecureStorage();
         writePendingEncryptionChange(dbPath, PendingEncryptionChange.enable);
 
         await processPendingDbEncryptionChange(
@@ -119,7 +98,7 @@ void main() {
     );
 
     test('enable is a no-op when the DB is already encrypted', () async {
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       final existing = generateDbCipherKeyHex();
       await writeDbCipherKey(storage, existing);
       markDbEncrypted(dbPath);
@@ -140,7 +119,7 @@ void main() {
       'disable with marker present but no stored key drops the marker '
       'without touching the file',
       () async {
-        final storage = _FakeSecureStorage();
+        final storage = FakeSecureStorage();
         // Simulate an inconsistent state: the encrypted marker file exists
         // but the secure-storage key is gone (e.g. keystore wipe).
         File(dbPath).writeAsBytesSync([1, 2, 3, 4]);
@@ -201,7 +180,7 @@ void main() {
       final before = File(dbPath).readAsBytesSync().sublist(0, 16);
       expect(before, _plaintextMagic);
 
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       writePendingEncryptionChange(dbPath, PendingEncryptionChange.enable);
       await processPendingDbEncryptionChange(
         dbPath: dbPath,
@@ -252,7 +231,7 @@ void main() {
       seed.execute("INSERT INTO kv VALUES ('greeting', 'hi'), ('lang', 'en');");
       seed.close();
 
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       writePendingEncryptionChange(dbPath, PendingEncryptionChange.enable);
       await processPendingDbEncryptionChange(
         dbPath: dbPath,
@@ -310,7 +289,7 @@ void main() {
 
         // Create an encrypted DB via the production migration path so the
         // on-disk format matches what _openConnection expects at runtime.
-        final storage = _FakeSecureStorage();
+        final storage = FakeSecureStorage();
         writePendingEncryptionChange(dbPath, PendingEncryptionChange.enable);
         await processPendingDbEncryptionChange(
           dbPath: dbPath,
@@ -339,7 +318,7 @@ void main() {
       }
 
       // Encrypt with one key, then try to open with a fresh one.
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       final seed = sqlite.sqlite3.open(dbPath);
       seed.execute('CREATE TABLE t (x INTEGER);');
       seed.execute('INSERT INTO t VALUES (1);');
