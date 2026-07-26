@@ -15,12 +15,14 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/pending_change.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
@@ -1813,6 +1815,28 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── JMAP push ────────────────────────────────────────────────────────────
 
+  /// Records the outcome of a `watchJmapPush` subscription as a
+  /// `sync.jmap.push` app-log row. The `status` value is stable and used by
+  /// the sync-state view to render a human-readable "Push" row — see
+  /// `push_status.dart` for the enum of accepted values.
+  Future<void> _logPushStatus(
+    String accountId,
+    String status,
+    String message, {
+    AppLogLevel level = AppLogLevel.info,
+    Map<String, Object?>? data,
+  }) async {
+    final logger = _appLogger;
+    if (logger == null) return;
+    await logger.log(
+      level: level,
+      event: 'sync.jmap.push',
+      message: message,
+      accountId: accountId,
+      data: {'push_status': status, ...?data},
+    );
+  }
+
   @override
   Stream<void> watchJmapPush(String accountId, String password) {
     final controller = StreamController<void>();
@@ -1830,6 +1854,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
         final jmapUrl = account.jmapUrl;
         if (jmapUrl == null || jmapUrl.isEmpty) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push disabled: account has no JMAP URL',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1844,12 +1875,29 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         } catch (e) {
           log('JMAP push: connect failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.connectFailed.wireName,
+              'JMAP push: session connect failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
 
         final sseUrl = jmap.eventSourceUrl;
         if (sseUrl == null) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push unavailable: server does not advertise '
+              'an eventSourceUrl (falling back to poll)',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1867,14 +1915,42 @@ class EmailRepositoryImpl implements EmailRepository {
               .send(request)
               .timeout(const Duration(seconds: 10));
           if (response.statusCode != 200) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                '${JmapPushStatus.sseStatusPrefix.wireName}'
+                    '${response.statusCode}',
+                'JMAP push: SSE endpoint returned HTTP '
+                    '${response.statusCode}',
+                level: AppLogLevel.warn,
+                data: {'httpStatus': response.statusCode},
+              ),
+            );
             await controller.close();
             return;
           }
         } catch (e) {
           log('JMAP push: SSE request failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.sseFailed.wireName,
+              'JMAP push: SSE request failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
+
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.connected.wireName,
+            'JMAP push connected — waiting for StateChange events',
+          ),
+        );
 
         var buffer = '';
         innerSub = response.stream
@@ -1898,12 +1974,42 @@ class EmailRepositoryImpl implements EmailRepository {
               }
             }
           },
-          onDone: () => controller.close(),
-          onError: (_) => controller.close(),
+          onDone: () {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.closed.wireName,
+                'JMAP push stream ended (server closed connection '
+                'or 25-min cap reached)',
+              ),
+            );
+            unawaited(controller.close());
+          },
+          onError: (Object e) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.errored.wireName,
+                'JMAP push stream errored: $e',
+                level: AppLogLevel.warn,
+                data: {'error': e.toString()},
+              ),
+            );
+            unawaited(controller.close());
+          },
           cancelOnError: true,
         );
       } catch (e) {
         log('JMAP push: unexpected error: $e');
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.errored.wireName,
+            'JMAP push: unexpected error: $e',
+            level: AppLogLevel.warn,
+            data: {'error': e.toString()},
+          ),
+        );
         await controller.close();
       }
     }());

@@ -68,6 +68,20 @@ class _MemRepo implements AppLogRepository {
   }
 
   @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) {
+    final matches = _rows.where(
+      (r) => r.accountId == accountId && r.event == event,
+    );
+    if (matches.isEmpty) return Stream.value(null);
+    final sorted = matches.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return Stream.value(sorted.first);
+  }
+
+  @override
   Future<void> trim({
     int maxRows = 10000,
     Duration maxAge = const Duration(days: 14),

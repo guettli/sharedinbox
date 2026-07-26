@@ -45,6 +45,13 @@ class _RecordingAppLogRepository implements AppLogRepository {
       Stream.value(const []);
 
   @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) =>
+      Stream.value(null);
+
+  @override
   Future<void> trim({
     int maxRows = 10000,
     Duration maxAge = const Duration(days: 14),

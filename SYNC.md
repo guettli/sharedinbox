@@ -136,6 +136,17 @@ a full re-fetch.
 **JMAP send** — outgoing mail uses `EmailSubmission/set` when the server advertises the
 `urn:ietf:params:jmap:submission` capability; falls back to SMTP otherwise.
 
+**Diagnosing push** — every branch of `watchJmapPush` writes an app-log row
+tagged with the `sync.jmap.push` event and a `push_status` data field
+(`connected`, `unsupported`, `connect_failed`, `sse_failed`, `sse_status_<N>`,
+`closed`, `errored` — see `lib/core/sync/push_status.dart`). The sync-state
+view (Settings → Accounts → your account → Sync state) surfaces the latest
+row as a "Push connected" / "Falling back to 30 s poll" card so the user can
+tell whether the 30 s cadence is a bug or the server simply not offering an
+`eventSourceUrl`. `_JmapAccountSync._wait()` additionally logs a `sync.jmap.wait`
+debug row with `sync_wait=push_event | poll_fallback | stop` explaining why
+each cycle woke.
+
 ---
 
 ## 5. Exponential backoff

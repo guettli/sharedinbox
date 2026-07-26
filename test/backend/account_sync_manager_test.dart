@@ -358,6 +358,86 @@ void main() {
       });
     },
   );
+
+  test(
+    'JMAP _wait() logs sync_wait=poll_fallback when the push stream ends',
+    () {
+      fakeAsync((async) {
+        final accounts = _FakeAccounts('pw');
+        final mailboxes = _FakeMailboxes();
+        final emails = _FakeEmails();
+        final logs = _FakeLogs();
+        final appLog = _RecordingAppLogRepo();
+
+        final manager = AccountSyncManager(
+          accounts,
+          mailboxes,
+          emails,
+          syncLog: logs,
+          appLogger: AppLogger(appLog),
+        );
+
+        manager.start();
+        accounts.push([_jmapAccount('1')]);
+        async.elapse(const Duration(milliseconds: 100));
+
+        final waitEvents =
+            appLog.entries.where((e) => e.event == 'sync.jmap.wait').toList();
+        expect(waitEvents, isNotEmpty);
+        expect(
+          waitEvents.first.dataJson,
+          contains('"sync_wait":"poll_fallback"'),
+        );
+
+        manager.dispose();
+        async.elapse(const Duration(milliseconds: 10));
+      });
+    },
+  );
+
+  test(
+    'JMAP _wait() logs sync_wait=push_event when woken by a StateChange',
+    () {
+      fakeAsync((async) {
+        final accounts = _FakeAccounts('pw');
+        final mailboxes = _FakeMailboxes();
+        final emails = _FakeEmails();
+        final logs = _FakeLogs();
+        final appLog = _RecordingAppLogRepo();
+
+        final pushCtrl = StreamController<void>.broadcast();
+        addTearDown(() async => pushCtrl.close());
+        emails.pushStreams['1'] = () => pushCtrl.stream;
+
+        final manager = AccountSyncManager(
+          accounts,
+          mailboxes,
+          emails,
+          syncLog: logs,
+          appLogger: AppLogger(appLog),
+        );
+
+        manager.start();
+        accounts.push([_jmapAccount('1')]);
+        async.elapse(const Duration(milliseconds: 100));
+
+        pushCtrl.add(null);
+        async.elapse(const Duration(milliseconds: 100));
+
+        final pushEvents = appLog.entries
+            .where(
+              (e) =>
+                  e.event == 'sync.jmap.wait' &&
+                  (e.dataJson ?? '').contains('"push_event"'),
+            )
+            .toList();
+        expect(pushEvents, isNotEmpty);
+
+        manager.dispose();
+        async.elapse(const Duration(milliseconds: 10));
+      });
+    },
+  );
 }
 
 Account _account(String id) => Account(
@@ -710,6 +790,13 @@ class _RecordingAppLogRepo implements AppLogRepository {
   @override
   Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
       Stream.value(const []);
+
+  @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) =>
+      Stream.value(null);
 
   @override
   Future<void> trim({
