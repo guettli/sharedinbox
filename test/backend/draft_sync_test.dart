@@ -268,105 +268,116 @@ void main() {
       return saved.id;
     }
 
-    test('save-then-sync appends a \\Draft-flagged message on the server',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(imapAccount, user.password);
-      final subject = 'imap-new-${DateTime.now().millisecondsSinceEpoch}';
+    test(
+      r'save-then-sync appends a \Draft-flagged message on the server',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(imapAccount, user.password);
+        final subject = 'imap-new-${DateTime.now().millisecondsSinceEpoch}';
 
-      final localId = await saveAndSync(
-        drafts: r.drafts,
-        subject: subject,
-        body: 'Hello from draft sync',
-      );
+        final localId = await saveAndSync(
+          drafts: r.drafts,
+          subject: subject,
+          body: 'Hello from draft sync',
+        );
 
-      final serverMessages = await _fetchServerDraftsImap(env, user);
-      expect(serverMessages, hasLength(1));
-      expect(serverMessages.single.envelope?.subject, subject);
-      expect(serverMessages.single.flags, contains(r'\Draft'));
+        final serverMessages = await _fetchServerDraftsImap(env, user);
+        expect(serverMessages, hasLength(1));
+        expect(serverMessages.single.envelope?.subject, subject);
+        expect(serverMessages.single.flags, contains(r'\Draft'));
 
-      // Local row records the returned UID and is no longer dirty.
-      final row = (await r.drafts.getDraft(localId))!;
-      expect(row.dirty, isFalse);
-      expect(int.tryParse(row.imapServerId ?? ''), isNotNull);
-    });
+        // Local row records the returned UID and is no longer dirty.
+        final row = (await r.drafts.getDraft(localId))!;
+        expect(row.dirty, isFalse);
+        expect(int.tryParse(row.imapServerId ?? ''), isNotNull);
+      },
+    );
 
-    test('editing a synced draft expunges the old UID and appends a new one',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(imapAccount, user.password);
-      final localId = await saveAndSync(
-        drafts: r.drafts,
-        subject: 'imap-edit-original',
-        body: 'first',
-      );
-      final firstUid = (await r.drafts.getDraft(localId))!.imapServerId;
+    test(
+      'editing a synced draft expunges the old UID and appends a new one',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(imapAccount, user.password);
+        final localId = await saveAndSync(
+          drafts: r.drafts,
+          subject: 'imap-edit-original',
+          body: 'first',
+        );
+        final firstUid = (await r.drafts.getDraft(localId))!.imapServerId;
 
-      // Edit and resync.
-      await r.drafts.saveDraft(
-        id: localId,
-        accountId: imapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: 'imap-edit-updated',
-        bodyText: 'second',
-      );
-      await r.drafts.syncDrafts(imapAccount.id);
+        // Edit and resync.
+        await r.drafts.saveDraft(
+          id: localId,
+          accountId: imapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: 'imap-edit-updated',
+          bodyText: 'second',
+        );
+        await r.drafts.syncDrafts(imapAccount.id);
 
-      final serverMessages = await _fetchServerDraftsImap(env, user);
-      expect(serverMessages, hasLength(1),
-          reason: 'Old copy should be expunged when a new copy is APPENDed');
-      expect(serverMessages.single.envelope?.subject, 'imap-edit-updated');
+        final serverMessages = await _fetchServerDraftsImap(env, user);
+        expect(
+          serverMessages,
+          hasLength(1),
+          reason: 'Old copy should be expunged when a new copy is APPENDed',
+        );
+        expect(serverMessages.single.envelope?.subject, 'imap-edit-updated');
 
-      final updated = (await r.drafts.getDraft(localId))!;
-      expect(updated.dirty, isFalse);
-      expect(updated.imapServerId, isNot(firstUid));
-    });
+        final updated = (await r.drafts.getDraft(localId))!;
+        expect(updated.dirty, isFalse);
+        expect(updated.imapServerId, isNot(firstUid));
+      },
+    );
 
-    test('a draft written on the server is pulled into the local table',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(imapAccount, user.password);
+    test(
+      'a draft written on the server is pulled into the local table',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(imapAccount, user.password);
 
-      // Simulate another device / webmail creating the draft server-side.
-      await _appendServerDraftImap(
-        env,
-        user,
-        subject: 'imap-server-only',
-        body: 'from webmail',
-      );
-      await r.drafts.syncDrafts(imapAccount.id);
+        // Simulate another device / webmail creating the draft server-side.
+        await _appendServerDraftImap(
+          env,
+          user,
+          subject: 'imap-server-only',
+          body: 'from webmail',
+        );
+        await r.drafts.syncDrafts(imapAccount.id);
 
-      final rows = await (r.db.select(r.db.drafts)
-            ..where((t) => t.accountId.equals(imapAccount.id)))
-          .get();
-      expect(rows, hasLength(1));
-      expect(rows.single.subjectText, 'imap-server-only');
-      expect(rows.single.bodyText, contains('from webmail'));
-      expect(rows.single.imapServerId, isNotNull);
-      expect(rows.single.dirty, isFalse);
-    });
+        final rows = await (r.db.select(r.db.drafts)
+              ..where((t) => t.accountId.equals(imapAccount.id)))
+            .get();
+        expect(rows, hasLength(1));
+        expect(rows.single.subjectText, 'imap-server-only');
+        expect(rows.single.bodyText, contains('from webmail'));
+        expect(rows.single.imapServerId, isNotNull);
+        expect(rows.single.dirty, isFalse);
+      },
+    );
 
-    test('deleteDraft + sync removes the server copy (the post-send flow)',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(imapAccount, user.password);
-      final localId = await saveAndSync(
-        drafts: r.drafts,
-        subject: 'imap-delete-me',
-        body: 'body',
-      );
-      expect(await _serverDraftCountImap(env, user), 1);
+    test(
+      'deleteDraft + sync removes the server copy (the post-send flow)',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(imapAccount, user.password);
+        final localId = await saveAndSync(
+          drafts: r.drafts,
+          subject: 'imap-delete-me',
+          body: 'body',
+        );
+        expect(await _serverDraftCountImap(env, user), 1);
 
-      // This is exactly what compose_screen does after enqueueSend().
-      await r.drafts.deleteDraft(localId);
-      expect(await r.db.select(r.db.draftTombstones).get(), hasLength(1));
+        // This is exactly what compose_screen does after enqueueSend().
+        await r.drafts.deleteDraft(localId);
+        expect(await r.db.select(r.db.draftTombstones).get(), hasLength(1));
 
-      await r.drafts.syncDrafts(imapAccount.id);
+        await r.drafts.syncDrafts(imapAccount.id);
 
-      expect(await _serverDraftCountImap(env, user), 0);
-      expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
-    });
+        expect(await _serverDraftCountImap(env, user), 0);
+        expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
+      },
+    );
   });
 
   group('JMAP', () {
@@ -392,139 +403,157 @@ void main() {
       );
     }
 
-    test(r'save-then-sync creates a $draft-keyworded email in Drafts', () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(jmapAccount, user.password);
-      final subject = 'jmap-new-${DateTime.now().millisecondsSinceEpoch}';
+    test(
+      r'save-then-sync creates a $draft-keyworded email in Drafts',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(jmapAccount, user.password);
+        final subject = 'jmap-new-${DateTime.now().millisecondsSinceEpoch}';
 
-      final saved = await r.drafts.saveDraft(
-        accountId: jmapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: subject,
-        bodyText: 'Hello from JMAP draft sync',
-      );
-      await r.drafts.syncDrafts(jmapAccount.id);
+        final saved = await r.drafts.saveDraft(
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: subject,
+          bodyText: 'Hello from JMAP draft sync',
+        );
+        await r.drafts.syncDrafts(jmapAccount.id);
 
-      final jmap = await openJmap(r.http);
-      final mailboxId = await _findDraftsMailboxIdJmap(jmap);
-      expect(mailboxId, isNotNull,
-          reason: 'Drafts mailbox should exist after syncDrafts');
-      final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId!);
-      expect(serverDrafts, hasLength(1));
-      expect(serverDrafts.single['subject'], subject);
-      final keywords = serverDrafts.single['keywords'] as Map<String, dynamic>?;
-      expect(keywords?[r'$draft'], isTrue);
+        final jmap = await openJmap(r.http);
+        final mailboxId = await _findDraftsMailboxIdJmap(jmap);
+        expect(
+          mailboxId,
+          isNotNull,
+          reason: 'Drafts mailbox should exist after syncDrafts',
+        );
+        final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId!);
+        expect(serverDrafts, hasLength(1));
+        expect(serverDrafts.single['subject'], subject);
+        final keywords =
+            serverDrafts.single['keywords'] as Map<String, dynamic>?;
+        expect(keywords?[r'$draft'], isTrue);
 
-      final row = (await r.drafts.getDraft(saved.id))!;
-      expect(row.dirty, isFalse);
-      expect(row.jmapServerId, isNotNull);
-    });
+        final row = (await r.drafts.getDraft(saved.id))!;
+        expect(row.dirty, isFalse);
+        expect(row.jmapServerId, isNotNull);
+      },
+    );
 
-    test('editing a synced draft destroys the old JMAP email id', () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(jmapAccount, user.password);
-      final first = await r.drafts.saveDraft(
-        accountId: jmapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: 'jmap-edit-original',
-        bodyText: 'first',
-      );
-      await r.drafts.syncDrafts(jmapAccount.id);
-      final firstId = (await r.drafts.getDraft(first.id))!.jmapServerId;
+    test(
+      'editing a synced draft destroys the old JMAP email id',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(jmapAccount, user.password);
+        final first = await r.drafts.saveDraft(
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: 'jmap-edit-original',
+          bodyText: 'first',
+        );
+        await r.drafts.syncDrafts(jmapAccount.id);
+        final firstId = (await r.drafts.getDraft(first.id))!.jmapServerId;
 
-      await r.drafts.saveDraft(
-        id: first.id,
-        accountId: jmapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: 'jmap-edit-updated',
-        bodyText: 'second',
-      );
-      await r.drafts.syncDrafts(jmapAccount.id);
+        await r.drafts.saveDraft(
+          id: first.id,
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: 'jmap-edit-updated',
+          bodyText: 'second',
+        );
+        await r.drafts.syncDrafts(jmapAccount.id);
 
-      final jmap = await openJmap(r.http);
-      final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
-      final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId);
-      expect(serverDrafts, hasLength(1),
-          reason: 'Edit should destroy the old copy');
-      expect(serverDrafts.single['subject'], 'jmap-edit-updated');
+        final jmap = await openJmap(r.http);
+        final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
+        final serverDrafts = await _fetchServerDraftsJmap(jmap, mailboxId);
+        expect(
+          serverDrafts,
+          hasLength(1),
+          reason: 'Edit should destroy the old copy',
+        );
+        expect(serverDrafts.single['subject'], 'jmap-edit-updated');
 
-      final updated = (await r.drafts.getDraft(first.id))!;
-      expect(updated.dirty, isFalse);
-      expect(updated.jmapServerId, isNot(firstId));
-    });
+        final updated = (await r.drafts.getDraft(first.id))!;
+        expect(updated.dirty, isFalse);
+        expect(updated.jmapServerId, isNot(firstId));
+      },
+    );
 
-    test('a JMAP-only draft (from webmail) shows up locally after syncDrafts',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(jmapAccount, user.password);
+    test(
+      'a JMAP-only draft (from webmail) shows up locally after syncDrafts',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(jmapAccount, user.password);
 
-      // Prime the Drafts mailbox by pushing one via the repo, then wipe
-      // the local DB so the second pass is a pure "pull".
-      await r.drafts.saveDraft(
-        accountId: jmapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: 'jmap-seed',
-        bodyText: 'seed',
-      );
-      await r.drafts.syncDrafts(jmapAccount.id);
-      await r.db.delete(r.db.drafts).go();
+        // Prime the Drafts mailbox by pushing one via the repo, then wipe
+        // the local DB so the second pass is a pure "pull".
+        await r.drafts.saveDraft(
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: 'jmap-seed',
+          bodyText: 'seed',
+        );
+        await r.drafts.syncDrafts(jmapAccount.id);
+        await r.db.delete(r.db.drafts).go();
 
-      final jmap = await openJmap(r.http);
-      final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
-      await _appendServerDraftJmap(
-        jmap,
-        mailboxId,
-        fromEmail: user.email,
-        toEmail: user.email,
-        subject: 'jmap-server-only',
-        body: 'from webmail',
-      );
+        final jmap = await openJmap(r.http);
+        final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
+        await _appendServerDraftJmap(
+          jmap,
+          mailboxId,
+          fromEmail: user.email,
+          toEmail: user.email,
+          subject: 'jmap-server-only',
+          body: 'from webmail',
+        );
 
-      await r.drafts.syncDrafts(jmapAccount.id);
+        await r.drafts.syncDrafts(jmapAccount.id);
 
-      final rows = await (r.db.select(r.db.drafts)
-            ..where((t) => t.accountId.equals(jmapAccount.id)))
-          .get();
-      final serverOnly =
-          rows.where((row) => row.subjectText == 'jmap-server-only').toList();
-      expect(serverOnly, hasLength(1));
-      expect(serverOnly.single.bodyText, contains('from webmail'));
-      expect(serverOnly.single.jmapServerId, isNotNull);
-      expect(serverOnly.single.dirty, isFalse);
-    });
+        final rows = await (r.db.select(r.db.drafts)
+              ..where((t) => t.accountId.equals(jmapAccount.id)))
+            .get();
+        final serverOnly = rows
+            .where((row) => row.subjectText == 'jmap-server-only')
+            .toList();
+        expect(serverOnly, hasLength(1));
+        expect(serverOnly.single.bodyText, contains('from webmail'));
+        expect(serverOnly.single.jmapServerId, isNotNull);
+        expect(serverOnly.single.dirty, isFalse);
+      },
+    );
 
-    test('deleteDraft + sync destroys the JMAP copy (the post-send flow)',
-        () async {
-      final r = makeRepo();
-      await r.accounts.addAccount(jmapAccount, user.password);
-      final saved = await r.drafts.saveDraft(
-        accountId: jmapAccount.id,
-        toText: user.email,
-        ccText: '',
-        subjectText: 'jmap-delete-me',
-        bodyText: 'body',
-      );
-      await r.drafts.syncDrafts(jmapAccount.id);
+    test(
+      'deleteDraft + sync destroys the JMAP copy (the post-send flow)',
+      () async {
+        final r = makeRepo();
+        await r.accounts.addAccount(jmapAccount, user.password);
+        final saved = await r.drafts.saveDraft(
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: 'jmap-delete-me',
+          bodyText: 'body',
+        );
+        await r.drafts.syncDrafts(jmapAccount.id);
 
-      final jmap = await openJmap(r.http);
-      final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
-      expect(await _fetchServerDraftsJmap(jmap, mailboxId), hasLength(1));
+        final jmap = await openJmap(r.http);
+        final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
+        expect(await _fetchServerDraftsJmap(jmap, mailboxId), hasLength(1));
 
-      // Same call compose_screen makes after enqueueSend().
-      await r.drafts.deleteDraft(saved.id);
-      expect(await r.db.select(r.db.draftTombstones).get(), hasLength(1));
+        // Same call compose_screen makes after enqueueSend().
+        await r.drafts.deleteDraft(saved.id);
+        expect(await r.db.select(r.db.draftTombstones).get(), hasLength(1));
 
-      await r.drafts.syncDrafts(jmapAccount.id);
+        await r.drafts.syncDrafts(jmapAccount.id);
 
-      // Fresh JMAP session — state token may have advanced.
-      final jmap2 = await openJmap(r.http);
-      final mailboxId2 = (await _findDraftsMailboxIdJmap(jmap2))!;
-      expect(await _fetchServerDraftsJmap(jmap2, mailboxId2), isEmpty);
-      expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
-    });
+        // Fresh JMAP session — state token may have advanced.
+        final jmap2 = await openJmap(r.http);
+        final mailboxId2 = (await _findDraftsMailboxIdJmap(jmap2))!;
+        expect(await _fetchServerDraftsJmap(jmap2, mailboxId2), isEmpty);
+        expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
+      },
+    );
   });
 }
