@@ -489,6 +489,125 @@ void main() {
       expect(result.bodies, isEmpty);
     });
 
+    test('sorts email diffs newest-first regardless of side', () async {
+      // Seed one "missing in B" (old) and one "missing in A" (new), then
+      // check the newer one comes first. Without sorting, the compare loop
+      // would return the A-side missing-in-B entry first.
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:old',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: '<old@example.com>',
+        subject: 'Old (only in A)',
+        sentAt: DateTime.utc(2025),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:new',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: '<new@example.com>',
+        subject: 'New (only in B)',
+        sentAt: DateTime.utc(2026, 6),
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.emails, hasLength(2));
+      expect(result.emails.first.messageId, '<new@example.com>');
+      expect(result.emails.first.kind, EmailDiffKind.missingInA);
+      expect(result.emails.last.messageId, '<old@example.com>');
+      expect(result.emails.last.kind, EmailDiffKind.missingInB);
+    });
+
+    test('sorts body diffs newest-first', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:old',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: '<old@example.com>',
+        subject: 'Old',
+        sentAt: DateTime.utc(2025),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:old',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: '<old@example.com>',
+        subject: 'Old',
+        sentAt: DateTime.utc(2025),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:new',
+        mailboxPath: 'INBOX',
+        uid: 2,
+        messageId: '<new@example.com>',
+        subject: 'New',
+        sentAt: DateTime.utc(2026, 6),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:new',
+        mailboxPath: 'a',
+        uid: 0,
+        messageId: '<new@example.com>',
+        subject: 'New',
+        sentAt: DateTime.utc(2026, 6),
+      );
+      await _seedBody(db, emailId: 'imap-1:old', textBody: 'old A');
+      await _seedBody(db, emailId: 'jmap-1:old', textBody: 'old B');
+      await _seedBody(db, emailId: 'imap-1:new', textBody: 'new A');
+      await _seedBody(db, emailId: 'jmap-1:new', textBody: 'new B');
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.bodies, hasLength(2));
+      expect(result.bodies.first.messageId, '<new@example.com>');
+      expect(result.bodies.last.messageId, '<old@example.com>');
+    });
+
+    test('sorts unmatchable emails newest-first', () async {
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:old',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        messageId: null,
+        subject: 'Old (no id)',
+        sentAt: DateTime.utc(2025),
+      );
+      await _seedEmail(
+        db,
+        accountId: 'imap-1',
+        id: 'imap-1:new',
+        mailboxPath: 'INBOX',
+        uid: 2,
+        messageId: null,
+        subject: 'New (no id)',
+        sentAt: DateTime.utc(2026, 6),
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.unmatchable, hasLength(2));
+      expect(result.unmatchable.first.email.id, 'imap-1:new');
+      expect(result.unmatchable.last.email.id, 'imap-1:old');
+    });
+
     test('treats two null text bodies as equal', () async {
       await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
       await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
