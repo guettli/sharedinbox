@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Wraps the router shell so every action pushed onto [undoServiceProvider]
 /// produces two complementary pieces of feedback rendered as Stack children
@@ -82,7 +83,7 @@ class _UndoShellState extends ConsumerState<UndoShell> {
           Positioned(
             left: 0,
             right: 0,
-            bottom: MediaQuery.of(context).padding.bottom + 16,
+            bottom: MediaQuery.of(context).padding.bottom + AppSpacing.lg,
             child: _BottomActionOverlay(
               display: _snack!,
               onUndo: _handleUndo,
@@ -197,7 +198,7 @@ class _BottomActionOverlay extends StatelessWidget {
         child: Opacity(opacity: t, child: child),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
         child: Material(
           color: display.background,
           elevation: 6,
@@ -211,13 +212,13 @@ class _BottomActionOverlay extends StatelessWidget {
               onTap: onDismiss,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.md,
                 ),
                 child: Row(
                   children: [
                     Icon(display.icon, color: display.foreground, size: 24),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: AppSpacing.md),
                     Expanded(
                       child: Text(
                         display.label,
