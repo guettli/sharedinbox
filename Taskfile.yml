@@ -498,12 +498,13 @@ tasks:
   _android-avd-setup:
     internal: true
     run: once
+    deps: [_android-sdk-check]
     status:
-      - test -f "${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
+      - test -f "$ANDROID_HOME/emulator/emulator"
       - test -d "$HOME/.android/avd/sharedinbox_test.avd"
     cmds:
       - cmd: |
-          SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
+          SDK="$ANDROID_HOME"
           SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
           AVDMANAGER="$SDK/cmdline-tools/latest/bin/avdmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
@@ -518,18 +519,23 @@ tasks:
     internal: true
     run: once
     preconditions:
-      - sh: test -d "${ANDROID_HOME:-$HOME/Android/Sdk}"
+      - sh: test -n "${ANDROID_HOME:-}"
         msg: |
-          Android SDK not found. Install it with:
+          ANDROID_HOME is not set. Add it to your ~/.zshrc or ~/.bashrc:
+            export ANDROID_HOME="$HOME/Android/Sdk"
+          Then re-open your shell (or `source` the file) and re-run.
+      - sh: test -d "$ANDROID_HOME"
+        msg: |
+          Android SDK not found at $ANDROID_HOME. Install it with:
             wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
-            mkdir -p ~/Android/Sdk/cmdline-tools
-            unzip /tmp/cmdtools.zip -d ~/Android/Sdk/cmdline-tools
-            mv ~/Android/Sdk/cmdline-tools/cmdline-tools ~/Android/Sdk/cmdline-tools/latest
-            ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
-      - sh: ls "${ANDROID_HOME:-$HOME/Android/Sdk}/platforms/" 2>/dev/null | grep -qE '^android-([3-9][4-9]|[4-9][0-9]|[1-9][0-9]{2,})$'
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            unzip /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+            mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+      - sh: ls "$ANDROID_HOME/platforms/" 2>/dev/null | grep -qE '^android-([3-9][4-9]|[4-9][0-9]|[1-9][0-9]{2,})$'
         msg: |
           Android platform 34 or higher not found. Install it with:
-            ${ANDROID_HOME:-$HOME/Android/Sdk}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
+            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-34"
 
   build-android:
     desc: Build a release APK
@@ -542,7 +548,7 @@ tasks:
     generates:
       - build/app/outputs/flutter-apk/app-release.apk
     cmds:
-      - ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} fvm flutter build apk --release --no-pub --dart-define=GIT_HASH=$(git rev-parse --short HEAD) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
+      - fvm flutter build apk --release --no-pub --dart-define=GIT_HASH=$(git rev-parse --short HEAD) | grep -Ev "was tree-shaken|Tree-shaking can be disabled"
 
   build-android-bundle-local:
     desc: Build a release App Bundle (AAB) locally via fvm (not Dagger)

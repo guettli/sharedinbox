@@ -12,24 +12,19 @@
 #   GITHUB_TOKEN             token for GitHub, owned by guettlibot
 #                            (push access to guettli/sharedinbox)
 #   NTFY_ALERT_MESSAGE_URL   ntfy topic URL for human-readable alerts
+#   CI_MONITOR_API           GitHub API base (e.g. https://api.github.com)
+#   CI_MONITOR_REPO          owner/repo  (e.g. guettli/sharedinbox)
+#   CI_MONITOR_BRANCH        branch to monitor (e.g. main)
+#   CI_MONITOR_AUTO_FIX      "true" to push Pattern A fixes, else "false"
+#                            (alert-only until the runner pool is stable)
 #
 # Optional env:
-#   CI_MONITOR_AUTO_FIX      "true" to push Pattern A fixes; default "false"
-#                            (alert-only until the runner pool is stable)
-#   CI_MONITOR_API           GitHub API base (default https://api.github.com)
-#   CI_MONITOR_REPO          owner/repo  (default guettli/sharedinbox)
-#   CI_MONITOR_BRANCH        branch to monitor (default main)
 #   CI_MONITOR_WORKDIR       scratch dir (default mktemp -d)
 #
 # When sourced (BASH_SOURCE != argv0) the file exposes the pure helpers
 # without running main() — used by scripts/test_ci_monitor.sh.
 
 set -uo pipefail
-
-CI_MONITOR_API="${CI_MONITOR_API:-https://api.github.com}"
-CI_MONITOR_REPO="${CI_MONITOR_REPO:-guettli/sharedinbox}"
-CI_MONITOR_BRANCH="${CI_MONITOR_BRANCH:-main}"
-CI_MONITOR_AUTO_FIX="${CI_MONITOR_AUTO_FIX:-false}"
 
 log() {
     printf '%s ci-monitor: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -149,6 +144,10 @@ for r in data.get('runners', []):
 
 main() {
     : "${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
+    : "${CI_MONITOR_API:?CI_MONITOR_API must be set (e.g. https://api.github.com)}"
+    : "${CI_MONITOR_REPO:?CI_MONITOR_REPO must be set (e.g. guettli/sharedinbox)}"
+    : "${CI_MONITOR_BRANCH:?CI_MONITOR_BRANCH must be set (e.g. main)}"
+    : "${CI_MONITOR_AUTO_FIX:?CI_MONITOR_AUTO_FIX must be set (true or false)}"
 
     local workdir="${CI_MONITOR_WORKDIR:-$(mktemp -d)}"
     trap 'rm -rf "$workdir"' EXIT
