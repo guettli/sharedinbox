@@ -519,12 +519,18 @@ class FakeEmailRepository implements EmailRepository {
   ) async =>
       _searchResults;
 
+  /// Every filter passed to [searchEmailsStructured] in call order, so tests
+  /// can assert that the UI produced the expected [FilterGroup].
+  final List<FilterGroup> structuredSearchCalls = [];
+
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
     FilterGroup filter,
-  ) async =>
-      List.of(_structuredSearchResults);
+  ) async {
+    structuredSearchCalls.add(filter);
+    return List.of(_structuredSearchResults);
+  }
 
   @override
   Future<List<Email>> getEmailsByAddress(

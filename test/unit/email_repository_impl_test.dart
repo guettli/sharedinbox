@@ -1081,21 +1081,21 @@ void main() {
               ),
             );
 
-        final containsFilter = FilterGroup(
+        final inboxFilter = FilterGroup(
           operator: FilterOperator.and_,
           children: [
             FilterLeaf(
               field: FilterField.folder,
-              comparison: FilterComparison.contains,
-              value: 'inbox',
+              comparison: FilterComparison.is_,
+              value: 'INBOX',
             ),
           ],
         );
-        final containsResults =
-            await r.emails.searchEmailsStructured('acc-1', containsFilter);
-        expect(containsResults.map((e) => e.id), ['acc-1:inbox']);
+        final inboxResults =
+            await r.emails.searchEmailsStructured('acc-1', inboxFilter);
+        expect(inboxResults.map((e) => e.id), ['acc-1:inbox']);
 
-        final isFilter = FilterGroup(
+        final archiveFilter = FilterGroup(
           operator: FilterOperator.and_,
           children: [
             FilterLeaf(
@@ -1105,9 +1105,9 @@ void main() {
             ),
           ],
         );
-        final isResults =
-            await r.emails.searchEmailsStructured('acc-1', isFilter);
-        expect(isResults.map((e) => e.id), ['acc-1:archive']);
+        final archiveResults =
+            await r.emails.searchEmailsStructured('acc-1', archiveFilter);
+        expect(archiveResults.map((e) => e.id), ['acc-1:archive']);
       },
     );
 

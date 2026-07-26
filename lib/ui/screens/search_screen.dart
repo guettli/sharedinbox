@@ -286,6 +286,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         children: [
           FilterBuilderWidget(
             initialValue: _filterGroup,
+            accountId: widget.accountId,
             onChanged: (g) => setState(() {
               _filterGroup = g;
               _results = null;
