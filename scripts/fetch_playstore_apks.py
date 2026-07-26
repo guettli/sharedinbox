@@ -17,6 +17,7 @@ Usage::
 import json
 import os
 import sys
+import time
 
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
@@ -24,6 +25,13 @@ from google.oauth2 import service_account
 PACKAGE_NAME = "de.sharedinbox.mua"
 TRACK = "alpha"
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
+
+# How long to poll for Play to finish generating split APKs before failing.
+# Generation typically takes minutes but occasionally an hour or more after an
+# AAB upload; the caller (hourly cron) also has a workflow-level timeout, so
+# we cap our polling well below that. Overridable via env vars for testing.
+_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "1800"))
+_POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
 
 def _resolve_version_code(session, package, track):
@@ -63,10 +71,8 @@ def _list_generated_apks(session, package, version_code):
     """Return the generatedApks listing for ``version_code``, or ``None`` on 404.
 
     Play returns 404 until it has finished generating the downloadable split
-    APKs for an uploaded AAB. Generation can take an hour or more after the
-    AAB upload completes (occasionally much longer); the caller treats
-    ``None`` as a transient "not ready yet" state and skips the run cleanly
-    — the next hourly cron will retry once Play catches up.
+    APKs for an uploaded AAB. Callers poll on ``None`` — the wait is bounded
+    by :func:`_poll_generated_apks`.
     """
     url = f"{_BASE}/{package}/generatedApks/{version_code}/downloads"
     resp = session.get(url, timeout=60)
@@ -74,6 +80,35 @@ def _list_generated_apks(session, package, version_code):
         return None
     resp.raise_for_status()
     return resp.json()
+
+
+def _poll_generated_apks(session, package, version_code):
+    """Poll :func:`_list_generated_apks` until Play returns a listing.
+
+    Fails loudly with :class:`TimeoutError` once ``_POLL_TIMEOUT_SECONDS``
+    has elapsed. The generation delay is deterministic-ish (usually minutes,
+    occasionally longer) so waiting inside a single run is cheaper than
+    letting the next hourly cron pick it up.
+    """
+    deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+    while True:
+        listing = _list_generated_apks(session, package, version_code)
+        if listing is not None:
+            return listing
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Play has not generated split APKs for versionCode "
+                f"{version_code} within {_POLL_TIMEOUT_SECONDS}s"
+            )
+        sleep_for = min(_POLL_INTERVAL_SECONDS, max(1, int(remaining)))
+        print(
+            f"Play has not generated split APKs for versionCode "
+            f"{version_code} yet — retrying in {sleep_for}s "
+            f"({int(remaining)}s left)",
+            file=sys.stderr,
+        )
+        time.sleep(sleep_for)
 
 
 def _download(session, package, version_code, download_id, dest):
@@ -146,30 +181,7 @@ def main():
     version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
     print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
-    listing = _list_generated_apks(session, PACKAGE_NAME, version_code)
-    if listing is None:
-        # Play has not yet generated split APKs for the latest release.
-        # Generation can take an hour or more after upload; skip cleanly
-        # and let the next hourly cron retry. We deliberately do NOT fall
-        # back to an older bundle — Firebase Test Lab should only exercise
-        # the binary users actually install.
-        _write_skip(
-            dest_dir,
-            f"Play has not yet generated split APKs for versionCode "
-            f"{version_code} (generation can take an hour or more after upload)",
-        )
-        return
-
-    # Skip if the latest alpha matches the versionCode of the last green run.
-    # The shell wrapper passes that through ALREADY_TESTED_VERSION_CODE; no
-    # point in retesting the same binary on every hourly tick.
-    already_tested = os.environ.get("ALREADY_TESTED_VERSION_CODE", "").strip()
-    if already_tested and already_tested == str(version_code):
-        _write_skip(
-            dest_dir,
-            f"versionCode {version_code} already tested green — skipping",
-        )
-        return
+    listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)
 
     downloads = _enumerate_downloads(listing)
 
@@ -186,19 +198,6 @@ def main():
 
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)
-
-
-def _write_skip(dest_dir, reason):
-    """Drop a ``.skip`` sentinel so the shell wrapper exits 0 with a notice.
-
-    Used for transient/expected states (Play APKs not generated yet, latest
-    versionCode already tested) that should not surface as a workflow
-    failure. The wrapper distinguishes "skip cleanly" from "real error" by
-    the presence of this file.
-    """
-    print(f"Skipping: {reason}", file=sys.stderr)
-    with open(os.path.join(dest_dir, ".skip"), "w") as f:
-        f.write(reason + "\n")
 
 
 if __name__ == "__main__":

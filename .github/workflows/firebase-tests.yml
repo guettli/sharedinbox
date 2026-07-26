@@ -2,10 +2,10 @@ name: Firebase Tests
 
 on:
   schedule:
-    - cron: '0 * * * *'   # hourly; the script exits early when the last green
-                          # run is within 12h, when the latest alpha was
-                          # already tested, or when its split APKs are not
-                          # generated yet — so most ticks are nearly free
+    # Every 12 hours — cadence lives here now rather than as an in-script
+    # cooldown, so the workflow always runs a full fetch + Firebase Test Lab
+    # cycle when it fires.
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 # Hourly schedule + a 60-minute timeout means runs could overlap while a real

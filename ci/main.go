@@ -1144,18 +1144,13 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 
 // FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
 // release using the Play Developer API. Returns a Directory containing the
-// APKs and a ``versionCode`` text file with the resolved alpha versionCode,
-// or a ``.skip`` sentinel when the latest alpha is not ready yet or has
-// already been tested green (see fetch_playstore_apks.py for the policy).
+// APKs and a ``versionCode`` text file with the resolved alpha versionCode.
+// Fails loudly when Play never finishes generating the split APKs — no
+// silent skip; the workflow-level schedule controls retry cadence.
 // Runs in a Python container so the runner host does not need google-auth /
 // requests installed (matches the UploadToPlayStore pattern).
 func (m *Ci) FetchPlayStoreApks(
 	playStoreConfig *dagger.Secret,
-	// versionCode last tested green. If Play's latest alpha matches, the
-	// script writes a .skip sentinel and returns without downloading APKs.
-	// Empty disables the optimisation (treated as "nothing tested yet").
-	// +optional
-	alreadyTestedVersionCode string,
 ) *dagger.Directory {
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/fetch_playstore_apks.py"},
@@ -1167,7 +1162,6 @@ func (m *Ci) FetchPlayStoreApks(
 		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
 		WithFile("/src/scripts/fetch_playstore_apks.py", scriptSource.File("scripts/fetch_playstore_apks.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
-		WithEnvVariable("ALREADY_TESTED_VERSION_CODE", alreadyTestedVersionCode).
 		WithWorkdir("/src").
 		WithUser("nobody").
 		WithExec([]string{"/bin/sh", "-c",
