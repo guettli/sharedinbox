@@ -64,8 +64,7 @@ const _excluded = <String, String>{
       'Widget-only About screen (device_info_plus + package_info_plus surface)',
   'lib/ui/screens/account_actions.dart':
       'Widget-only bottom-sheet menu of account actions',
-  'lib/ui/screens/account_compare_screen.dart':
-      'Widget-only account diff view',
+  'lib/ui/screens/account_compare_screen.dart': 'Widget-only account diff view',
   'lib/ui/screens/account_home_screen.dart':
       'Widget-only screen showing account overview',
   'lib/ui/screens/account_list_screen.dart':
@@ -76,20 +75,18 @@ const _excluded = <String, String>{
       'Widget-only add-account step (send)',
   'lib/ui/screens/add_account_screen.dart':
       'Widget-only multi-step add-account form',
+  'lib/ui/screens/app_log_screen.dart': 'Widget-only application log viewer',
   'lib/ui/screens/address_emails_screen.dart':
       'Widget-only per-address inbox view',
   'lib/ui/screens/bug_report_screen.dart':
       'Widget-only in-app bug-report form that POSTs to the bugreport server',
-  'lib/ui/screens/changelog_screen.dart':
-      'Widget-only changelog viewer',
-  'lib/ui/screens/combined_inbox_screen.dart':
-      'Widget-only unified inbox view',
+  'lib/ui/screens/changelog_screen.dart': 'Widget-only changelog viewer',
+  'lib/ui/screens/combined_inbox_screen.dart': 'Widget-only unified inbox view',
   'lib/ui/screens/compose_screen.dart':
       'Widget-only compose form with drafts, attachments, send flow',
   'lib/ui/screens/crash_screen.dart':
       'Widget-only crash reporter shown by FlutterError.onError',
-  'lib/ui/screens/edit_account_screen.dart':
-      'Widget-only account edit form',
+  'lib/ui/screens/edit_account_screen.dart': 'Widget-only account edit form',
   'lib/ui/screens/email_action_helpers.dart':
       'BuildContext- and WidgetRef-heavy batch action helpers (widget-tested)',
   'lib/ui/screens/email_detail_screen.dart':
@@ -98,10 +95,10 @@ const _excluded = <String, String>{
       'Widget-only mailbox email list with selection-mode UI',
   'lib/ui/screens/force_resync_screen.dart':
       'Widget-only progress UI wrapping AccountSyncManager.forceResync (unit-tested)',
-  'lib/ui/screens/mailbox_list_screen.dart':
-      'Widget-only mailbox tree view',
+  'lib/ui/screens/mailbox_list_screen.dart': 'Widget-only mailbox tree view',
   'lib/ui/screens/message_debug_screen.dart':
       'Widget-only debug UI displaying raw message data',
+  'lib/ui/screens/outbox_screen.dart': 'Widget-only per-account outbox view',
   'lib/ui/screens/push_settings_screen.dart':
       'Widget-only push notification settings (UnifiedPush plugin)',
   'lib/ui/screens/search_screen.dart':
@@ -110,34 +107,28 @@ const _excluded = <String, String>{
       'Widget-only Sieve editor — save round-trips through ManageSieve/JMAP',
   'lib/ui/screens/sieve_scripts_screen.dart':
       'Widget-only Sieve script list view',
-  'lib/ui/screens/sync_log_screen.dart':
-      'Widget-only sync-log viewer',
-  'lib/ui/screens/thread_detail_screen.dart':
-      'Widget-only thread reader',
+  'lib/ui/screens/sync_log_screen.dart': 'Widget-only sync-log viewer',
+  'lib/ui/screens/sync_state_screen.dart':
+      'Widget-only per-mailbox sync-state view',
+  'lib/ui/screens/thread_detail_screen.dart': 'Widget-only thread reader',
   'lib/ui/screens/trusted_image_senders_screen.dart':
       'Widget-only settings screen for the trusted-image sender allowlist',
   'lib/ui/screens/undo_log_detail_screen.dart':
       'Widget-only undo-log detail view',
-  'lib/ui/screens/undo_log_screen.dart':
-      'Widget-only undo-log list view',
-  'lib/ui/screens/user_preferences_screen.dart':
-      'Widget-only preferences form',
-  'lib/ui/widgets/app_drawer.dart':
-      'Widget-only navigation drawer',
-  'lib/ui/widgets/email_headers_dialog.dart':
-      'Widget-only headers dialog',
+  'lib/ui/screens/undo_log_screen.dart': 'Widget-only undo-log list view',
+  'lib/ui/screens/user_preferences_screen.dart': 'Widget-only preferences form',
+  'lib/ui/widgets/app_drawer.dart': 'Widget-only navigation drawer',
+  'lib/ui/widgets/email_headers_dialog.dart': 'Widget-only headers dialog',
   'lib/ui/widgets/email_thread_list.dart':
       'Widget with a controller — controller has unit test, widget slice needs BuildContext',
-  'lib/ui/widgets/email_tile.dart':
-      'Widget-only list tile',
+  'lib/ui/widgets/email_tile.dart': 'Widget-only list tile',
   'lib/ui/widgets/filter_builder.dart':
       'Widget-only interactive FilterGroup editor',
   'lib/ui/widgets/secure_email_webview.dart':
       'Wraps webview_flutter plugin — no headless webview backend on Linux',
   'lib/ui/widgets/snooze_picker.dart':
       'Widget-only date/time picker bottom sheet',
-  'lib/ui/widgets/thread_tile.dart':
-      'Widget-only list tile',
+  'lib/ui/widgets/thread_tile.dart': 'Widget-only list tile',
   'lib/ui/widgets/try_connection_button.dart':
       'Widget-only button wrapping async connection test',
   'lib/ui/widgets/undo_shell.dart':
@@ -146,12 +137,20 @@ const _excluded = <String, String>{
       'device_info_plus + package_info_plus + MediaQuery — needs a real BuildContext',
   'lib/data/jmap/sieve_repository.dart':
       'Wraps ManageSieve socket + JMAP HTTP calls to a live server',
+  'lib/data/repositories/draft_repository_impl.dart':
+      'IMAP APPEND / JMAP Email/set over a real network connection',
   'lib/data/repositories/share_key_repository_impl.dart':
       'ShareEncryptionService generates a real X25519 key pair — deliberately slow',
   'lib/data/repositories/note_repository_impl.dart':
       'IMAP APPEND / JMAP Email/set over a real network connection',
   'lib/core/services/update_service.dart':
       'FutureProvider hits https://sharedinbox.de/latest.json with no injectable http.Client',
+  'lib/core/services/unified_push_service.dart':
+      'UnifiedPush plugin channel — plugin-only surface',
+  'lib/core/sync/background_sync.dart':
+      'workmanager plugin + secure storage + IMAP + path_provider surface',
+  'lib/core/sync/message_probe.dart':
+      'Opens live IMAP TLS socket + JMAP HTTP calls to a mail server',
 };
 
 void main() {
