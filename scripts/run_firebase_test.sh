@@ -122,11 +122,11 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # APKs. No fallback to older bundles — the next cron tick will retry.
 #
 # The outer timeout must exceed the Python script's internal poll budget
-# (`_POLL_TIMEOUT_SECONDS`, default 1800s in scripts/fetch_playstore_apks.py)
-# plus time to download the split APKs; otherwise a legitimate 10-minute
-# Play-side generation delay is killed here with a bare "fetch failed" and
-# the script's clean TimeoutError is never surfaced (see #396, #398).
-FETCH_OUTER_TIMEOUT_SECONDS=2100
+# (`_POLL_TIMEOUT_SECONDS`, default 3600s in scripts/fetch_playstore_apks.py)
+# plus time to download the split APKs; otherwise a legitimate Play-side
+# generation delay is killed here with a bare "fetch failed" and the
+# script's clean TimeoutError is never surfaced (see #396, #398, #402).
+FETCH_OUTER_TIMEOUT_SECONDS=3900
 FETCH_MIN_BUFFER_SECONDS=300
 INTERNAL_POLL_SECONDS=$(python3 -c '
 import re, sys
