@@ -19,6 +19,12 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
     exit 1
 fi
 
+if [ -z "${ANDROID_HOME:-}" ]; then
+    echo "ERROR: ANDROID_HOME is not set. Add it to your ~/.zshrc or ~/.bashrc:" >&2
+    echo "  export ANDROID_HOME=\"\$HOME/Android/Sdk\"" >&2
+    exit 1
+fi
+
 PACKAGE="de.sharedinbox.mua"
 APK_DIR=$(mktemp -d /tmp/playstore-apks-XXXXXX)
 trap 'rm -rf "$APK_DIR"' EXIT
@@ -27,9 +33,9 @@ echo "Fetching latest alpha APK set to $APK_DIR…"
 VERSION_CODE=$(python3 scripts/fetch_playstore_apks.py "$APK_DIR")
 echo "Got versionCode=$VERSION_CODE"
 
-ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb")
+ADB=$(command -v adb 2>/dev/null || echo "$ANDROID_HOME/platform-tools/adb")
 "$ADB" version >/dev/null 2>&1 || {
-    echo "adb not found — set ANDROID_HOME or add platform-tools to PATH"
+    echo "adb not found at $ADB — install platform-tools under \$ANDROID_HOME or add it to PATH"
     exit 1
 }
 
@@ -42,7 +48,7 @@ if [ -z "$EMULATOR_ID" ]; then
         echo "  sudo gpasswd -a \$USER kvm  # then log out and back in."
         exit 1
     fi
-    EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
+    EMULATOR_BIN="$ANDROID_HOME/emulator/emulator"
     echo "No emulator running — booting AVD sharedinbox_test…"
     "$EMULATOR_BIN" -avd sharedinbox_test -no-window -no-audio -no-snapshot-save \
         > /tmp/emulator.log 2>&1 &
