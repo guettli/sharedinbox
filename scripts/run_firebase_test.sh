@@ -125,8 +125,24 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # (`_POLL_TIMEOUT_SECONDS`, default 1800s in scripts/fetch_playstore_apks.py)
 # plus time to download the split APKs; otherwise a legitimate 10-minute
 # Play-side generation delay is killed here with a bare "fetch failed" and
-# the script's clean TimeoutError is never surfaced (see #396).
-if ! timeout --kill-after=10 2100 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+# the script's clean TimeoutError is never surfaced (see #396, #398).
+FETCH_OUTER_TIMEOUT_SECONDS=2100
+FETCH_MIN_BUFFER_SECONDS=300
+INTERNAL_POLL_SECONDS=$(python3 -c '
+import re, sys
+with open("scripts/fetch_playstore_apks.py") as f:
+    m = re.search(r"PLAY_APKS_POLL_TIMEOUT_SECONDS[^,]+,\s*\"(\d+)\"", f.read())
+sys.stdout.write(m.group(1) if m else "")
+')
+if [ -z "$INTERNAL_POLL_SECONDS" ]; then
+    echo "ERROR: could not parse _POLL_TIMEOUT_SECONDS default from scripts/fetch_playstore_apks.py" >&2
+    exit 1
+fi
+if [ "$FETCH_OUTER_TIMEOUT_SECONDS" -lt "$((INTERNAL_POLL_SECONDS + FETCH_MIN_BUFFER_SECONDS))" ]; then
+    echo "ERROR: outer fetch timeout ${FETCH_OUTER_TIMEOUT_SECONDS}s must exceed inner poll ${INTERNAL_POLL_SECONDS}s + ${FETCH_MIN_BUFFER_SECONDS}s buffer (see #396, #398)" >&2
+    exit 1
+fi
+if ! timeout --kill-after=10 "$FETCH_OUTER_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
         --play-store-config env:PLAY_STORE_CONFIG_JSON \
         -o "$APK_DIR"; then
     echo "ERROR: dagger fetch-play-store-apks failed" >&2
