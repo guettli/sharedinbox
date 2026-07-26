@@ -557,6 +557,95 @@ void main() {
       },
     );
 
+    testWidgets(
+      'folder condition uses a picker and filters by the picked mailbox path',
+      (tester) async {
+        // JMAP-shaped mailbox: opaque server path "a", human-readable
+        // displayPath "Archive". The picker must show the display path to the
+        // user but the resulting FilterLeaf must carry the raw path so it
+        // matches `emails.mailbox_path` when the search runs.
+        const jmapArchive = Mailbox(
+          id: 'acc-1:a',
+          accountId: 'acc-1',
+          path: 'a',
+          name: 'Archive',
+          displayPath: 'Archive',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        final hit = testEmail(subject: 'Old invoice');
+        final fakeEmails = FakeEmailRepository(structuredSearchResults: [hit]);
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/search',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([jmapArchive]),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeEmails),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Enter advanced mode and add one condition (default: From).
+        await tester.tap(find.byIcon(Icons.tune));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Add condition'));
+        await tester.pumpAndSettle();
+
+        // Switch the field dropdown from "From" to "Folder".
+        await tester.tap(find.byType(DropdownButton<FilterField>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Folder').last);
+        await tester.pumpAndSettle();
+
+        // No text input and no comparison dropdown for Folder — just the
+        // picker button with a "Select folder…" placeholder.
+        expect(find.text('Select folder…'), findsOneWidget);
+        expect(
+          find.byType(DropdownButton<FilterComparison>),
+          findsNothing,
+        );
+
+        // Tap the picker button, choose the JMAP-shaped mailbox by its
+        // human-readable displayPath.
+        await tester.tap(find.text('Select folder…'));
+        await tester.pumpAndSettle();
+        expect(find.text('Pick folder'), findsOneWidget);
+        await tester.tap(find.text('Archive'));
+        await tester.pumpAndSettle();
+
+        // Picker dialog is gone; the button now reflects the folder's
+        // displayPath (not the raw opaque JMAP id "a").
+        expect(find.text('Pick folder'), findsNothing);
+        expect(find.text('Archive'), findsOneWidget);
+
+        // Run the search and verify the repository was called with a
+        // FilterLeaf whose value is the mailbox's raw `path` ("a"), so the
+        // LIKE against emails.mailbox_path matches on JMAP accounts.
+        await tester.tap(find.widgetWithText(FilledButton, 'Search'));
+        await tester.pumpAndSettle();
+
+        expect(fakeEmails.structuredSearchCalls, hasLength(1));
+        final children = fakeEmails.structuredSearchCalls.first.children;
+        expect(children, hasLength(1));
+        final leaf = children.first as FilterLeaf;
+        expect(leaf.field, FilterField.folder);
+        expect(leaf.comparison, FilterComparison.is_);
+        expect(leaf.value, 'a');
+
+        // Result flows through to the message list.
+        expect(find.text('Old invoice'), findsOneWidget);
+      },
+    );
+
     testWidgets('tapping Clear empties the recent searches panel', (
       tester,
     ) async {
