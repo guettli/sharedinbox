@@ -207,37 +207,76 @@ func New(
 	}, nil
 }
 
+// androidCmdlineToolsURL pins the Android SDK command-line tools bundle used
+// to install NDK / build-tools / platforms. Bump manually only when a newer
+// sdkmanager package requires it.
+const androidCmdlineToolsURL = "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+
+// flutterArchiveURLTemplate is the official Flutter SDK archive. The stable
+// channel publishes an image for EVERY stable release (including patch
+// releases that ghcr.io/cirruslabs/flutter skips), so installing from here
+// makes every Renovate bump buildable without waiting on a third party (#394).
+const flutterArchiveURLTemplate = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_%s-stable.tar.xz"
+
 // toolchain returns the Flutter+Android toolchain without any mutable cache mounts.
-// Its execution cache key is stable until the image, apt packages, or SDK versions change.
+// Its execution cache key is stable until the base image, apt packages, or SDK
+// versions change; a Flutter version bump invalidates only the Flutter install
+// layer and the precache step below it, so the multi-GB Android SDK layers are
+// reused across .fvmrc bumps.
 // Used as the base for pubGetLayer so flutter pub get is execution-cached between runs.
 func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/cirruslabs/flutter:"+m.FlutterVersion).
-		WithExec([]string{"apt-get", "-qq", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithEnvVariable("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64").
+		WithEnvVariable("ANDROID_HOME", "/opt/android-sdk").
+		WithEnvVariable("PATH", "/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:${JAVA_HOME}/bin:${PATH}",
+			dagger.ContainerWithEnvVariableOpts{Expand: true}).
+		// Combined update+install so a stale cached index cannot pin a
+		// superseded .deb (404). libssl-dev is here (not in a later layer) so
+		// the entire apt state lives in one cache entry that is stable across
+		// Flutter version bumps.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				// Flutter/Android runtime deps
+				"ca-certificates curl git unzip xz-utils zip openjdk-17-jdk-headless python3 " +
+				// Linux desktop build deps (sqlcipher_flutter_libs needs libssl-dev, #582)
+				"clang cmake ninja-build pkg-config " +
+				"libgtk-3-dev liblzma-dev libsecret-1-dev libgcrypt20-dev libjsoncpp-dev libssl-dev " +
+				"sqlite3 " +
+				// Integration testing / networking
+				"iproute2 netcat-openbsd xvfb libosmesa6 libegl1 lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
+		// Install Android command-line tools and accept the SDK licenses so
+		// subsequent `sdkmanager <package>` calls install without prompting.
 		WithExec([]string{"/bin/sh", "-c",
 			`set -e; ` +
-				`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
-				`chown -R ci:ci "$flutter_dir"; ` +
-				`if [ -n "$ANDROID_HOME" ]; then chown -R ci:ci "$ANDROID_HOME"; fi; ` +
-				`mkdir -p /src; chown ci:ci /src`}).
+				`mkdir -p /opt/android-sdk/cmdline-tools; ` +
+				`curl -fsSL -o /tmp/cmdline-tools.zip ` + androidCmdlineToolsURL + `; ` +
+				`unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools; ` +
+				`mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest; ` +
+				`rm /tmp/cmdline-tools.zip; ` +
+				`yes | sdkmanager --licenses >/dev/null; ` +
+				`chown -R ci:ci /opt/android-sdk; ` +
+				`mkdir -p /src && chown ci:ci /src`}).
 		WithEnvVariable("PUB_CACHE", "/home/ci/.pub-cache").
 		WithEnvVariable("HOME", "/home/ci").
 		WithUser("ci").
 		WithExec([]string{"/bin/sh", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" "platforms;android-35" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
-		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"}).
-		// libssl-dev — sqlcipher_flutter_libs compiles SQLCipher against OpenSSL
-		// on the Linux desktop integration_test build; its CMake
-		// find_package(OpenSSL) fails without the dev headers (#582). Installed
-		// here, AFTER the expensive Android-SDK/precache layers, so it does not
-		// invalidate their cache and force a full cold rebuild. update+install
-		// share one exec so a stale cached index can't pin a superseded .deb (404).
+		// Install Flutter from the official archive at the exact .fvmrc
+		// version. The version is interpolated into the exec so this layer's
+		// cache key changes with FlutterVersion — invalidating only the two
+		// steps that follow, not the multi-GB Android SDK layers above.
 		WithUser("root").
-		WithExec([]string{"/bin/sh", "-c", "apt-get -qq update && apt-get install -y -qq libssl-dev"}).
-		WithUser("ci")
+		WithExec([]string{"/bin/sh", "-c",
+			fmt.Sprintf(`set -e; `+
+				`curl -fsSL "`+flutterArchiveURLTemplate+`" | tar -xJ -C /opt; `+
+				`git config --system --add safe.directory /opt/flutter; `+
+				`chown -R ci:ci /opt/flutter`, m.FlutterVersion)}).
+		WithUser("ci").
+		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"})
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.
