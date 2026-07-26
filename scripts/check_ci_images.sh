@@ -11,11 +11,12 @@ static_images=$(grep -oP 'From\("\K[^"]+' "$FILE" | grep -v ':$' | sort -u)
 
 # Dynamic Flutter image derived from .fvmrc (not a literal in main.go)
 FVMRC="$ROOT/.fvmrc"
-flutter_version=$(python3 -c "import json; print(json.load(open('$FVMRC'))['flutter'])" 2>/dev/null || true)
-flutter_image=""
-if [ -n "$flutter_version" ]; then
-  flutter_image="ghcr.io/cirruslabs/flutter:$flutter_version"
+if [ ! -f "$FVMRC" ]; then
+  echo "check-ci-images: ERROR: $FVMRC not found"
+  exit 1
 fi
+flutter_version=$(python3 -c "import json; print(json.load(open('$FVMRC'))['flutter'])")
+flutter_image="ghcr.io/cirruslabs/flutter:$flutter_version"
 
 images=$(printf '%s\n%s\n' "$static_images" "$flutter_image" | grep -v '^$' | sort -u)
 

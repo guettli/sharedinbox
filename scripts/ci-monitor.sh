@@ -90,8 +90,12 @@ locate_workflow_file() {
 # made, 1 if the file already used the wanted label, 2 if no runs-on line
 # was found.
 patch_runs_on() {
-    local file="$1" wanted="$2" current
-    current=$(grep -E '^\s*runs-on:' "$file" | head -n1 | sed -E 's/.*runs-on:[[:space:]]*//' | tr -d '"' | tr -d "'" | xargs || true)
+    local file="$1" wanted="$2" line current
+    line=$(grep -E '^[[:space:]]*runs-on:' "$file" | head -n1)
+    if [ -z "$line" ]; then
+        return 2
+    fi
+    current=$(printf '%s' "$line" | sed -E 's/.*runs-on:[[:space:]]*//' | tr -d '"' | tr -d "'" | xargs)
     if [ -z "$current" ]; then
         return 2
     fi

@@ -20,20 +20,37 @@ fi
 
 for i in $(seq 1 6); do
     if [ "$USE_SSH" = true ]; then
+        # Ask the remote to run curl under `set -e` so a curl network error
+        # propagates as a non-zero ssh exit — distinct from HTTP != 200.
+        set +e
         OUT=$(ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$SSH_USER@$SSH_HOST" "
-            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}' 2>/dev/null || echo '000')
+            set -e
+            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}')
             echo \"\$HTTP\"
-            cat /tmp/website-verify.html 2>/dev/null || true
-        " || true)
+            cat /tmp/website-verify.html
+        ")
+        rc=$?
+        set -e
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: ssh/curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
         HTTP=$(head -n 1 <<<"$OUT")
         HTML=$(tail -n +2 <<<"$OUT")
     else
-        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}" 2>/dev/null || true)
-        HTML=$(cat /tmp/website-verify.html 2>/dev/null || true)
+        set +e
+        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}")
+        rc=$?
+        set -e
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
+        HTML=$(cat /tmp/website-verify.html)
     fi
 
     if [ "${HTTP}" != "200" ]; then
-        echo "HTTP ${HTTP} (attempt ${i}/6); waiting 10s ..."
+        echo "HTTP status ${HTTP} (attempt ${i}/6); waiting 10s ..."
     elif echo "$HTML" | grep -q "x-version.*${VERSION}"; then
         echo "OK: version ${VERSION} is live (HTTP ${HTTP})."
         exit 0

@@ -21,7 +21,21 @@ for attempt in 1 2 3; do
     fi
     if [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$out"; then
         echo "$(_ts) dagger: disk space error on attempt $attempt/3, pruning Dagger cache..." >&2
-        timeout 120 dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' >/dev/null 2>&1 || true
+        prune_rc=0
+        for prune_attempt in 1 2 3; do
+            prune_rc=0
+            timeout 120 dagger query '{ engine { localCache { prune(targetSpace: "20gb") } } }' >/dev/null || prune_rc=$?
+            if [ "$prune_rc" -eq 0 ]; then
+                break
+            fi
+            echo "$(_ts) dagger: prune attempt $prune_attempt/3 failed (exit $prune_rc)" >&2
+            [ "$prune_attempt" -lt 3 ] && sleep 10
+        done
+        if [ "$prune_rc" -ne 0 ]; then
+            echo "$(_ts) dagger: prune failed after 3 attempts; aborting" >&2
+            cat "$out"
+            exit "$rc"
+        fi
         echo "$(_ts) dagger: waiting 90s for freed space to settle..." >&2
         sleep 90
         continue

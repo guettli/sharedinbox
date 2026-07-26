@@ -146,8 +146,14 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             decoded = _decode(body)
         except Exception as exc:
-            print(f"[otel-receiver] decode error: {exc}", file=sys.stderr, flush=True)
-            self._respond(400, str(exc).encode()); return
+            # Return 500 (retryable) instead of 400: 400 tells the OTLP sender
+            # "your fault, don't retry" which silently drops timing data on
+            # a receiver-side decoder bug.
+            print(
+                f"[otel-receiver] ERROR: decode failed: {exc}; body={body!r}",
+                file=sys.stderr, flush=True,
+            )
+            self._respond(500, str(exc).encode()); return
         with _lock:
             _spans.extend(decoded)
         self._respond(200)
