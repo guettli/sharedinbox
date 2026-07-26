@@ -11,10 +11,16 @@ class FilterBuilderWidget extends StatefulWidget {
     super.key,
     required this.initialValue,
     required this.onChanged,
+    this.availableFields = FilterField.values,
   });
 
   final FilterGroup initialValue;
   final void Function(FilterGroup) onChanged;
+
+  /// Fields shown in the "field" dropdown. Defaults to every [FilterField].
+  /// The Sieve rule editor omits fields that do not exist in the Sieve spec
+  /// (e.g. [FilterField.folder]).
+  final List<FilterField> availableFields;
 
   @override
   State<FilterBuilderWidget> createState() => _FilterBuilderWidgetState();
@@ -40,6 +46,7 @@ class _FilterBuilderWidgetState extends State<FilterBuilderWidget> {
       group: _group,
       onChanged: _update,
       depth: 0,
+      availableFields: widget.availableFields,
     );
   }
 }
@@ -54,12 +61,14 @@ class _GroupEditor extends StatelessWidget {
     required this.group,
     required this.onChanged,
     required this.depth,
+    required this.availableFields,
     this.onRemoveGroup,
   });
 
   final FilterGroup group;
   final void Function(FilterGroup) onChanged;
   final int depth;
+  final List<FilterField> availableFields;
   final VoidCallback? onRemoveGroup;
 
   static const _maxDepth = 1;
@@ -69,8 +78,8 @@ class _GroupEditor extends StatelessWidget {
 
   void _addLeaf() {
     final leaf = FilterLeaf(
-      field: FilterField.from_,
-      comparison: FilterComparison.contains,
+      field: availableFields.first,
+      comparison: availableFields.first.allowedComparisons.first,
       value: '',
     );
     onChanged(group.copyWith(children: [...group.children, leaf]));
@@ -149,12 +158,14 @@ class _GroupEditor extends StatelessWidget {
           leaf: leaf,
           onChanged: (l) => _replaceChild(i, l),
           onDelete: () => _removeChild(i),
+          availableFields: availableFields,
         ),
       final FilterGroup sub => _GroupEditor(
           key: ValueKey(i),
           group: sub,
           onChanged: (g) => _replaceChild(i, g),
           depth: depth + 1,
+          availableFields: availableFields,
           onRemoveGroup: () => _removeChild(i),
         ),
     };
@@ -214,11 +225,13 @@ class _LeafRow extends StatefulWidget {
     required this.leaf,
     required this.onChanged,
     required this.onDelete,
+    required this.availableFields,
   });
 
   final FilterLeaf leaf;
   final void Function(FilterLeaf) onChanged;
   final VoidCallback onDelete;
+  final List<FilterField> availableFields;
 
   @override
   State<_LeafRow> createState() => _LeafRowState();
@@ -280,7 +293,7 @@ class _LeafRowState extends State<_LeafRow> {
             onChanged: _onFieldChanged,
             isDense: true,
             underline: const SizedBox.shrink(),
-            items: FilterField.values
+            items: widget.availableFields
                 .map(
                   (f) => DropdownMenuItem(value: f, child: Text(f.label)),
                 )

@@ -62,6 +62,10 @@ class SieveSerializer {
         FilterField.subject => _serializeHeaderLeaf(leaf, 'subject'),
         FilterField.header => _serializeHeaderLeaf(leaf, leaf.headerName ?? ''),
         FilterField.size => _serializeSizeLeaf(leaf),
+        // Folder is a search-only field; Sieve runs at delivery time before
+        // the message is filed. The UI hides this field in the Sieve editor.
+        FilterField.folder =>
+          throw StateError('folder filter is not supported in Sieve'),
       };
 
   String _serializeAddressLeaf(FilterLeaf leaf) {

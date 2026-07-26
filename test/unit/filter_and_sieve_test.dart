@@ -202,6 +202,23 @@ void main() {
       expect(script, contains(r'\Flagged'));
     });
 
+    test('folder field throws — not representable in Sieve', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.folder,
+            comparison: FilterComparison.is_,
+            value: 'INBOX',
+          ),
+        ],
+      );
+      expect(
+        () => ser.serialize(group, [KeepAction()]),
+        throwsA(isA<StateError>()),
+      );
+    });
+
     test('escapes quotes in values', () {
       final group = FilterGroup(
         operator: FilterOperator.and_,
