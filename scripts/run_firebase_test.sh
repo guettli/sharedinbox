@@ -120,7 +120,13 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # The Dagger function writes <dest>/versionCode and the APKs on success, and
 # fails loudly (non-zero exit) when Play never finishes generating the split
 # APKs. No fallback to older bundles — the next cron tick will retry.
-if ! timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+#
+# The outer timeout must exceed the Python script's internal poll budget
+# (`_POLL_TIMEOUT_SECONDS`, default 1800s in scripts/fetch_playstore_apks.py)
+# plus time to download the split APKs; otherwise a legitimate 10-minute
+# Play-side generation delay is killed here with a bare "fetch failed" and
+# the script's clean TimeoutError is never surfaced (see #396).
+if ! timeout --kill-after=10 2100 dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
         --play-store-config env:PLAY_STORE_CONFIG_JSON \
         -o "$APK_DIR"; then
     echo "ERROR: dagger fetch-play-store-apks failed" >&2
