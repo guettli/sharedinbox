@@ -24,6 +24,7 @@ import 'package:sharedinbox/core/sieve/sieve_rule.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -720,10 +721,11 @@ class EmailRepositoryImpl implements EmailRepository {
         final refs = _cleanReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
         final threadId = _computeThreadId(
-              emailId: emailId,
               messageId: msgId,
               inReplyTo: inReplyTo,
               references: refs,
+              subject: envelope.subject,
+              date: envelope.date,
             ) ??
             emailId;
         affectedThreads.add(threadId);
@@ -4209,10 +4211,6 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /// Computes a stable threadId from RFC 2822 headers.
-  /// Uses the first entry in References (= oldest ancestor) so all messages
-  /// in a thread share the same root Message-ID as their threadId.
-  /// Falls back to In-Reply-To, then own Message-ID, then internal emailId.
   /// JMAP header fields like messageId/inReplyTo/references come as arrays.
   /// We join them space-separated to match the IMAP convention.
   static String? _joinJmapStringList(List<dynamic>? list) {
@@ -4239,18 +4237,61 @@ class EmailRepositoryImpl implements EmailRepository {
     return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
   }
 
-  static String? _computeThreadId({
-    required String emailId,
+  @visibleForTesting
+  static String? computeThreadIdForTest({
     required String? messageId,
     required String? inReplyTo,
     required String? references,
+    String? subject,
+    DateTime? date,
+  }) =>
+      _computeThreadId(
+        messageId: messageId,
+        inReplyTo: inReplyTo,
+        references: references,
+        subject: subject,
+        date: date,
+      );
+
+  /// Derives a stable thread key from RFC 2822 headers.
+  ///
+  /// Precedence, matching JWZ-style threading:
+  ///   1. First entry of `References` — the oldest ancestor, so every message
+  ///      down the chain agrees on the same root Message-ID.
+  ///   2. `In-Reply-To` — used when `References` is missing but the client
+  ///      still recorded the immediate parent.
+  ///   3. Own `Message-ID` — starts a fresh thread that later replies will
+  ///      attach to via their `In-Reply-To`.
+  ///   4. Subject fallback — when a message has no Message-ID/References/
+  ///      In-Reply-To at all (rare, non-conformant senders), group by
+  ///      normalised subject bucketed into a `yyyy-mm` window so unrelated
+  ///      re-uses of the same subject in a different month land in a
+  ///      separate thread. See [normalizedSubject] for the strip rules.
+  ///
+  /// Returns `null` only when nothing usable is available (no headers, no
+  /// subject); the caller then falls back to the per-message `emailId` so the
+  /// thread contains just this message.
+  static String? _computeThreadId({
+    required String? messageId,
+    required String? inReplyTo,
+    required String? references,
+    String? subject,
+    DateTime? date,
   }) {
     if (references != null && references.isNotEmpty) {
       final first = references.trim().split(RegExp(r'\s+')).firstOrNull;
       if (first != null && first.isNotEmpty) return first;
     }
     if (inReplyTo != null && inReplyTo.isNotEmpty) return inReplyTo;
-    return messageId; // null for messages with no Message-ID (rare)
+    if (messageId != null && messageId.isNotEmpty) return messageId;
+    final subj = normalizedSubject(subject);
+    if (subj.isNotEmpty && date != null) {
+      final utc = date.toUtc();
+      final bucket = '${utc.year.toString().padLeft(4, '0')}-'
+          '${utc.month.toString().padLeft(2, '0')}';
+      return 'subj:$bucket:$subj';
+    }
+    return null;
   }
 
   String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(
