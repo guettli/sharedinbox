@@ -1050,6 +1050,15 @@ class _JmapAccountSync implements _SyncLoop {
       if (pushClosed.isCompleted &&
           !pushEvent.isCompleted &&
           !_stopSignal!.isCompleted) {
+        unawaited(
+          _appLogger.debug(
+            'sync.jmap.wait',
+            'JMAP wait: push unavailable — polling in '
+                '${_pollFallbackInterval.inSeconds}s',
+            accountId: account.id,
+            data: {'sync_wait': 'poll_fallback'},
+          ),
+        );
         _waitTimer = Timer(_pollFallbackInterval, () {
           if (_stopSignal != null && !_stopSignal!.isCompleted) {
             _stopSignal!.complete();
@@ -1061,6 +1070,24 @@ class _JmapAccountSync implements _SyncLoop {
           _waitTimer?.cancel();
           _waitTimer = null;
         }
+      } else if (pushEvent.isCompleted) {
+        unawaited(
+          _appLogger.debug(
+            'sync.jmap.wait',
+            'JMAP wait: woken by server StateChange',
+            accountId: account.id,
+            data: {'sync_wait': 'push_event'},
+          ),
+        );
+      } else if (_stopSignal!.isCompleted) {
+        unawaited(
+          _appLogger.debug(
+            'sync.jmap.wait',
+            'JMAP wait: woken by kick()/stop()',
+            accountId: account.id,
+            data: {'sync_wait': 'stop'},
+          ),
+        );
       }
     } finally {
       // Fire-and-forget the cancel: awaiting it can deadlock under

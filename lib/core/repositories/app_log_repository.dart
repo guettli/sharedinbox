@@ -143,6 +143,15 @@ abstract class AppLogRepository {
   /// Watches the most recent entries matching [filter], newest first.
   Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter);
 
+  /// Emits the newest entry (by created_at/id) for [accountId] whose
+  /// [event] column equals [event], or `null` when the account has never
+  /// logged that event. Emits again whenever a newer matching row appears.
+  /// Used by the sync-state view to render the "Push" row.
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  });
+
   /// Removes everything older than [maxRows] / [maxAge] (whichever leaves
   /// fewer rows). Idempotent — safe to call any time.
   Future<void> trim({
@@ -175,6 +184,13 @@ class NoOpAppLogRepository implements AppLogRepository {
   @override
   Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
       Stream.value(const []);
+
+  @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) =>
+      Stream.value(null);
 
   @override
   Future<void> trim({

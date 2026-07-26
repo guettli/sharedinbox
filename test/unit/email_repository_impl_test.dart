@@ -11,6 +11,8 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -170,6 +172,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
   Duration? sendOperationTimeout,
+  AppLogger? appLogger,
 }) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
@@ -181,8 +184,50 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     smtpConnect: smtpConnect ?? _noSmtpConnect,
     httpClient: httpClient,
     sendOperationTimeout: sendOperationTimeout ?? const Duration(seconds: 50),
+    appLogger: appLogger,
   );
   return (db: db, accounts: accounts, emails: emails);
+}
+
+/// Minimal in-memory [AppLogRepository] used by the JMAP push tests to
+/// observe the `push_status` sequence written by `watchJmapPush`. Only the
+/// insert path is exercised — everything else is inherited as a no-op from
+/// [NoOpAppLogRepository].
+class _PushStatusRecorder extends NoOpAppLogRepository {
+  final List<AppLogEntry> entries = [];
+  int _nextId = 1;
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    final id = _nextId++;
+    entries.add(
+      AppLogEntry(
+        id: id,
+        createdAt: createdAt ?? DateTime.now(),
+        level: level,
+        event: event,
+        message: message,
+        dataJson: dataJson,
+        screen: screen,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+        syncLogId: syncLogId,
+      ),
+    );
+    return id;
+  }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -3716,6 +3761,87 @@ void main() {
 
       await sub.cancel();
       await sseController.close();
+    });
+
+    test(
+      'logs push_status=unsupported when server has no eventSourceUrl',
+      () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          httpClient: makeSseClient(),
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await r.emails.watchJmapPush('jmap-1', 'pw').toList();
+
+        final pushRows =
+            recorder.entries.where((e) => e.event == 'sync.jmap.push').toList();
+        expect(pushRows, hasLength(1));
+        expect(
+          pushRows.single.dataJson,
+          contains('"push_status":"unsupported"'),
+        );
+        expect(pushRows.single.accountId, 'jmap-1');
+      },
+    );
+
+    test('logs push_status=connected once the SSE stream opens', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final connectedRows = recorder.entries
+          .where(
+            (e) =>
+                e.event == 'sync.jmap.push' &&
+                (e.dataJson ?? '').contains('"push_status":"connected"'),
+          )
+          .toList();
+      expect(connectedRows, hasLength(1));
+
+      await sub.cancel();
+      await sseController.close();
+    });
+
+    test('logs push_status=closed when SSE stream ends', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      await sseController.close();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final closedRows = recorder.entries
+          .where(
+            (e) =>
+                e.event == 'sync.jmap.push' &&
+                (e.dataJson ?? '').contains('"push_status":"closed"'),
+          )
+          .toList();
+      expect(closedRows, hasLength(1));
+
+      await sub.cancel();
     });
   });
 

@@ -99,6 +99,39 @@ class AppLogRepositoryImpl implements AppLogRepository {
   }
 
   @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) {
+    final query = _db.select(_db.appLogs)
+      ..where((t) => t.accountId.equals(accountId) & t.event.equals(event))
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.createdAt),
+        (t) => OrderingTerm.desc(t.id),
+      ])
+      ..limit(1);
+    return query.watch().map(
+      (rows) {
+        if (rows.isEmpty) return null;
+        final r = rows.first;
+        return AppLogEntry(
+          id: r.id,
+          createdAt: r.createdAt,
+          level: AppLogLevel.tryParse(r.level) ?? AppLogLevel.info,
+          event: r.event,
+          message: r.message,
+          dataJson: r.dataJson,
+          screen: r.screen,
+          accountId: r.accountId,
+          mailboxPath: r.mailboxPath,
+          emailId: r.emailId,
+          syncLogId: r.syncLogId,
+        );
+      },
+    );
+  }
+
+  @override
   Future<void> trim({
     int maxRows = 10000,
     Duration maxAge = const Duration(days: 14),
