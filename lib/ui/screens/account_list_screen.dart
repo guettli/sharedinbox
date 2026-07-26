@@ -70,6 +70,8 @@ class _AccountTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(accountConnectionStatusProvider(account.id));
     final health = ref.watch(syncHealthProvider(account.id));
+    final pendingCount =
+        ref.watch(pendingChangeCountForAccountProvider(account.id)).value ?? 0;
     final counterparts =
         ref.watch(comparableCounterpartsProvider(account.id)).value ??
             const <Account>[];
@@ -86,6 +88,21 @@ class _AccountTile extends ConsumerWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (pendingCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  child: Tooltip(
+                    message: '$pendingCount pending change'
+                        '${pendingCount == 1 ? '' : 's'} — tap to view',
+                    child: InkWell(
+                      onTap: () => context.push('/pending-changes'),
+                      child: Badge(
+                        label: Text('$pendingCount'),
+                        child: const Icon(Icons.sync_problem),
+                      ),
+                    ),
+                  ),
+                ),
               status.when(
                 loading: () => const SizedBox(
                   width: AppIconSize.md,

@@ -32,6 +32,8 @@ Behaviour rules carried over from the previous inline Python:
   - If HEAD_SHA == last deployed SHA → all targets false.
   - Otherwise the GitHub Compare API gives the changed-file list and each
     target's regex is matched against it.
+  - GitHub API errors are NOT swallowed — they propagate so the workflow
+    fails loudly. Retries for transient blips belong at the caller, not here.
 
 Notices/warnings that used to go to the workflow log are emitted as
 ``::notice::``/``::warning::`` lines on stderr so they still surface in the
@@ -42,7 +44,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -130,16 +131,7 @@ def main():
         emit({n: True for n in names})
         return
 
-    try:
-        base = _last_deployed_sha(api, repo, workflow_file, job_name, token)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-        print(
-            f"::error::LAST_DEPLOYED_SHA lookup failed "
-            f"({type(e).__name__}: {e})",
-            file=sys.stderr,
-        )
-        emit({n: True for n in names})
-        return
+    base = _last_deployed_sha(api, repo, workflow_file, job_name, token)
 
     if not base:
         print(
@@ -159,16 +151,7 @@ def main():
         emit({n: False for n in names})
         return
 
-    try:
-        changed = _compare_files(api, repo, base, head_sha, token)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-        print(
-            f"::warning::compare API failed ({type(e).__name__}: {e}) — "
-            "deploying as a precaution",
-            file=sys.stderr,
-        )
-        emit({n: True for n in names})
-        return
+    changed = _compare_files(api, repo, base, head_sha, token)
 
     print(f"Changed files (since {base}):", file=sys.stderr)
     for f in changed:

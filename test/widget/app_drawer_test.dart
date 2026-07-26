@@ -107,6 +107,7 @@ void main() {
 
       expect(textInDrawer('Preferences'), findsOneWidget);
       expect(textInDrawer('Sent Queue'), findsOneWidget);
+      expect(textInDrawer('Pending Changes'), findsOneWidget);
       expect(textInDrawer('Undo Log'), findsOneWidget);
       expect(textInDrawer('ChangeLog'), findsOneWidget);
       expect(textInDrawer('About'), findsOneWidget);
