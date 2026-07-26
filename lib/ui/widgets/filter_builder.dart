@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 
 /// A widget that lets the user build a structured [FilterGroup] interactively.
 ///
@@ -12,6 +16,7 @@ class FilterBuilderWidget extends StatefulWidget {
     required this.initialValue,
     required this.onChanged,
     this.availableFields = FilterField.values,
+    this.accountId,
   });
 
   final FilterGroup initialValue;
@@ -21,6 +26,10 @@ class FilterBuilderWidget extends StatefulWidget {
   /// The Sieve rule editor omits fields that do not exist in the Sieve spec
   /// (e.g. [FilterField.folder]).
   final List<FilterField> availableFields;
+
+  /// Optional account scope for the folder picker. When null, the picker
+  /// lists folders across every account (matching the search itself).
+  final String? accountId;
 
   @override
   State<FilterBuilderWidget> createState() => _FilterBuilderWidgetState();
@@ -47,6 +56,7 @@ class _FilterBuilderWidgetState extends State<FilterBuilderWidget> {
       onChanged: _update,
       depth: 0,
       availableFields: widget.availableFields,
+      accountId: widget.accountId,
     );
   }
 }
@@ -62,6 +72,7 @@ class _GroupEditor extends StatelessWidget {
     required this.onChanged,
     required this.depth,
     required this.availableFields,
+    required this.accountId,
     this.onRemoveGroup,
   });
 
@@ -69,6 +80,7 @@ class _GroupEditor extends StatelessWidget {
   final void Function(FilterGroup) onChanged;
   final int depth;
   final List<FilterField> availableFields;
+  final String? accountId;
   final VoidCallback? onRemoveGroup;
 
   static const _maxDepth = 1;
@@ -159,6 +171,7 @@ class _GroupEditor extends StatelessWidget {
           onChanged: (l) => _replaceChild(i, l),
           onDelete: () => _removeChild(i),
           availableFields: availableFields,
+          accountId: accountId,
         ),
       final FilterGroup sub => _GroupEditor(
           key: ValueKey(i),
@@ -166,6 +179,7 @@ class _GroupEditor extends StatelessWidget {
           onChanged: (g) => _replaceChild(i, g),
           depth: depth + 1,
           availableFields: availableFields,
+          accountId: accountId,
           onRemoveGroup: () => _removeChild(i),
         ),
     };
@@ -226,12 +240,14 @@ class _LeafRow extends StatefulWidget {
     required this.onChanged,
     required this.onDelete,
     required this.availableFields,
+    required this.accountId,
   });
 
   final FilterLeaf leaf;
   final void Function(FilterLeaf) onChanged;
   final VoidCallback onDelete;
   final List<FilterField> availableFields;
+  final String? accountId;
 
   @override
   State<_LeafRow> createState() => _LeafRowState();
@@ -284,6 +300,7 @@ class _LeafRowState extends State<_LeafRow> {
   @override
   Widget build(BuildContext context) {
     final isHeader = widget.leaf.field == FilterField.header;
+    final isFolder = widget.leaf.field == FilterField.folder;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
@@ -320,34 +337,47 @@ class _LeafRowState extends State<_LeafRow> {
             ),
           ],
           const SizedBox(width: AppSpacing.sm),
-          DropdownButton<FilterComparison>(
-            value: widget.leaf.comparison,
-            onChanged: _onCompChanged,
-            isDense: true,
-            underline: const SizedBox.shrink(),
-            items: widget.leaf.field.allowedComparisons
-                .map(
-                  (c) => DropdownMenuItem(value: c, child: Text(c.label)),
-                )
-                .toList(),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: TextField(
-              controller: _ctrl,
-              onChanged: (v) =>
-                  widget.onChanged(widget.leaf.copyWith(value: v)),
-              decoration: const InputDecoration(
-                hintText: 'value',
-                isDense: true,
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.sm,
+          if (isFolder)
+            // Folder is always an exact match against the picked mailbox, so
+            // there is no comparison dropdown — just the picker button.
+            Expanded(
+              child: _FolderPickerField(
+                accountId: widget.accountId,
+                value: widget.leaf.value,
+                onChanged: (v) =>
+                    widget.onChanged(widget.leaf.copyWith(value: v)),
+              ),
+            )
+          else ...[
+            DropdownButton<FilterComparison>(
+              value: widget.leaf.comparison,
+              onChanged: _onCompChanged,
+              isDense: true,
+              underline: const SizedBox.shrink(),
+              items: widget.leaf.field.allowedComparisons
+                  .map(
+                    (c) => DropdownMenuItem(value: c, child: Text(c.label)),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                onChanged: (v) =>
+                    widget.onChanged(widget.leaf.copyWith(value: v)),
+                decoration: const InputDecoration(
+                  hintText: 'value',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.sm,
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
           IconButton(
             icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
             tooltip: 'Remove',
@@ -356,5 +386,101 @@ class _LeafRowState extends State<_LeafRow> {
         ],
       ),
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Folder picker field (advanced-search "Folder" condition)
+// ---------------------------------------------------------------------------
+
+/// Button that opens a [showFolderTreePicker] and stores the picked mailbox's
+/// [Mailbox.path] (opaque JMAP id or IMAP path) in the leaf value, since that
+/// is what the `emails.mailbox_path` column contains. The label shows the
+/// human-readable [Mailbox.displayPath] so the JMAP opaque id never leaks.
+class _FolderPickerField extends ConsumerWidget {
+  const _FolderPickerField({
+    required this.accountId,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String? accountId;
+  final String value;
+  final void Function(String) onChanged;
+
+  Future<void> _pick(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(mailboxRepositoryProvider);
+    final picked = await showFolderTreePicker(
+      context,
+      mailboxesStream: repo.observeMailboxes(accountId),
+      initialPath: value.isEmpty ? null : value,
+    );
+    if (picked == null) return;
+    // The picker returns the `displayPath`; resolve it back to the mailbox's
+    // `path` so the LIKE against `emails.mailbox_path` matches (for JMAP the
+    // two differ — displayPath is "Archive/2026", path is the opaque id "a").
+    final mailboxes = await repo.observeMailboxes(accountId).first;
+    final match = _resolveByDisplayPath(mailboxes, picked);
+    onChanged(match?.path ?? picked);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return StreamBuilder<List<Mailbox>>(
+      stream: ref.watch(mailboxRepositoryProvider).observeMailboxes(accountId),
+      builder: (ctx, snap) {
+        final mailboxes = snap.data ?? const <Mailbox>[];
+        final match = _resolve(mailboxes, value);
+        final label =
+            value.isEmpty ? 'Select folder…' : (match?.displayPath ?? value);
+        final isUnknown = value.isNotEmpty && match == null;
+        return OutlinedButton.icon(
+          onPressed: mailboxes.isEmpty ? null : () => _pick(context, ref),
+          icon: const Icon(Icons.folder_outlined, size: AppIconSize.sm),
+          label: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  isUnknown ? TextStyle(color: theme.colorScheme.error) : null,
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            alignment: AlignmentDirectional.centerStart,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xs,
+            ),
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        );
+      },
+    );
+  }
+
+  /// Matches the stored value against a mailbox. New picks store the raw
+  /// [Mailbox.path]; we still accept a [Mailbox.displayPath] as a fallback so
+  /// the button renders a readable name for any pre-existing text-based value.
+  static Mailbox? _resolve(List<Mailbox> mailboxes, String value) {
+    for (final m in mailboxes) {
+      if (m.path == value) return m;
+    }
+    for (final m in mailboxes) {
+      if (m.displayPath == value) return m;
+    }
+    return null;
+  }
+
+  static Mailbox? _resolveByDisplayPath(
+    List<Mailbox> mailboxes,
+    String displayPath,
+  ) {
+    for (final m in mailboxes) {
+      if (m.displayPath == displayPath) return m;
+    }
+    return null;
   }
 }

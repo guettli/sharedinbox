@@ -19,6 +19,9 @@ enum FilterField {
 
   List<FilterComparison> get allowedComparisons => switch (this) {
         FilterField.size => [FilterComparison.over, FilterComparison.under],
+        // Folder is picked from the account's mailbox tree, so the only
+        // meaningful comparison is an exact match against the stored path.
+        FilterField.folder => [FilterComparison.is_],
         _ => [
             FilterComparison.contains,
             FilterComparison.is_,
