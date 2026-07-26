@@ -16,8 +16,7 @@ UndoAction _action(
       type: type,
       emailIds: const ['e1'],
       sourceMailboxPath: 'INBOX',
-      destinationMailboxPath:
-          type == UndoType.delete ? 'Trash' : 'Archive',
+      destinationMailboxPath: type == UndoType.delete ? 'Trash' : 'Archive',
       timestamp: timestamp,
     );
 

@@ -81,8 +81,8 @@ void main() {
           container.listen(comparableCounterpartsProvider('imap'), (_, __) {});
       addTearDown(sub.close);
 
-      final counterparts = await container
-          .read(comparableCounterpartsProvider('imap').future);
+      final counterparts =
+          await container.read(comparableCounterpartsProvider('imap').future);
       expect(counterparts.map((a) => a.id).toList(), ['jmap']);
     });
 
@@ -94,8 +94,8 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
-      final sub = container
-          .listen(comparableCounterpartsProvider('missing'), (_, __) {});
+      final sub = container.listen(
+          comparableCounterpartsProvider('missing'), (_, __) {});
       addTearDown(sub.close);
 
       final counterparts = await container
