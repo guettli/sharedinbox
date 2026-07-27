@@ -179,6 +179,70 @@ void main() {
     expect(refreshed.first.isSeen, isTrue);
   });
 
+  // #407: even when HIGHESTMODSEQ does NOT advance after a server-side flag
+  // change (as Stalwart 0.14.x sometimes fails to do for JMAP-side keyword
+  // edits), the periodic flag reconcile must still detect and correct the
+  // drift so the paired IMAP account converges with server truth.
+  test('flag reconcile catches drift even when HIGHESTMODSEQ is stuck',
+      () async {
+    await appendToInbox('stuck-modseq-test');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(emails.first.isSeen, isFalse);
+
+    // Mark seen directly on the server, which normally advances HIGHESTMODSEQ.
+    final imap = await connectImap(env: env, user: user);
+    try {
+      await imap.selectMailboxByPath('INBOX');
+      final seq = MessageSequence.fromIds([emails.first.uid], isUid: true);
+      await imap.uidMarkSeen(seq);
+    } finally {
+      await imap.logout();
+    }
+
+    // Simulate Stalwart's stuck-MODSEQ quirk by rolling the stored
+    // highestModSeq forward to whatever the server will report next sync
+    // — that way the CONDSTORE fast path's `serverModSeq != storedModSeq`
+    // gate skips the refresh, mimicking the bug's precondition.
+    final probe = await connectImap(env: env, user: user);
+    final int currentServerModSeq;
+    try {
+      final mbox = await probe.selectMailboxByPath('INBOX');
+      currentServerModSeq = mbox.highestModSequence ?? 0;
+    } finally {
+      await probe.logout();
+    }
+    final states = await r.db.select(r.db.syncStates).get();
+    expect(states, hasLength(1));
+    final checkpoint = jsonDecode(states.first.state) as Map<String, dynamic>;
+    checkpoint['highestModSeq'] = currentServerModSeq;
+    // Only one syncStates row exists at this point (asserted above), so
+    // targeting by resourceType is unambiguous.
+    final resourceType = states.first.resourceType;
+    await (r.db.update(r.db.syncStates)
+          ..where((t) => t.resourceType.equals(resourceType)))
+        .write(SyncStatesCompanion(state: Value(jsonEncode(checkpoint))));
+    // Also delete any prior flag-reconcile timestamp so the throttle doesn't
+    // suppress the reconcile in this fresh test run.
+    await (r.db.delete(r.db.syncStates)
+          ..where((t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX')))
+        .go();
+
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final refreshed = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(
+      refreshed.first.isSeen,
+      isTrue,
+      reason: 'reconcile must catch the flag change even when CONDSTORE '
+          'reports no MODSEQ advance',
+    );
+  });
+
   test('syncEmails reconciliation removes emails deleted on server', () async {
     await appendToInbox('keep');
     await appendToInbox('delete-me');
