@@ -442,6 +442,102 @@ void main() {
       expect(threads.first.emailIds, ['acc-1:1', 'acc-1:2']);
     });
 
+    test('observeThreads returns starred threads before unstarred', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Insert four threads: two starred (one old, one very old) and two
+      // unstarred (one newest, one middle). Starred must come first even
+      // though an unstarred thread has the newest date.
+      Future<void> insertThread(
+        String id,
+        DateTime date, {
+        required bool flagged,
+      }) {
+        return r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                latestDate: date,
+                isFlagged: Value(flagged),
+                latestEmailId: '$id-latest',
+              ),
+            );
+      }
+
+      await insertThread('unstarred-new', DateTime(2024, 6), flagged: false);
+      await insertThread('starred-old', DateTime(2024, 2), flagged: true);
+      await insertThread('unstarred-mid', DateTime(2024, 4), flagged: false);
+      await insertThread('starred-mid', DateTime(2024, 3), flagged: true);
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(
+        threads.map((t) => t.threadId).toList(),
+        ['starred-mid', 'starred-old', 'unstarred-new', 'unstarred-mid'],
+      );
+    });
+
+    test(
+      'observeAllInboxThreads returns starred threads before unstarred',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        const account2 = Account(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        await r.accounts.addAccount(account2, 'pw');
+
+        for (final (accountId, path) in [
+          ('acc-1', 'INBOX'),
+          ('acc-2', 'INBOX'),
+        ]) {
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: '$accountId:$path',
+                  accountId: accountId,
+                  path: path,
+                  name: path,
+                  role: const Value('inbox'),
+                ),
+              );
+        }
+
+        Future<void> insertThread(
+          String accountId,
+          String id,
+          DateTime date, {
+          required bool flagged,
+        }) {
+          return r.db.into(r.db.threads).insert(
+                ThreadsCompanion.insert(
+                  id: id,
+                  accountId: accountId,
+                  mailboxPath: 'INBOX',
+                  latestDate: date,
+                  isFlagged: Value(flagged),
+                  latestEmailId: '$id-latest',
+                ),
+              );
+        }
+
+        await insertThread('acc-1', 't-a', DateTime(2024, 6), flagged: false);
+        await insertThread('acc-2', 't-b', DateTime(2024, 2), flagged: true);
+        await insertThread('acc-1', 't-c', DateTime(2024, 5), flagged: true);
+        await insertThread('acc-2', 't-d', DateTime(2024, 4), flagged: false);
+
+        final threads = await r.emails.observeAllInboxThreads().first;
+        expect(
+          threads.map((t) => t.threadId).toList(),
+          ['t-c', 't-b', 't-a', 't-d'],
+        );
+      },
+    );
+
     test('observeEmailsInThread returns all emails for a thread', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -904,6 +1000,40 @@ void main() {
       expect(results[1].subject, 'Older report');
     });
 
+    test('searchEmailsGlobal returns starred results before unstarred',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Older starred email must appear above a newer unstarred one.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Older starred report'),
+              receivedAt: DateTime(2024),
+              isFlagged: const Value(true),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('Newer plain report'),
+              receivedAt: DateTime(2024, 6),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'report');
+      expect(results, hasLength(2));
+      expect(results[0].subject, 'Older starred report');
+      expect(results[1].subject, 'Newer plain report');
+    });
+
     test('searchEmails returns results sorted by receivedAt descending',
         () async {
       final r = _makeRepos();
@@ -977,6 +1107,51 @@ void main() {
         expect(results, hasLength(2));
         expect(results[0].subject, 'Newer invoice');
         expect(results[1].subject, 'Older invoice');
+      },
+    );
+
+    test(
+      'searchEmailsStructured returns starred results before unstarred',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Older starred invoice'),
+                receivedAt: DateTime(2024),
+                isFlagged: const Value(true),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:2',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                subject: const Value('Newer plain invoice'),
+                receivedAt: DateTime(2024, 6),
+              ),
+            );
+
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.subject,
+              comparison: FilterComparison.contains,
+              value: 'invoice',
+            ),
+          ],
+        );
+        final results = await r.emails.searchEmailsStructured(null, filter);
+        expect(results, hasLength(2));
+        expect(results[0].subject, 'Older starred invoice');
+        expect(results[1].subject, 'Newer plain invoice');
       },
     );
 

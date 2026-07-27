@@ -131,7 +131,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.latestDate)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.latestDate),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_threadRowToModel).toList());
@@ -148,7 +151,10 @@ class EmailRepositoryImpl implements EmailRepository {
     ]);
     query
       ..where(_db.mailboxes.role.equals('inbox'))
-      ..orderBy([OrderingTerm.desc(_db.threads.latestDate)])
+      ..orderBy([
+        OrderingTerm.desc(_db.threads.isFlagged),
+        OrderingTerm.desc(_db.threads.latestDate),
+      ])
       ..limit(limit);
     return query.watch().map(
           (rows) => rows
@@ -4188,9 +4194,11 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY e.received_at DESC LIMIT 50'
+            ' WHERE email_fts MATCH ? AND e.account_id = ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? ORDER BY e.received_at DESC LIMIT 50';
+            ' WHERE email_fts MATCH ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -4208,7 +4216,10 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
@@ -4239,7 +4250,7 @@ class EmailRepositoryImpl implements EmailRepository {
         ' JOIN emails e ON e.message_id = n.message_id'
         ' AND e.account_id = n.account_id'
         ' WHERE email_notes_fts MATCH ?$extraConditions'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
     final rows = await _db.customSelect(
       sql,
@@ -4262,7 +4273,10 @@ class EmailRepositoryImpl implements EmailRepository {
             if (accountId == null) return fe;
             return t.accountId.equals(accountId) & fe;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ])
           ..limit(100))
         .get();
     return rows.map(_toModel).toList();
@@ -4431,7 +4445,10 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return condition;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ]))
         .get();
     return rows.map(_toModel).toList();
   }
@@ -4520,7 +4537,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -4540,7 +4557,10 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
