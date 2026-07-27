@@ -570,6 +570,13 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
+        // Record that we've just fetched every flag so the periodic reconcile
+        // in _maybeReconcileImapFlagsMailbox doesn't repeat it immediately.
+        await _saveSyncState(
+          account.id,
+          'IMAP:FlagReconcile:$mailboxPath',
+          DateTime.now().toIso8601String(),
+        );
         return model.SyncEmailsResult(
           fetched: allUids.length,
           skipped: 0,
@@ -607,6 +614,13 @@ class EmailRepositoryImpl implements EmailRepository {
             serverModSeq != storedModSeq) {
           await _refreshFlagsImap(client, account, mailboxPath, storedModSeq);
         }
+
+        // Belt-and-braces: periodically re-fetch every FLAGS in the mailbox
+        // and rewrite `isSeen`/`isFlagged` from server truth. Catches drift
+        // when CONDSTORE misreports — Stalwart 0.14.x does not always bump
+        // HIGHESTMODSEQ when a flag is toggled via JMAP on the same account,
+        // so IMAP would otherwise never see the change (#407).
+        await _maybeReconcileImapFlagsMailbox(client, account.id, mailboxPath);
 
         // Detect remote deletions.
         final serverUids = (await client.uidSearchMessages(
@@ -666,6 +680,105 @@ class EmailRepositoryImpl implements EmailRepository {
         ),
       );
     }
+  }
+
+  static const _imapFlagReconcileInterval = Duration(minutes: 15);
+
+  /// Periodic safety net: at most once per [_imapFlagReconcileInterval] per
+  /// mailbox, unconditionally `UID FETCH 1:* FLAGS` and rewrite `isSeen` /
+  /// `isFlagged` from server truth. Runs regardless of whether HIGHESTMODSEQ
+  /// changed, so it catches drift when the server fails to advance MODSEQ on
+  /// a flag mutation (Stalwart 0.14.x is known to do this for JMAP-side
+  /// keyword changes, leaving the paired IMAP account permanently stale —
+  /// #407). Skips rows whose flag change is still queued in `pendingChanges`
+  /// so an unflushed optimistic edit is not silently reverted.
+  Future<void> _maybeReconcileImapFlagsMailbox(
+    imap.ImapClient client,
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final key = 'IMAP:FlagReconcile:$mailboxPath';
+    final last = await _loadSyncState(accountId, key);
+    if (last != null) {
+      final lastAt = DateTime.tryParse(last);
+      if (lastAt != null &&
+          DateTime.now().difference(lastAt) < _imapFlagReconcileInterval) {
+        return;
+      }
+    }
+
+    final fetch = await client.uidFetchMessages(
+      imap.MessageSequence.fromAll(),
+      'FLAGS',
+    );
+    final byUid = <int, ({bool seen, bool flagged})>{};
+    for (final msg in fetch.messages) {
+      final uid = msg.uid;
+      if (uid == null) continue;
+      byUid[uid] = (
+        seen: msg.flags?.contains(r'\Seen') ?? false,
+        flagged: msg.flags?.contains(r'\Flagged') ?? false,
+      );
+    }
+
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
+        .get();
+
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'delete',
+                  ],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
+    final affectedThreads = <String>{};
+    var corrected = 0;
+    for (final row in localRows) {
+      if (inFlightSet.contains(row.id)) continue;
+      final serverFlags = byUid[row.uid];
+      if (serverFlags == null) continue; // handled by _reconcileDeletedImap
+      if (serverFlags.seen == row.isSeen &&
+          serverFlags.flagged == row.isFlagged) {
+        continue;
+      }
+      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+        EmailsCompanion(
+          isSeen: Value(serverFlags.seen),
+          isFlagged: Value(serverFlags.flagged),
+        ),
+      );
+      affectedThreads.add(row.threadId ?? row.id);
+      corrected++;
+    }
+
+    for (final tid in affectedThreads) {
+      await _updateThread(accountId, mailboxPath, tid);
+    }
+
+    if (corrected > 0) {
+      log(
+        'IMAP-sync: flag-reconcile mailbox=$mailboxPath corrected=$corrected '
+        '(local=${localRows.length}, server=${byUid.length})',
+      );
+    }
+    await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
   }
 
   // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
@@ -1467,13 +1580,17 @@ class EmailRepositoryImpl implements EmailRepository {
     return removed;
   }
 
-  static const _jmapReconcileInterval = Duration(hours: 1);
+  static const _jmapReconcileInterval = Duration(minutes: 15);
 
   /// Periodic safety net: at most once per [_jmapReconcileInterval] per
   /// mailbox, list all server-side email ids in [mailboxJmapId] and prune
-  /// local rows no longer present. Catches ghosts from Email/changes
-  /// under-reporting (Stalwart's IMAP-triggered mailbox moves have surfaced
-  /// this — see #262).
+  /// local rows no longer present. Also refreshes `keywords` for every
+  /// email still in the mailbox and rewrites `isSeen` / `isFlagged` from
+  /// server truth. Catches ghosts and flag drift from Email/changes
+  /// under-reporting — Stalwart's IMAP-triggered mailbox moves have surfaced
+  /// this for existence (#262) and Stalwart 0.14.x similarly under-reports
+  /// keyword changes to the paired IMAP account, causing "seen" drift on the
+  /// compare view (#407).
   Future<void> _maybeReconcileJmapMailbox(
     String accountId,
     JmapClient jmap,
@@ -1524,7 +1641,118 @@ class EmailRepositoryImpl implements EmailRepository {
         '(server=${serverIds.length})',
       );
     }
+    await _reconcileJmapFlagsForMailbox(
+      accountId,
+      jmap,
+      mailboxJmapId,
+      serverIds,
+    );
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  /// Fetches `keywords` for every local row in [mailboxJmapId] whose JMAP id
+  /// is still on the server and rewrites `isSeen` / `isFlagged` from truth.
+  /// Skips rows whose flag change is still queued in `pendingChanges` so an
+  /// unflushed optimistic edit is not silently reverted.
+  Future<void> _reconcileJmapFlagsForMailbox(
+    String accountId,
+    JmapClient jmap,
+    String mailboxJmapId,
+    Set<String> serverIds,
+  ) async {
+    if (serverIds.isEmpty) return;
+
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxJmapId),
+          ))
+        .get();
+    if (localRows.isEmpty) return;
+
+    final localByJmapId = <String, Email>{
+      for (final r in localRows) r.id.substring('$accountId:'.length): r,
+    };
+
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'delete',
+                  ],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
+    final toCheck = [
+      for (final jmapId in localByJmapId.keys)
+        if (serverIds.contains(jmapId) &&
+            !inFlightSet.contains(localByJmapId[jmapId]!.id))
+          jmapId,
+    ];
+    if (toCheck.isEmpty) return;
+
+    final affectedThreads = <String>{};
+    var corrected = 0;
+    for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
+      final batch = toCheck.sublist(
+        offset,
+        math.min(offset + _jmapPageSize, toCheck.length),
+      );
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': batch,
+            'properties': ['id', 'keywords'],
+          },
+          '0',
+        ],
+      ]);
+      final getResult = _responseArgs(responses, 0, 'Email/get');
+      final list = getResult['list'] as List<dynamic>;
+      for (final e in list) {
+        final m = e as Map<String, dynamic>;
+        final jmapId = m['id'] as String;
+        final row = localByJmapId[jmapId];
+        if (row == null) continue;
+        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+        final serverSeen = keywords.containsKey(r'$seen');
+        final serverFlagged = keywords.containsKey(r'$flagged');
+        if (serverSeen == row.isSeen && serverFlagged == row.isFlagged) {
+          continue;
+        }
+        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+          EmailsCompanion(
+            isSeen: Value(serverSeen),
+            isFlagged: Value(serverFlagged),
+          ),
+        );
+        affectedThreads.add(row.threadId ?? row.id);
+        corrected++;
+      }
+    }
+
+    for (final tid in affectedThreads) {
+      await _updateThread(accountId, mailboxJmapId, tid);
+    }
+    if (corrected > 0) {
+      log(
+        'JMAP-sync: flag-reconcile mailbox=$mailboxJmapId corrected=$corrected '
+        '(checked=${toCheck.length}, local=${localRows.length})',
+      );
+    }
   }
 
   String _briefIds(List<String> ids, {int keep = 10}) {
