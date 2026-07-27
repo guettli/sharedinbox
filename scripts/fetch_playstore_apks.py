@@ -9,6 +9,12 @@ Play, not a debug build assembled from source. Auth comes from the same
 The resolved ``versionCode`` is printed to **stdout** (status messages go to
 stderr) so callers can capture it via ``$(…)``.
 
+When Play has not finished generating split APKs within the poll window, the
+script writes a ``PENDING`` marker file to ``<dest-dir>`` (alongside a
+``versionCode`` file) and exits 0. The wrapper reads the marker and skips
+the Firebase Test Lab run for that cycle — the next scheduled tick retries.
+Every other failure mode still exits non-zero so real problems stay visible.
+
 Usage::
 
     PLAY_STORE_CONFIG_JSON=<sa-json> python3 scripts/fetch_playstore_apks.py <dest-dir>
@@ -183,7 +189,23 @@ def main():
     version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
     print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
-    listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)
+    try:
+        listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)
+    except TimeoutError as exc:
+        # Play-side split APK generation is asynchronous and, in practice, can
+        # stall for many hours (see #402, #414). Treat "Play still generating"
+        # as a skip rather than a hard failure: emit a PENDING marker so the
+        # wrapper (scripts/run_firebase_test.sh) can exit 0 without filing a
+        # "Firebase Tests failed" issue, and rely on the next scheduled run
+        # to retry. Any other error (auth, network, Play API 5xx) still
+        # propagates and fails loudly.
+        print(f"[fetch_playstore_apks] {exc}", file=sys.stderr)
+        with open(os.path.join(dest_dir, "PENDING"), "w") as f:
+            f.write(f"{version_code}\n")
+        with open(os.path.join(dest_dir, "versionCode"), "w") as f:
+            f.write(f"{version_code}\n")
+        print(version_code)
+        return
 
     downloads = _enumerate_downloads(listing)
 

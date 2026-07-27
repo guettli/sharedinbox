@@ -2,28 +2,20 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
-import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
   ref,
 ) async {
   return ref.watch(searchHistoryRepositoryProvider).getRecentSearches();
 });
-
-/// Returns true if [text] contains a word that starts with [query].
-/// "foo" matches "foobar" or "My Foobar" but NOT "blafoo".
-bool _hasWordPrefix(String text, String query) =>
-    RegExp(r'\b' + RegExp.escape(query), caseSensitive: false).hasMatch(text);
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, this.accountId, this.initialFilter});
@@ -42,7 +34,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _ctrl = TextEditingController();
   final _focusNode = FocusNode();
   Timer? _debounce;
-  _SearchResults? _results;
+  List<Email>? _results;
   bool _loading = false;
   bool _fieldFocused = false;
 
@@ -86,17 +78,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void _onAfterBatchAction(List<String> actedThreadIds) {
     if (_results == null || !mounted) return;
     final actedSet = actedThreadIds.toSet();
-    final remaining = _results!.emails
-        .where((e) => !actedSet.contains(e.threadId ?? e.id))
-        .toList();
-    setState(() {
-      final updated = _SearchResults(
-        mailboxes: _results!.mailboxes,
-        addresses: _results!.addresses,
-        emails: remaining,
-      );
-      _results = updated.isEmpty ? null : updated;
-    });
+    final remaining =
+        _results!.where((e) => !actedSet.contains(e.threadId ?? e.id)).toList();
+    setState(() => _results = remaining);
   }
 
   void _toggleAdvanced() {
@@ -128,57 +112,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
     try {
       final emailRepo = ref.read(emailRepositoryProvider);
-      final mailboxRepo = ref.read(mailboxRepositoryProvider);
-      final ql = query.toLowerCase();
 
-      final (allMailboxes, emails, addressEmails) = await (
-        mailboxRepo.observeMailboxes(widget.accountId).first,
+      // Run both queries in parallel. `searchEmailsGlobal` matches subject,
+      // preview and From via FTS; `getEmailsByAddress` catches recipients
+      // (To/Cc) that FTS does not index. Merge + dedup so a single message
+      // list surfaces every match.
+      final (globalHits, addressHits) = await (
         emailRepo.searchEmailsGlobal(widget.accountId, query),
         emailRepo.getEmailsByAddress(widget.accountId, query),
       ).wait;
 
-      final matchedMailboxes = allMailboxes
-          .where((m) => _hasWordPrefix(m.name, ql))
-          .toList()
-        ..sort(compareMailboxes);
-
-      // Collect unique addresses from address-search results where the
-      // email or display name contains the query.
       final seen = <String>{};
-      final addresses = <(EmailAddress, int, String)>[];
-      for (final email in addressEmails) {
-        for (final addr in [...email.from, ...email.to, ...email.cc]) {
-          final key = '${email.accountId}:${addr.email}';
-          if (seen.contains(key)) continue;
-          final matchesEmail = _hasWordPrefix(addr.email, ql);
-          final matchesName =
-              addr.name != null && _hasWordPrefix(addr.name!, ql);
-          if (!matchesEmail && !matchesName) continue;
-          seen.add(key);
-          final addrEmail = addr.email;
-          final accId = email.accountId;
-          final count = addressEmails
-              .where(
-                (e) =>
-                    e.accountId == accId &&
-                    [
-                      ...e.from,
-                      ...e.to,
-                      ...e.cc,
-                    ].any((a) => a.email == addrEmail),
-              )
-              .length;
-          addresses.add((addr, count, accId));
-        }
+      final merged = <Email>[];
+      for (final e in [...globalHits, ...addressHits]) {
+        if (seen.add(e.id)) merged.add(e);
       }
+      merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
 
       if (mounted) {
         setState(() {
-          _results = _SearchResults(
-            mailboxes: matchedMailboxes,
-            addresses: addresses,
-            emails: emails,
-          );
+          _results = merged;
           _loading = false;
         });
       }
@@ -197,11 +150,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           .searchEmailsStructured(widget.accountId, _filterGroup);
       if (mounted) {
         setState(() {
-          _results = _SearchResults(
-            mailboxes: const [],
-            addresses: const [],
-            emails: emails,
-          );
+          _results = emails;
           _loading = false;
         });
       }
@@ -225,7 +174,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       focusNode: _focusNode,
                       autofocus: true,
                       decoration: const InputDecoration(
-                        hintText: 'Search folders, addresses, emails…',
+                        hintText: 'Search emails…',
                         border: InputBorder.none,
                       ),
                       onChanged: _onChanged,
@@ -302,7 +251,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
 
-    if (!_loading && _results != null && !_results!.isEmpty) {
+    if (!_loading && _results != null && _results!.isNotEmpty) {
       return Column(
         children: [
           filterHeader,
@@ -334,36 +283,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  Widget _buildResultsList(_SearchResults r) {
-    final messagesList = EmailThreadList(
+  Widget _buildResultsList(List<Email> emails) {
+    return EmailThreadList(
       controller: _selection,
-      items: r.emails.map(EmailThread.fromEmail).toList(),
+      items: emails.map(EmailThread.fromEmail).toList(),
       enableSwipe: false,
       showLocationLabel: true,
-    );
-
-    final hasNonMessageSections =
-        r.mailboxes.isNotEmpty || r.addresses.isNotEmpty;
-    if (!hasNonMessageSections) return messagesList;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (r.mailboxes.isNotEmpty) ...[
-          const _SectionHeader('Folders'),
-          for (final mb in r.mailboxes)
-            _FolderTile(mb: mb, accountId: mb.accountId),
-        ],
-        if (r.addresses.isNotEmpty) ...[
-          const _SectionHeader('Addresses'),
-          for (final (addr, count, accId) in r.addresses)
-            _AddressTile(addr: addr, count: count, accountId: accId),
-        ],
-        if (r.emails.isNotEmpty) ...[
-          const _SectionHeader('Messages'),
-          Expanded(child: messagesList),
-        ],
-      ],
     );
   }
 
@@ -437,98 +362,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ],
         );
       },
-    );
-  }
-}
-
-class _SearchResults {
-  const _SearchResults({
-    required this.mailboxes,
-    required this.addresses,
-    required this.emails,
-  });
-
-  final List<Mailbox> mailboxes;
-  final List<(EmailAddress, int, String)> addresses;
-  final List<Email> emails;
-
-  bool get isEmpty => mailboxes.isEmpty && addresses.isEmpty && emails.isEmpty;
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.title);
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.lg,
-        AppSpacing.md,
-        AppSpacing.lg,
-        AppSpacing.xs,
-      ),
-      child: Text(title, style: Theme.of(context).textTheme.labelLarge),
-    );
-  }
-}
-
-class _FolderTile extends StatelessWidget {
-  const _FolderTile({required this.mb, required this.accountId});
-  final Mailbox mb;
-  final String accountId;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.folder),
-      title: Text(
-        mb.name,
-        style: mb.unreadCount > 0
-            ? const TextStyle(fontWeight: FontWeight.bold)
-            : null,
-      ),
-      subtitle: Text(accountId, style: Theme.of(context).textTheme.bodySmall),
-      trailing: MailboxCountLabel(
-        unread: mb.unreadCount,
-        total: mb.totalCount,
-      ),
-      onTap: () => context.go(
-        '/accounts/$accountId/mailboxes'
-        '/${Uri.encodeComponent(mb.path)}/emails',
-      ),
-    );
-  }
-}
-
-class _AddressTile extends StatelessWidget {
-  const _AddressTile({
-    required this.addr,
-    required this.count,
-    required this.accountId,
-  });
-
-  final EmailAddress addr;
-  final int count;
-  final String accountId;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.person),
-      title: Text(addr.name ?? addr.email),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (addr.name != null) Text(addr.email),
-          Text(accountId, style: Theme.of(context).textTheme.bodySmall),
-        ],
-      ),
-      trailing: Text('$count mail${count == 1 ? '' : 's'}'),
-      onTap: () => context.push(
-        '/accounts/$accountId/emails/by-address'
-        '/${Uri.encodeComponent(addr.email)}',
-      ),
     );
   }
 }
