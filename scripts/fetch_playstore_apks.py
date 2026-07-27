@@ -34,11 +34,11 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 
 # How long to poll for Play to finish generating split APKs before failing.
 # Generation typically takes minutes but occasionally an hour or more after an
-# AAB upload (see #402); the caller's workflow-level timeout is the hard cap.
-# The outer bash wrapper (scripts/run_firebase_test.sh) and workflow
+# AAB upload (see #402, #409); the caller's workflow-level timeout is the
+# hard cap. The outer bash wrapper (scripts/run_firebase_test.sh) and workflow
 # timeout-minutes must be kept ≥ this + margin — see the guard there.
 # Overridable via env vars for testing.
-_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "3600"))
+_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "5400"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
 
