@@ -5,8 +5,10 @@
 #
 # Cron policy (see .github/workflows/firebase-tests.yml — controls cadence):
 #   1. Resolve the latest alpha versionCode and download its split APKs from
-#      Play. The fetch polls until Play has generated the split APKs and
-#      fails loudly on timeout — no silent skip, no fallback to older bundles.
+#      Play. The fetch polls until Play has generated the split APKs. If Play
+#      has not finished within the poll budget, it drops a PENDING marker and
+#      we skip this cycle (see #414 — Play-side delay is not a red build).
+#      Every other failure (auth, network, Play API 5xx) still exits non-zero.
 #   2. Run Firebase Test Lab against the fetched APKs.
 #   3. On success, record the versionCode in LAST_TESTED_ALPHA_VERSION_CODE
 #      so callers can tell which alpha was last exercised green. Written
@@ -157,6 +159,16 @@ if [ -z "$VERSION_CODE" ]; then
     echo "ERROR: $APK_DIR/versionCode is empty" >&2
     exit 1
 fi
+# Play-side split APK generation is asynchronous and, in practice, can stall
+# for many hours (see #402, #414). The Python fetch drops a PENDING marker in
+# that case instead of erroring; skip the Firebase Test Lab attempt with a
+# ::notice:: so the workflow stays green and no failure issue is filed. The
+# next scheduled cron tick retries.
+if [ -f "$APK_DIR/PENDING" ]; then
+    echo "::notice::[firebase] skipping: Play has not yet generated split APKs for versionCode $VERSION_CODE (generation can take an hour or more after upload; next scheduled run will retry)" >&2
+    exit 0
+fi
+
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2
 

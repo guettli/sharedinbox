@@ -160,33 +160,58 @@ def _with_patches(patches, fn):
         return _with_patches(patches[1:], fn)
 
 
-class TestMainFailsWhenPlayNotReady(unittest.TestCase):
-    """When Play never finishes generating split APKs within the poll
-    window, the script must fail loudly. The old behaviour dropped a
-    ``.skip`` sentinel and returned success — that hid stuck deploys."""
+class TestMainWritesPendingMarkerWhenPlayNotReady(unittest.TestCase):
+    """When Play has not finished generating split APKs within the poll
+    window, the script writes a ``PENDING`` marker (and a ``versionCode``)
+    and exits 0 so the wrapper can skip the Firebase Test Lab attempt
+    without filing a failure issue (see #414). The next scheduled run
+    retries. Any other error still propagates."""
 
-    def test_propagates_poll_timeout(self):
+    def test_writes_pending_marker_on_poll_timeout(self):
         with tempfile.TemporaryDirectory() as dest_dir:
-            with self.assertRaises(TimeoutError):
+            _with_patches(
+                _patches(
+                    dest_dir,
+                    version_code=200,
+                    list_apks=TimeoutError(
+                        "Play has not generated split APKs for versionCode "
+                        "200 within 3600s"
+                    ),
+                ),
+                fetch_playstore_apks.main,
+            )
+
+            pending_path = Path(dest_dir) / "PENDING"
+            self.assertTrue(
+                pending_path.is_file(),
+                "PENDING marker must be written when Play is still generating",
+            )
+            self.assertEqual(pending_path.read_text().strip(), "200")
+
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertTrue(
+                vc_path.is_file(),
+                "versionCode must also be written so the wrapper can log it",
+            )
+            self.assertEqual(vc_path.read_text().strip(), "200")
+
+    def test_other_errors_still_propagate(self):
+        """A generic error (auth, Play API 5xx, …) must NOT be swallowed —
+        the PENDING skip is narrow to the Play-still-generating case."""
+        with tempfile.TemporaryDirectory() as dest_dir:
+            with self.assertRaises(RuntimeError):
                 _with_patches(
                     _patches(
                         dest_dir,
                         version_code=200,
-                        list_apks=TimeoutError(
-                            "Play has not generated split APKs for versionCode "
-                            "200 within 1800s"
-                        ),
+                        list_apks=RuntimeError("Play API 500"),
                     ),
                     fetch_playstore_apks.main,
                 )
 
             self.assertFalse(
-                (Path(dest_dir) / ".skip").is_file(),
-                ".skip sentinel must no longer be written",
-            )
-            self.assertFalse(
-                (Path(dest_dir) / "versionCode").is_file(),
-                "versionCode must not be written when the fetch fails",
+                (Path(dest_dir) / "PENDING").is_file(),
+                "PENDING marker must not be written for non-timeout errors",
             )
 
 

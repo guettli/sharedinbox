@@ -1189,10 +1189,14 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 // FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
 // release using the Play Developer API. Returns a Directory containing the
 // APKs and a ``versionCode`` text file with the resolved alpha versionCode.
-// Fails loudly when Play never finishes generating the split APKs — no
-// silent skip; the workflow-level schedule controls retry cadence.
-// Runs in a Python container so the runner host does not need google-auth /
-// requests installed (matches the UploadToPlayStore pattern).
+// When Play has not finished generating split APKs within the poll window,
+// the returned directory contains a ``PENDING`` marker (and ``versionCode``)
+// instead of APKs — the wrapper (scripts/run_firebase_test.sh) reads the
+// marker and skips the Firebase Test Lab attempt with a ::notice::. Any
+// other failure (auth, network, Play API 5xx) still propagates and fails
+// loudly. See #414 for why we no longer treat Play-side delay as a red
+// build. Runs in a Python container so the runner host does not need
+// google-auth / requests installed (matches the UploadToPlayStore pattern).
 func (m *Ci) FetchPlayStoreApks(
 	playStoreConfig *dagger.Secret,
 ) *dagger.Directory {

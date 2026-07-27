@@ -335,16 +335,20 @@ class FakeEmailRepository implements EmailRepository {
     EmailBody? emailBody,
     EmailBody? refreshedEmailBody,
     List<Email>? searchResults,
+    List<Email>? byAddressResults,
     List<Email>? structuredSearchResults,
     String rawRfc822 = '',
     this.onSearch,
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
+        _byAddressResults = byAddressResults ?? const [],
         _structuredSearchResults = structuredSearchResults ?? const [],
         _rawRfc822 = rawRfc822,
         _refreshedEmailBody = refreshedEmailBody,
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
+
+  final List<Email> _byAddressResults;
 
   final List<Email> _structuredSearchResults;
 
@@ -537,7 +541,7 @@ class FakeEmailRepository implements EmailRepository {
     String? accountId,
     String address,
   ) async =>
-      [];
+      List.of(_byAddressResults);
 
   @override
   Future<List<EmailAddress>> searchAddresses(
