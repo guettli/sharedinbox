@@ -102,7 +102,9 @@ void main() {
     await r.accounts.addAccount(account, user.password);
     await r.emails.syncEmails('test', 'INBOX');
 
-    final states = await r.db.select(r.db.syncStates).get();
+    final states = await (r.db.select(r.db.syncStates)
+          ..where((t) => t.resourceType.equals('IMAP:INBOX')))
+        .get();
     expect(states, hasLength(1));
     final checkpoint = jsonDecode(states.first.state) as Map<String, dynamic>;
     expect(checkpoint['uidValidity'], isA<int>());
@@ -141,7 +143,9 @@ void main() {
 
       // First sync — full sync, saves modseq checkpoint.
       await r.emails.syncEmails('test', 'INBOX');
-      final stateAfterFirst = await r.db.select(r.db.syncStates).get();
+      final stateAfterFirst = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('IMAP:INBOX')))
+          .get();
       expect(stateAfterFirst, hasLength(1));
 
       // Second sync with no server changes — CONDSTORE fast-path should skip
@@ -213,18 +217,17 @@ void main() {
     } finally {
       await probe.logout();
     }
-    final states = await r.db.select(r.db.syncStates).get();
+    final states = await (r.db.select(r.db.syncStates)
+          ..where((t) => t.resourceType.equals('IMAP:INBOX')))
+        .get();
     expect(states, hasLength(1));
     final checkpoint = jsonDecode(states.first.state) as Map<String, dynamic>;
     checkpoint['highestModSeq'] = currentServerModSeq;
-    // Only one syncStates row exists at this point (asserted above), so
-    // targeting by resourceType is unambiguous.
-    final resourceType = states.first.resourceType;
     await (r.db.update(r.db.syncStates)
-          ..where((t) => t.resourceType.equals(resourceType)))
+          ..where((t) => t.resourceType.equals('IMAP:INBOX')))
         .write(SyncStatesCompanion(state: Value(jsonEncode(checkpoint))));
-    // Also delete any prior flag-reconcile timestamp so the throttle doesn't
-    // suppress the reconcile in this fresh test run.
+    // Also delete the flag-reconcile timestamp written by the initial full
+    // sync so the throttle doesn't suppress the reconcile on the next sync.
     await (r.db.delete(r.db.syncStates)
           ..where((t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX')))
         .go();
