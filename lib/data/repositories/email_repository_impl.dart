@@ -26,6 +26,7 @@ import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/mail_header_decode.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -841,11 +842,18 @@ class EmailRepositoryImpl implements EmailRepository {
         final inReplyTo = _cleanMessageId(envelope.inReplyTo);
         final refs = _cleanReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
+        // Re-decode Subject from the raw header enough_mail stashed on the
+        // message during envelope parsing (#418). `envelope.subject` uses
+        // MailCodec.decodeHeader, which leaves stray spaces around ü/ö/ä
+        // when adjacent encoded-words differ in charset case or are folded
+        // with a tab.
+        final subject =
+            decodeMailHeader(msg.getHeaderValue('Subject')) ?? envelope.subject;
         final threadId = _computeThreadId(
               messageId: msgId,
               inReplyTo: inReplyTo,
               references: refs,
-              subject: envelope.subject,
+              subject: subject,
               date: envelope.date,
             ) ??
             emailId;
@@ -871,7 +879,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 accountId: account.id,
                 mailboxPath: mailboxPath,
                 uid: uid,
-                subject: Value(envelope.subject),
+                subject: Value(subject),
                 sentAt: Value(envelope.date),
                 receivedAt: envelope.date ?? DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
@@ -1252,6 +1260,10 @@ class EmailRepositoryImpl implements EmailRepository {
     'threadId',
     'mailboxIds',
     'subject',
+    // Raw Subject header so we can re-decode client-side when the server's
+    // RFC 2047 decoding leaves stray spaces around encoded-word boundaries
+    // (see #418, and [decodeMailHeader]).
+    'header:Subject:asRaw',
     'sentAt',
     'receivedAt',
     'from',
@@ -1871,6 +1883,15 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       final jmapListUnsubscribe =
           (m['header:List-Unsubscribe:asText'] as String?)?.trim();
+      // Re-decode Subject from the raw header when the server exposes it, so
+      // we get the same defensive handling as the IMAP path (#418). Falls
+      // back to the server-decoded `subject` property when the raw header is
+      // absent (e.g. mail with no Subject at all, or servers that reject
+      // `header:*:asRaw`).
+      final rawSubjectHeader = m['header:Subject:asRaw'] as String?;
+      final subject = rawSubjectHeader != null
+          ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
+          : m['subject'] as String?;
 
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -1878,7 +1899,7 @@ class EmailRepositoryImpl implements EmailRepository {
               accountId: accountId,
               mailboxPath: mailboxPath,
               uid: 0, // not used for JMAP accounts
-              subject: Value(m['subject'] as String?),
+              subject: Value(subject),
               sentAt: Value(sentAt),
               receivedAt: receivedAt,
               fromJson: Value(from),
