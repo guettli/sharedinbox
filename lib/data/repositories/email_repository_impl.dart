@@ -26,6 +26,7 @@ import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -837,9 +838,9 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$mailboxPath:$uid';
-        final msgId = _cleanMessageId(envelope.messageId);
-        final inReplyTo = _cleanMessageId(envelope.inReplyTo);
-        final refs = _cleanReferences(msg.getHeaderValue('References'));
+        final msgId = normaliseMessageId(envelope.messageId);
+        final inReplyTo = normaliseMessageId(envelope.inReplyTo);
+        final refs = normaliseReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
         final threadId = _computeThreadId(
               messageId: msgId,
@@ -4572,24 +4573,6 @@ class EmailRepositoryImpl implements EmailRepository {
     if (list == null || list.isEmpty) return null;
     final joined = list.cast<String>().join(' ');
     return joined.isEmpty ? null : joined;
-  }
-
-  static String? _cleanMessageId(String? mid) {
-    if (mid == null) return null;
-    var s = mid.trim();
-    if (s.startsWith('<') && s.endsWith('>')) {
-      s = s.substring(1, s.length - 1);
-    }
-    return s.isEmpty ? null : s;
-  }
-
-  static String? _cleanReferences(String? refs) {
-    if (refs == null) return null;
-    final cleanTokens = refs
-        .split(RegExp(r'\s+'))
-        .map((t) => _cleanMessageId(t))
-        .whereType<String>();
-    return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
   }
 
   @visibleForTesting

@@ -169,6 +169,43 @@ void main() {
       expect(result.diffCount, 0);
     });
 
+    test(
+      'bracketed IMAP row matches bracket-less JMAP row (#406)',
+      () async {
+        // Legacy IMAP rows written before #143's `_cleanMessageId` still hold
+        // the RFC-5322 `<foo@bar>` verbatim in the DB, while JMAP has always
+        // stored ids bracket-less (RFC 8621 §4.1.2.3). Without normalisation
+        // in the compare join, the same email showed up twice: once as
+        // missingInB (IMAP side) and once as missingInA (JMAP side).
+        await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+        await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
+        await _seedEmail(
+          db,
+          accountId: 'imap-1',
+          id: 'imap-1:1',
+          mailboxPath: 'INBOX',
+          uid: 1,
+          messageId: '<msg-001@example.com>',
+          subject: 'Hello',
+          sentAt: DateTime.utc(2026, 1, 1, 12),
+        );
+        await _seedEmail(
+          db,
+          accountId: 'jmap-1',
+          id: 'jmap-1:X',
+          mailboxPath: 'a',
+          uid: 0,
+          messageId: 'msg-001@example.com',
+          subject: 'Hello',
+          sentAt: DateTime.utc(2026, 1, 1, 12),
+        );
+
+        final result = await service.compare('imap-1', 'jmap-1');
+        expect(result.isIdentical, isTrue);
+        expect(result.diffCount, 0);
+      },
+    );
+
     test('detects an email missing on side B', () async {
       await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
       await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
@@ -187,7 +224,9 @@ void main() {
       expect(result.isIdentical, isFalse);
       expect(result.emails, hasLength(1));
       expect(result.emails.single.kind, EmailDiffKind.missingInB);
-      expect(result.emails.single.messageId, '<only-in-a@example.com>');
+      // #406: the compare join keys on the normalised (bracket-less) id, so
+      // the surfaced messageId no longer carries the RFC 5322 angle brackets.
+      expect(result.emails.single.messageId, 'only-in-a@example.com');
     });
 
     test('detects field mismatches on matched emails', () async {
@@ -329,7 +368,7 @@ void main() {
       final result = await service.compare('imap-1', 'jmap-1');
       expect(result.emails, hasLength(1));
       expect(result.emails.single.kind, EmailDiffKind.missingInA);
-      expect(result.emails.single.messageId, '<only-in-b@example.com>');
+      expect(result.emails.single.messageId, 'only-in-b@example.com');
     });
 
     test('detects flagged/subject/sentAt mismatches', () async {
@@ -428,7 +467,9 @@ void main() {
 
       final result = await service.compare('imap-1', 'jmap-1');
       expect(result.bodies, hasLength(1));
-      expect(result.bodies.single.messageId, messageId);
+      // Compare normalises the id when joining, so the diff carries the
+      // bracket-less form regardless of what the DB stored.
+      expect(result.bodies.single.messageId, 'm1@example.com');
     });
 
     test('ignores whitespace-only body differences', () async {
@@ -518,9 +559,9 @@ void main() {
 
       final result = await service.compare('imap-1', 'jmap-1');
       expect(result.emails, hasLength(2));
-      expect(result.emails.first.messageId, '<new@example.com>');
+      expect(result.emails.first.messageId, 'new@example.com');
       expect(result.emails.first.kind, EmailDiffKind.missingInA);
-      expect(result.emails.last.messageId, '<old@example.com>');
+      expect(result.emails.last.messageId, 'old@example.com');
       expect(result.emails.last.kind, EmailDiffKind.missingInB);
     });
 
@@ -536,8 +577,8 @@ void main() {
 
       final result = await service.compare('imap-1', 'jmap-1');
       expect(result.bodies, hasLength(2));
-      expect(result.bodies.first.messageId, '<new@example.com>');
-      expect(result.bodies.last.messageId, '<old@example.com>');
+      expect(result.bodies.first.messageId, 'new@example.com');
+      expect(result.bodies.last.messageId, 'old@example.com');
     });
 
     test('sorts unmatchable emails newest-first', () async {
