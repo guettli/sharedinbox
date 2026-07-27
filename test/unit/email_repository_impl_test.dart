@@ -2728,6 +2728,25 @@ void main() {
                   ],
                 ],
               },
+              // Call 3: reconcile pass Email/get for keywords on the surviving
+              // local row (e-live). Server-side keywords are empty, matching
+              // the seeded row's default isSeen=false / isFlagged=false.
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Email/get',
+                    {
+                      'accountId': 'acct1',
+                      'state': 'est1',
+                      'list': [
+                        {'id': 'e-live', 'keywords': <String, dynamic>{}},
+                      ],
+                    },
+                    '0',
+                  ],
+                ],
+              },
             ],
           ),
         );
@@ -2784,7 +2803,7 @@ void main() {
     );
 
     test(
-      'periodic reconcile is throttled to at most once per hour',
+      'periodic reconcile is throttled to at most once per interval',
       () async {
         // Only 1 mocked response — a second network call for reconcile would
         // wrap around and mismatch. The throttle must prevent that.
