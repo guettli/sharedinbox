@@ -258,12 +258,15 @@ class AccountComparison {
       final mid = entry.key;
       final ea = entry.value;
       final eb = remainingB.remove(mid);
+      // Surface the raw stored id so callers see whatever's actually in the
+      // DB; the v49 migration eventually rewrites legacy IMAP rows to the
+      // canonical bracket-less form, at which point both sides match here.
       if (eb == null) {
         emailDiffs.add(
           EmailDiff(
             kind: EmailDiffKind.missingInB,
             mailboxKey: mailboxKey,
-            messageId: mid,
+            messageId: ea.messageId!,
             a: ea,
             b: null,
           ),
@@ -288,7 +291,7 @@ class AccountComparison {
           EmailDiff(
             kind: EmailDiffKind.fieldMismatch,
             mailboxKey: mailboxKey,
-            messageId: mid,
+            messageId: ea.messageId!,
             a: ea,
             b: eb,
             fields: mismatches,
@@ -296,17 +299,17 @@ class AccountComparison {
         );
       }
 
-      final body = await _diffBodies(mid, ea, eb);
+      final body = await _diffBodies(ea.messageId!, ea, eb);
       if (body != null) bodyDiffs.add(body);
     }
-    for (final entry in remainingB.entries) {
+    for (final eb in remainingB.values) {
       emailDiffs.add(
         EmailDiff(
           kind: EmailDiffKind.missingInA,
           mailboxKey: mailboxKey,
-          messageId: entry.key,
+          messageId: eb.messageId!,
           a: null,
-          b: entry.value,
+          b: eb,
         ),
       );
     }
