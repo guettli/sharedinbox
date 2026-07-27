@@ -152,6 +152,17 @@ void main() {
     },
   );
 
+  // Marks the given INBOX UID seen on the server via a fresh IMAP session.
+  Future<void> markSeenOnServer(int uid) async {
+    final client = await connectImap(env: env, user: user);
+    try {
+      await client.selectMailboxByPath('INBOX');
+      await client.uidMarkSeen(MessageSequence.fromIds([uid], isUid: true));
+    } finally {
+      await client.logout();
+    }
+  }
+
   test('CONDSTORE flag refresh updates flags in local DB', () async {
     await appendToInbox('flag-refresh-test');
 
@@ -163,14 +174,7 @@ void main() {
     expect(emails.first.isSeen, isFalse);
 
     // Mark seen directly on server, advancing modseq.
-    final imap = await connectImap(env: env, user: user);
-    try {
-      await imap.selectMailboxByPath('INBOX');
-      final seq = MessageSequence.fromIds([emails.first.uid], isUid: true);
-      await imap.uidMarkSeen(seq);
-    } finally {
-      await imap.logout();
-    }
+    await markSeenOnServer(emails.first.uid);
 
     // Second sync — modseq changed, should refresh flags.
     await r.emails.syncEmails('test', 'INBOX');
@@ -195,14 +199,7 @@ void main() {
     expect(emails.first.isSeen, isFalse);
 
     // Mark seen directly on the server, which normally advances HIGHESTMODSEQ.
-    final imap = await connectImap(env: env, user: user);
-    try {
-      await imap.selectMailboxByPath('INBOX');
-      final seq = MessageSequence.fromIds([emails.first.uid], isUid: true);
-      await imap.uidMarkSeen(seq);
-    } finally {
-      await imap.logout();
-    }
+    await markSeenOnServer(emails.first.uid);
 
     // Simulate Stalwart's stuck-MODSEQ quirk by rolling the stored
     // highestModSeq forward to whatever the server will report next sync
