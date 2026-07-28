@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Tests for fetch_playstore_apks.py."""
+import contextlib
+import io
 import os
 import shutil
 import sys
@@ -402,6 +404,63 @@ class TestMainSkipSurvivesDirVanishingBeforeSecondWrite(unittest.TestCase):
             self.assertEqual(calls, ["PENDING", "versionCode"])
             self.assertEqual(
                 (Path(dest_dir) / "versionCode").read_text().strip(), "424"
+            )
+
+
+class TestMainSkipCompletesForReclaimDuringPoll(unittest.TestCase):
+    """Regression for #428: the observed failure was the 90-minute poll timing
+    out (Play never generated split APKs for the alpha versionCode) and the
+    PENDING write then crashing with
+    ``FileNotFoundError: '/tmp/apks/PENDING'`` because the exec's ephemeral
+    /tmp had been reclaimed during the long idle. That crash exited the fetch
+    non-zero and filed a spurious "Firebase Tests failed" issue.
+
+    Unlike the earlier per-file assertions (#422, #424), this pins the full
+    end-to-end skip contract for the #428 traceback: main() must return
+    without raising *and* still print the versionCode to stdout so a caller
+    that captures ``$(…)`` gets it even on the reclaimed-dir skip path."""
+
+    def test_skip_returns_and_prints_versioncode_when_dir_reclaimed(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Reproduce #428: dest_dir is reclaimed during the long poll,
+                # then the poll gives up with TimeoutError.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "1785101151 within 5400s"
+                )
+
+            stdout = io.StringIO()
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code",
+                return_value=1785101151,
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ), contextlib.redirect_stdout(stdout):
+                # Must not raise: the skip re-creates dest_dir before writing.
+                fetch_playstore_apks.main()
+
+            self.assertEqual(stdout.getvalue().strip(), "1785101151")
+            self.assertTrue((Path(dest_dir) / "PENDING").is_file())
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(),
+                "1785101151",
             )
 
 

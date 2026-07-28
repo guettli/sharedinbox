@@ -128,7 +128,7 @@ def _write_dest_file(dest_dir, name, contents):
     writes — by the time we drop the marker. Re-creating it immediately before
     each write keeps the skip graceful instead of crashing with
     FileNotFoundError and filing a spurious "Firebase Tests failed" issue
-    (see #422, #424).
+    (see #422, #424, #428).
     """
     os.makedirs(dest_dir, exist_ok=True)
     with open(os.path.join(dest_dir, name), "w") as f:
@@ -221,9 +221,10 @@ def main():
         # directory may be gone — the long idle exec's ephemeral /tmp gets
         # reclaimed underneath us — so writing the marker crashes with
         # FileNotFoundError. That turns a benign Play-side delay into a red
-        # build and a spurious "Firebase Tests failed" issue (see #422, #424).
-        # ``_write_dest_file`` re-creates the directory before each write so
-        # the skip stays graceful even if /tmp is reclaimed again between them.
+        # build and a spurious "Firebase Tests failed" issue (see #422, #424,
+        # #428). ``_write_dest_file`` re-creates the directory before each
+        # write so the skip stays graceful even if /tmp is reclaimed again
+        # between them.
         _write_dest_file(dest_dir, "PENDING", f"{version_code}\n")
         _write_dest_file(dest_dir, "versionCode", f"{version_code}\n")
         print(version_code)
