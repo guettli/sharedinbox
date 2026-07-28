@@ -5,10 +5,12 @@
 #
 # Cron policy (see .github/workflows/firebase-tests.yml — controls cadence):
 #   1. Resolve the latest alpha versionCode and download its split APKs from
-#      Play. The fetch polls until Play has generated the split APKs. If Play
-#      has not finished within the poll budget, it drops a PENDING marker and
-#      we skip this cycle (see #414 — Play-side delay is not a red build).
-#      Every other failure (auth, network, Play API 5xx) still exits non-zero.
+#      Play. Each fetch attempt is a short-lived Dagger exec; we retry across
+#      fresh execs (see the loop below) until Play has generated the split
+#      APKs. If Play has not finished within the total budget, we skip this
+#      cycle (see #414 — Play-side delay is not a red build; #432 — why the
+#      wait no longer lives inside one long exec). Every other failure (auth,
+#      network, Play API 5xx) still exits non-zero.
 #   2. Run Firebase Test Lab against the fetched APKs.
 #   3. On success, record the versionCode in LAST_TESTED_ALPHA_VERSION_CODE
 #      so callers can tell which alpha was last exercised green. Written
@@ -119,17 +121,32 @@ PYEOF
 # === Step 1: fetch the latest alpha APK set =====================================
 
 echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&2
-# The Dagger function writes <dest>/versionCode and the APKs on success, and
-# fails loudly (non-zero exit) when Play never finishes generating the split
-# APKs. No fallback to older bundles — the next cron tick will retry.
+# Play-side split APK generation is asynchronous and can take from minutes to
+# well over an hour after an AAB upload (see #402, #409). We used to poll for
+# that whole window *inside a single Dagger exec*. That exec then sat idle for
+# up to 90 minutes — long enough for the Dagger/buildkit engine to
+# garbage-collect its snapshot, so the in-container marker writes died with
+# FileNotFoundError and, decisively, `Directory.export` failed with "commit
+# output … snapshot does not exist". A benign Play-side delay became a red
+# build and a spurious "Firebase Tests failed" issue (see #422, #424, #425,
+# #432), and no amount of Python-side dest-dir re-creation could fix it because
+# the export failure is at the buildkit layer.
 #
-# The outer timeout must exceed the Python script's internal poll budget
-# (`_POLL_TIMEOUT_SECONDS`, default 5400s in scripts/fetch_playstore_apks.py)
-# plus time to download the split APKs; otherwise a legitimate Play-side
-# generation delay is killed here with a bare "fetch failed" and the
-# script's clean TimeoutError is never surfaced (see #396, #398, #402, #409).
-FETCH_OUTER_TIMEOUT_SECONDS=5700
+# Instead, poll from HERE: each attempt is a short-lived Dagger fetch (the
+# Python script polls Play only briefly, then drops a PENDING marker), and we
+# retry across FRESH execs until Play catches up or the overall budget elapses.
+# No single exec idles long enough to be reclaimed. On the final give-up we
+# skip with a ::notice:: so the workflow stays green and no issue is filed —
+# the next scheduled cron tick retries.
+#
+# The per-attempt timeout must exceed the Python script's internal poll budget
+# (`_POLL_TIMEOUT_SECONDS`, default 300s in scripts/fetch_playstore_apks.py)
+# plus time to download the split APKs; otherwise a short Play-side delay is
+# killed here with a bare "fetch failed" (see #396, #398).
+FETCH_ATTEMPT_TIMEOUT_SECONDS=900
 FETCH_MIN_BUFFER_SECONDS=300
+FETCH_TOTAL_BUDGET_SECONDS=5400
+FETCH_RETRY_INTERVAL_SECONDS=60
 INTERNAL_POLL_SECONDS=$(python3 -c '
 import re, sys
 with open("scripts/fetch_playstore_apks.py") as f:
@@ -140,34 +157,51 @@ if [ -z "$INTERNAL_POLL_SECONDS" ]; then
     echo "ERROR: could not parse _POLL_TIMEOUT_SECONDS default from scripts/fetch_playstore_apks.py" >&2
     exit 1
 fi
-if [ "$FETCH_OUTER_TIMEOUT_SECONDS" -lt "$((INTERNAL_POLL_SECONDS + FETCH_MIN_BUFFER_SECONDS))" ]; then
-    echo "ERROR: outer fetch timeout ${FETCH_OUTER_TIMEOUT_SECONDS}s must exceed inner poll ${INTERNAL_POLL_SECONDS}s + ${FETCH_MIN_BUFFER_SECONDS}s buffer (see #396, #398)" >&2
+if [ "$FETCH_ATTEMPT_TIMEOUT_SECONDS" -lt "$((INTERNAL_POLL_SECONDS + FETCH_MIN_BUFFER_SECONDS))" ]; then
+    echo "ERROR: per-attempt fetch timeout ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s must exceed inner poll ${INTERNAL_POLL_SECONDS}s + ${FETCH_MIN_BUFFER_SECONDS}s buffer (see #396, #398)" >&2
     exit 1
 fi
-if ! timeout --kill-after=10 "$FETCH_OUTER_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
-        --play-store-config env:PLAY_STORE_CONFIG_JSON \
-        -o "$APK_DIR"; then
-    echo "ERROR: dagger fetch-play-store-apks failed" >&2
-    exit 1
-fi
-if [ ! -f "$APK_DIR/versionCode" ]; then
-    echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
-    exit 1
-fi
-VERSION_CODE=$(tr -d '[:space:]' < "$APK_DIR/versionCode")
-if [ -z "$VERSION_CODE" ]; then
-    echo "ERROR: $APK_DIR/versionCode is empty" >&2
-    exit 1
-fi
-# Play-side split APK generation is asynchronous and, in practice, can stall
-# for many hours (see #402, #414). The Python fetch drops a PENDING marker in
-# that case instead of erroring; skip the Firebase Test Lab attempt with a
-# ::notice:: so the workflow stays green and no failure issue is filed. The
-# next scheduled cron tick retries.
-if [ -f "$APK_DIR/PENDING" ]; then
-    echo "::notice::[firebase] skipping: Play has not yet generated split APKs for versionCode $VERSION_CODE (generation can take an hour or more after upload; next scheduled run will retry)" >&2
-    exit 0
-fi
+
+FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
+FETCH_ATTEMPT=0
+while :; do
+    FETCH_ATTEMPT=$((FETCH_ATTEMPT + 1))
+    # Start each attempt from a clean dest dir so a stale PENDING (or partial
+    # download) from a previous attempt can't be misread.
+    rm -rf "$APK_DIR"
+    mkdir -p "$APK_DIR"
+    # A distinct --cache-buster per attempt forces the Dagger fetch exec to
+    # re-run and re-check Play; otherwise the engine would serve the first
+    # attempt's cached PENDING directory and the retry loop would never make
+    # progress (see #432).
+    if ! timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+            --play-store-config env:PLAY_STORE_CONFIG_JSON \
+            --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+            -o "$APK_DIR"; then
+        echo "ERROR: dagger fetch-play-store-apks failed" >&2
+        exit 1
+    fi
+    if [ ! -f "$APK_DIR/versionCode" ]; then
+        echo "ERROR: $APK_DIR/versionCode missing after fetch" >&2
+        exit 1
+    fi
+    VERSION_CODE=$(tr -d '[:space:]' < "$APK_DIR/versionCode")
+    if [ -z "$VERSION_CODE" ]; then
+        echo "ERROR: $APK_DIR/versionCode is empty" >&2
+        exit 1
+    fi
+    # No PENDING marker means the split APKs were downloaded — proceed to test.
+    if [ ! -f "$APK_DIR/PENDING" ]; then
+        break
+    fi
+    NOW=$(date +%s)
+    if [ "$NOW" -ge "$FETCH_DEADLINE" ]; then
+        echo "::notice::[firebase] skipping: Play has not generated split APKs for versionCode $VERSION_CODE within ${FETCH_TOTAL_BUDGET_SECONDS}s (generation can take an hour or more after upload; next scheduled run will retry)" >&2
+        exit 0
+    fi
+    echo "[firebase] Play still generating split APKs for versionCode $VERSION_CODE; retrying in ${FETCH_RETRY_INTERVAL_SECONDS}s ($(( FETCH_DEADLINE - NOW ))s left)" >&2
+    sleep "$FETCH_RETRY_INTERVAL_SECONDS"
+done
 
 echo "[firebase] downloaded APKs for versionCode=$VERSION_CODE to $APK_DIR" >&2
 ls -1 "$APK_DIR" >&2

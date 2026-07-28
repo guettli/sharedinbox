@@ -19,8 +19,9 @@ jobs:
   test-android-firebase:
     name: Android Robo Crawl (Firebase Test Lab) — Play Store alpha
     runs-on: sharedinbox-arc
-    # Must exceed FETCH_OUTER_TIMEOUT_SECONDS (95 min in run_firebase_test.sh
-    # after #409) plus one Firebase Test Lab attempt (~40 min).
+    # Must exceed FETCH_TOTAL_BUDGET_SECONDS (90 min in run_firebase_test.sh —
+    # the wrapper polls Play across fresh short execs, see #432) plus one
+    # Firebase Test Lab attempt (~40 min).
     timeout-minutes: 150
     if: github.server_url == 'https://github.com'
     permissions:
