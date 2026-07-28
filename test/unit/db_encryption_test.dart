@@ -1,30 +1,9 @@
 import 'dart:io';
 
 import 'package:sharedinbox/core/storage/db_encryption.dart';
-import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:test/test.dart';
 
-/// In-memory SecureStorage stand-in for tests.
-class _FakeSecureStorage implements SecureStorage {
-  final Map<String, String> _data = {};
-
-  @override
-  Future<String?> read({required String key}) async => _data[key];
-
-  @override
-  Future<void> write({required String key, required String? value}) async {
-    if (value == null) {
-      _data.remove(key);
-      return;
-    }
-    _data[key] = value;
-  }
-
-  @override
-  Future<void> delete({required String key}) async {
-    _data.remove(key);
-  }
-}
+import 'helpers/fake_secure_storage.dart';
 
 void main() {
   group('generateDbCipherKeyHex', () {
@@ -43,7 +22,7 @@ void main() {
 
   group('cipher key storage', () {
     test('round-trip: write → read → delete', () async {
-      final storage = _FakeSecureStorage();
+      final storage = FakeSecureStorage();
       final key = generateDbCipherKeyHex();
 
       expect(await readDbCipherKey(storage), isNull);

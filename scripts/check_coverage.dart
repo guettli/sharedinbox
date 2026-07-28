@@ -48,7 +48,8 @@ const _excluded = <String, String>{
   'lib/data/db/database.dart':
       'Drift schema opened via path_provider + flutter_secure_storage plugins',
   'lib/data/db/db_encryption_migration.dart':
-      'sqlite3 sqlcipher_export + on-disk file rename (integration-tested)',
+      'sqlcipher_export path needs SQLCipher-linked sqlite3; pure-Dart '
+          'branches exercised by test/unit/db_encryption_migration_test.dart',
   'lib/data/imap/imap_client_factory.dart':
       'Opens a real IMAP TLS socket to a mail server',
   'lib/data/imap/managesieve_client.dart':
