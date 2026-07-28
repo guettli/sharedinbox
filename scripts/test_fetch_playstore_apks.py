@@ -268,6 +268,81 @@ class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
             )
 
 
+class TestWriteDestFile(unittest.TestCase):
+    """``_write_dest_file`` must (re)create the destination directory before
+    every write. The Play-still-generating skip idles for well over an hour and
+    the exec's ephemeral /tmp is reclaimed underneath it (see #422, #424), so a
+    plain ``open`` would crash with FileNotFoundError."""
+
+    def test_recreates_missing_dir_before_write(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "gone")  # never created
+            fetch_playstore_apks._write_dest_file(dest_dir, "PENDING", "7\n")
+            self.assertEqual(
+                (Path(dest_dir) / "PENDING").read_text().strip(), "7"
+            )
+
+
+class TestMainSkipSurvivesDirVanishingBeforeSecondWrite(unittest.TestCase):
+    """Regression for #424: the observed crash was the PENDING write failing
+    with FileNotFoundError after a 90-minute poll timed out and the exec's
+    ephemeral /tmp was reclaimed. #422 re-created the dir once at the top of the
+    skip; routing every write through ``_write_dest_file`` additionally keeps
+    the skip graceful if the dir is reclaimed *again* before the versionCode
+    write, so the whole skip never crashes with FileNotFoundError."""
+
+    def test_versioncode_write_survives_dir_removed_after_pending(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_timeout(*_args, **_kwargs):
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "424 within 5400s"
+                )
+
+            real_write = fetch_playstore_apks._write_dest_file
+            calls = []
+
+            def _maybe_vanish_then_write(dd, name, contents):
+                calls.append(name)
+                # After PENDING lands, simulate the reaper dropping dest_dir
+                # again before the versionCode write — the helper must recover.
+                if name == "versionCode":
+                    shutil.rmtree(dd, ignore_errors=True)
+                return real_write(dd, name, contents)
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=424
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_timeout,
+            ), patch(
+                "fetch_playstore_apks._write_dest_file",
+                side_effect=_maybe_vanish_then_write,
+            ):
+                # Must not raise even though dest_dir vanishes before the
+                # versionCode write.
+                fetch_playstore_apks.main()
+
+            self.assertEqual(calls, ["PENDING", "versionCode"])
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "424"
+            )
+
+
 class TestEnumerateDownloads(unittest.TestCase):
     def test_master_split_named_base_master(self):
         listing = {
