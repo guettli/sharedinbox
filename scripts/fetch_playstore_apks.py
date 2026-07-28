@@ -217,6 +217,16 @@ def main():
 
     downloads = _enumerate_downloads(listing)
 
+    # The poll above can run for well over an hour (see #409, #411, #422). By
+    # the time it returns a listing the directory created at startup may be
+    # gone — the long idle exec's ephemeral /tmp gets reclaimed underneath us —
+    # so the first _download() (or the versionCode write below) would crash
+    # with FileNotFoundError. Unlike the timeout skip that only drops a marker,
+    # this path is a hard failure with no PENDING marker, so the crash turns a
+    # transient reclaim into a red build and a spurious "Firebase Tests failed"
+    # issue (see #425). Re-create the directory so the download stays graceful.
+    os.makedirs(dest_dir, exist_ok=True)
+
     for download_id, name in downloads:
         dest = os.path.join(dest_dir, name)
         print(f"Downloading {name}…", file=sys.stderr)
