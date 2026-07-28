@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for fetch_playstore_apks.py."""
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -212,6 +213,58 @@ class TestMainWritesPendingMarkerWhenPlayNotReady(unittest.TestCase):
             self.assertFalse(
                 (Path(dest_dir) / "PENDING").is_file(),
                 "PENDING marker must not be written for non-timeout errors",
+            )
+
+
+class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
+    """Regression for #422: the poll can run for well over an hour, and by the
+    time it times out ``dest_dir`` may have been reclaimed underneath the long
+    idle exec. Writing the PENDING marker then crashed with FileNotFoundError,
+    turning a benign Play-side delay into a red build. The skip must re-create
+    the directory so it stays graceful and still exits 0."""
+
+    def test_recreates_dest_dir_before_writing_marker(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Simulate dest_dir disappearing during the long poll.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "321 within 5400s"
+                )
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=321
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ):
+                # Must not raise — the skip re-creates dest_dir.
+                fetch_playstore_apks.main()
+
+            pending = Path(dest_dir) / "PENDING"
+            self.assertTrue(
+                pending.is_file(),
+                "PENDING marker must be written even if dest_dir vanished "
+                "during the poll",
+            )
+            self.assertEqual(pending.read_text().strip(), "321")
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "321"
             )
 
 

@@ -200,6 +200,14 @@ def main():
         # to retry. Any other error (auth, network, Play API 5xx) still
         # propagates and fails loudly.
         print(f"[fetch_playstore_apks] {exc}", file=sys.stderr)
+        # ``dest_dir`` was created at startup, but the poll above can run for
+        # well over an hour (see #409, #411). By the time it gives up the
+        # directory may be gone — the long idle exec's ephemeral /tmp gets
+        # reclaimed underneath us — so writing the marker crashes with
+        # FileNotFoundError. That turns a benign Play-side delay into a red
+        # build and a spurious "Firebase Tests failed" issue (see #422).
+        # Re-create the directory so the skip stays graceful.
+        os.makedirs(dest_dir, exist_ok=True)
         with open(os.path.join(dest_dir, "PENDING"), "w") as f:
             f.write(f"{version_code}\n")
         with open(os.path.join(dest_dir, "versionCode"), "w") as f:
