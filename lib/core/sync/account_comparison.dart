@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 // [Email] and [MailboxRow] are already part of this file's public API (they
@@ -216,10 +217,14 @@ class AccountComparison {
     final emailsA = await _emailsIn(a.accountId, a.path);
     final emailsB = await _emailsIn(b.accountId, b.path);
 
+    // Normalise the Message-ID before keying: legacy IMAP rows written prior
+    // to the `_cleanMessageId` fix (#143) still carry the RFC 5322 `<...>`
+    // brackets in the DB, whereas JMAP rows have always stored them without.
+    // Without this join, the same message shows up as two separate diffs.
     final byMessageIdA = <String, Email>{};
     for (final e in emailsA) {
-      final mid = e.messageId;
-      if (mid == null || mid.isEmpty) {
+      final mid = normaliseMessageId(e.messageId);
+      if (mid == null) {
         unmatchable.add(
           UnmatchableEmail(
             side: ComparisonSide.a,
@@ -234,8 +239,8 @@ class AccountComparison {
 
     final byMessageIdB = <String, Email>{};
     for (final e in emailsB) {
-      final mid = e.messageId;
-      if (mid == null || mid.isEmpty) {
+      final mid = normaliseMessageId(e.messageId);
+      if (mid == null) {
         unmatchable.add(
           UnmatchableEmail(
             side: ComparisonSide.b,
@@ -253,12 +258,15 @@ class AccountComparison {
       final mid = entry.key;
       final ea = entry.value;
       final eb = remainingB.remove(mid);
+      // Surface the raw stored id so callers see whatever's actually in the
+      // DB; the v49 migration eventually rewrites legacy IMAP rows to the
+      // canonical bracket-less form, at which point both sides match here.
       if (eb == null) {
         emailDiffs.add(
           EmailDiff(
             kind: EmailDiffKind.missingInB,
             mailboxKey: mailboxKey,
-            messageId: mid,
+            messageId: ea.messageId!,
             a: ea,
             b: null,
           ),
@@ -283,7 +291,7 @@ class AccountComparison {
           EmailDiff(
             kind: EmailDiffKind.fieldMismatch,
             mailboxKey: mailboxKey,
-            messageId: mid,
+            messageId: ea.messageId!,
             a: ea,
             b: eb,
             fields: mismatches,
@@ -291,7 +299,7 @@ class AccountComparison {
         );
       }
 
-      final body = await _diffBodies(mid, ea, eb);
+      final body = await _diffBodies(ea.messageId!, ea, eb);
       if (body != null) bodyDiffs.add(body);
     }
     for (final eb in remainingB.values) {

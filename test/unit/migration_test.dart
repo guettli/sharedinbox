@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 48);
+      expect(db.schemaVersion, 49);
       await db.close();
     });
 
@@ -1000,6 +1000,126 @@ void main() {
       expect(rows, hasLength(1));
       expect(rows.first.mailboxPath, 'a');
       expect(rows.first.mailboxName, isNull);
+
+      await db.close();
+      if (dbFile.existsSync()) dbFile.deleteSync();
+    });
+
+    // #406: legacy IMAP rows written before commit 6db1f31 still store
+    // Message-ID / In-Reply-To / References with the RFC 5322 `<...>`
+    // brackets. The v49 migration strips them so they compare cleanly against
+    // JMAP rows, which have always been bracket-less (RFC 8621 §4.1.2.3).
+    test('v48→v49: strips angle brackets from legacy message-id columns',
+        () async {
+      final dbFile = File('test_migration_v48_to_v49.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        CREATE TABLE accounts (
+          id TEXT NOT NULL PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          imap_host TEXT NOT NULL DEFAULT '',
+          imap_port INTEGER NOT NULL DEFAULT 993,
+          imap_ssl INTEGER NOT NULL DEFAULT 1,
+          smtp_host TEXT NOT NULL DEFAULT '',
+          smtp_port INTEGER NOT NULL DEFAULT 465,
+          smtp_ssl INTEGER NOT NULL DEFAULT 1,
+          account_type TEXT NOT NULL DEFAULT 'imap',
+          jmap_url TEXT NULL,
+          username TEXT NOT NULL DEFAULT '',
+          verbose INTEGER NOT NULL DEFAULT 0,
+          manage_sieve_host TEXT NOT NULL DEFAULT '',
+          manage_sieve_port INTEGER NOT NULL DEFAULT 4190,
+          manage_sieve_ssl INTEGER NOT NULL DEFAULT 1,
+          manage_sieve_available INTEGER NULL
+        )
+      ''');
+      // Emails schema mirrors the v48 shape (post-v41 wide format).
+      rawDb.execute('''
+        CREATE TABLE emails (
+          id TEXT NOT NULL PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+          mailbox_path TEXT NOT NULL,
+          uid INTEGER NOT NULL,
+          subject TEXT NULL,
+          sent_at INTEGER NULL,
+          received_at INTEGER NOT NULL,
+          from_json TEXT NOT NULL DEFAULT '[]',
+          to_addresses TEXT NOT NULL DEFAULT '[]',
+          cc_json TEXT NOT NULL DEFAULT '[]',
+          preview TEXT NULL,
+          is_seen INTEGER NOT NULL DEFAULT 0,
+          is_flagged INTEGER NOT NULL DEFAULT 0,
+          has_attachment INTEGER NOT NULL DEFAULT 0,
+          thread_id TEXT NULL,
+          message_id TEXT NULL,
+          in_reply_to TEXT NULL,
+          "references" TEXT NULL,
+          snoozed_until INTEGER NULL,
+          snoozed_from_mailbox_path TEXT NULL,
+          list_unsubscribe_header TEXT NULL
+        )
+      ''');
+      // email_bodies (created at v9) is referenced by the v48 migration when
+      // it lands on this schema, but it doesn't need any rows for our test.
+      rawDb.execute('''
+        CREATE TABLE email_bodies (
+          email_id TEXT NOT NULL PRIMARY KEY REFERENCES emails (id) ON DELETE CASCADE,
+          text_body TEXT NULL,
+          html_body TEXT NULL,
+          attachments_json TEXT NOT NULL DEFAULT '[]',
+          cached_at INTEGER NULL,
+          headers_json TEXT NULL,
+          mime_tree_json TEXT NULL
+        )
+      ''');
+
+      rawDb.execute(
+        "INSERT INTO accounts (id, display_name, email) VALUES ('acc-1', 'Alice', 'alice@example.com')",
+      );
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      // 1. Row with bracketed ids in all three columns — must be stripped.
+      rawDb.execute(
+        'INSERT INTO emails '
+        '(id, account_id, mailbox_path, uid, received_at, message_id, in_reply_to, "references") '
+        "VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, $now, '<a1@example.com>', '<parent@example.com>', '<r1@example.com> <r2@example.com>')",
+      );
+      // 2. Row with already-clean ids — must be left untouched.
+      rawDb.execute(
+        'INSERT INTO emails '
+        '(id, account_id, mailbox_path, uid, received_at, message_id, in_reply_to, "references") '
+        "VALUES ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, $now, 'clean@example.com', NULL, NULL)",
+      );
+      // 3. Row with mixed bracketed / bracket-less references tokens.
+      rawDb.execute(
+        'INSERT INTO emails '
+        '(id, account_id, mailbox_path, uid, received_at, message_id, "references") '
+        "VALUES ('acc-1:INBOX:3', 'acc-1', 'INBOX', 3, $now, 'clean@example.com', '<a@x> b@y <c@z>')",
+      );
+
+      rawDb.execute('PRAGMA user_version = 48');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      await db.select(db.accounts).get();
+
+      final rows = await db.select(db.emails).get();
+      final byId = {for (final r in rows) r.id: r};
+
+      expect(byId['acc-1:INBOX:1']?.messageId, 'a1@example.com');
+      expect(byId['acc-1:INBOX:1']?.inReplyTo, 'parent@example.com');
+      expect(
+        byId['acc-1:INBOX:1']?.references,
+        'r1@example.com r2@example.com',
+      );
+
+      expect(byId['acc-1:INBOX:2']?.messageId, 'clean@example.com');
+      expect(byId['acc-1:INBOX:2']?.inReplyTo, isNull);
+      expect(byId['acc-1:INBOX:2']?.references, isNull);
+
+      expect(byId['acc-1:INBOX:3']?.references, 'a@x b@y c@z');
 
       await db.close();
       if (dbFile.existsSync()) dbFile.deleteSync();
