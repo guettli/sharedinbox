@@ -119,6 +119,22 @@ def _poll_generated_apks(session, package, version_code):
         time.sleep(sleep_for)
 
 
+def _write_dest_file(dest_dir, name, contents):
+    """Write ``contents`` to ``<dest_dir>/<name>``, (re)creating ``dest_dir``.
+
+    The Play-still-generating skip can idle for well over an hour (see #409,
+    #411) and the long exec's ephemeral ``/tmp`` gets reclaimed underneath us,
+    so ``dest_dir`` may be gone — or vanish *again* between two consecutive
+    writes — by the time we drop the marker. Re-creating it immediately before
+    each write keeps the skip graceful instead of crashing with
+    FileNotFoundError and filing a spurious "Firebase Tests failed" issue
+    (see #422, #424).
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    with open(os.path.join(dest_dir, name), "w") as f:
+        f.write(contents)
+
+
 def _download(session, package, version_code, download_id, dest):
     url = (
         f"{_BASE}/{package}/generatedApks/{version_code}"
@@ -205,13 +221,11 @@ def main():
         # directory may be gone — the long idle exec's ephemeral /tmp gets
         # reclaimed underneath us — so writing the marker crashes with
         # FileNotFoundError. That turns a benign Play-side delay into a red
-        # build and a spurious "Firebase Tests failed" issue (see #422).
-        # Re-create the directory so the skip stays graceful.
-        os.makedirs(dest_dir, exist_ok=True)
-        with open(os.path.join(dest_dir, "PENDING"), "w") as f:
-            f.write(f"{version_code}\n")
-        with open(os.path.join(dest_dir, "versionCode"), "w") as f:
-            f.write(f"{version_code}\n")
+        # build and a spurious "Firebase Tests failed" issue (see #422, #424).
+        # ``_write_dest_file`` re-creates the directory before each write so
+        # the skip stays graceful even if /tmp is reclaimed again between them.
+        _write_dest_file(dest_dir, "PENDING", f"{version_code}\n")
+        _write_dest_file(dest_dir, "versionCode", f"{version_code}\n")
         print(version_code)
         return
 
@@ -225,8 +239,7 @@ def main():
     # Also persist the versionCode next to the APKs so callers that cannot
     # capture stdout (e.g. `dagger call --progress=plain ... -o <dir>`) can
     # still recover it.
-    with open(os.path.join(dest_dir, "versionCode"), "w") as f:
-        f.write(f"{version_code}\n")
+    _write_dest_file(dest_dir, "versionCode", f"{version_code}\n")
 
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)
