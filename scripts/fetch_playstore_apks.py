@@ -34,11 +34,11 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 
 # How long to poll for Play to finish generating split APKs before failing.
 # Generation typically takes minutes but occasionally an hour or more after an
-# AAB upload (see #402); the caller's workflow-level timeout is the hard cap.
-# The outer bash wrapper (scripts/run_firebase_test.sh) and workflow
+# AAB upload (see #402, #409); the caller's workflow-level timeout is the
+# hard cap. The outer bash wrapper (scripts/run_firebase_test.sh) and workflow
 # timeout-minutes must be kept ≥ this + margin — see the guard there.
 # Overridable via env vars for testing.
-_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "3600"))
+_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "5400"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
 
@@ -117,6 +117,22 @@ def _poll_generated_apks(session, package, version_code):
             file=sys.stderr,
         )
         time.sleep(sleep_for)
+
+
+def _write_dest_file(dest_dir, name, contents):
+    """Write ``contents`` to ``<dest_dir>/<name>``, (re)creating ``dest_dir``.
+
+    The Play-still-generating skip can idle for well over an hour (see #409,
+    #411) and the long exec's ephemeral ``/tmp`` gets reclaimed underneath us,
+    so ``dest_dir`` may be gone — or vanish *again* between two consecutive
+    writes — by the time we drop the marker. Re-creating it immediately before
+    each write keeps the skip graceful instead of crashing with
+    FileNotFoundError and filing a spurious "Firebase Tests failed" issue
+    (see #422, #424).
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    with open(os.path.join(dest_dir, name), "w") as f:
+        f.write(contents)
 
 
 def _download(session, package, version_code, download_id, dest):
@@ -200,14 +216,30 @@ def main():
         # to retry. Any other error (auth, network, Play API 5xx) still
         # propagates and fails loudly.
         print(f"[fetch_playstore_apks] {exc}", file=sys.stderr)
-        with open(os.path.join(dest_dir, "PENDING"), "w") as f:
-            f.write(f"{version_code}\n")
-        with open(os.path.join(dest_dir, "versionCode"), "w") as f:
-            f.write(f"{version_code}\n")
+        # ``dest_dir`` was created at startup, but the poll above can run for
+        # well over an hour (see #409, #411). By the time it gives up the
+        # directory may be gone — the long idle exec's ephemeral /tmp gets
+        # reclaimed underneath us — so writing the marker crashes with
+        # FileNotFoundError. That turns a benign Play-side delay into a red
+        # build and a spurious "Firebase Tests failed" issue (see #422, #424).
+        # ``_write_dest_file`` re-creates the directory before each write so
+        # the skip stays graceful even if /tmp is reclaimed again between them.
+        _write_dest_file(dest_dir, "PENDING", f"{version_code}\n")
+        _write_dest_file(dest_dir, "versionCode", f"{version_code}\n")
         print(version_code)
         return
 
     downloads = _enumerate_downloads(listing)
+
+    # The poll above can run for well over an hour (see #409, #411, #422). By
+    # the time it returns a listing the directory created at startup may be
+    # gone — the long idle exec's ephemeral /tmp gets reclaimed underneath us —
+    # so the first _download() (or the versionCode write below) would crash
+    # with FileNotFoundError. Unlike the timeout skip that only drops a marker,
+    # this path is a hard failure with no PENDING marker, so the crash turns a
+    # transient reclaim into a red build and a spurious "Firebase Tests failed"
+    # issue (see #425). Re-create the directory so the download stays graceful.
+    os.makedirs(dest_dir, exist_ok=True)
 
     for download_id, name in downloads:
         dest = os.path.join(dest_dir, name)
@@ -217,8 +249,7 @@ def main():
     # Also persist the versionCode next to the APKs so callers that cannot
     # capture stdout (e.g. `dagger call --progress=plain ... -o <dir>`) can
     # still recover it.
-    with open(os.path.join(dest_dir, "versionCode"), "w") as f:
-        f.write(f"{version_code}\n")
+    _write_dest_file(dest_dir, "versionCode", f"{version_code}\n")
 
     # versionCode on stdout so the caller can do VC=$(fetch_playstore_apks.py …)
     print(version_code)

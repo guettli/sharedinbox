@@ -26,6 +26,8 @@ import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/mail_header_decode.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -131,7 +133,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.latestDate)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.latestDate),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_threadRowToModel).toList());
@@ -148,7 +153,10 @@ class EmailRepositoryImpl implements EmailRepository {
     ]);
     query
       ..where(_db.mailboxes.role.equals('inbox'))
-      ..orderBy([OrderingTerm.desc(_db.threads.latestDate)])
+      ..orderBy([
+        OrderingTerm.desc(_db.threads.isFlagged),
+        OrderingTerm.desc(_db.threads.latestDate),
+      ])
       ..limit(limit);
     return query.watch().map(
           (rows) => rows
@@ -831,15 +839,22 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$mailboxPath:$uid';
-        final msgId = _cleanMessageId(envelope.messageId);
-        final inReplyTo = _cleanMessageId(envelope.inReplyTo);
-        final refs = _cleanReferences(msg.getHeaderValue('References'));
+        final msgId = normaliseMessageId(envelope.messageId);
+        final inReplyTo = normaliseMessageId(envelope.inReplyTo);
+        final refs = normaliseReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
+        // Re-decode Subject from the raw header enough_mail stashed on the
+        // message during envelope parsing (#418). `envelope.subject` uses
+        // MailCodec.decodeHeader, which leaves stray spaces around ü/ö/ä
+        // when adjacent encoded-words differ in charset case or are folded
+        // with a tab.
+        final subject =
+            decodeMailHeader(msg.getHeaderValue('Subject')) ?? envelope.subject;
         final threadId = _computeThreadId(
               messageId: msgId,
               inReplyTo: inReplyTo,
               references: refs,
-              subject: envelope.subject,
+              subject: subject,
               date: envelope.date,
             ) ??
             emailId;
@@ -865,7 +880,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 accountId: account.id,
                 mailboxPath: mailboxPath,
                 uid: uid,
-                subject: Value(envelope.subject),
+                subject: Value(subject),
                 sentAt: Value(envelope.date),
                 receivedAt: envelope.date ?? DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
@@ -1246,6 +1261,10 @@ class EmailRepositoryImpl implements EmailRepository {
     'threadId',
     'mailboxIds',
     'subject',
+    // Raw Subject header so we can re-decode client-side when the server's
+    // RFC 2047 decoding leaves stray spaces around encoded-word boundaries
+    // (see #418, and [decodeMailHeader]).
+    'header:Subject:asRaw',
     'sentAt',
     'receivedAt',
     'from',
@@ -1865,6 +1884,15 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       final jmapListUnsubscribe =
           (m['header:List-Unsubscribe:asText'] as String?)?.trim();
+      // Re-decode Subject from the raw header when the server exposes it, so
+      // we get the same defensive handling as the IMAP path (#418). Falls
+      // back to the server-decoded `subject` property when the raw header is
+      // absent (e.g. mail with no Subject at all, or servers that reject
+      // `header:*:asRaw`).
+      final rawSubjectHeader = m['header:Subject:asRaw'] as String?;
+      final subject = rawSubjectHeader != null
+          ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
+          : m['subject'] as String?;
 
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -1872,7 +1900,7 @@ class EmailRepositoryImpl implements EmailRepository {
               accountId: accountId,
               mailboxPath: mailboxPath,
               uid: 0, // not used for JMAP accounts
-              subject: Value(m['subject'] as String?),
+              subject: Value(subject),
               sentAt: Value(sentAt),
               receivedAt: receivedAt,
               fromJson: Value(from),
@@ -4188,9 +4216,11 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY e.received_at DESC LIMIT 50'
+            ' WHERE email_fts MATCH ? AND e.account_id = ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? ORDER BY e.received_at DESC LIMIT 50';
+            ' WHERE email_fts MATCH ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -4208,7 +4238,10 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
@@ -4239,7 +4272,7 @@ class EmailRepositoryImpl implements EmailRepository {
         ' JOIN emails e ON e.message_id = n.message_id'
         ' AND e.account_id = n.account_id'
         ' WHERE email_notes_fts MATCH ?$extraConditions'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
     final rows = await _db.customSelect(
       sql,
@@ -4262,7 +4295,10 @@ class EmailRepositoryImpl implements EmailRepository {
             if (accountId == null) return fe;
             return t.accountId.equals(accountId) & fe;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ])
           ..limit(100))
         .get();
     return rows.map(_toModel).toList();
@@ -4431,7 +4467,10 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return condition;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ]))
         .get();
     return rows.map(_toModel).toList();
   }
@@ -4520,7 +4559,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -4540,7 +4579,10 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
@@ -4552,24 +4594,6 @@ class EmailRepositoryImpl implements EmailRepository {
     if (list == null || list.isEmpty) return null;
     final joined = list.cast<String>().join(' ');
     return joined.isEmpty ? null : joined;
-  }
-
-  static String? _cleanMessageId(String? mid) {
-    if (mid == null) return null;
-    var s = mid.trim();
-    if (s.startsWith('<') && s.endsWith('>')) {
-      s = s.substring(1, s.length - 1);
-    }
-    return s.isEmpty ? null : s;
-  }
-
-  static String? _cleanReferences(String? refs) {
-    if (refs == null) return null;
-    final cleanTokens = refs
-        .split(RegExp(r'\s+'))
-        .map((t) => _cleanMessageId(t))
-        .whereType<String>();
-    return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
   }
 
   @visibleForTesting
