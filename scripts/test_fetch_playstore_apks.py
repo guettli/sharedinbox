@@ -36,6 +36,45 @@ class TestResolveVersionCode(unittest.TestCase):
             120,
         )
 
+    def test_ignores_draft_release_in_favor_of_served_one(self):
+        """Regression for #432: a draft release (never served, so Play never
+        generates its split APKs) with a higher versionCode must not shadow the
+        served release — otherwise the fetch polls forever and every run skips."""
+        session = self._session_with_releases(
+            [
+                {"versionCodes": ["120"], "status": "draft"},
+                {"versionCodes": ["110"], "status": "completed"},
+            ]
+        )
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            110,
+        )
+
+    def test_falls_back_to_raw_max_when_only_drafts(self):
+        """If every release is a draft we still surface the highest versionCode
+        (it skips via PENDING) rather than erroring — preserves prior behaviour
+        for that edge case."""
+        session = self._session_with_releases(
+            [
+                {"versionCodes": ["120"], "status": "draft"},
+                {"versionCodes": ["115"], "status": "draft"},
+            ]
+        )
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            120,
+        )
+
+    def test_absent_status_treated_as_served(self):
+        """A release with no ``status`` field must be treated as served so an
+        unexpected/omitted API value never silently drops a real release."""
+        session = self._session_with_releases([{"versionCodes": ["42"]}])
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            42,
+        )
+
     def test_raises_when_no_releases(self):
         session = self._session_with_releases([])
         with self.assertRaises(RuntimeError):
