@@ -82,7 +82,7 @@ dependencies:
   # Device connectivity change events (wifi / mobile / none). Used to trigger
   # an immediate outbox flush when the device comes back online (#353). Guarded
   # with try/catch so missing platform channels never break app startup.
-  connectivity_plus: ^6.1.0
+  connectivity_plus: ^7.0.0
 
   # Stack trace chain-to-VM conversion for FlutterError.demangleStackTrace
   stack_trace: ^1.12.1

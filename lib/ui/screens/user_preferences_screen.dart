@@ -257,7 +257,7 @@ class UserPreferencesScreen extends ConsumerWidget {
   }
 }
 
-/// Local-storage encryption toggle (issue #582).
+/// Local-storage encryption toggle (issue #330).
 ///
 /// Conversion between plaintext and SQLCipher requires exclusive access to
 /// the DB, so flipping the switch only stages a pending change — the actual
