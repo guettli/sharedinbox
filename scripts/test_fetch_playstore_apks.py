@@ -268,6 +268,68 @@ class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
             )
 
 
+class TestMainDownloadSurvivesMissingDestDir(unittest.TestCase):
+    """Regression for #425: the poll can run for well over an hour, and by the
+    time it returns a listing ``dest_dir`` may have been reclaimed underneath
+    the long idle exec. The download path (unlike the #422 PENDING skip) is a
+    hard failure with no marker, so a crash there turns a transient reclaim
+    into a red build and a spurious failure issue. main() must re-create the
+    directory so the download stays graceful."""
+
+    def test_recreates_dest_dir_before_downloading(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Simulate dest_dir disappearing during the long poll before
+                # Play finally returns a listing.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                return {"generatedApks": [{"key": "v"}]}
+
+            written = {}
+
+            def _fake_download(_session, _pkg, _vc, _dl_id, dest):
+                # Fails with FileNotFoundError if dest_dir was not re-created.
+                with open(dest, "wb") as out:
+                    out.write(b"apk")
+                written[os.path.basename(dest)] = True
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=555
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ), patch(
+                "fetch_playstore_apks._enumerate_downloads",
+                return_value=[("dl-1", "base-master.apk")],
+            ), patch(
+                "fetch_playstore_apks._download",
+                side_effect=_fake_download,
+            ):
+                # Must not raise — main() re-creates dest_dir before downloading.
+                fetch_playstore_apks.main()
+
+            self.assertTrue(
+                written.get("base-master.apk"),
+                "APK must be downloaded even if dest_dir vanished during poll",
+            )
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "555"
+            )
+
+
 class TestWriteDestFile(unittest.TestCase):
     """``_write_dest_file`` must (re)create the destination directory before
     every write. The Play-still-generating skip idles for well over an hour and
