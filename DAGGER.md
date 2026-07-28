@@ -105,6 +105,28 @@ the engine.
   Python that used to live in workflow YAML; the deploy-health label
   flip, the firebase failure-issue creator, and the changed-targets
   detector all run inside Dagger so the workflows stay declarative.
+
+### Deploy-health tracker setup
+
+The hourly `Deploy` workflow ends with a `label-deploy-health` job that
+flips `CI/Full-Pass` / `CI/Full-Fail` on a long-lived tracker issue. It
+fails loudly if any piece of the setup is missing, so a fresh fork or
+mirror needs three things wired up once:
+
+1. Two repository labels: `CI/Full-Pass` and `CI/Full-Fail`.
+2. A long-lived tracker issue (do not close it — closing it breaks the
+   labeler). Give it a descriptive title like "Deploy health tracker".
+3. A repository (or organisation) Actions variable
+   `DEPLOY_HEALTH_ISSUE` whose value is the tracker issue number.
+
+Verify locally with
+
+```sh
+DEPLOY_HEALTH_ISSUE=<n> GITHUB_TOKEN=$(gh auth token) \
+  GITHUB_API_URL=https://api.github.com \
+  GITHUB_REPOSITORY=<owner>/<repo> ALL_SUCCEEDED=true \
+  python3 scripts/update_deploy_health_label.py
+```
 - **Dev container:** `publish-dev-container` builds `Dockerfile.dev` and
   pushes both `:latest` and `:<short-sha>` to GHCR via `dag.Container().Build().Publish()`,
   replacing the `docker login` / `docker build` / `docker push` steps.
