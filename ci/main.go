@@ -1199,6 +1199,14 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 // google-auth / requests installed (matches the UploadToPlayStore pattern).
 func (m *Ci) FetchPlayStoreApks(
 	playStoreConfig *dagger.Secret,
+	// cacheBuster forces the fetch to re-run instead of returning a cached
+	// result. The wrapper (scripts/run_firebase_test.sh) now polls Play by
+	// retrying this fetch across fresh short execs and passes a distinct value
+	// per attempt, so each attempt actually re-checks Play for freshly
+	// generated split APKs — a cached PENDING directory would otherwise make
+	// the retry loop a silent no-op (see #432).
+	// +optional
+	cacheBuster string,
 ) *dagger.Directory {
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/fetch_playstore_apks.py"},
@@ -1210,6 +1218,8 @@ func (m *Ci) FetchPlayStoreApks(
 		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
 		WithFile("/src/scripts/fetch_playstore_apks.py", scriptSource.File("scripts/fetch_playstore_apks.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
+		// Changing env var busts the exec cache key so each retry re-runs.
+		WithEnvVariable("FETCH_CACHE_BUSTER", cacheBuster).
 		WithWorkdir("/src").
 		WithUser("nobody").
 		WithExec([]string{"/bin/sh", "-c",
