@@ -9,11 +9,13 @@ Play, not a debug build assembled from source. Auth comes from the same
 The resolved ``versionCode`` is printed to **stdout** (status messages go to
 stderr) so callers can capture it via ``$(…)``.
 
-When Play has not finished generating split APKs within the poll window, the
-script writes a ``PENDING`` marker file to ``<dest-dir>`` (alongside a
-``versionCode`` file) and exits 0. The wrapper reads the marker and skips
-the Firebase Test Lab run for that cycle — the next scheduled tick retries.
-Every other failure mode still exits non-zero so real problems stay visible.
+When Play has not finished generating split APKs within this attempt's short
+poll window, the script writes a ``PENDING`` marker file to ``<dest-dir>``
+(alongside a ``versionCode`` file) and exits 0. The wrapper
+(``scripts/run_firebase_test.sh``) reads the marker and retries the fetch —
+each attempt is a fresh, short-lived process so no single run idles long
+enough for the Dagger engine to reclaim its snapshot (see #432). Every other
+failure mode still exits non-zero so real problems stay visible.
 
 Usage::
 
@@ -32,23 +34,68 @@ PACKAGE_NAME = "de.sharedinbox.mua"
 TRACK = "alpha"
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 
-# How long to poll for Play to finish generating split APKs before failing.
-# Generation typically takes minutes but occasionally an hour or more after an
-# AAB upload (see #402, #409); the caller's workflow-level timeout is the
-# hard cap. The outer bash wrapper (scripts/run_firebase_test.sh) and workflow
-# timeout-minutes must be kept ≥ this + margin — see the guard there.
-# Overridable via env vars for testing.
-_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "5400"))
+# How long a *single* fetch attempt polls for Play to finish generating split
+# APKs before giving up and dropping a PENDING marker. Generation typically
+# takes minutes but occasionally an hour or more after an AAB upload (see #402,
+# #409). This is kept deliberately SHORT: the fetch runs inside a Dagger exec,
+# and an exec that idles for the full generation window is long enough for the
+# Dagger/buildkit engine to garbage-collect its snapshot — which made both the
+# marker writes (FileNotFoundError) and the final ``Directory.export`` ("commit
+# output … snapshot does not exist") fail, turning a benign Play-side delay
+# into a red build and a spurious "Firebase Tests failed" issue (see #422, #424,
+# #425, #432). The long-horizon waiting now lives in the bash wrapper
+# (scripts/run_firebase_test.sh), which retries this short fetch across *fresh*
+# execs until Play catches up, so no single exec idles long enough to be
+# reclaimed. The wrapper's per-attempt timeout must stay ≥ this + margin — see
+# the guard there. Overridable via env vars for testing.
+_POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "300"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
+
+# Play only generates downloadable split APKs for a release it is actually
+# serving. A "draft" release (uploaded but never rolled out) never gets a
+# generatedApks listing, so resolving to its versionCode makes every fetch poll
+# in vain and the Firebase run skip forever — exactly what kept alpha
+# versionCode 1785101151 stuck for days (see #432). We therefore ignore
+# definitively non-serving statuses when picking the versionCode. Only these
+# two are excluded; any other or absent status is treated as serving so an
+# unexpected API value never silently drops a real release.
+_NON_SERVING_RELEASE_STATUSES = frozenset({"draft", "statusUnspecified"})
+
+
+def _serves_apks(release):
+    """Whether Play serves downloadable APKs for ``release``.
+
+    Only a definitively non-serving status (``draft``, ``statusUnspecified``)
+    is excluded; any other or absent status is treated as serving so an
+    unexpected API value never silently drops a real release.
+    """
+    return release.get("status") not in _NON_SERVING_RELEASE_STATUSES
+
+
+def _highest_version_code(releases):
+    """Return the highest versionCode across ``releases``, or ``None``."""
+    best = None
+    for release in releases:
+        for code in release.get("versionCodes") or []:
+            n = int(code)
+            if best is None or n > best:
+                best = n
+    return best
 
 
 def _resolve_version_code(session, package, track):
-    """Return the highest versionCode currently published on ``track``.
+    """Return the highest *serving* versionCode currently published on ``track``.
 
     Track state is only exposed through the edits API; the non-edit
     ``applications/{package}/tracks/{track}`` URL returns 404 even when the
     track has a live release (see ``verify_playstore_deploy.py`` for the same
     pattern).
+
+    Releases Play is not serving (drafts) are skipped: Play never generates
+    downloadable split APKs for them, so picking one makes the fetch poll
+    forever (see #432). If no serving release exists we fall back to the raw
+    maximum so a served-but-genuinely-stuck version still surfaces (and skips
+    via PENDING) rather than erroring.
     """
     edit_resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
     edit_resp.raise_for_status()
@@ -64,12 +111,9 @@ def _resolve_version_code(session, package, track):
             session.delete(f"{_BASE}/{package}/edits/{edit_id}", timeout=30)
         except Exception:
             pass
-    best = None
-    for release in releases:
-        for code in release.get("versionCodes") or []:
-            n = int(code)
-            if best is None or n > best:
-                best = n
+    best = _highest_version_code(r for r in releases if _serves_apks(r))
+    if best is None:
+        best = _highest_version_code(releases)
     if best is None:
         raise RuntimeError(f"No releases found on track '{track}'")
     return best
