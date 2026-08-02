@@ -11,9 +11,26 @@ jobs:
     runs-on: sharedinbox-arc
     timeout-minutes: 30
     if: github.server_url == 'https://github.com'
+    env:
+      RENOVATE_APP_ID: ${{ secrets.RENOVATE_APP_ID }}
 
     steps:
       - uses: actions/checkout@v5
+
+      # Prefer a GitHub App installation token. It is minted fresh on every run
+      # so it can never expire (a personal access token silently does, which
+      # fails the platform init with "401 unauthorized" / "Authentication
+      # failure"), and unlike the workflow's own github.token it can trigger CI
+      # on the PRs Renovate opens, which auto-merge depends on. Skipped when the
+      # app is not configured, and non-fatal so a bad key falls back below.
+      - name: Generate GitHub App token
+        id: app-token
+        if: env.RENOVATE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
 
       - name: Setup Dagger Remote Engine
         env:
@@ -23,5 +40,5 @@ jobs:
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
-          GITHUB_TOKEN: ${{ secrets.RENOVATE_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.RENOVATE_TOKEN || github.token }}
         run: task renovate
