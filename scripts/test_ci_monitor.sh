@@ -28,8 +28,8 @@ _assert() {
 
 _assert "A: workspace permission" A "$(classify_failure 'Permission denied: /workspace')"
 _assert "A: EACCES on workspace" A "$(classify_failure 'open /workspace/foo: EACCES')"
-_assert "A: no matching runner" A "$(classify_failure 'job failed: no matching runner for label codeberg-runner')"
-_assert "A: runs-on not found" A "$(classify_failure 'runs-on: codeberg-runner not found in runner pool')"
+_assert "A: no matching runner" A "$(classify_failure 'job failed: no matching runner for label sharedinbox-arc')"
+_assert "A: runs-on not found" A "$(classify_failure 'runs-on: sharedinbox-arc not found in runner pool')"
 
 _assert "B: dagger no server response" B "$(classify_failure 'Error: No Dagger server responded within the timeout window')"
 _assert "B: dagger connection refused" B "$(classify_failure 'dial tcp 127.0.0.1:1774: dagger: connection refused')"
@@ -87,14 +87,14 @@ jobs:
 YAML
 
 # Diff applied: rc=0.
-patch_runs_on "$wf" "codeberg-runner"
+patch_runs_on "$wf" "sharedinbox-arc"
 rc=$?
 _assert "patch: rc=0 on change" 0 "$rc"
 _assert "patch: file contains new label" 1 \
-    "$(grep -c '^    runs-on: codeberg-runner$' "$wf")"
+    "$(grep -c '^    runs-on: sharedinbox-arc$' "$wf")"
 
 # No-op when already at the wanted label: rc=1.
-patch_runs_on "$wf" "codeberg-runner"
+patch_runs_on "$wf" "sharedinbox-arc"
 rc=$?
 _assert "patch: rc=1 on no-op" 1 "$rc"
 
@@ -148,7 +148,7 @@ else
     PASS=$((PASS + 1))
 fi
 
-__STUB_JSON='{"runners": [{"status":"offline","labels":[{"name":"codeberg-runner"}]}]}'
+__STUB_JSON='{"runners": [{"status":"offline","labels":[{"name":"sharedinbox-arc"}]}]}'
 __STUB_RC=0
 if discover_runner_label anything >/dev/null 2>&1; then
     echo "FAIL: discover: expected non-zero when all runners offline"
@@ -166,9 +166,9 @@ else
     PASS=$((PASS + 1))
 fi
 
-__STUB_JSON='{"runners": [{"status":"online","labels":[{"name":"self-hosted"},{"name":"codeberg-runner"}]}]}'
+__STUB_JSON='{"runners": [{"status":"online","labels":[{"name":"self-hosted"},{"name":"sharedinbox-arc"}]}]}'
 __STUB_RC=0
-_assert "discover: emits first non-generic label" "codeberg-runner" \
+_assert "discover: emits first non-generic label" "sharedinbox-arc" \
     "$(discover_runner_label anything 2>/dev/null)"
 
 echo ""

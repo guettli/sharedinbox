@@ -1,64 +1,63 @@
 # Dagger CI/CD Setup
 
-This project has migrated from Taskfile-based CI to **Dagger**. This document explains the infrastructure setup for the shared Dagger Server.
+This project has migrated from Taskfile-based CI to **Dagger**. This document
+explains where the Dagger engine lives, how CI reaches it, and where secrets
+come from.
 
 ## Architecture
 
-We use a **Shared Dagger Server** approach for both local development and CI. This allows multiple users to share a single Dagger Engine and its cache, significantly speeding up builds.
+CI and local development share a single **remote Dagger engine** running on a
+dedicated host. Sharing one engine (and its cache) across jobs is what makes
+builds fast; nothing runs a throwaway engine per job.
 
-- **Container Engine:** Rootless Podman (managed by the `dagger-svc` user).
-- **Orchestration:** System-wide `systemd` service.
-- **Access:** Users connect via TCP (localhost) or Unix Socket.
+- **Engine:** a system-wide `dagger-engine` systemd unit reading its config
+  from `/etc/dagger/engine.json`. It is **not** managed from this repo — the
+  unit, its config, and the pinned engine version are provisioned by Ansible in
+  the gitops repo (`ansible/p16.yml`). Treat that playbook as the source of
+  truth; do not duplicate its content here.
+- **Access:** clients reach the engine over an SSH tunnel to its Unix socket
+  (`/run/dagger/engine.sock`) and point Dagger at it via
+  `_EXPERIMENTAL_DAGGER_RUNNER_HOST`. See
+  [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh).
 
-## Server Setup (Admin)
+### Version pinning
 
-### 1. Dedicated Service User
-A dedicated user `dagger-svc` owns the Dagger Engine and its cache.
+The engine version is kept in lockstep with the two Dagger CLIs that talk to it
+(the `sharedinbox-arc` runner image and the local dev container). The engine
+runs `github:dagger/nix/v0.21.7#dagger` (pinned in `ansible/p16.yml`); the CLIs
+are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
+`scripts/check_dagger_versions.sh` enforces that all three agree — the CLI and
+engine must be the exact same version, there is no fallback when they differ
+(the tunnel authenticates but the protocol handshake fails). Bumping the engine
+means bumping `ansible/p16.yml` in gitops and restarting `dagger-engine`.
 
-```bash
-sudo useradd -m -s /bin/bash dagger-svc
-sudo loginctl enable-linger dagger-svc
+## CI path
+
+Every workflow pins `runs-on: sharedinbox-arc`. Each job's first Dagger step is
+[`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh), which opens
+the SSH tunnel to the remote engine and exports
+`_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080` for the steps that
+follow (see `.github/workflows/ci.yml`).
+
+```
+sharedinbox-arc runner → scripts/setup_dagger_remote.sh → remote dagger-engine
 ```
 
-**Why Lingering?**
-Lingering is required for rootless users to maintain a persistent background session. It ensures that `/run/user/<UID>` and the user-level Dagger/Podman namespaces are initialized at boot and remain active even when the user is not logged in.
+**A local engine inside the runner is not supported.** The runner executes in a
+dind wedge where a co-located engine wedges too, which is the whole reason the
+remote setup exists. The script fails loudly rather than falling back to a local
+engine: if it ever runs somewhere without a route to the engine host, the tunnel
+must error out instead of silently degrading.
 
-### 2. Systemd Service
-The engine is managed by a system-wide systemd service located at `/etc/systemd/system/dagger-engine.service`.
+## Local development
 
-```ini
-[Unit]
-Description=Dagger Engine (Shared Server)
-After=network.target
+Local development uses the same remote engine, not a local one. With
+`SOPS_AGE_KEY` set, running
+[`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh) establishes
+the SSH tunnel and exports `_EXPERIMENTAL_DAGGER_RUNNER_HOST` exactly as CI does.
 
-[Service]
-Type=simple
-User=dagger-svc
-Group=dagger-svc
-WorkingDirectory=/home/dagger-svc
-# Replace 1003 with the actual UID of dagger-svc
-Environment=DOCKER_HOST=unix:///run/user/1003/podman/podman.sock
-Environment=XDG_RUNTIME_DIR=/run/user/1003
-ExecStart=/usr/bin/nix run github:dagger/nix/v0.21.7#dagger -- engine --addr tcp://0.0.0.0:8080
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-## Client Configuration
-
-To connect to the shared engine, users should set the `_DAGGER_RUNNER_HOST` environment variable.
-
-### Local Development (.env)
-The project uses a `.env` file to manage the connection string. Ensure your `.env` contains:
-
-```bash
-_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080
-```
-
-### Usage
-Once the environment is set up, you can run the Dagger pipeline. For non-interactive environments (CI, LLMs), use `--progress=plain` for readable logs:
+Once connected, run the pipeline. For non-interactive environments (CI, LLMs)
+use `--progress=plain` for readable logs:
 
 ```bash
 nix develop --command dagger call --progress=plain -q -m ci --source=. check
@@ -66,8 +65,25 @@ nix develop --command dagger call --progress=plain -q -m ci --source=. check
 
 ## Secrets
 
-All sensitive credentials are passed as `dagger.Secret` (never as plain strings).
-This prevents values from appearing in Dagger logs or being cached in the engine.
+CI holds exactly **one** GitHub Actions secret: `SOPS_AGE_KEY`. Everything else
+lives SOPS-encrypted in `secrets.enc.yaml` in this repo.
+[`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh) decrypts that
+file with the age key at the start of each job and exports the individual
+secrets to `$GITHUB_ENV` (registering each for log redaction) so later steps can
+use them without touching the SOPS store directly. The engine's own SSH access
+credentials (`DAGGER_SSH_KEY`, `DAGGER_ENGINE_HOST`) are decrypted the same way.
+
+The secrets carried in `secrets.enc.yaml` include the SSH deploy credentials
+(`SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`, `SSH_USER`, `SSH_HOST`,
+`WEBSITE_SSH_HOST`), the Android signing material
+(`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`), the Play Store service
+account (`PLAY_STORE_CONFIG_JSON`), the Firebase Test Lab service account
+(`FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY`), and the tokens used by the pipeline
+(`GITHUB_TOKEN`, `AGENTLOOP_OTEL_TOKEN`).
+
+Inside the Dagger module all sensitive credentials are passed as `dagger.Secret`
+(never as plain strings), so values never appear in Dagger logs or get cached in
+the engine.
 
 | Parameter | Functions |
 |---|---|
@@ -97,8 +113,7 @@ the engine.
 - **Check Suite:** Runs analysis and tests in parallel (`check`).
 - **Builds:** Produces Linux and Android artifacts (`deploy-linux`,
   `deploy-apk`, `publish-android`).
-- **Caching:** When using the shared engine, CI runners benefit from the
-  persistent cache on the host.
+- **Caching:** All jobs share the persistent cache on the remote engine host.
 - **GitHub-API helpers:** `print-runner-wait`, `changed-targets`,
   `update-deploy-health-label`, `create-firebase-failure-issue`,
   `verify-play-store-deploy`, and `website-verify` replace the inline
@@ -130,93 +145,3 @@ DEPLOY_HEALTH_ISSUE=<n> GITHUB_TOKEN=$(gh auth token) \
 - **Dev container:** `publish-dev-container` builds `Dockerfile.dev` and
   pushes both `:latest` and `:<short-sha>` to GHCR via `dag.Container().Build().Publish()`,
   replacing the `docker login` / `docker build` / `docker push` steps.
-
-## Credential Security — Keeping Production Secrets Off Codeberg
-
-### Problem
-
-The current setup stores two categories of secrets in Codeberg repository secrets:
-
-1. **Dagger access credentials** — TLS certificates used to connect to the remote Dagger engine via stunnel (`DAGGER_CA_CERT`, `DAGGER_CLIENT_CERT`, `DAGGER_CLIENT_KEY`, `DAGGER_STUNNEL_URL`).
-2. **Production secrets** — actual credentials for external services: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `PLAY_STORE_CONFIG_JSON`, `SSH_PRIVATE_KEY`, `FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY`.
-
-If Codeberg is compromised, both categories are leaked. The Dagger TLS certificates enable access only to the Dagger engine and have limited blast radius. But the production secrets give direct access to the Play Store, the Android signing key, the deployment server, and Firebase — a much larger blast radius.
-
-**Goal:** Keep only Dagger access credentials in Codeberg. Store all production secrets on the Dagger host machine so they never touch Codeberg.
-
-### Option 1: Runner-level environment variables
-
-Store production secrets as environment variables in the self-hosted runner's systemd service (e.g., via a `EnvironmentFile=` in the service override). The runner injects host env vars into job processes automatically. CI workflows drop the `${{ secrets.XYZ }}` references for production secrets entirely — the variables are already present in the job environment.
-
-**Pro:**
-- No new infrastructure required.
-- Works with the existing `dagger call --progress=plain --secret env:VAR_NAME` argument style.
-- Secrets never enter Codeberg.
-- Straightforward to set up on a single self-hosted runner.
-
-**Con:**
-- Env vars are visible to every process on the runner host (e.g., via `/proc/<pid>/environ`).
-- Rotating a secret requires host access (no API).
-- Does not scale cleanly to multiple runners without a shared secrets mechanism.
-
-### Option 2: Secret files on the CI host with restricted permissions
-
-Store production secrets as files owned by the runner user with mode `600` (e.g., `/home/actions-runner/secrets/play_store.json`). A small setup script reads the files and either exports them as env vars or passes them directly as file-type arguments to `dagger call --progress=plain`. CI workflows contain no secret references at all.
-
-**Pro:**
-- OS-level file permissions limit access to the runner user.
-- Natural format for JSON payloads and key files.
-- Easy to audit (list files, check mtime).
-- No new infrastructure.
-
-**Con:**
-- Plaintext files on disk; root or backup access exposes them.
-- Workflow must know file paths (either hardcoded or by convention).
-- Rotation still requires host filesystem access.
-
-### Option 3: Dagger host as pipeline orchestrator
-
-Instead of the CI runner invoking the Dagger CLI directly, the CI job sends a trigger to the Dagger host over SSH. The Dagger host runs the pipeline locally against its own environment, where secrets live as env vars or files. Codeberg only stores the SSH key to reach the Dagger host — not the production secrets.
-
-```yaml
-# CI job only does this:
-- name: Trigger pipeline on Dagger host
-  run: ssh dagger-host "cd sharedinbox && task publish-android"
-  env:
-    SSH_PRIVATE_KEY: ${{ secrets.DAGGER_TRIGGER_SSH_KEY }}
-```
-
-**Pro:**
-- Production secrets never leave the Dagger host.
-- Codeberg stores exactly one secret: the trigger SSH key.
-- All deployment logic and secrets are fully contained on the host.
-
-**Con:**
-- Harder to stream structured CI logs back to Codeberg Actions.
-- Dynamic context (commit SHA, PR branch) must be passed explicitly over SSH.
-- The trigger SSH key still grants shell access to the host, so its compromise has its own blast radius.
-- CI becomes a "fire-and-forget" call, making failure attribution harder.
-
-### Option 4: External secret manager (e.g., HashiCorp Vault)
-
-Run a secret manager co-located with the Dagger host. The CI job authenticates with a short-lived AppRole credential (stored in Codeberg) and retrieves secrets at runtime. Vault can also be configured with IP-allow-lists to further restrict who can authenticate.
-
-**Pro:**
-- Full audit trail: every secret read is logged with a timestamp and caller identity.
-- Fine-grained access control per secret.
-- Built-in versioning and rotation support.
-- Industry-standard approach; scales to team or multi-runner setups.
-
-**Con:**
-- Significant additional infrastructure to install, configure, and maintain.
-- Vault credentials (RoleID + SecretID) still need to be in Codeberg, though with a smaller blast radius than raw secrets.
-- Vault itself becomes a security-critical single point of failure.
-- Operational overhead likely disproportionate for a small single-developer project.
-
-### Recommendation
-
-**Option 1** (runner-level env vars) or **Option 2** (secret files) are the pragmatic starting point for a single self-hosted runner. They require no new infrastructure and move all production secrets off Codeberg immediately.
-
-**Option 3** (Dagger host as orchestrator) is worth considering once the trigger SSH key replaces all other secrets in Codeberg — it offers the cleanest security boundary at the cost of reduced CI observability.
-
-**Option 4** (Vault) becomes worthwhile if the project grows to multiple runners or team members who each need audited access to deploy credentials.
