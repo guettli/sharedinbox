@@ -3788,6 +3788,126 @@ void main() {
     });
 
     test(
+      'destroys the created Sent copy when EmailSubmission/set fails',
+      () async {
+        // When the server refuses the submission, the email created in the
+        // Sent mailbox beforehand must be destroyed so a message that was
+        // never actually sent does not linger in the Sent folder.
+        final emailSetBodies = <Map<String, dynamic>>[];
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {
+                  'urn:ietf:params:jmap:core': {},
+                  'urn:ietf:params:jmap:mail': {},
+                  'urn:ietf:params:jmap:submission': {},
+                },
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          if (req.body.contains('Identity/get')) {
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Identity/get',
+                    {
+                      'accountId': 'acct1',
+                      'state': 'id1',
+                      'list': [
+                        {'id': 'identity1', 'email': 'alice@example.com'},
+                      ],
+                    },
+                    'i',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
+          if (req.body.contains('Email/set')) {
+            emailSetBodies.add(jsonDecode(req.body) as Map<String, dynamic>);
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Email/set',
+                    {
+                      'accountId': 'acct1',
+                      'newState': 'est2',
+                      'created': {
+                        'em1': {'id': 'newEmailId1'},
+                      },
+                    },
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
+          // EmailSubmission/set fails.
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'EmailSubmission/set',
+                  {
+                    'accountId': 'acct1',
+                    'notCreated': {
+                      'sub1': {'type': 'forbiddenFrom'},
+                    },
+                  },
+                  '1',
+                ],
+              ],
+            }),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await expectLater(
+          r.emails.sendEmail('jmap-1', draft),
+          throwsA(isA<JmapException>()),
+        );
+
+        // The first Email/set creates the Sent copy; a later Email/set must
+        // destroy exactly the email that was created.
+        final destroyCall = emailSetBodies.firstWhere(
+          (body) {
+            final calls = body['methodCalls'] as List<dynamic>;
+            final args = (calls.first as List<dynamic>)[1]
+                as Map<String, dynamic>;
+            return args.containsKey('destroy');
+          },
+          orElse: () => throw StateError(
+            'expected an Email/set destroy call after a failed submission',
+          ),
+        );
+        final destroyArgs =
+            ((destroyCall['methodCalls'] as List<dynamic>).first
+                as List<dynamic>)[1] as Map<String, dynamic>;
+        expect(destroyArgs['destroy'], contains('newEmailId1'));
+      },
+    );
+
+    test(
       'forbiddenFrom error includes envelope and identity addresses',
       () async {
         final r = _makeRepos(
