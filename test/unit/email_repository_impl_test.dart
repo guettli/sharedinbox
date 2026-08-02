@@ -3889,21 +3889,18 @@ void main() {
 
         // The first Email/set creates the Sent copy; a later Email/set must
         // destroy exactly the email that was created.
+        Map<String, dynamic> emailSetArgs(Map<String, dynamic> body) {
+          final calls = body['methodCalls'] as List<dynamic>;
+          return (calls.first as List<dynamic>)[1] as Map<String, dynamic>;
+        }
+
         final destroyCall = emailSetBodies.firstWhere(
-          (body) {
-            final calls = body['methodCalls'] as List<dynamic>;
-            final args = (calls.first as List<dynamic>)[1]
-                as Map<String, dynamic>;
-            return args.containsKey('destroy');
-          },
+          (body) => emailSetArgs(body).containsKey('destroy'),
           orElse: () => throw StateError(
             'expected an Email/set destroy call after a failed submission',
           ),
         );
-        final destroyArgs =
-            ((destroyCall['methodCalls'] as List<dynamic>).first
-                as List<dynamic>)[1] as Map<String, dynamic>;
-        expect(destroyArgs['destroy'], contains('newEmailId1'));
+        expect(emailSetArgs(destroyCall)['destroy'], contains('newEmailId1'));
       },
     );
 
