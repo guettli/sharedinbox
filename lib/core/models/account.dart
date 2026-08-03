@@ -147,3 +147,14 @@ class Account {
 
   String get accountType => type.name;
 }
+
+/// Human-friendly label for an account. Prefers [Account.displayName], falls
+/// back to [Account.email], and finally to [fallbackId] when the account can no
+/// longer be resolved (e.g. it was removed after the row referencing it was
+/// recorded). Never returns an empty string as long as [fallbackId] is set.
+String accountDisplayLabel(Account? account, String fallbackId) {
+  if (account == null) return fallbackId;
+  if (account.displayName.isNotEmpty) return account.displayName;
+  if (account.email.isNotEmpty) return account.email;
+  return fallbackId;
+}
