@@ -3988,46 +3988,75 @@ class EmailRepositoryImpl implements EmailRepository {
       throw JmapException('Email/set create failed: missing created email id');
     }
 
-    // Then submit the created email.
-    final submissionResponses = await jmap.call(
-      [
+    // Then submit the created email. If submission fails for any reason, the
+    // email was already created in the Sent mailbox above; destroy it so a
+    // message that was never actually sent doesn't linger in Sent and make the
+    // user think it went out.
+    try {
+      final submissionResponses = await jmap.call(
         [
-          'EmailSubmission/set',
-          {
-            'accountId': jmap.accountId,
-            'create': {
-              'sub1': {
-                'emailId': emailId,
-                'identityId': identityId,
-                'envelope': {
-                  'mailFrom': {'email': draft.from.email},
-                  'rcptTo': allRecipients,
+          [
+            'EmailSubmission/set',
+            {
+              'accountId': jmap.accountId,
+              'create': {
+                'sub1': {
+                  'emailId': emailId,
+                  'identityId': identityId,
+                  'envelope': {
+                    'mailFrom': {'email': draft.from.email},
+                    'rcptTo': allRecipients,
+                  },
                 },
               },
             },
-          },
-          '1',
+            '1',
+          ],
         ],
-      ],
-      withSubmission: true,
-    );
-
-    // Check EmailSubmission/set for submission errors.
-    final subResult = _responseArgs(
-      submissionResponses,
-      0,
-      'EmailSubmission/set',
-    );
-    final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
-    if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
-      final err = notSubmitted['sub1'] as Map<String, dynamic>;
-      throw JmapException(
-        'EmailSubmission/set failed: ${err['type']} '
-        '${err['description'] ?? ''} '
-        '${err['properties'] ?? ''} '
-        '(envelope mailFrom: ${draft.from.email}, '
-        'identity email: ${identityEmail ?? 'unknown'})',
+        withSubmission: true,
       );
+
+      // Check EmailSubmission/set for submission errors.
+      final subResult = _responseArgs(
+        submissionResponses,
+        0,
+        'EmailSubmission/set',
+      );
+      final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
+      if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
+        final err = notSubmitted['sub1'] as Map<String, dynamic>;
+        throw JmapException(
+          'EmailSubmission/set failed: ${err['type']} '
+          '${err['description'] ?? ''} '
+          '${err['properties'] ?? ''} '
+          '(envelope mailFrom: ${draft.from.email}, '
+          'identity email: ${identityEmail ?? 'unknown'})',
+        );
+      }
+    } catch (_) {
+      await _destroyJmapEmail(jmap, emailId);
+      rethrow;
+    }
+  }
+
+  /// Best-effort removal of a locally-created JMAP email (e.g. the Sent copy
+  /// created before a failed submission). Swallows errors: the original send
+  /// failure is what matters to the caller, and a failed cleanup must not mask
+  /// it.
+  Future<void> _destroyJmapEmail(JmapClient jmap, String emailId) async {
+    try {
+      await jmap.call([
+        [
+          'Email/set',
+          {
+            'accountId': jmap.accountId,
+            'destroy': [emailId],
+          },
+          '0',
+        ],
+      ]);
+    } catch (_) {
+      // Ignore — the send already failed and that error is being rethrown.
     }
   }
 
