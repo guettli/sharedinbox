@@ -202,7 +202,9 @@ void main() {
           timestamp: DateTime(2024, 6, 1, 10),
         );
 
-        await tester.pumpWidget(_buildApp(history: [action], accounts: const []));
+        await tester.pumpWidget(
+          _buildApp(history: [action], accounts: const []),
+        );
         await tester.pumpAndSettle();
 
         expect(find.text('gone'), findsOneWidget);
