@@ -32,6 +32,35 @@ jobs:
           app-id: ${{ secrets.RENOVATE_APP_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
 
+      # An expired PAT is still a non-empty secret, so in a plain `||` chain it
+      # wins over github.token and hard-fails platform init with "401
+      # unauthorized" — twice now (#441, #444). Probe it once and let the chain
+      # skip it when it no longer authenticates, instead of dropping the PAT
+      # entirely: a PAT-created PR triggers CI, and github.token's does not, so
+      # under the required-status-check ruleset a github.token PR can never be
+      # merged. Order of preference: App token, working PAT, github.token.
+      - name: Probe RENOVATE_TOKEN
+        id: pat
+        if: steps.app-token.outputs.token == ''
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          usable=false
+          if [ -n "${RENOVATE_TOKEN:-}" ]; then
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $RENOVATE_TOKEN" https://api.github.com/user)
+            if [ "$code" = "200" ]; then
+              usable=true
+            else
+              echo "::warning::RENOVATE_TOKEN does not authenticate (HTTP $code) — rotate it, or configure RENOVATE_APP_ID/RENOVATE_APP_PRIVATE_KEY."
+            fi
+          fi
+          if [ "$usable" = false ]; then
+            echo "::warning::Falling back to github.token: Renovate still runs, but its PRs do not trigger CI, so they cannot satisfy the required status check."
+          fi
+          echo "usable=$usable" >> "$GITHUB_OUTPUT"
+
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -40,5 +69,5 @@ jobs:
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.RENOVATE_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || (steps.pat.outputs.usable == 'true' && secrets.RENOVATE_TOKEN) || github.token }}
         run: task renovate

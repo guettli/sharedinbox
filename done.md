@@ -167,6 +167,14 @@ exceptions to its subtree instead of escalating to the global crash screen.
     is minted fresh each run so it never expires and can still trigger CI on
     Renovate's PRs. It falls back to `RENOVATE_TOKEN` then `github.token`, so
     rotating the PAT also resolves the failure without configuring the app.
+  - Follow-up (Issue #444): the same failure recurred because an *expired*
+    `RENOVATE_TOKEN` is still a non-empty secret and so wins a plain `||` chain
+    over `github.token`. Dropping the PAT from the chain would trade that for a
+    worse failure: a PAT-created PR triggers CI, a `github.token` PR does not, so
+    under the required-status-check ruleset Renovate's PRs could never merge
+    (verified on #445/#446, both of which got checks from the rotated PAT). The
+    workflow now probes the PAT once and skips it only when it fails to
+    authenticate, warning in the job summary either way.
 
 ## Tasks (2026-05-11)
 
