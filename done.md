@@ -165,8 +165,17 @@ exceptions to its subtree instead of escalating to the global crash screen.
     `RENOVATE_TOKEN` PAT expired. The workflow now prefers a GitHub App
     installation token (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`), which
     is minted fresh each run so it never expires and can still trigger CI on
-    Renovate's PRs. It falls back to `RENOVATE_TOKEN` then `github.token`, so
-    rotating the PAT also resolves the failure without configuring the app.
+    Renovate's PRs.
+  - Follow-up (Issue #444): the same `401` recurred. The GitHub App is not
+    configured (the `Generate GitHub App token` step is skipped because
+    `RENOVATE_APP_ID` is empty), so the token expression fell through to a
+    re-expired `RENOVATE_TOKEN` PAT. Because GitHub Actions treats a non-empty
+    (expired) secret as truthy, `RENOVATE_TOKEN || github.token` never reached
+    `github.token` and the run hard-failed. Dropped the PAT from the fallback:
+    the expression is now `steps.app-token.outputs.token || github.token`, so an
+    unconfigured/expired credential degrades to the always-valid `github.token`
+    (Renovate keeps running; configure the App to restore CI-triggering and
+    native auto-merge) instead of crashing the daily run.
 
 ## Tasks (2026-05-11)
 

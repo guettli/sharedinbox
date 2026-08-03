@@ -18,11 +18,10 @@ jobs:
       - uses: actions/checkout@v5
 
       # Prefer a GitHub App installation token. It is minted fresh on every run
-      # so it can never expire (a personal access token silently does, which
-      # fails the platform init with "401 unauthorized" / "Authentication
-      # failure"), and unlike the workflow's own github.token it can trigger CI
-      # on the PRs Renovate opens, which auto-merge depends on. Skipped when the
-      # app is not configured, and non-fatal so a bad key falls back below.
+      # so it can never expire, and unlike the workflow's own github.token it
+      # can trigger CI on the PRs Renovate opens, which auto-merge depends on.
+      # Skipped when the app is not configured, and non-fatal so a bad key
+      # falls back to github.token below.
       - name: Generate GitHub App token
         id: app-token
         if: env.RENOVATE_APP_ID != ''
@@ -37,8 +36,16 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
+      # When the app token is unavailable, fall back to the workflow's own
+      # github.token rather than a personal access token. A PAT expires silently
+      # and, because GitHub Actions treats a non-empty (but expired) secret as
+      # truthy, an expired RENOVATE_TOKEN would win the `||` chain and hard-fail
+      # the run with "401 unauthorized" / "Authentication failure" (issues #441,
+      # #444). github.token always authenticates so Renovate keeps running; it
+      # cannot trigger CI on Renovate's PRs, so configure the GitHub App above to
+      # restore CI-triggering and native auto-merge.
       - name: Run Renovate
         env:
           DAGGER_NO_NAG: "1"
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.RENOVATE_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: task renovate
