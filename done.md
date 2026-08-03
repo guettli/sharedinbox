@@ -160,6 +160,13 @@ exceptions to its subtree instead of escalating to the global crash screen.
     native auto-merge) once CI is green. agentloop's `automerge` label is
     issue-scoped and never sees Renovate PRs, so relying on it alone left
     them stuck. `major` updates remain manual.
+  - Follow-up (Issue #441): the daily run failed platform init with `401
+    unauthorized` / `Authentication failure` because the long-lived
+    `RENOVATE_TOKEN` PAT expired. The workflow now prefers a GitHub App
+    installation token (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`), which
+    is minted fresh each run so it never expires and can still trigger CI on
+    Renovate's PRs. It falls back to `RENOVATE_TOKEN` then `github.token`, so
+    rotating the PAT also resolves the failure without configuring the app.
 
 ## Tasks (2026-05-11)
 
