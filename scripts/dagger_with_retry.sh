@@ -40,7 +40,7 @@ for attempt in 1 2 3; do
         sleep 90
         continue
     fi
-    if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context deadline exceeded|connection refused|invalid return status code" "$out"; then
+    if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context deadline exceeded|connection refused|invalid return status code|TLS handshake timeout|failed to fetch (anonymous )?token|failed to do request|i/o timeout" "$out"; then
         echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
         continue
     fi
