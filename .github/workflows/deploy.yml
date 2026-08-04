@@ -34,6 +34,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Print runner wait time
+        # Purely diagnostic: prints only how long the job waited in the runner
+        # queue. Don't let a Docker Hub hiccup while pulling its base image
+        # (TLS handshake timeout to auth.docker.io — see #453) fail the job
+        # before the real deploy work runs.
+        continue-on-error: true
         env:
           DAGGER_NO_NAG: "1"
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
@@ -86,6 +91,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Print runner wait time
+        # Purely diagnostic: prints only how long the job waited in the runner
+        # queue. Don't let a Docker Hub hiccup while pulling its base image
+        # (TLS handshake timeout to auth.docker.io — see #453) fail the job
+        # before the real deploy work runs.
+        continue-on-error: true
         env:
           DAGGER_NO_NAG: "1"
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
@@ -142,6 +152,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Print runner wait time
+        # Purely diagnostic: prints only how long the job waited in the runner
+        # queue. Don't let a Docker Hub hiccup while pulling its base image
+        # (TLS handshake timeout to auth.docker.io — see #453) fail the job
+        # before the real deploy work runs.
+        continue-on-error: true
         env:
           DAGGER_NO_NAG: "1"
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
@@ -175,6 +190,11 @@ jobs:
         run: scripts/setup_dagger_remote.sh
 
       - name: Print runner wait time
+        # Purely diagnostic: prints only how long the job waited in the runner
+        # queue. Don't let a Docker Hub hiccup while pulling its base image
+        # (TLS handshake timeout to auth.docker.io — see #453) fail the job
+        # before the real deploy work runs.
+        continue-on-error: true
         env:
           DAGGER_NO_NAG: "1"
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
