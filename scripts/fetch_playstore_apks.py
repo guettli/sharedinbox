@@ -27,6 +27,7 @@ import os
 import sys
 import time
 
+import requests
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 
@@ -60,6 +61,22 @@ _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "
 # two are excluded; any other or absent status is treated as serving so an
 # unexpected API value never silently drops a real release.
 _NON_SERVING_RELEASE_STATUSES = frozenset({"draft", "statusUnspecified"})
+
+# Connection-level errors that mean "the request never got an answer" rather
+# than "Play said no". The Play Developer API occasionally drops a connection
+# mid-poll — the observed failure (see #455) was a ``RemoteDisconnected`` (which
+# requests surfaces as ``ConnectionError``) on one of the many polling GETs,
+# which crashed the whole fetch and filed a spurious "Firebase Tests failed"
+# issue even though the binary was fine and Play was simply still generating.
+# We treat these as transient and keep polling within the deadline, exactly
+# like a "not ready yet" 404. HTTP status errors (4xx/5xx) are deliberately NOT
+# included — those still propagate and fail loudly so a real Play API problem
+# stays visible.
+_TRANSIENT_REQUEST_ERRORS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.Timeout,
+)
 
 
 def _serves_apks(release):
@@ -141,23 +158,49 @@ def _poll_generated_apks(session, package, version_code):
     has elapsed. The generation delay is deterministic-ish (usually minutes,
     occasionally longer) so waiting inside a single run is cheaper than
     letting the next hourly cron pick it up.
+
+    A transient connection error from Play (a dropped/reset connection, read
+    timeout — see :data:`_TRANSIENT_REQUEST_ERRORS`) is treated like a "not
+    ready yet" 404 and retried within the same deadline rather than crashing
+    the run (see #455). Only if such errors persist past the deadline do we
+    give up — with a :class:`TimeoutError` that names the last one so the
+    cause stays visible in the logs.
     """
     deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+    last_transient = None
     while True:
-        listing = _list_generated_apks(session, package, version_code)
+        try:
+            listing = _list_generated_apks(session, package, version_code)
+        except _TRANSIENT_REQUEST_ERRORS as exc:
+            last_transient = exc
+            listing = None
+            reason = (
+                f"transient Play API error ({exc.__class__.__name__}) fetching "
+                f"split APKs for versionCode {version_code}"
+            )
+        else:
+            last_transient = None
+            reason = (
+                f"Play has not generated split APKs for versionCode "
+                f"{version_code} yet"
+            )
         if listing is not None:
             return listing
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if last_transient is not None:
+                raise TimeoutError(
+                    f"Play API kept dropping connections while fetching split "
+                    f"APKs for versionCode {version_code} within "
+                    f"{_POLL_TIMEOUT_SECONDS}s: {last_transient!r}"
+                )
             raise TimeoutError(
                 f"Play has not generated split APKs for versionCode "
                 f"{version_code} within {_POLL_TIMEOUT_SECONDS}s"
             )
         sleep_for = min(_POLL_INTERVAL_SECONDS, max(1, int(remaining)))
         print(
-            f"Play has not generated split APKs for versionCode "
-            f"{version_code} yet — retrying in {sleep_for}s "
-            f"({int(remaining)}s left)",
+            f"{reason} — retrying in {sleep_for}s ({int(remaining)}s left)",
             file=sys.stderr,
         )
         time.sleep(sleep_for)
@@ -257,7 +300,10 @@ def main():
         # as a skip rather than a hard failure: emit a PENDING marker so the
         # wrapper (scripts/run_firebase_test.sh) can exit 0 without filing a
         # "Firebase Tests failed" issue, and rely on the next scheduled run
-        # to retry. Any other error (auth, network, Play API 5xx) still
+        # to retry. The poller also raises TimeoutError when a transient Play
+        # connection error persists for the whole window (see #455), so this
+        # same skip covers a flaky Play API rather than turning it into a red
+        # build. Any other error (auth, a hard Play API 4xx/5xx) still
         # propagates and fails loudly.
         print(f"[fetch_playstore_apks] {exc}", file=sys.stderr)
         # ``dest_dir`` was created at startup, but the poll above can run for
