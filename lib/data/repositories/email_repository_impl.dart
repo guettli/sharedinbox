@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
@@ -2621,19 +2622,30 @@ class EmailRepositoryImpl implements EmailRepository {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingle();
-    final account = (await _accounts.getAccount(row.accountId))!;
+    await _snoozeRow(row, until);
+    await _mirrorSnoozeToCounterparts(
+      row.accountId,
+      row.messageId,
+      until: until,
+    );
+  }
+
+  /// Snoozes a single [row] on its own account: moves it to that account's
+  /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
+  Future<void> _snoozeRow(Email row, DateTime until) async {
+    final accountId = row.accountId;
 
     // Find or create Snoozed mailbox.
     var snoozedMailbox = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('snoozed'),
+            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
 
     snoozedMailbox ??= await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.name.equals('Snoozed'),
+            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -2642,7 +2654,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final destPath = snoozedMailbox?.path ?? 'Snoozed';
 
     // Optimistic local update.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(destPath),
         snoozedUntil: Value(until),
@@ -2651,8 +2663,8 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     await _enqueueChange(
-      account.id,
-      emailId,
+      accountId,
+      row.id,
       'snooze',
       jsonEncode({
         'uid': row.uid,
@@ -2662,12 +2674,8 @@ class EmailRepositoryImpl implements EmailRepository {
       }),
     );
 
-    await _updateThread(
-      row.accountId,
-      row.mailboxPath,
-      row.threadId ?? emailId,
-    );
-    await _updateThread(row.accountId, destPath, row.threadId ?? emailId);
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, destPath, row.threadId ?? row.id);
   }
 
   @override
@@ -2684,35 +2692,114 @@ class EmailRepositoryImpl implements EmailRepository {
     if (expired.isEmpty) return 0;
 
     for (final row in expired) {
-      // Per instructions: "get to inbox moved by app".
-      final inbox = await (_db.select(_db.mailboxes)
-            ..where(
-              (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
-            )
-            ..limit(1))
-          .getSingleOrNull();
-      final dest = inbox?.path ?? 'INBOX';
-
-      await _enqueueChange(
-        accountId,
-        row.id,
-        'unsnooze',
-        jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+      await _unsnoozeRow(row);
+      await _mirrorSnoozeToCounterparts(
+        row.accountId,
+        row.messageId,
+        until: null,
       );
-
-      // Optimistic local update.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-        EmailsCompanion(
-          mailboxPath: Value(dest),
-          snoozedUntil: const Value(null),
-          snoozedFromMailboxPath: const Value(null),
-        ),
-      );
-
-      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
-      await _updateThread(accountId, dest, row.threadId ?? row.id);
     }
     return expired.length;
+  }
+
+  /// Un-snoozes a single [row] on its own account: moves it back to that
+  /// account's Inbox, clears the snooze columns and enqueues the change.
+  Future<void> _unsnoozeRow(Email row) async {
+    final accountId = row.accountId;
+
+    // Per instructions: "get to inbox moved by app".
+    final inbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final dest = inbox?.path ?? 'INBOX';
+
+    await _enqueueChange(
+      accountId,
+      row.id,
+      'unsnooze',
+      jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+    );
+
+    // Optimistic local update.
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(dest),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
+    );
+
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, dest, row.threadId ?? row.id);
+  }
+
+  /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
+  /// message in every counterpart account — the same server mailbox connected
+  /// via the other protocol (see [AccountComparison]).
+  ///
+  /// A user who connects to one server via both IMAP and JMAP has two
+  /// independent [Account] rows, each with its own copy of every message, so
+  /// snoozing on one account leaves the other untouched. This bridges them:
+  /// messages are correlated by their normalised RFC 2822 Message-ID and the
+  /// same optimistic update + pending change is applied to the counterpart,
+  /// which then flushes through that account's own protocol path.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet are skipped
+  /// (their next sync reconstructs the snooze from the shared server-side
+  /// `snz:` keyword anyway), and rows already in the requested state are left
+  /// alone so no redundant change is enqueued.
+  Future<void> _mirrorSnoozeToCounterparts(
+    String sourceAccountId,
+    String? messageId, {
+    required DateTime? until,
+  }) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      if (until != null) {
+        // Already snoozed to (about) the same time → nothing to mirror.
+        final current = row.snoozedUntil;
+        if (current != null &&
+            current.difference(until).abs() < const Duration(seconds: 1)) {
+          continue;
+        }
+        await _snoozeRow(row, until);
+      } else {
+        // Already awake → nothing to mirror.
+        if (row.snoozedUntil == null) continue;
+        await _unsnoozeRow(row);
+      }
+    }
+  }
+
+  /// Looks up a single email row in [accountId] whose Message-ID matches [mid]
+  /// (already run through [normaliseMessageId]). Matches both the bracket-less
+  /// JMAP form and the legacy `<...>` IMAP form stored in the column.
+  Future<Email?> _findEmailRowByNormalisedMessageId(
+    String accountId,
+    String mid,
+  ) {
+    return (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(1))
+        .getSingleOrNull();
   }
 
   @override
