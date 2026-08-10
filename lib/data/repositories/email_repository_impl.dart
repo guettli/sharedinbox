@@ -151,6 +151,14 @@ class EmailRepositoryImpl implements EmailRepository {
         _db.mailboxes.accountId.equalsExp(_db.threads.accountId) &
             _db.mailboxes.path.equalsExp(_db.threads.mailboxPath),
       ),
+      // Pull the latest message's Message-ID so counterpart copies of the same
+      // server message (IMAP + JMAP accounts on the same server) can be
+      // collapsed to one row — see [_dedupeCounterpartThreads].
+      leftOuterJoin(
+        _db.emails,
+        _db.emails.accountId.equalsExp(_db.threads.accountId) &
+            _db.emails.id.equalsExp(_db.threads.latestEmailId),
+      ),
     ]);
     query
       ..where(_db.mailboxes.role.equals('inbox'))
@@ -159,11 +167,87 @@ class EmailRepositoryImpl implements EmailRepository {
         OrderingTerm.desc(_db.threads.latestDate),
       ])
       ..limit(limit);
-    return query.watch().map(
-          (rows) => rows
-              .map((row) => _threadRowToModel(row.readTable(_db.threads)))
-              .toList(),
-        );
+    return query.watch().asyncMap((rows) async {
+      final withMessageId = [
+        for (final row in rows)
+          (
+            _threadRowToModel(row.readTable(_db.threads)),
+            row.readTableOrNull(_db.emails)?.messageId,
+          ),
+      ];
+      final accounts = await _accounts.observeAccounts().first;
+      return _dedupeCounterpartThreads(withMessageId, accounts);
+    });
+  }
+
+  /// Collapses threads that are the same server message reached through two
+  /// counterpart accounts (one IMAP, one JMAP on the same server — see
+  /// [AccountComparison]) down to a single row, so the combined inbox never
+  /// shows the mail twice.
+  ///
+  /// [rows] pairs each inbox thread with the (raw) Message-ID of its latest
+  /// message. Threads are only merged when their account has a counterpart and
+  /// the normalised Message-IDs match; everything else passes through
+  /// unchanged, so two genuinely-different accounts that happen to receive the
+  /// same Message-ID both remain, as do threads with no Message-ID.
+  ///
+  /// The kept copy is deterministic (IMAP preferred, then lowest account id)
+  /// and keeps its original list position, preserving the query's
+  /// `isFlagged`/`latestDate` ordering.
+  List<model.EmailThread> _dedupeCounterpartThreads(
+    List<(model.EmailThread, String?)> rows,
+    List<account_model.Account> accounts,
+  ) {
+    final accountById = {for (final a in accounts) a.id: a};
+
+    account_model.Account? preferred(
+      account_model.Account? a,
+      account_model.Account? b,
+    ) {
+      if (a == null) return b;
+      if (b == null) return a;
+      final aImap = a.type == account_model.AccountType.imap;
+      final bImap = b.type == account_model.AccountType.imap;
+      if (aImap != bImap) return aImap ? a : b;
+      return a.id.compareTo(b.id) <= 0 ? a : b;
+    }
+
+    final result = <model.EmailThread>[];
+    // dedupKey -> index into [result] of the currently-kept copy.
+    final keptIndexByKey = <String, int>{};
+
+    for (final (thread, rawMessageId) in rows) {
+      final account = accountById[thread.accountId];
+      final counterparts = account == null
+          ? const <account_model.Account>[]
+          : AccountComparison.counterpartsOf(account, accounts);
+      final mid = normaliseMessageId(rawMessageId);
+
+      if (account == null || counterparts.isEmpty || mid == null) {
+        result.add(thread);
+        continue;
+      }
+
+      // Stable per-group key: the lowest account id across the group.
+      final groupIds = [account.id, for (final c in counterparts) c.id]..sort();
+      final dedupKey = '${groupIds.first} $mid';
+
+      final existingIndex = keptIndexByKey[dedupKey];
+      if (existingIndex == null) {
+        keptIndexByKey[dedupKey] = result.length;
+        result.add(thread);
+        continue;
+      }
+
+      // Already have a copy of this message — keep the preferred account's row
+      // in the same position and drop the other.
+      final existing = result[existingIndex];
+      if (preferred(account, accountById[existing.accountId]) == account) {
+        result[existingIndex] = thread;
+      }
+    }
+
+    return result;
   }
 
   model.EmailThread _threadRowToModel(ThreadRow row) {
