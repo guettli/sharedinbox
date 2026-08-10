@@ -87,7 +87,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!mounted) return;
     setState(() {
       _accounts = accounts;
-      _accountId ??= accounts.isNotEmpty ? accounts.first.id : null;
+      // With more than one account, require an explicit choice (#463) rather
+      // than silently defaulting to the first one — the "From" dropdown starts
+      // unselected and _send blocks until the user picks. A single account is
+      // still auto-selected. An account passed in (reply, restored draft)
+      // keeps its value via ??=.
+      _accountId ??= accounts.length == 1 ? accounts.first.id : null;
     });
   }
 
@@ -338,6 +343,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   labelText: 'From',
                   border: OutlineInputBorder(),
                 ),
+                hint: const Text('Select an account'),
                 items: _accounts
                     .map(
                       (a) => DropdownMenuItem(

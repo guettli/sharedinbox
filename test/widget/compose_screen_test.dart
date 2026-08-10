@@ -119,6 +119,50 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    testWidgets(
+      'does not auto-select an account with several configured, and '
+      'blocks send until one is chosen (#463)',
+      (tester) async {
+        const second = Account(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/compose',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount, second]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Neither account is pre-selected — the "From" hint is shown.
+        expect(find.text('Select an account'), findsOneWidget);
+        expect(find.text('Alice <alice@example.com>'), findsNothing);
+        expect(find.text('Bob <bob@example.com>'), findsNothing);
+
+        // Sending without a choice is blocked with a prompt.
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+        expect(find.text('Select an account first'), findsOneWidget);
+
+        // Let the SnackBar auto-dismiss so no timer leaks into teardown.
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
     testWidgets('restores saved draft when no prefill is provided', (
       tester,
     ) async {
