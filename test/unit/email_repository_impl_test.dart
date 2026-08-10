@@ -575,8 +575,7 @@ void main() {
         date ??= DateTime(2024, 6);
         final existingInbox = await (r.db.select(r.db.mailboxes)
               ..where(
-                (t) =>
-                    t.accountId.equals(accountId) & t.role.equals('inbox'),
+                (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
               ))
             .getSingleOrNull();
         if (existingInbox == null) {
