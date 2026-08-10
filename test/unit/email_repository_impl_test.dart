@@ -39,6 +39,24 @@ const _jmapAccount = Account(
   jmapUrl: 'https://jmap.example.com/.well-known/jmap',
 );
 
+// A matching IMAP/JMAP pair pointing at the *same* server (same host + user),
+// used to exercise cross-protocol snooze mirroring (see [AccountComparison]).
+const _imapPair = Account(
+  id: 'imap-p',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'mail.example.com',
+  smtpHost: 'smtp.example.com',
+);
+
+const _jmapPair = Account(
+  id: 'jmap-p',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://mail.example.com/.well-known/jmap',
+);
+
 http.Client _mockJmapEmails({
   required List<Map<String, dynamic>> apiResponses,
 }) {
@@ -2124,6 +2142,182 @@ void main() {
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes, hasLength(1));
       expect(changes.first.changeType, 'unsnooze');
+    });
+
+    test('snoozeEmail mirrors the snooze onto the counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+
+      // Same message, seen via both protocols. IMAP keeps the RFC 5322 angle
+      // brackets around the Message-ID; JMAP stores it without — the mirror
+      // must correlate the two regardless.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'INBOX',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+            ),
+          );
+
+      final until = DateTime(2026, 5, 10, 15);
+      await r.emails.snoozeEmail('imap-p:5', until);
+
+      // Source account snoozed.
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.snoozedUntil, until);
+
+      // Counterpart account snoozed too.
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.snoozedUntil, until);
+      expect(mirror.mailboxPath, 'Snoozed');
+      expect(mirror.snoozedFromMailboxPath, 'INBOX');
+
+      // Each account got exactly one pending change on its own queue.
+      final srcChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('imap-p')))
+          .get();
+      expect(srcChanges, hasLength(1));
+      expect(srcChanges.first.changeType, 'snooze');
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, hasLength(1));
+      expect(mirrorChanges.first.changeType, 'snooze');
+    });
+
+    test('wakeUpEmails mirrors the un-snooze onto the counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      for (final id in const ['imap-p', 'jmap-p']) {
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$id:INBOX',
+                accountId: id,
+                path: 'INBOX',
+                name: 'Inbox',
+                role: const Value('inbox'),
+              ),
+            );
+      }
+
+      final past = DateTime.now().subtract(const Duration(hours: 1));
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+              snoozedUntil: Value(past),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'Snoozed',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+              snoozedUntil: Value(past),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+
+      final count = await r.emails.wakeUpEmails('imap-p');
+      expect(count, 1);
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.snoozedUntil, isNull);
+      expect(mirror.mailboxPath, 'INBOX');
+
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, hasLength(1));
+      expect(mirrorChanges.first.changeType, 'unsnooze');
+    });
+
+    test('snooze mirror skips a counterpart already snoozed to the same time',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+
+      final until = DateTime(2026, 5, 10, 15);
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+      // Counterpart is already snoozed to the same instant (e.g. picked up from
+      // the shared server-side keyword on a previous sync).
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'Snoozed',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+              snoozedUntil: Value(until),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('imap-p:5', until);
+
+      // No redundant change enqueued on the already-snoozed counterpart.
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, isEmpty);
+    });
+
+    test('snoozeEmail is a no-op mirror when there is no counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('imap-p:5', DateTime(2026, 5, 10, 15));
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.accountId, 'imap-p');
     });
   });
 
