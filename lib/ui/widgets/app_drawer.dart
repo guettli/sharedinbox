@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 /// Identifies the currently-active destination so the drawer can highlight
@@ -100,11 +101,11 @@ class AppDrawer extends ConsumerWidget {
                   const Divider(height: 1),
                   accountsAsync.when(
                     loading: () => const Padding(
-                      padding: EdgeInsets.all(16),
+                      padding: EdgeInsets.all(AppSpacing.lg),
                       child: Center(child: CircularProgressIndicator()),
                     ),
                     error: (e, _) => Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(AppSpacing.lg),
                       child: Text('Error loading accounts: $e'),
                     ),
                     data: (accounts) => Column(
@@ -154,6 +155,7 @@ class AppDrawer extends ConsumerWidget {
                     },
                   ),
                   const _SentQueueDrawerTile(),
+                  const _PendingChangesDrawerTile(),
                   ListTile(
                     leading: const Icon(Icons.history),
                     title: const Text('Undo Log'),
@@ -281,6 +283,28 @@ class _SentQueueDrawerTile extends ConsumerWidget {
   }
 }
 
+/// Global "Pending Changes" drawer entry — surfaces the outbound queue of
+/// local mutations (flag/move/delete) that have not yet been flushed to the
+/// server. Shows a badge with the total count so a growing queue is visible
+/// without opening the screen.
+class _PendingChangesDrawerTile extends ConsumerWidget {
+  const _PendingChangesDrawerTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(allPendingChangesProvider).value?.length ?? 0;
+    return ListTile(
+      leading: const Icon(Icons.sync_problem),
+      title: const Text('Pending Changes'),
+      trailing: count > 0 ? Badge(label: Text('$count')) : null,
+      onTap: () {
+        Navigator.pop(context);
+        unawaited(context.push('/pending-changes'));
+      },
+    );
+  }
+}
+
 /// Surfaces the per-account offline send queue in the drawer. Shows a count
 /// badge when there are queued messages so the user knows they need delivery.
 class _OutboxTile extends ConsumerWidget {
@@ -323,7 +347,7 @@ class _FolderList extends ConsumerWidget {
       builder: (ctx, snap) {
         if (!snap.hasData) {
           return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
             child: Center(child: CircularProgressIndicator()),
           );
         }
@@ -333,7 +357,7 @@ class _FolderList extends ConsumerWidget {
           children: [
             for (final mb in mailboxes)
               Padding(
-                padding: const EdgeInsets.only(left: 16),
+                padding: const EdgeInsets.only(left: AppSpacing.lg),
                 child: ListTile(
                   leading: const Icon(Icons.folder),
                   title: Text(
@@ -358,7 +382,7 @@ class _FolderList extends ConsumerWidget {
               ),
             // Local-only "folder" surfacing queued offline sends.
             Padding(
-              padding: const EdgeInsets.only(left: 16),
+              padding: const EdgeInsets.only(left: AppSpacing.lg),
               child: _OutboxTile(accountId: accountId),
             ),
           ],

@@ -196,7 +196,7 @@ jobs:
     runs-on: sharedinbox-arc
     needs: [deploy-playstore, deploy-apk, build-linux]
     if: |
-      always() && github.server_url == 'https://github.com' && vars.DEPLOY_HEALTH_ISSUE != '' && (
+      always() && github.server_url == 'https://github.com' && (
         needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'failure' ||
         needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'failure' ||
         needs.build-linux.result == 'success' || needs.build-linux.result == 'failure'

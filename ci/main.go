@@ -207,19 +207,62 @@ func New(
 	}, nil
 }
 
+// androidCmdlineToolsURL pins the Android SDK command-line tools bundle used
+// to install NDK / build-tools / platforms. Bump manually only when a newer
+// sdkmanager package requires it.
+const androidCmdlineToolsURL = "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+
+// flutterArchiveURLTemplate is the official Flutter SDK archive. The stable
+// channel publishes an image for EVERY stable release (including patch
+// releases that ghcr.io/cirruslabs/flutter skips), so installing from here
+// makes every Renovate bump buildable without waiting on a third party (#394).
+const flutterArchiveURLTemplate = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_%s-stable.tar.xz"
+
 // toolchain returns the Flutter+Android toolchain without any mutable cache mounts.
-// Its execution cache key is stable until the image, apt packages, or SDK versions change.
+// Its execution cache key is stable until the base image, apt packages, or SDK
+// versions change; a Flutter version bump invalidates only the Flutter install
+// layer and the precache step below it, so the multi-GB Android SDK layers are
+// reused across .fvmrc bumps.
 // Used as the base for pubGetLayer so flutter pub get is execution-cached between runs.
 func (m *Ci) toolchain() *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/cirruslabs/flutter:"+m.FlutterVersion).
-		WithExec([]string{"apt-get", "-qq", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "-qq", "clang", "cmake", "ninja-build", "pkg-config", "libgtk-3-dev", "liblzma-dev", "libsecret-1-dev", "libgcrypt20-dev", "libjsoncpp-dev", "sqlite3", "iproute2", "netcat-openbsd", "xvfb", "libosmesa6", "libegl1", "lld"}).
-		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithEnvVariable("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64").
+		WithEnvVariable("ANDROID_HOME", "/opt/android-sdk").
+		WithEnvVariable("PATH", "/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:${JAVA_HOME}/bin:${PATH}",
+			dagger.ContainerWithEnvVariableOpts{Expand: true}).
+		// Combined update+install so a stale cached index cannot pin a
+		// superseded .deb (404). libssl-dev is here (not in a later layer) so
+		// the entire apt state lives in one cache entry that is stable across
+		// Flutter version bumps.
 		WithExec([]string{"/bin/sh", "-c",
-			`flutter_dir=$(dirname $(dirname $(which flutter))); ` +
-				`chown -R ci:ci "$flutter_dir"; ` +
-				`[ -n "$ANDROID_HOME" ] && chown -R ci:ci "$ANDROID_HOME" || true; ` +
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				// Flutter/Android runtime deps
+				"ca-certificates curl git unzip xz-utils zip openjdk-17-jdk-headless python3 " +
+				// Linux desktop build deps. sqlcipher_flutter_libs needs
+				// libssl-dev (#582). libsqlite3-dev is required for the
+				// unversioned /usr/lib/.../libsqlite3.so symlink that the Dart
+				// sqlite3 FFI package dlopens; without it, widget tests fail to
+				// load the native library (cirruslabs baked this in; ubuntu:24.04
+				// does not).
+				"clang cmake ninja-build pkg-config " +
+				"libgtk-3-dev liblzma-dev libsecret-1-dev libgcrypt20-dev libjsoncpp-dev libssl-dev " +
+				"sqlite3 libsqlite3-dev " +
+				// Integration testing / networking
+				"iproute2 netcat-openbsd xvfb libosmesa6 libegl1 lld"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
+		// Install Android command-line tools and accept the SDK licenses so
+		// subsequent `sdkmanager <package>` calls install without prompting.
+		WithExec([]string{"/bin/sh", "-c",
+			`set -e; ` +
+				`mkdir -p /opt/android-sdk/cmdline-tools; ` +
+				`curl -fsSL -o /tmp/cmdline-tools.zip ` + androidCmdlineToolsURL + `; ` +
+				`unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools; ` +
+				`mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest; ` +
+				`rm /tmp/cmdline-tools.zip; ` +
+				`yes | sdkmanager --licenses >/dev/null; ` +
+				`chown -R ci:ci /opt/android-sdk; ` +
 				`mkdir -p /src && chown ci:ci /src`}).
 		WithEnvVariable("PUB_CACHE", "/home/ci/.pub-cache").
 		WithEnvVariable("HOME", "/home/ci").
@@ -227,16 +270,18 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithExec([]string{"/bin/sh", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" "platforms;android-35" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }`}).
-		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"}).
-		// libssl-dev — sqlcipher_flutter_libs compiles SQLCipher against OpenSSL
-		// on the Linux desktop integration_test build; its CMake
-		// find_package(OpenSSL) fails without the dev headers (#582). Installed
-		// here, AFTER the expensive Android-SDK/precache layers, so it does not
-		// invalidate their cache and force a full cold rebuild. update+install
-		// share one exec so a stale cached index can't pin a superseded .deb (404).
+		// Install Flutter from the official archive at the exact .fvmrc
+		// version. The version is interpolated into the exec so this layer's
+		// cache key changes with FlutterVersion — invalidating only the two
+		// steps that follow, not the multi-GB Android SDK layers above.
 		WithUser("root").
-		WithExec([]string{"/bin/sh", "-c", "apt-get -qq update && apt-get install -y -qq libssl-dev"}).
-		WithUser("ci")
+		WithExec([]string{"/bin/sh", "-c",
+			fmt.Sprintf(`set -e; `+
+				`curl -fsSL "`+flutterArchiveURLTemplate+`" | tar -xJ -C /opt; `+
+				`git config --system --add safe.directory /opt/flutter; `+
+				`chown -R ci:ci /opt/flutter`, m.FlutterVersion)}).
+		WithUser("ci").
+		WithExec([]string{"flutter", "precache", "--linux", "--no-android", "--no-ios"})
 }
 
 // Base is the Flutter toolchain container with mutable cache mounts attached.
@@ -1013,7 +1058,6 @@ emulator -avd smoke -no-window -no-audio -no-boot-anim -no-snapshot \
     > /tmp/emulator.log 2>&1 &
 EMU_PID=$!
 
-adb start-server >/dev/null 2>&1 || true
 for _i in $(seq 1 60); do
     adb get-state 2>/dev/null | grep -q device && break
     kill -0 "$EMU_PID" 2>/dev/null || { echo "ERROR: emulator exited early"; tail -50 /tmp/emulator.log; exit 1; }
@@ -1043,7 +1087,9 @@ adb shell am start -W -n "$PACKAGE/.MainActivity"
 WATCH=20
 echo "Watching crash logcat for ${WATCH}s…"
 sleep "$WATCH"
-CRASH=$(adb logcat -b crash -d 2>/dev/null || true)
+crash_rc=0
+CRASH=$(adb logcat -b crash -d 2>&1) || crash_rc=$?
+[ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH"; exit 1; }
 if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
     echo "----- CRASH DETECTED -----"
     echo "$CRASH"
@@ -1142,18 +1188,25 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 
 // FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
 // release using the Play Developer API. Returns a Directory containing the
-// APKs and a ``versionCode`` text file with the resolved alpha versionCode,
-// or a ``.skip`` sentinel when the latest alpha is not ready yet or has
-// already been tested green (see fetch_playstore_apks.py for the policy).
-// Runs in a Python container so the runner host does not need google-auth /
-// requests installed (matches the UploadToPlayStore pattern).
+// APKs and a ``versionCode`` text file with the resolved alpha versionCode.
+// When Play has not finished generating split APKs within the poll window,
+// the returned directory contains a ``PENDING`` marker (and ``versionCode``)
+// instead of APKs — the wrapper (scripts/run_firebase_test.sh) reads the
+// marker and skips the Firebase Test Lab attempt with a ::notice::. Any
+// other failure (auth, network, Play API 5xx) still propagates and fails
+// loudly. See #414 for why we no longer treat Play-side delay as a red
+// build. Runs in a Python container so the runner host does not need
+// google-auth / requests installed (matches the UploadToPlayStore pattern).
 func (m *Ci) FetchPlayStoreApks(
 	playStoreConfig *dagger.Secret,
-	// versionCode last tested green. If Play's latest alpha matches, the
-	// script writes a .skip sentinel and returns without downloading APKs.
-	// Empty disables the optimisation (treated as "nothing tested yet").
+	// cacheBuster forces the fetch to re-run instead of returning a cached
+	// result. The wrapper (scripts/run_firebase_test.sh) now polls Play by
+	// retrying this fetch across fresh short execs and passes a distinct value
+	// per attempt, so each attempt actually re-checks Play for freshly
+	// generated split APKs — a cached PENDING directory would otherwise make
+	// the retry loop a silent no-op (see #432).
 	// +optional
-	alreadyTestedVersionCode string,
+	cacheBuster string,
 ) *dagger.Directory {
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/fetch_playstore_apks.py"},
@@ -1165,7 +1218,8 @@ func (m *Ci) FetchPlayStoreApks(
 		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
 		WithFile("/src/scripts/fetch_playstore_apks.py", scriptSource.File("scripts/fetch_playstore_apks.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
-		WithEnvVariable("ALREADY_TESTED_VERSION_CODE", alreadyTestedVersionCode).
+		// Changing env var busts the exec cache key so each retry re-runs.
+		WithEnvVariable("FETCH_CACHE_BUSTER", cacheBuster).
 		WithWorkdir("/src").
 		WithUser("nobody").
 		WithExec([]string{"/bin/sh", "-c",
@@ -1294,18 +1348,28 @@ func (m *Ci) PrintRunnerWait(
 ) (string, error) {
 	const script = `#!/bin/sh
 set -u
-created=$(curl -sf --max-time 30 \
+runner_start=$(date +%s)
+response=$(curl -sf --max-time 30 \
     -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${API_URL:-https://api.github.com}/repos/${REPOSITORY:-}/actions/runs/${RUN_ID:-}" \
-    | python3 -c "import sys,json;print(json.load(sys.stdin).get('created_at',''))" 2>/dev/null) || true
-runner_start=$(date +%s)
+    "${API_URL:-https://api.github.com}/repos/${REPOSITORY:-}/actions/runs/${RUN_ID:-}")
+curl_rc=$?
+if [ "$curl_rc" -ne 0 ]; then
+    echo "Runner wait time: unknown (API lookup failed, curl exit $curl_rc)"
+    exit 0
+fi
+created=$(printf '%s' "$response" | python3 -c "import sys,json;print(json.load(sys.stdin).get('created_at',''))")
+py_rc=$?
+if [ "$py_rc" -ne 0 ]; then
+    echo "Runner wait time: unknown (malformed JSON from GitHub API, python exit $py_rc)" >&2
+    exit 1
+fi
 if [ -n "$created" ]; then
     queued_epoch=$(date -d "$created" +%s)
     echo "Runner wait time: $((runner_start - queued_epoch))s (queued at $created)"
 else
-    echo "Runner wait time: unknown (API lookup failed)"
+    echo "Runner wait time: unknown (created_at missing from response)"
 fi
 `
 	return dag.Container().
@@ -1462,19 +1526,32 @@ USE_SSH="${USE_SSH:-false}"
 echo "Checking that version ${VERSION} is live at ${URL} ..."
 for i in 1 2 3 4 5 6; do
     if [ "$USE_SSH" = "true" ]; then
+        # Run remote curl under 'set -e' so a network error propagates as a
+        # non-zero ssh exit — distinct from HTTP != 200.
         OUT=$(ssh -i /home/deploy/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$SSH_USER@$SSH_HOST" "
-            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}' 2>/dev/null || echo '000')
+            set -e
+            HTTP=\$(curl -so /tmp/website-verify.html -w '%{http_code}' '${URL}')
             echo \"\$HTTP\"
-            cat /tmp/website-verify.html 2>/dev/null || true
-        " || true)
+            cat /tmp/website-verify.html
+        ")
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: ssh/curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
         HTTP=$(echo "$OUT" | head -n 1)
         HTML=$(echo "$OUT" | tail -n +2)
     else
-        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
-        HTML=$(cat /tmp/website-verify.html 2>/dev/null || true)
+        HTTP=$(curl -so /tmp/website-verify.html -w "%{http_code}" "${URL}")
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: curl network error (exit $rc) at attempt ${i}/6 for ${URL}"
+            exit 1
+        fi
+        HTML=$(cat /tmp/website-verify.html)
     fi
     if [ "${HTTP}" != "200" ]; then
-        echo "HTTP ${HTTP} (attempt ${i}/6); waiting 10s ..."
+        echo "HTTP status ${HTTP} (attempt ${i}/6); waiting 10s ..."
     elif echo "$HTML" | grep -q "x-version.*${VERSION}"; then
         echo "OK: version ${VERSION} is live (HTTP ${HTTP})."
         exit 0

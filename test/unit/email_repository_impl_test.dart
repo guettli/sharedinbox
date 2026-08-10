@@ -11,6 +11,8 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -35,6 +37,24 @@ const _jmapAccount = Account(
   email: 'alice@example.com',
   type: AccountType.jmap,
   jmapUrl: 'https://jmap.example.com/.well-known/jmap',
+);
+
+// A matching IMAP/JMAP pair pointing at the *same* server (same host + user),
+// used to exercise cross-protocol snooze mirroring (see [AccountComparison]).
+const _imapPair = Account(
+  id: 'imap-p',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'mail.example.com',
+  smtpHost: 'smtp.example.com',
+);
+
+const _jmapPair = Account(
+  id: 'jmap-p',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://mail.example.com/.well-known/jmap',
 );
 
 http.Client _mockJmapEmails({
@@ -170,6 +190,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
   Duration? sendOperationTimeout,
+  AppLogger? appLogger,
 }) {
   final db = openTestDatabase();
   final storage = MapSecureStorage();
@@ -181,8 +202,50 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     smtpConnect: smtpConnect ?? _noSmtpConnect,
     httpClient: httpClient,
     sendOperationTimeout: sendOperationTimeout ?? const Duration(seconds: 50),
+    appLogger: appLogger,
   );
   return (db: db, accounts: accounts, emails: emails);
+}
+
+/// Minimal in-memory [AppLogRepository] used by the JMAP push tests to
+/// observe the `push_status` sequence written by `watchJmapPush`. Only the
+/// insert path is exercised — everything else is inherited as a no-op from
+/// [NoOpAppLogRepository].
+class _PushStatusRecorder extends NoOpAppLogRepository {
+  final List<AppLogEntry> entries = [];
+  int _nextId = 1;
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    final id = _nextId++;
+    entries.add(
+      AppLogEntry(
+        id: id,
+        createdAt: createdAt ?? DateTime.now(),
+        level: level,
+        event: event,
+        message: message,
+        dataJson: dataJson,
+        screen: screen,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+        syncLogId: syncLogId,
+      ),
+    );
+    return id;
+  }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -397,6 +460,102 @@ void main() {
       expect(threads.first.emailIds, ['acc-1:1', 'acc-1:2']);
     });
 
+    test('observeThreads returns starred threads before unstarred', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Insert four threads: two starred (one old, one very old) and two
+      // unstarred (one newest, one middle). Starred must come first even
+      // though an unstarred thread has the newest date.
+      Future<void> insertThread(
+        String id,
+        DateTime date, {
+        required bool flagged,
+      }) {
+        return r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                latestDate: date,
+                isFlagged: Value(flagged),
+                latestEmailId: '$id-latest',
+              ),
+            );
+      }
+
+      await insertThread('unstarred-new', DateTime(2024, 6), flagged: false);
+      await insertThread('starred-old', DateTime(2024, 2), flagged: true);
+      await insertThread('unstarred-mid', DateTime(2024, 4), flagged: false);
+      await insertThread('starred-mid', DateTime(2024, 3), flagged: true);
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(
+        threads.map((t) => t.threadId).toList(),
+        ['starred-mid', 'starred-old', 'unstarred-new', 'unstarred-mid'],
+      );
+    });
+
+    test(
+      'observeAllInboxThreads returns starred threads before unstarred',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        const account2 = Account(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        await r.accounts.addAccount(account2, 'pw');
+
+        for (final (accountId, path) in [
+          ('acc-1', 'INBOX'),
+          ('acc-2', 'INBOX'),
+        ]) {
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: '$accountId:$path',
+                  accountId: accountId,
+                  path: path,
+                  name: path,
+                  role: const Value('inbox'),
+                ),
+              );
+        }
+
+        Future<void> insertThread(
+          String accountId,
+          String id,
+          DateTime date, {
+          required bool flagged,
+        }) {
+          return r.db.into(r.db.threads).insert(
+                ThreadsCompanion.insert(
+                  id: id,
+                  accountId: accountId,
+                  mailboxPath: 'INBOX',
+                  latestDate: date,
+                  isFlagged: Value(flagged),
+                  latestEmailId: '$id-latest',
+                ),
+              );
+        }
+
+        await insertThread('acc-1', 't-a', DateTime(2024, 6), flagged: false);
+        await insertThread('acc-2', 't-b', DateTime(2024, 2), flagged: true);
+        await insertThread('acc-1', 't-c', DateTime(2024, 5), flagged: true);
+        await insertThread('acc-2', 't-d', DateTime(2024, 4), flagged: false);
+
+        final threads = await r.emails.observeAllInboxThreads().first;
+        expect(
+          threads.map((t) => t.threadId).toList(),
+          ['t-c', 't-b', 't-a', 't-d'],
+        );
+      },
+    );
+
     test('observeEmailsInThread returns all emails for a thread', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -426,6 +585,126 @@ void main() {
           await r.emails.observeEmailsInThread('acc-1', 'INBOX', 'tid1').first;
       expect(emails, hasLength(2));
       expect(emails.map((e) => e.id).toSet(), {'acc-1:1', 'acc-1:2'});
+    });
+
+    group('computeThreadIdForTest (IMAP reference-chain walking)', () {
+      test('root-only: no References/In-Reply-To → own Message-ID', () {
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'root@example.com',
+            inReplyTo: null,
+            references: null,
+            subject: 'Original',
+            date: DateTime.utc(2024, 3),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('deep chain: References first entry (= oldest ancestor) wins', () {
+        // JWZ: every reply carries the whole chain in References, oldest first.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'reply3@example.com',
+            inReplyTo: 'reply2@example.com',
+            references: 'root@example.com reply1@example.com '
+                'reply2@example.com',
+            subject: 'Re: Original',
+            date: DateTime.utc(2024, 3, 3),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('broken chain: no References → falls back to In-Reply-To', () {
+        // Some clients drop References but keep In-Reply-To. The reply must
+        // still land in the same thread as its immediate parent.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: 'reply@example.com',
+            inReplyTo: 'root@example.com',
+            references: null,
+            subject: 'Re: Original',
+            date: DateTime.utc(2024, 3, 2),
+          ),
+          'root@example.com',
+        );
+      });
+
+      test('subject fallback: no headers → subj:yyyy-mm:<normalised subject>',
+          () {
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            subject: 'Re: Fwd: Project Alpha',
+            date: DateTime.utc(2024, 5, 15),
+          ),
+          'subj:2024-05:project alpha',
+        );
+      });
+
+      test('subject fallback groups matching subjects within same month', () {
+        final key1 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 5, 2, 8),
+        );
+        final key2 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Re: Project Alpha',
+          date: DateTime.utc(2024, 5, 30, 23, 59),
+        );
+        expect(key1, isNotNull);
+        expect(key1, key2);
+      });
+
+      test('subject fallback splits threads across month boundaries', () {
+        final key1 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 5, 31),
+        );
+        final key2 = EmailRepositoryImpl.computeThreadIdForTest(
+          messageId: null,
+          inReplyTo: null,
+          references: null,
+          subject: 'Project Alpha',
+          date: DateTime.utc(2024, 6),
+        );
+        expect(key1, isNot(key2));
+      });
+
+      test('everything missing: returns null so caller uses emailId', () {
+        // Subject omitted (defaults to null) — the true "no signal" case.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            date: DateTime.utc(2024),
+          ),
+          isNull,
+        );
+        // Empty subject after normalisation also yields null.
+        expect(
+          EmailRepositoryImpl.computeThreadIdForTest(
+            messageId: null,
+            inReplyTo: null,
+            references: null,
+            subject: '',
+            date: DateTime.utc(2024),
+          ),
+          isNull,
+        );
+      });
     });
 
     // ── Search tests ─────────────────────────────────────────────────────────
@@ -739,6 +1018,40 @@ void main() {
       expect(results[1].subject, 'Older report');
     });
 
+    test('searchEmailsGlobal returns starred results before unstarred',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Older starred email must appear above a newer unstarred one.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Older starred report'),
+              receivedAt: DateTime(2024),
+              isFlagged: const Value(true),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('Newer plain report'),
+              receivedAt: DateTime(2024, 6),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'report');
+      expect(results, hasLength(2));
+      expect(results[0].subject, 'Older starred report');
+      expect(results[1].subject, 'Newer plain report');
+    });
+
     test('searchEmails returns results sorted by receivedAt descending',
         () async {
       final r = _makeRepos();
@@ -816,6 +1129,51 @@ void main() {
     );
 
     test(
+      'searchEmailsStructured returns starred results before unstarred',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Older starred invoice'),
+                receivedAt: DateTime(2024),
+                isFlagged: const Value(true),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:2',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 2,
+                subject: const Value('Newer plain invoice'),
+                receivedAt: DateTime(2024, 6),
+              ),
+            );
+
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.subject,
+              comparison: FilterComparison.contains,
+              value: 'invoice',
+            ),
+          ],
+        );
+        final results = await r.emails.searchEmailsStructured(null, filter);
+        expect(results, hasLength(2));
+        expect(results[0].subject, 'Older starred invoice');
+        expect(results[1].subject, 'Newer plain invoice');
+      },
+    );
+
+    test(
       'searchEmailsStructured with header filter matches cached headers',
       () async {
         final r = _makeRepos();
@@ -886,6 +1244,63 @@ void main() {
           containsResults.map((e) => e.id),
           unorderedEquals(['acc-1:1', 'acc-1:2']),
         );
+      },
+    );
+
+    test(
+      'searchEmailsStructured with folder filter matches by mailbox path',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:inbox',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                subject: const Value('Hello inbox'),
+                receivedAt: DateTime(2026),
+              ),
+            );
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:archive',
+                accountId: 'acc-1',
+                mailboxPath: 'Archive',
+                uid: 2,
+                subject: const Value('Hello archive'),
+                receivedAt: DateTime(2026, 2),
+              ),
+            );
+
+        final inboxFilter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.folder,
+              comparison: FilterComparison.is_,
+              value: 'INBOX',
+            ),
+          ],
+        );
+        final inboxResults =
+            await r.emails.searchEmailsStructured('acc-1', inboxFilter);
+        expect(inboxResults.map((e) => e.id), ['acc-1:inbox']);
+
+        final archiveFilter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.folder,
+              comparison: FilterComparison.is_,
+              value: 'archive',
+            ),
+          ],
+        );
+        final archiveResults =
+            await r.emails.searchEmailsStructured('acc-1', archiveFilter);
+        expect(archiveResults.map((e) => e.id), ['acc-1:archive']);
       },
     );
 
@@ -1728,6 +2143,396 @@ void main() {
       expect(changes, hasLength(1));
       expect(changes.first.changeType, 'unsnooze');
     });
+
+    test('snoozeEmail mirrors the snooze onto the counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+
+      // Same message, seen via both protocols. IMAP keeps the RFC 5322 angle
+      // brackets around the Message-ID; JMAP stores it without — the mirror
+      // must correlate the two regardless.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'INBOX',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+            ),
+          );
+
+      final until = DateTime(2026, 5, 10, 15);
+      await r.emails.snoozeEmail('imap-p:5', until);
+
+      // Source account snoozed.
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.snoozedUntil, until);
+
+      // Counterpart account snoozed too.
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.snoozedUntil, until);
+      expect(mirror.mailboxPath, 'Snoozed');
+      expect(mirror.snoozedFromMailboxPath, 'INBOX');
+
+      // Each account got exactly one pending change on its own queue.
+      final srcChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('imap-p')))
+          .get();
+      expect(srcChanges, hasLength(1));
+      expect(srcChanges.first.changeType, 'snooze');
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, hasLength(1));
+      expect(mirrorChanges.first.changeType, 'snooze');
+    });
+
+    test('wakeUpEmails mirrors the un-snooze onto the counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      for (final id in const ['imap-p', 'jmap-p']) {
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$id:INBOX',
+                accountId: id,
+                path: 'INBOX',
+                name: 'Inbox',
+                role: const Value('inbox'),
+              ),
+            );
+      }
+
+      final past = DateTime.now().subtract(const Duration(hours: 1));
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+              snoozedUntil: Value(past),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'Snoozed',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+              snoozedUntil: Value(past),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+
+      final count = await r.emails.wakeUpEmails('imap-p');
+      expect(count, 1);
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.snoozedUntil, isNull);
+      expect(mirror.mailboxPath, 'INBOX');
+
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, hasLength(1));
+      expect(mirrorChanges.first.changeType, 'unsnooze');
+    });
+
+    test('snooze mirror skips a counterpart already snoozed to the same time',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+
+      final until = DateTime(2026, 5, 10, 15);
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+      // Counterpart is already snoozed to the same instant (e.g. picked up from
+      // the shared server-side keyword on a previous sync).
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-p:e1',
+              accountId: 'jmap-p',
+              mailboxPath: 'Snoozed',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('abc@example.com'),
+              snoozedUntil: Value(until),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('imap-p:5', until);
+
+      // No redundant change enqueued on the already-snoozed counterpart.
+      final mirrorChanges = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(mirrorChanges, isEmpty);
+    });
+
+    test('snoozeEmail is a no-op mirror when there is no counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'imap-p:5',
+              accountId: 'imap-p',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<abc@example.com>'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('imap-p:5', DateTime(2026, 5, 10, 15));
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.accountId, 'imap-p');
+    });
+  });
+
+  group('Archive/Delete/Spam mirroring', () {
+    // Seeds a mailbox row. IMAP and JMAP copies of the same server mailbox live
+    // under different [path]s, so the mirror must resolve the counterpart by
+    // [role], never by copying the source path.
+    Future<void> seedMailbox(
+      AppDatabase db,
+      String accountId,
+      String path,
+      String name, {
+      String? role,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$accountId:$path',
+                accountId: accountId,
+                path: path,
+                name: name,
+                role: Value(role),
+              ),
+            );
+
+    Future<void> seedEmail(
+      AppDatabase db,
+      String id,
+      String accountId,
+      String mailboxPath,
+      String messageId,
+    ) =>
+        db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: accountId,
+                mailboxPath: mailboxPath,
+                uid: 0,
+                receivedAt: DateTime(2024),
+                messageId: Value(messageId),
+              ),
+            );
+
+    test('archive move on IMAP mirrors to the JMAP counterpart by role',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      // Deliberately a *different* path from the IMAP archive folder.
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      // Source moved to its own archive path.
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.mailboxPath, 'Archive');
+      // Counterpart moved to *its* archive path (resolved by role, not copied).
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-9');
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'move');
+      }
+    });
+
+    test('archive move on JMAP mirrors to the IMAP counterpart by role',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('jmap-p:e1', 'mbox-9');
+
+      final mirror = await r.emails.getEmail('imap-p:5');
+      expect(mirror!.mailboxPath, 'Archive');
+    });
+
+    test('spam move mirrors to the counterpart junk mailbox', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Junk', 'Junk', role: 'junk');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-junk', 'Spam', role: 'junk');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Junk');
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-junk');
+    });
+
+    test('delete-to-Trash mirrors onto the counterpart Trash', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-t', 'Trash', role: 'trash');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      final dest = await r.emails.deleteEmail('imap-p:5');
+      expect(dest, 'Trash');
+
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.mailboxPath, 'Trash');
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-t');
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'move');
+      }
+    });
+
+    test('hard delete (already in Trash) mirrors a hard delete', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-t', 'Trash', role: 'trash');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'Trash', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'mbox-t', 'abc@example.com');
+
+      final dest = await r.emails.deleteEmail('imap-p:5');
+      expect(dest, isNull);
+
+      // Both copies are permanently removed.
+      expect(await r.emails.getEmail('imap-p:5'), isNull);
+      expect(await r.emails.getEmail('jmap-p:e1'), isNull);
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'delete');
+      }
+    });
+
+    test(
+        'move mirror is a no-op when the counterpart has not synced the message',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      // No jmap-p email row: the counterpart hasn't cached this message yet.
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, isEmpty);
+    });
+
+    test('move mirror skips a counterpart already in the destination',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      // Counterpart is already archived (e.g. from a previous sync).
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'mbox-9', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, isEmpty);
+    });
+
+    test('move is a no-op mirror when there is no counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.accountId, 'imap-p');
+    });
   });
 
   group('JMAP getEmailBody', () {
@@ -2506,6 +3311,25 @@ void main() {
                   ],
                 ],
               },
+              // Call 3: reconcile pass Email/get for keywords on the surviving
+              // local row (e-live). Server-side keywords are empty, matching
+              // the seeded row's default isSeen=false / isFlagged=false.
+              {
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Email/get',
+                    {
+                      'accountId': 'acct1',
+                      'state': 'est1',
+                      'list': [
+                        {'id': 'e-live', 'keywords': <String, dynamic>{}},
+                      ],
+                    },
+                    '0',
+                  ],
+                ],
+              },
             ],
           ),
         );
@@ -2562,7 +3386,7 @@ void main() {
     );
 
     test(
-      'periodic reconcile is throttled to at most once per hour',
+      'periodic reconcile is throttled to at most once per interval',
       () async {
         // Only 1 mocked response — a second network call for reconcile would
         // wrap around and mismatch. The throttle must prevent that.
@@ -3372,6 +4196,123 @@ void main() {
     });
 
     test(
+      'destroys the created Sent copy when EmailSubmission/set fails',
+      () async {
+        // When the server refuses the submission, the email created in the
+        // Sent mailbox beforehand must be destroyed so a message that was
+        // never actually sent does not linger in the Sent folder.
+        final emailSetBodies = <Map<String, dynamic>>[];
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {
+                  'urn:ietf:params:jmap:core': {},
+                  'urn:ietf:params:jmap:mail': {},
+                  'urn:ietf:params:jmap:submission': {},
+                },
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          if (req.body.contains('Identity/get')) {
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Identity/get',
+                    {
+                      'accountId': 'acct1',
+                      'state': 'id1',
+                      'list': [
+                        {'id': 'identity1', 'email': 'alice@example.com'},
+                      ],
+                    },
+                    'i',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
+          if (req.body.contains('Email/set')) {
+            emailSetBodies.add(jsonDecode(req.body) as Map<String, dynamic>);
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Email/set',
+                    {
+                      'accountId': 'acct1',
+                      'newState': 'est2',
+                      'created': {
+                        'em1': {'id': 'newEmailId1'},
+                      },
+                    },
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
+          // EmailSubmission/set fails.
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'EmailSubmission/set',
+                  {
+                    'accountId': 'acct1',
+                    'notCreated': {
+                      'sub1': {'type': 'forbiddenFrom'},
+                    },
+                  },
+                  '1',
+                ],
+              ],
+            }),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await expectLater(
+          r.emails.sendEmail('jmap-1', draft),
+          throwsA(isA<JmapException>()),
+        );
+
+        // The first Email/set creates the Sent copy; a later Email/set must
+        // destroy exactly the email that was created.
+        Map<String, dynamic> emailSetArgs(Map<String, dynamic> body) {
+          final calls = body['methodCalls'] as List<dynamic>;
+          return (calls.first as List<dynamic>)[1] as Map<String, dynamic>;
+        }
+
+        final destroyCall = emailSetBodies.firstWhere(
+          (body) => emailSetArgs(body).containsKey('destroy'),
+          orElse: () => throw StateError(
+            'expected an Email/set destroy call after a failed submission',
+          ),
+        );
+        expect(emailSetArgs(destroyCall)['destroy'], contains('newEmailId1'));
+      },
+    );
+
+    test(
       'forbiddenFrom error includes envelope and identity addresses',
       () async {
         final r = _makeRepos(
@@ -3596,6 +4537,87 @@ void main() {
 
       await sub.cancel();
       await sseController.close();
+    });
+
+    test(
+      'logs push_status=unsupported when server has no eventSourceUrl',
+      () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          httpClient: makeSseClient(),
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await r.emails.watchJmapPush('jmap-1', 'pw').toList();
+
+        final pushRows =
+            recorder.entries.where((e) => e.event == 'sync.jmap.push').toList();
+        expect(pushRows, hasLength(1));
+        expect(
+          pushRows.single.dataJson,
+          contains('"push_status":"unsupported"'),
+        );
+        expect(pushRows.single.accountId, 'jmap-1');
+      },
+    );
+
+    test('logs push_status=connected once the SSE stream opens', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final connectedRows = recorder.entries
+          .where(
+            (e) =>
+                e.event == 'sync.jmap.push' &&
+                (e.dataJson ?? '').contains('"push_status":"connected"'),
+          )
+          .toList();
+      expect(connectedRows, hasLength(1));
+
+      await sub.cancel();
+      await sseController.close();
+    });
+
+    test('logs push_status=closed when SSE stream ends', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: makeSseClient(
+          eventSourceUrl: 'https://jmap.example.com/events/',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      await sseController.close();
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final closedRows = recorder.entries
+          .where(
+            (e) =>
+                e.event == 'sync.jmap.push' &&
+                (e.dataJson ?? '').contains('"push_status":"closed"'),
+          )
+          .toList();
+      expect(closedRows, hasLength(1));
+
+      await sub.cancel();
     });
   });
 

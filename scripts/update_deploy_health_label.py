@@ -6,14 +6,17 @@ Replaces the inline Python that used to live in deploy.yml's
 ``label-deploy-health`` job. Reads from the environment:
 
   GITHUB_TOKEN            — token with repo:issues write
-  GITHUB_API_URL          — https://api.github.com (runner-provided)
+  GITHUB_API_URL          — GitHub API base URL (required — pin it in the
+                            workflow ``env:`` block, e.g. ``$GITHUB_API_URL``
+                            on hosted runners)
   GITHUB_REPOSITORY       — owner/repo
-  DEPLOY_HEALTH_ISSUE     — issue number, e.g. "42"; empty disables this script
+  DEPLOY_HEALTH_ISSUE     — issue number, e.g. "42"; required
   ALL_SUCCEEDED           — "true" if every deploy job succeeded or was
                             skipped, otherwise "false"
 
-If DEPLOY_HEALTH_ISSUE is empty the script exits 0 silently — matches the
-behaviour of the previous inline implementation.
+Missing or empty ``DEPLOY_HEALTH_ISSUE`` is a hard failure: the whole point
+of the label is to reflect deploy health, so silently skipping when the var
+is unset would make a broken configuration look green.
 """
 
 import json
@@ -27,11 +30,15 @@ import urllib.request
 def main():
     issue = os.environ.get("DEPLOY_HEALTH_ISSUE", "").strip()
     if not issue:
-        print("DEPLOY_HEALTH_ISSUE not set; skipping")
-        return 0
+        print(
+            "ERROR: DEPLOY_HEALTH_ISSUE is not set. Configure the "
+            "Actions variable at the repository (or organisation) level.",
+            file=sys.stderr,
+        )
+        return 1
 
     token = os.environ["GITHUB_TOKEN"]
-    api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    api_base = os.environ["GITHUB_API_URL"].rstrip("/")
     repo = os.environ["GITHUB_REPOSITORY"]
     succeeded = os.environ.get("ALL_SUCCEEDED", "false").lower() == "true"
     add_label = "CI/Full-Pass" if succeeded else "CI/Full-Fail"

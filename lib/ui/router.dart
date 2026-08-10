@@ -23,9 +23,11 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/force_resync_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
+import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
@@ -130,6 +132,12 @@ final router = GoRouter(
               path: ':accountId/sync-log',
               builder: (ctx, state) =>
                   SyncLogScreen(accountId: state.pathParameters['accountId']!),
+            ),
+            GoRoute(
+              path: ':accountId/force-resync',
+              builder: (ctx, state) => ForceResyncScreen(
+                accountId: state.pathParameters['accountId']!,
+              ),
             ),
             GoRoute(
               path: ':accountId/sync-state',
@@ -270,6 +278,10 @@ final router = GoRouter(
         GoRoute(
           path: '/sent-queue',
           builder: (ctx, state) => const SentQueueScreen(),
+        ),
+        GoRoute(
+          path: '/pending-changes',
+          builder: (ctx, state) => const PendingChangesScreen(),
         ),
         GoRoute(
           path: '/debug/messages',

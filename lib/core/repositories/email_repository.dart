@@ -1,5 +1,6 @@
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 
 export 'package:sharedinbox/core/sieve/sieve_parser.dart'
     show SieveParseException;
@@ -107,6 +108,14 @@ abstract class EmailRepository {
   /// Emits the list of pending mutations that have failed at least once for
   /// [accountId]. Updates live whenever the queue changes.
   Stream<List<FailedMutation>> observeFailedMutations(String accountId);
+
+  /// Emits every outbound queue row (failed or not-yet-tried) for [accountId],
+  /// oldest first. Powers the per-account Pending Changes screen.
+  Stream<List<PendingChange>> observePendingChanges(String accountId);
+
+  /// Emits every outbound queue row across all accounts, oldest first. Backs
+  /// the global Pending Changes screen and the drawer badge.
+  Stream<List<PendingChange>> observeAllPendingChanges();
 
   /// Permanently removes the pending mutation with [id] from the queue.
   Future<void> discardMutation(int id);

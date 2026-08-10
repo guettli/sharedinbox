@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mockito/mockito.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -37,6 +38,9 @@ Email _emailWith({
 Widget _buildApp({
   required List<UndoAction> history,
   List<Mailbox> mailboxes = const [],
+  List<Account> accounts = const [
+    Account(id: 'acc-1', displayName: 'Alice', email: 'alice@example.com'),
+  ],
 }) {
   final undoRepo = MockUndoRepository();
   when(undoRepo.getHistory(limit: anyNamed('limit')))
@@ -67,6 +71,8 @@ Widget _buildApp({
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
       emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      accountRepositoryProvider
+          .overrideWithValue(FakeAccountRepository(accounts)),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -157,6 +163,51 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.textContaining('MOVE from INBOX'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'shows the account name, not the raw account id',
+      (tester) async {
+        final action = UndoAction(
+          id: 'undo-6',
+          accountId: 'acc-1',
+          type: UndoType.delete,
+          emailIds: ['acc-1:42'],
+          sourceMailboxPath: 'INBOX',
+          originalEmails: [_emailWith()],
+          timestamp: DateTime(2024, 6, 1, 10),
+        );
+
+        await tester.pumpWidget(_buildApp(history: [action]));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Alice'), findsOneWidget);
+        expect(find.text('acc-1'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'falls back to the raw account id when the account is unknown',
+      (tester) async {
+        // Account removed after the action was logged: nothing to resolve, so
+        // the raw id is shown rather than a blank line.
+        final action = UndoAction(
+          id: 'undo-7',
+          accountId: 'gone',
+          type: UndoType.delete,
+          emailIds: ['acc-1:42'],
+          sourceMailboxPath: 'INBOX',
+          originalEmails: [_emailWith()],
+          timestamp: DateTime(2024, 6, 1, 10),
+        );
+
+        await tester.pumpWidget(
+          _buildApp(history: [action], accounts: const []),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('gone'), findsOneWidget);
       },
     );
 

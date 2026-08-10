@@ -28,8 +28,8 @@
       "customType": "regex",
       "fileMatch": ["^\\.fvmrc$"],
       "matchStrings": ["\"flutter\":\\s*\"(?<currentValue>[^\"]+)\""],
-      "depNameTemplate": "ghcr.io/cirruslabs/flutter",
-      "datasourceTemplate": "docker",
+      "depNameTemplate": "flutter",
+      "datasourceTemplate": "flutter-version",
       "versioningTemplate": "semver"
     },
     {

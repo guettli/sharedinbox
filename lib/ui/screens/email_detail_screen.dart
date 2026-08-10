@@ -19,7 +19,6 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
-import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -52,7 +51,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _isFlagged = false;
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
-  bool _notesSynced = false;
 
   /// Fallback nav resolved from `observeEmails(mailbox)` when [widget.nav]
   /// is null (deep links, notifications). Cached per emailId so the buttons
@@ -107,18 +105,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
-  /// Fire-and-forget notes sync — swallow failures (network timeout, TLS
-  /// error, DB error) so a background refresh cannot escape to
-  /// runZonedGuarded → FlutterError.onError → CrashScreen. The local cache
-  /// keeps serving whatever it already has; the next screen open will retry.
-  Future<void> _syncNotesQuietly(String accountId, String messageId) async {
-    try {
-      await ref.read(noteRepositoryProvider).syncNotes(accountId, messageId);
-    } catch (e, st) {
-      log('note sync failed', error: e, stackTrace: st);
-    }
-  }
-
   void _goToNeighbour(EmailDetailNavItem target) {
     if (!mounted) return;
     context.go(
@@ -140,10 +126,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         final email = next.value?.$1;
         if (email != null && mounted) {
           setState(() => _isFlagged = email.isFlagged);
-        }
-        if (!_notesSynced && email?.messageId != null) {
-          _notesSynced = true;
-          unawaited(_syncNotesQuietly(email!.accountId, email.messageId!));
         }
       },
     );

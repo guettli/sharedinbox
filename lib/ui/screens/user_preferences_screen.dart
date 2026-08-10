@@ -257,7 +257,7 @@ class UserPreferencesScreen extends ConsumerWidget {
   }
 }
 
-/// Local-storage encryption toggle (issue #582).
+/// Local-storage encryption toggle (issue #330).
 ///
 /// Conversion between plaintext and SQLCipher requires exclusive access to
 /// the DB, so flipping the switch only stages a pending change — the actual
@@ -317,7 +317,12 @@ class _EncryptionSectionState extends ConsumerState<_EncryptionSection> {
         ),
         if (status.hasPendingChange)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              0,
+              AppSpacing.lg,
+              AppSpacing.lg,
+            ),
             child: Row(
               children: [
                 Expanded(

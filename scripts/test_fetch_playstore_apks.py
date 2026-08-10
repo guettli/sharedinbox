@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Tests for fetch_playstore_apks.py."""
+import contextlib
+import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -35,6 +38,45 @@ class TestResolveVersionCode(unittest.TestCase):
             120,
         )
 
+    def test_ignores_draft_release_in_favor_of_served_one(self):
+        """Regression for #432: a draft release (never served, so Play never
+        generates its split APKs) with a higher versionCode must not shadow the
+        served release — otherwise the fetch polls forever and every run skips."""
+        session = self._session_with_releases(
+            [
+                {"versionCodes": ["120"], "status": "draft"},
+                {"versionCodes": ["110"], "status": "completed"},
+            ]
+        )
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            110,
+        )
+
+    def test_falls_back_to_raw_max_when_only_drafts(self):
+        """If every release is a draft we still surface the highest versionCode
+        (it skips via PENDING) rather than erroring — preserves prior behaviour
+        for that edge case."""
+        session = self._session_with_releases(
+            [
+                {"versionCodes": ["120"], "status": "draft"},
+                {"versionCodes": ["115"], "status": "draft"},
+            ]
+        )
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            120,
+        )
+
+    def test_absent_status_treated_as_served(self):
+        """A release with no ``status`` field must be treated as served so an
+        unexpected/omitted API value never silently drops a real release."""
+        session = self._session_with_releases([{"versionCodes": ["42"]}])
+        self.assertEqual(
+            fetch_playstore_apks._resolve_version_code(session, "pkg", "alpha"),
+            42,
+        )
+
     def test_raises_when_no_releases(self):
         session = self._session_with_releases([])
         with self.assertRaises(RuntimeError):
@@ -56,9 +98,8 @@ class TestResolveVersionCode(unittest.TestCase):
 class TestListGeneratedApks(unittest.TestCase):
     def test_returns_none_on_404(self):
         """Play returns 404 until it has finished generating split APKs for a
-        freshly uploaded AAB. The helper signals this with ``None`` so the
-        caller can skip the run cleanly — there is no fallback to older
-        bundles (we only ever exercise the binary users actually install)."""
+        freshly uploaded AAB. The helper signals this with ``None`` so
+        :func:`_poll_generated_apks` can retry until Play catches up."""
         session = MagicMock()
         resp = MagicMock(status_code=404)
         session.get.return_value = resp
@@ -78,14 +119,123 @@ class TestListGeneratedApks(unittest.TestCase):
             fetch_playstore_apks._list_generated_apks(session, "pkg", 42)
 
 
+class TestPollGeneratedApks(unittest.TestCase):
+    """Polling replaces the old ``.skip`` fallback: we wait inside the run
+    instead of deferring to the next hourly cron, and fail loudly when Play
+    never catches up so a stuck deploy surfaces as a red build."""
+
+    def test_returns_first_non_none_listing(self):
+        session = MagicMock()
+        listing = {"generatedApks": [{"key": "v"}]}
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=[None, None, listing],
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                result = fetch_playstore_apks._poll_generated_apks(
+                    session, "pkg", 42
+                )
+        self.assertIs(result, listing)
+
+    def test_raises_timeout_after_deadline(self):
+        session = MagicMock()
+        with patch(
+            "fetch_playstore_apks._list_generated_apks", return_value=None
+        ):
+            # time.monotonic advances past the deadline on the second call so
+            # the loop exits on the very next iteration.
+            with patch(
+                "fetch_playstore_apks.time.monotonic",
+                side_effect=[0.0, 10_000_000.0, 10_000_001.0],
+            ):
+                with patch("fetch_playstore_apks.time.sleep"):
+                    with self.assertRaises(TimeoutError) as ctx:
+                        fetch_playstore_apks._poll_generated_apks(
+                            session, "pkg", 42
+                        )
+        self.assertIn("42", str(ctx.exception))
+
+    def test_retries_through_transient_connection_error(self):
+        """Regression for #455: a dropped/reset connection to the Play API on one
+        polling GET (surfaced by requests as ``ConnectionError``, e.g. from a
+        ``RemoteDisconnected``) must be retried within the deadline, not crash
+        the whole fetch and file a spurious "Firebase Tests failed" issue."""
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        listing = {"generatedApks": [{"key": "v"}]}
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=[
+                ReqConnectionError("Connection aborted."),
+                None,
+                listing,
+            ],
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                result = fetch_playstore_apks._poll_generated_apks(
+                    session, "pkg", 42
+                )
+        self.assertIs(result, listing)
+
+    def test_timeout_names_transient_error_when_it_persists(self):
+        """If the transient connection error never clears within the window, the
+        poller still gives up with TimeoutError (so main() drops a PENDING skip
+        and the next run retries) and names the last error so the cause is
+        visible in the logs."""
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=ReqConnectionError("Remote end closed connection"),
+        ):
+            with patch(
+                "fetch_playstore_apks.time.monotonic",
+                side_effect=[0.0, 10_000_000.0, 10_000_001.0],
+            ):
+                with patch("fetch_playstore_apks.time.sleep"):
+                    with self.assertRaises(TimeoutError) as ctx:
+                        fetch_playstore_apks._poll_generated_apks(
+                            session, "pkg", 42
+                        )
+        self.assertIn("42", str(ctx.exception))
+        self.assertIn("Remote end closed connection", str(ctx.exception))
+
+    def test_http_error_still_propagates(self):
+        """An HTTP status error (4xx/5xx) is a hard problem, not a transient
+        connection blip — it must propagate rather than being retried away."""
+        from requests.exceptions import HTTPError
+
+        session = MagicMock()
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=HTTPError("500 Server Error"),
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                with self.assertRaises(HTTPError):
+                    fetch_playstore_apks._poll_generated_apks(
+                        session, "pkg", 42
+                    )
+
+
 def _patches(dest_dir, *, version_code, list_apks, env=None):
     """Common patch stack used by the main() tests.
 
     Stubs out the network-y bits (auth, session) so the test exercises only
-    the policy in ``main()`` (skip vs. download)."""
+    the policy in ``main()``.
+
+    ``list_apks`` may be either a listing (returned by ``_poll_generated_apks``)
+    or an exception instance to raise from the poller — the latter drives
+    the "Play never generated APKs" failure path.
+    """
     env_vars = {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
     if env:
         env_vars.update(env)
+    if isinstance(list_apks, BaseException):
+        poll_kwargs = {"side_effect": list_apks}
+    else:
+        poll_kwargs = {"return_value": list_apks}
     return [
         patch.dict(os.environ, env_vars, clear=False),
         patch.object(sys, "argv", ["fetch_playstore_apks.py", dest_dir]),
@@ -97,8 +247,8 @@ def _patches(dest_dir, *, version_code, list_apks, env=None):
             "fetch_playstore_apks._resolve_version_code", return_value=version_code
         ),
         patch(
-            "fetch_playstore_apks._list_generated_apks",
-            return_value=list_apks,
+            "fetch_playstore_apks._poll_generated_apks",
+            **poll_kwargs,
         ),
         patch(
             "fetch_playstore_apks._enumerate_downloads",
@@ -115,113 +265,305 @@ def _with_patches(patches, fn):
         return _with_patches(patches[1:], fn)
 
 
-class TestMainSkipsWhenPlayNotReady(unittest.TestCase):
-    """Regression for #83: when Play has not generated split APKs for the
-    latest alpha, write a ``.skip`` sentinel in the dest dir and return
-    cleanly. The shell wrapper treats ``.skip`` as a transient state (Play
-    APK generation can take an hour or more after upload) and skips the run
-    instead of opening a spurious failure issue. No fallback to older
-    bundles — the next hourly cron will pick it up."""
+class TestMainWritesPendingMarkerWhenPlayNotReady(unittest.TestCase):
+    """When Play has not finished generating split APKs within the poll
+    window, the script writes a ``PENDING`` marker (and a ``versionCode``)
+    and exits 0 so the wrapper can skip the Firebase Test Lab attempt
+    without filing a failure issue (see #414). The next scheduled run
+    retries. Any other error still propagates."""
 
-    def test_skips_when_latest_has_no_apks(self):
-        with tempfile.TemporaryDirectory() as dest_dir:
-            _with_patches(
-                _patches(dest_dir, version_code=200, list_apks=None),
-                fetch_playstore_apks.main,
-            )
-
-            skip_path = Path(dest_dir) / ".skip"
-            vc_path = Path(dest_dir) / "versionCode"
-            self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
-            self.assertIn("split APKs", skip_path.read_text())
-            self.assertIn("200", skip_path.read_text())
-            self.assertFalse(
-                vc_path.is_file(),
-                "versionCode must not be written when skipping — otherwise the "
-                "CI cache would treat the untested versionCode as 'tested'.",
-            )
-
-    def test_skip_message_is_single_line(self):
-        """The skip reason is surfaced as a ``::notice::`` line in the CI log,
-        so it must be a single line so the notice stays on one row."""
-        with tempfile.TemporaryDirectory() as dest_dir:
-            _with_patches(
-                _patches(dest_dir, version_code=1782243611, list_apks=None),
-                fetch_playstore_apks.main,
-            )
-
-            skip_text = (Path(dest_dir) / ".skip").read_text()
-            self.assertIn("1782243611", skip_text)
-            self.assertEqual(
-                skip_text.count("\n"), 1,
-                "skip message must be a single line (plus trailing newline)",
-            )
-
-
-class TestMainSkipsWhenAlreadyTested(unittest.TestCase):
-    """Skip Firebase Test Lab when the latest alpha matches the versionCode
-    of the last green run — the same binary doesn't need to be exercised
-    twice. The shell wrapper passes the cached versionCode via the
-    ``ALREADY_TESTED_VERSION_CODE`` env var; the script writes a ``.skip``
-    sentinel and downloads nothing."""
-
-    def test_skips_when_latest_matches_already_tested_env(self):
+    def test_writes_pending_marker_on_poll_timeout(self):
         with tempfile.TemporaryDirectory() as dest_dir:
             _with_patches(
                 _patches(
                     dest_dir,
                     version_code=200,
-                    list_apks={"generatedApks": []},
-                    env={"ALREADY_TESTED_VERSION_CODE": "200"},
+                    list_apks=TimeoutError(
+                        "Play has not generated split APKs for versionCode "
+                        "200 within 3600s"
+                    ),
                 ),
                 fetch_playstore_apks.main,
             )
 
-            skip_path = Path(dest_dir) / ".skip"
+            pending_path = Path(dest_dir) / "PENDING"
+            self.assertTrue(
+                pending_path.is_file(),
+                "PENDING marker must be written when Play is still generating",
+            )
+            self.assertEqual(pending_path.read_text().strip(), "200")
+
             vc_path = Path(dest_dir) / "versionCode"
-            self.assertTrue(skip_path.is_file(), f"{skip_path} not created")
-            self.assertIn("already tested", skip_path.read_text())
-            self.assertIn("200", skip_path.read_text())
-            self.assertFalse(
+            self.assertTrue(
                 vc_path.is_file(),
-                "versionCode is only written when the binary is actually being "
-                "exercised — the cache must not move forward on a skip.",
+                "versionCode must also be written so the wrapper can log it",
             )
-
-    def test_runs_when_latest_differs_from_already_tested(self):
-        with tempfile.TemporaryDirectory() as dest_dir:
-            _with_patches(
-                _patches(
-                    dest_dir,
-                    version_code=200,
-                    list_apks={"generatedApks": []},
-                    env={"ALREADY_TESTED_VERSION_CODE": "150"},
-                ),
-                fetch_playstore_apks.main,
-            )
-
-            skip_path = Path(dest_dir) / ".skip"
-            vc_path = Path(dest_dir) / "versionCode"
-            self.assertFalse(skip_path.is_file(), "must not skip when versions differ")
-            self.assertTrue(vc_path.is_file())
             self.assertEqual(vc_path.read_text().strip(), "200")
 
-    def test_runs_when_already_tested_env_is_empty(self):
-        """An empty ``ALREADY_TESTED_VERSION_CODE`` env var means the cache
-        is missing (first run, or token couldn't read it). Treat it as
-        "nothing tested yet" — exercise the latest alpha."""
+    def test_other_errors_still_propagate(self):
+        """A generic error (auth, Play API 5xx, …) must NOT be swallowed —
+        the PENDING skip is narrow to the Play-still-generating case."""
         with tempfile.TemporaryDirectory() as dest_dir:
-            _with_patches(
-                _patches(
-                    dest_dir,
-                    version_code=200,
-                    list_apks={"generatedApks": []},
-                    env={"ALREADY_TESTED_VERSION_CODE": ""},
-                ),
-                fetch_playstore_apks.main,
+            with self.assertRaises(RuntimeError):
+                _with_patches(
+                    _patches(
+                        dest_dir,
+                        version_code=200,
+                        list_apks=RuntimeError("Play API 500"),
+                    ),
+                    fetch_playstore_apks.main,
+                )
+
+            self.assertFalse(
+                (Path(dest_dir) / "PENDING").is_file(),
+                "PENDING marker must not be written for non-timeout errors",
             )
-            self.assertFalse((Path(dest_dir) / ".skip").is_file())
-            self.assertTrue((Path(dest_dir) / "versionCode").is_file())
+
+
+class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
+    """Regression for #422: the poll can run for well over an hour, and by the
+    time it times out ``dest_dir`` may have been reclaimed underneath the long
+    idle exec. Writing the PENDING marker then crashed with FileNotFoundError,
+    turning a benign Play-side delay into a red build. The skip must re-create
+    the directory so it stays graceful and still exits 0."""
+
+    def test_recreates_dest_dir_before_writing_marker(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Simulate dest_dir disappearing during the long poll.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "321 within 5400s"
+                )
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=321
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ):
+                # Must not raise — the skip re-creates dest_dir.
+                fetch_playstore_apks.main()
+
+            pending = Path(dest_dir) / "PENDING"
+            self.assertTrue(
+                pending.is_file(),
+                "PENDING marker must be written even if dest_dir vanished "
+                "during the poll",
+            )
+            self.assertEqual(pending.read_text().strip(), "321")
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "321"
+            )
+
+
+class TestMainDownloadSurvivesMissingDestDir(unittest.TestCase):
+    """Regression for #425: the poll can run for well over an hour, and by the
+    time it returns a listing ``dest_dir`` may have been reclaimed underneath
+    the long idle exec. The download path (unlike the #422 PENDING skip) is a
+    hard failure with no marker, so a crash there turns a transient reclaim
+    into a red build and a spurious failure issue. main() must re-create the
+    directory so the download stays graceful."""
+
+    def test_recreates_dest_dir_before_downloading(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Simulate dest_dir disappearing during the long poll before
+                # Play finally returns a listing.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                return {"generatedApks": [{"key": "v"}]}
+
+            written = {}
+
+            def _fake_download(_session, _pkg, _vc, _dl_id, dest):
+                # Fails with FileNotFoundError if dest_dir was not re-created.
+                with open(dest, "wb") as out:
+                    out.write(b"apk")
+                written[os.path.basename(dest)] = True
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=555
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ), patch(
+                "fetch_playstore_apks._enumerate_downloads",
+                return_value=[("dl-1", "base-master.apk")],
+            ), patch(
+                "fetch_playstore_apks._download",
+                side_effect=_fake_download,
+            ):
+                # Must not raise — main() re-creates dest_dir before downloading.
+                fetch_playstore_apks.main()
+
+            self.assertTrue(
+                written.get("base-master.apk"),
+                "APK must be downloaded even if dest_dir vanished during poll",
+            )
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "555"
+            )
+
+
+class TestWriteDestFile(unittest.TestCase):
+    """``_write_dest_file`` must (re)create the destination directory before
+    every write. The Play-still-generating skip idles for well over an hour and
+    the exec's ephemeral /tmp is reclaimed underneath it (see #422, #424), so a
+    plain ``open`` would crash with FileNotFoundError."""
+
+    def test_recreates_missing_dir_before_write(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "gone")  # never created
+            fetch_playstore_apks._write_dest_file(dest_dir, "PENDING", "7\n")
+            self.assertEqual(
+                (Path(dest_dir) / "PENDING").read_text().strip(), "7"
+            )
+
+
+class TestMainSkipSurvivesDirVanishingBeforeSecondWrite(unittest.TestCase):
+    """Regression for #424: the observed crash was the PENDING write failing
+    with FileNotFoundError after a 90-minute poll timed out and the exec's
+    ephemeral /tmp was reclaimed. #422 re-created the dir once at the top of the
+    skip; routing every write through ``_write_dest_file`` additionally keeps
+    the skip graceful if the dir is reclaimed *again* before the versionCode
+    write, so the whole skip never crashes with FileNotFoundError."""
+
+    def test_versioncode_write_survives_dir_removed_after_pending(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_timeout(*_args, **_kwargs):
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "424 within 5400s"
+                )
+
+            real_write = fetch_playstore_apks._write_dest_file
+            calls = []
+
+            def _maybe_vanish_then_write(dd, name, contents):
+                calls.append(name)
+                # After PENDING lands, simulate the reaper dropping dest_dir
+                # again before the versionCode write — the helper must recover.
+                if name == "versionCode":
+                    shutil.rmtree(dd, ignore_errors=True)
+                return real_write(dd, name, contents)
+
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code", return_value=424
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_timeout,
+            ), patch(
+                "fetch_playstore_apks._write_dest_file",
+                side_effect=_maybe_vanish_then_write,
+            ):
+                # Must not raise even though dest_dir vanishes before the
+                # versionCode write.
+                fetch_playstore_apks.main()
+
+            self.assertEqual(calls, ["PENDING", "versionCode"])
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "424"
+            )
+
+
+class TestMainSkipCompletesForReclaimDuringPoll(unittest.TestCase):
+    """Regression for #428: the observed failure was the 90-minute poll timing
+    out (Play never generated split APKs for the alpha versionCode) and the
+    PENDING write then crashing with
+    ``FileNotFoundError: '/tmp/apks/PENDING'`` because the exec's ephemeral
+    /tmp had been reclaimed during the long idle. That crash exited the fetch
+    non-zero and filed a spurious "Firebase Tests failed" issue.
+
+    Unlike the earlier per-file assertions (#422, #424), this pins the full
+    end-to-end skip contract for the #428 traceback: main() must return
+    without raising *and* still print the versionCode to stdout so a caller
+    that captures ``$(…)`` gets it even on the reclaimed-dir skip path."""
+
+    def test_skip_returns_and_prints_versioncode_when_dir_reclaimed(self):
+        with tempfile.TemporaryDirectory() as parent:
+            dest_dir = os.path.join(parent, "apks")
+
+            def _poll_then_vanish(*_args, **_kwargs):
+                # Reproduce #428: dest_dir is reclaimed during the long poll,
+                # then the poll gives up with TimeoutError.
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                raise TimeoutError(
+                    "Play has not generated split APKs for versionCode "
+                    "1785101151 within 5400s"
+                )
+
+            stdout = io.StringIO()
+            with patch.dict(
+                os.environ,
+                {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'},
+                clear=False,
+            ), patch.object(
+                sys, "argv", ["fetch_playstore_apks.py", dest_dir]
+            ), patch(
+                "fetch_playstore_apks.service_account.Credentials."
+                "from_service_account_info"
+            ), patch(
+                "fetch_playstore_apks.AuthorizedSession",
+                return_value=MagicMock(),
+            ), patch(
+                "fetch_playstore_apks._resolve_version_code",
+                return_value=1785101151,
+            ), patch(
+                "fetch_playstore_apks._poll_generated_apks",
+                side_effect=_poll_then_vanish,
+            ), contextlib.redirect_stdout(stdout):
+                # Must not raise: the skip re-creates dest_dir before writing.
+                fetch_playstore_apks.main()
+
+            self.assertEqual(stdout.getvalue().strip(), "1785101151")
+            self.assertTrue((Path(dest_dir) / "PENDING").is_file())
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(),
+                "1785101151",
+            )
 
 
 class TestEnumerateDownloads(unittest.TestCase):

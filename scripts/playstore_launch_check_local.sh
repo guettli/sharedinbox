@@ -19,6 +19,12 @@ if [ -z "${PLAY_STORE_CONFIG_JSON:-}" ]; then
     exit 1
 fi
 
+if [ -z "${ANDROID_HOME:-}" ]; then
+    echo "ERROR: ANDROID_HOME is not set. Add it to your ~/.zshrc or ~/.bashrc:" >&2
+    echo "  export ANDROID_HOME=\"\$HOME/Android/Sdk\"" >&2
+    exit 1
+fi
+
 PACKAGE="de.sharedinbox.mua"
 APK_DIR=$(mktemp -d /tmp/playstore-apks-XXXXXX)
 trap 'rm -rf "$APK_DIR"' EXIT
@@ -27,12 +33,11 @@ echo "Fetching latest alpha APK set to $APK_DIR…"
 VERSION_CODE=$(python3 scripts/fetch_playstore_apks.py "$APK_DIR")
 echo "Got versionCode=$VERSION_CODE"
 
-ADB=$(command -v adb 2>/dev/null || echo "${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb")
+ADB=$(command -v adb 2>/dev/null || echo "$ANDROID_HOME/platform-tools/adb")
 "$ADB" version >/dev/null 2>&1 || {
-    echo "adb not found — set ANDROID_HOME or add platform-tools to PATH"
+    echo "adb not found at $ADB — install platform-tools under \$ANDROID_HOME or add it to PATH"
     exit 1
 }
-"$ADB" start-server >/dev/null 2>&1 || true
 
 # AVD boot logic mirrors stalwart-dev/run_android.sh; if no emulator is up we
 # boot sharedinbox_test in the background.
@@ -43,7 +48,7 @@ if [ -z "$EMULATOR_ID" ]; then
         echo "  sudo gpasswd -a \$USER kvm  # then log out and back in."
         exit 1
     fi
-    EMULATOR_BIN="${ANDROID_HOME:-$HOME/Android/Sdk}/emulator/emulator"
+    EMULATOR_BIN="$ANDROID_HOME/emulator/emulator"
     echo "No emulator running — booting AVD sharedinbox_test…"
     "$EMULATOR_BIN" -avd sharedinbox_test -no-window -no-audio -no-snapshot-save \
         > /tmp/emulator.log 2>&1 &
@@ -63,9 +68,6 @@ if [ -z "$EMULATOR_ID" ]; then
 fi
 echo "Using emulator: $EMULATOR_ID"
 
-echo "Uninstalling any previous install of $PACKAGE…"
-"$ADB" -s "$EMULATOR_ID" uninstall "$PACKAGE" >/dev/null 2>&1 || true
-
 echo "Installing split APKs from $APK_DIR…"
 # install-multiple is required for split APKs from the Play generatedApks API.
 mapfile -t APK_FILES < <(find "$APK_DIR" -maxdepth 1 -name "*.apk" -type f)
@@ -80,7 +82,9 @@ echo "Launching $PACKAGE/.MainActivity…"
 
 WATCH_SECONDS=15
 echo "Watching crash logcat for FATAL EXCEPTION for ${WATCH_SECONDS}s…"
-CRASH_LOG=$(timeout "${WATCH_SECONDS}" "$ADB" -s "$EMULATOR_ID" logcat -b crash -d 2>/dev/null || true)
+crash_rc=0
+CRASH_LOG=$(timeout "${WATCH_SECONDS}" "$ADB" -s "$EMULATOR_ID" logcat -b crash -d 2>&1) || crash_rc=$?
+[ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH_LOG"; exit 1; }
 if echo "$CRASH_LOG" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
     echo "----- CRASH DETECTED -----"
     echo "$CRASH_LOG"

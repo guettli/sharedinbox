@@ -3,14 +3,19 @@
 Minimal OTLP HTTP/protobuf trace receiver for Dagger CI timing.
 
 Usage:
-    python3 ci/otel-receiver.py --port-file=/tmp/otel.port
+    python3 ci/otel-receiver.py --port-file=/tmp/otel.port [--output-file=timings.json]
 
 Caller sets:
     OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>
     OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+
+When --output-file is given, on shutdown the receiver writes a JSON document
+with the collected spans and per-span durations. Suitable for uploading as a
+GitHub Actions workflow artefact (see .github/workflows/ci.yml).
 """
 
 import argparse
+import json
 import signal
 import struct
 import sys
@@ -141,8 +146,14 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             decoded = _decode(body)
         except Exception as exc:
-            print(f"[otel-receiver] decode error: {exc}", file=sys.stderr, flush=True)
-            self._respond(400, str(exc).encode()); return
+            # Return 500 (retryable) instead of 400: 400 tells the OTLP sender
+            # "your fault, don't retry" which silently drops timing data on
+            # a receiver-side decoder bug.
+            print(
+                f"[otel-receiver] ERROR: decode failed: {exc}; body={body!r}",
+                file=sys.stderr, flush=True,
+            )
+            self._respond(500, str(exc).encode()); return
         with _lock:
             _spans.extend(decoded)
         self._respond(200)
@@ -153,10 +164,13 @@ class _Handler(BaseHTTPRequestHandler):
 
 # ── Timing report ────────────────────────────────────────────────────────────
 
-def _report():
+def _report(output_file=""):
     with _lock:
         if not _spans:
             print("otel-receiver: no spans received", file=sys.stderr)
+            if output_file:
+                with open(output_file, "w") as f:
+                    json.dump({"spans": [], "total_s": 0.0}, f, indent=2)
             return
         rows = sorted(_spans, key=lambda r: r["dur"], reverse=True)
         NAME_W = 38
@@ -169,11 +183,28 @@ def _report():
                 name = name[: NAME_W - 1] + "…"
             print(f'{status:<6}  {r["dur"]:7.2f}s  {name}')
         print(f"\n{len(rows)} spans total")
+        if output_file:
+            payload = {
+                "spans": [
+                    {
+                        "name": r["name"],
+                        "duration_s": round(r["dur"], 3),
+                        "cached": bool(r["cached"]),
+                    }
+                    for r in rows
+                ],
+                "total_s": round(sum(r["dur"] for r in rows if not r["cached"]), 3),
+            }
+            with open(output_file, "w") as f:
+                json.dump(payload, f, indent=2)
+            print(f"otel-receiver: wrote {output_file}", file=sys.stderr)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", default="")
+    ap.add_argument("--output-file", default="",
+                    help="write per-span JSON timings on shutdown (for CI upload)")
     args = ap.parse_args()
 
     server = HTTPServer(("127.0.0.1", 0), _Handler)
@@ -188,7 +219,7 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
 
     server.serve_forever()
-    _report()
+    _report(args.output_file)
 
 
 if __name__ == "__main__":

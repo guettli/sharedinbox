@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:sharedinbox/ui/theme/spacing.dart';
+
 /// Wraps [child] so that a build- or paint-time exception in the subtree shows
 /// a compact inline fallback instead of escalating to the global crash screen.
 ///
@@ -208,17 +210,17 @@ class _DefaultErrorFallback extends StatelessWidget {
         : 'This part of the screen could not be rendered';
 
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
+      margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       color: scheme.errorContainer,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Icon(Icons.error_outline, color: scheme.onErrorContainer),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     title,
@@ -233,10 +235,10 @@ class _DefaultErrorFallback extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 8),
+              childrenPadding: const EdgeInsets.only(bottom: AppSpacing.sm),
               title: Text(
                 'Show details',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -255,7 +257,7 @@ class _DefaultErrorFallback extends StatelessWidget {
                   ),
                 ),
                 if (stack != null && kDebugMode) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   SelectableText(
                     stack.toString(),
                     style: TextStyle(

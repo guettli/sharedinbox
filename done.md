@@ -52,6 +52,37 @@ removed local rows for folders that had disappeared upstream. The next
   defensive `syncEmails` path that handles a folder deleted between the two
   sync steps.
 
+## Force Full Re-sync from Settings (Issue #332)
+
+`AccountSyncManager.forceResync` used to be fire-and-forget: it cleared the
+local cache and restarted the background sync loop, leaving the user
+staring at a silent screen with no way to know whether anything was
+happening. This change makes the operation observable and adds an
+explicit UI entry point per account.
+
+- **`lib/core/sync/account_sync_manager.dart`**: `forceResync` now returns
+  a `Stream<ForceResyncProgress>` that emits per-phase snapshots
+  (`clearing` → `syncingMailboxes` → per-mailbox `syncingEmails` →
+  `complete` or `failed`). Per-mailbox failures are collected and
+  surfaced in the terminal snapshot instead of tearing down the whole
+  operation. Cached bodies/attachments continue to be preserved because
+  `EmailRepository.clearForResync` keeps the `EmailBodies` rows around
+  (see `SYNC.md`, `DB-SYNC.md`).
+- **`lib/ui/screens/force_resync_screen.dart`**: new screen that
+  subscribes to the stream and shows a phase header, an overall
+  progress bar, per-mailbox `new / skipped` counts, and any errors in a
+  dedicated error panel. Back navigation is blocked until the resync
+  reaches a terminal phase so the user can't accidentally leave
+  mid-flight.
+- **`lib/ui/screens/account_actions.dart`** + **`lib/ui/router.dart`**:
+  the "Force full sync" menu item now confirms and then pushes
+  `/accounts/:accountId/force-resync` instead of awaiting the future.
+- **`test/unit/force_resync_test.dart`**: divergence-and-reconcile
+  coverage — seeds a stale local row and a missing-locally row, asserts
+  the terminal snapshot matches the fake server, that cached bodies are
+  not re-downloaded, and that per-mailbox errors flow into the terminal
+  snapshot's `error` field.
+
 ## Advanced Error Boundaries (Issue #583)
 
 Added a reusable `ErrorBoundary` widget that contains build- and paint-time
@@ -129,6 +160,21 @@ exceptions to its subtree instead of escalating to the global crash screen.
     native auto-merge) once CI is green. agentloop's `automerge` label is
     issue-scoped and never sees Renovate PRs, so relying on it alone left
     them stuck. `major` updates remain manual.
+  - Follow-up (Issue #441): the daily run failed platform init with `401
+    unauthorized` / `Authentication failure` because the long-lived
+    `RENOVATE_TOKEN` PAT expired. The workflow now prefers a GitHub App
+    installation token (`RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`), which
+    is minted fresh each run so it never expires and can still trigger CI on
+    Renovate's PRs. It falls back to `RENOVATE_TOKEN` then `github.token`, so
+    rotating the PAT also resolves the failure without configuring the app.
+  - Follow-up (Issue #444): the same failure recurred because an *expired*
+    `RENOVATE_TOKEN` is still a non-empty secret and so wins a plain `||` chain
+    over `github.token`. Dropping the PAT from the chain would trade that for a
+    worse failure: a PAT-created PR triggers CI, a `github.token` PR does not, so
+    under the required-status-check ruleset Renovate's PRs could never merge
+    (verified on #445/#446, both of which got checks from the rotated PAT). The
+    workflow now probes the PAT once and skips it only when it fails to
+    authenticate, warning in the job summary either way.
 
 ## Tasks (2026-05-11)
 

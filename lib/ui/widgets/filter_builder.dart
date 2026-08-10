@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
 
 /// A widget that lets the user build a structured [FilterGroup] interactively.
 ///
@@ -11,10 +12,21 @@ class FilterBuilderWidget extends StatefulWidget {
     super.key,
     required this.initialValue,
     required this.onChanged,
+    this.availableFields = FilterField.values,
+    this.accountId,
   });
 
   final FilterGroup initialValue;
   final void Function(FilterGroup) onChanged;
+
+  /// Fields shown in the "field" dropdown. Defaults to every [FilterField].
+  /// The Sieve rule editor omits fields that do not exist in the Sieve spec
+  /// (e.g. [FilterField.folder]).
+  final List<FilterField> availableFields;
+
+  /// Optional account scope for the folder picker. When null, the picker
+  /// lists folders across every account (matching the search itself).
+  final String? accountId;
 
   @override
   State<FilterBuilderWidget> createState() => _FilterBuilderWidgetState();
@@ -40,6 +52,8 @@ class _FilterBuilderWidgetState extends State<FilterBuilderWidget> {
       group: _group,
       onChanged: _update,
       depth: 0,
+      availableFields: widget.availableFields,
+      accountId: widget.accountId,
     );
   }
 }
@@ -54,12 +68,16 @@ class _GroupEditor extends StatelessWidget {
     required this.group,
     required this.onChanged,
     required this.depth,
+    required this.availableFields,
+    required this.accountId,
     this.onRemoveGroup,
   });
 
   final FilterGroup group;
   final void Function(FilterGroup) onChanged;
   final int depth;
+  final List<FilterField> availableFields;
+  final String? accountId;
   final VoidCallback? onRemoveGroup;
 
   static const _maxDepth = 1;
@@ -69,18 +87,15 @@ class _GroupEditor extends StatelessWidget {
 
   void _addLeaf() {
     final leaf = FilterLeaf(
-      field: FilterField.from_,
-      comparison: FilterComparison.contains,
+      field: availableFields.first,
+      comparison: availableFields.first.allowedComparisons.first,
       value: '',
     );
     onChanged(group.copyWith(children: [...group.children, leaf]));
   }
 
   void _addSubGroup() {
-    final sub = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [],
-    );
+    final sub = FilterGroup(operator: FilterOperator.and_, children: []);
     onChanged(group.copyWith(children: [...group.children, sub]));
   }
 
@@ -149,12 +164,16 @@ class _GroupEditor extends StatelessWidget {
           leaf: leaf,
           onChanged: (l) => _replaceChild(i, l),
           onDelete: () => _removeChild(i),
+          availableFields: availableFields,
+          accountId: accountId,
         ),
       final FilterGroup sub => _GroupEditor(
           key: ValueKey(i),
           group: sub,
           onChanged: (g) => _replaceChild(i, g),
           depth: depth + 1,
+          availableFields: availableFields,
+          accountId: accountId,
           onRemoveGroup: () => _removeChild(i),
         ),
     };
@@ -214,11 +233,15 @@ class _LeafRow extends StatefulWidget {
     required this.leaf,
     required this.onChanged,
     required this.onDelete,
+    required this.availableFields,
+    required this.accountId,
   });
 
   final FilterLeaf leaf;
   final void Function(FilterLeaf) onChanged;
   final VoidCallback onDelete;
+  final List<FilterField> availableFields;
+  final String? accountId;
 
   @override
   State<_LeafRow> createState() => _LeafRowState();
@@ -271,6 +294,7 @@ class _LeafRowState extends State<_LeafRow> {
   @override
   Widget build(BuildContext context) {
     final isHeader = widget.leaf.field == FilterField.header;
+    final isFolder = widget.leaf.field == FilterField.folder;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
@@ -280,10 +304,8 @@ class _LeafRowState extends State<_LeafRow> {
             onChanged: _onFieldChanged,
             isDense: true,
             underline: const SizedBox.shrink(),
-            items: FilterField.values
-                .map(
-                  (f) => DropdownMenuItem(value: f, child: Text(f.label)),
-                )
+            items: widget.availableFields
+                .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
                 .toList(),
           ),
           if (isHeader) ...[
@@ -294,47 +316,45 @@ class _LeafRowState extends State<_LeafRow> {
                 controller: _headerNameCtrl,
                 onChanged: (v) =>
                     widget.onChanged(widget.leaf.copyWith(headerName: v)),
-                decoration: const InputDecoration(
-                  hintText: 'header name',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.sm,
-                  ),
-                ),
+                decoration: _leafFieldDecoration('header name'),
               ),
             ),
           ],
           const SizedBox(width: AppSpacing.sm),
-          DropdownButton<FilterComparison>(
-            value: widget.leaf.comparison,
-            onChanged: _onCompChanged,
-            isDense: true,
-            underline: const SizedBox.shrink(),
-            items: widget.leaf.field.allowedComparisons
-                .map(
-                  (c) => DropdownMenuItem(value: c, child: Text(c.label)),
-                )
-                .toList(),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: TextField(
-              controller: _ctrl,
-              onChanged: (v) =>
-                  widget.onChanged(widget.leaf.copyWith(value: v)),
-              decoration: const InputDecoration(
-                hintText: 'value',
-                isDense: true,
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.sm,
+          if (isFolder)
+            // Folder is always an exact match against the picked mailbox, so
+            // there is no comparison dropdown — just the picker button, which
+            // stores the mailbox's raw `path` (opaque JMAP id or IMAP path)
+            // so the LIKE against `emails.mailbox_path` matches.
+            Expanded(
+              child: MailboxPickerButton(
+                accountId: widget.accountId,
+                value: widget.leaf.value,
+                onPicked: (picked, displayPath) => widget.onChanged(
+                  widget.leaf.copyWith(value: picked?.path ?? displayPath),
                 ),
               ),
+            )
+          else ...[
+            DropdownButton<FilterComparison>(
+              value: widget.leaf.comparison,
+              onChanged: _onCompChanged,
+              isDense: true,
+              underline: const SizedBox.shrink(),
+              items: widget.leaf.field.allowedComparisons
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
+                  .toList(),
             ),
-          ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                onChanged: (v) =>
+                    widget.onChanged(widget.leaf.copyWith(value: v)),
+                decoration: _leafFieldDecoration('value'),
+              ),
+            ),
+          ],
           IconButton(
             icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
             tooltip: 'Remove',
@@ -345,3 +365,16 @@ class _LeafRowState extends State<_LeafRow> {
     );
   }
 }
+
+/// Shared decoration for the leaf-row text inputs (header name and value),
+/// hoisted out so the two nearly-identical [InputDecoration] literals don't
+/// trip the duplication detector.
+InputDecoration _leafFieldDecoration(String hint) => InputDecoration(
+      hintText: hint,
+      isDense: true,
+      border: const OutlineInputBorder(),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.sm,
+      ),
+    );

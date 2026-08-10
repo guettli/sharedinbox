@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -26,6 +27,7 @@ import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
+import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
@@ -139,6 +141,22 @@ final allOutboxProvider = StreamProvider<List<OutboxMessage>>((ref) {
   return ref.watch(outboxRepositoryProvider).observeAllOutbox();
 });
 
+/// Every row in the outbound `pending_changes` queue, oldest first. Backs
+/// the global Pending Changes screen and the "Pending Changes" drawer badge.
+final allPendingChangesProvider = StreamProvider<List<PendingChange>>((ref) {
+  return ref.watch(emailRepositoryProvider).observeAllPendingChanges();
+});
+
+/// Per-account pending-change count — powers the badge next to each account
+/// row in the Manage Accounts (Settings) screen.
+final pendingChangeCountForAccountProvider =
+    StreamProvider.autoDispose.family<int, String>((ref, accountId) {
+  return ref
+      .watch(emailRepositoryProvider)
+      .observePendingChanges(accountId)
+      .map((rows) => rows.length);
+});
+
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
   return EmailRepositoryImpl(
     ref.watch(dbProvider),
@@ -186,6 +204,17 @@ final appLoggerProvider = Provider<AppLogger>((ref) {
 final appLogEntriesProvider = StreamProvider.autoDispose
     .family<List<AppLogEntry>, AppLogFilter>((ref, filter) {
   return ref.watch(appLogRepositoryProvider).watchEntries(filter);
+});
+
+/// Streams the newest `sync.jmap.push` log entry for [accountId]. Backs the
+/// "Push" row on the sync-state view — see `push_status.dart` for the
+/// vocabulary of values encoded in the entry's `push_status` data field.
+final jmapPushStatusProvider =
+    StreamProvider.autoDispose.family<AppLogEntry?, String>((ref, accountId) {
+  return ref.watch(appLogRepositoryProvider).watchLatestForAccount(
+        accountId: accountId,
+        event: 'sync.jmap.push',
+      );
 });
 
 final syncLastErrorProvider =
@@ -254,6 +283,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     appLogger: ref.watch(appLoggerProvider),
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
+    notes: ref.watch(noteRepositoryProvider),
     onNewMail: showNewMailNotification,
   );
   ref.onDispose(manager.dispose);
@@ -268,6 +298,34 @@ final unifiedPushServiceProvider = Provider<UnifiedPushService>((ref) {
   );
   ref.onDispose(service.dispose);
   return service;
+});
+
+/// Watches offline → online transitions so the outbox is drained as soon as
+/// the device is back on the network (#353). Owned by the running app; a
+/// missing platform channel just makes the reconnect kick a no-op.
+final connectivityServiceProvider = Provider<ConnectivityService>((ref) {
+  final service = ConnectivityService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Installs the subscription that turns each connectivity reconnect into an
+/// immediate outbox flush: clears the per-row backoff (so rows currently
+/// waiting on `nextAttemptAt` are eligible now) and kicks every account's
+/// sync loop (which calls `flushOutbox` at the start of its next iteration).
+///
+/// Reading this provider from app startup installs the subscription; the
+/// `onDispose` hook cancels it on shutdown.
+final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
+  final connectivity = ref.watch(connectivityServiceProvider);
+  final outbox = ref.watch(outboxRepositoryProvider);
+  final syncManager = ref.watch(syncManagerProvider);
+  final sub = connectivity.onOnline.listen((_) async {
+    await outbox.resetPendingBackoff();
+    syncManager.syncAll();
+  });
+  ref.onDispose(sub.cancel);
+  return sub;
 });
 
 final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((

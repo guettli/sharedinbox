@@ -46,6 +46,17 @@ android {
         versionName = flutter.versionName
     }
 
+    lint {
+        // lintVital runs automatically as part of every release build. The lint
+        // bundled with the current AGP crashes (NoSuchMethodError in
+        // JavaDocParser) while analysing url_launcher_android's UrlLauncher.java,
+        // failing :url_launcher_android:lintVitalAnalyzeRelease and aborting the
+        // whole release build. That is a bug in lint, not in our code, and our
+        // Dart sources are already gated by `flutter analyze`, so skip the
+        // release-build lint check.
+        checkReleaseBuilds = false
+    }
+
     buildTypes {
         release {
             if (ksPath != null) {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -87,6 +88,9 @@ Widget _buildApp({
   required UndoAction action,
   required FakeEmailRepository emailRepo,
   List<Mailbox> mailboxes = const [],
+  List<Account> accounts = const [
+    Account(id: 'acc-1', displayName: 'Alice', email: 'alice@example.com'),
+  ],
   ValueNotifier<String?>? lastEmailRoute,
 }) {
   final router = GoRouter(
@@ -111,6 +115,8 @@ Widget _buildApp({
       emailRepositoryProvider.overrideWithValue(emailRepo),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
+      accountRepositoryProvider
+          .overrideWithValue(FakeAccountRepository(accounts)),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -191,6 +197,36 @@ void main() {
       expect(find.textContaining('no Message-ID'), findsOneWidget);
       expect(lastRoute.value, isNull);
       expect(find.text('email-detail-route'), findsNothing);
+    });
+  });
+
+  group('UndoLogDetailScreen account row', () {
+    testWidgets('shows the account name instead of the raw id', (tester) async {
+      await tester.pumpWidget(
+        _buildApp(
+          action: _action(),
+          emailRepo: FakeEmailRepository(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Alice'), findsOneWidget);
+      expect(find.text('acc-1'), findsNothing);
+    });
+
+    testWidgets('falls back to the raw id when the account is unknown', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildApp(
+          action: _action(accountId: 'gone'),
+          emailRepo: FakeEmailRepository(),
+          accounts: const [],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('gone'), findsOneWidget);
     });
   });
 

@@ -58,25 +58,42 @@ class TestMainEnvChecks(unittest.TestCase):
 
 class TestMainHappyPath(unittest.TestCase):
     def _run_main(self, fake_config='{"type":"service_account"}'):
+        import tempfile
+
         mock_session = MagicMock()
-        # POST for edit create and commit
+        # POST sequence: create edit → deobfuscation upload → commit
         post_responses = [
             MagicMock(**{"json.return_value": {"id": "edit-42"}}),  # create edit
+            MagicMock(**{"content": b"", "json.return_value": {}}),  # deobf upload
             MagicMock(),  # commit
         ]
         mock_session.post.side_effect = post_responses
         # PUT for track update
         mock_session.put.return_value = MagicMock()
 
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": fake_config}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
-                        with patch(
-                            "deploy_playstore._upload_aab_resumable",
-                            return_value={"versionCode": 7},
-                        ):
-                            deploy_playstore.main()
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+        try:
+            env = {
+                "PLAY_STORE_CONFIG_JSON": fake_config,
+                "MAPPING_TXT_PATH": mapping_path,
+            }
+            real_exists = os.path.exists
+            with patch.dict(os.environ, env, clear=True):
+                with patch("deploy_playstore.os.path.exists") as exists_mock:
+                    exists_mock.side_effect = lambda p: (
+                        True if p == deploy_playstore.AAB_PATH else real_exists(p)
+                    )
+                    with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
+                        with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                            with patch(
+                                "deploy_playstore._upload_aab_resumable",
+                                return_value={"versionCode": 7},
+                            ):
+                                deploy_playstore.main()
+        finally:
+            os.unlink(mapping_path)
 
         return mock_session
 
@@ -87,7 +104,8 @@ class TestMainHappyPath(unittest.TestCase):
 
     def test_commits_edit(self):
         session = self._run_main()
-        commit_call = session.post.call_args_list[1]
+        # POST sequence: create edit (0) → deobfuscation upload (1) → commit (2).
+        commit_call = session.post.call_args_list[-1]
         self.assertIn(":commit", commit_call[0][0])
 
     def test_updates_track(self):
@@ -122,20 +140,34 @@ class TestMainHappyPath(unittest.TestCase):
 
 class TestUploadRetry(unittest.TestCase):
     def _run_main(self, upload_side_effects, sleep_mock=None):
+        import tempfile
+
         mock_session = MagicMock()
         post_responses = [
             MagicMock(**{"json.return_value": {"id": "edit-1"}}),
+            MagicMock(**{"content": b"", "json.return_value": {}}),
             MagicMock(),
         ]
         mock_session.post.side_effect = post_responses
         mock_session.put.return_value = MagicMock()
 
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+
+        env = {
+            "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
+            "MAPPING_TXT_PATH": mapping_path,
+        }
+        real_exists = os.path.exists
         patches = [
-            patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}),
-            patch("deploy_playstore.os.path.exists", return_value=True),
+            patch.dict(os.environ, env, clear=True),
+            patch("deploy_playstore.os.path.exists",
+                  side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)),
             patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
             patch("deploy_playstore.AuthorizedSession", return_value=mock_session),
             patch("deploy_playstore._upload_aab_resumable", side_effect=upload_side_effects),
+            patch("deploy_playstore._upload_deobfuscation_file", return_value={}),
             patch("deploy_playstore.time.sleep"),
         ]
         for p in patches:
@@ -145,21 +177,12 @@ class TestUploadRetry(unittest.TestCase):
         finally:
             for p in patches:
                 p.stop()
+            os.unlink(mapping_path)
 
     def test_succeeds_on_first_attempt(self):
-        with patch("deploy_playstore._upload_aab_resumable", return_value={"versionCode": 5}) as mock_upload:
-            with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
-                with patch("deploy_playstore.os.path.exists", return_value=True):
-                    with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                        mock_session = MagicMock()
-                        mock_session.post.side_effect = [
-                            MagicMock(**{"json.return_value": {"id": "e1"}}),
-                            MagicMock(),
-                        ]
-                        mock_session.put.return_value = MagicMock()
-                        with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
-                            deploy_playstore.main()
-            mock_upload.assert_called_once()
+        # side_effect list with a single result means the mock returns after
+        # exactly one call — main() must not retry.
+        self._run_main([{"versionCode": 5}])
 
     def test_retries_once_on_error_then_succeeds(self):
         self._run_main([ValueError("transient"), {"versionCode": 9}])
@@ -170,23 +193,39 @@ class TestUploadRetry(unittest.TestCase):
         self.assertIn(str(deploy_playstore._MAX_UPLOAD_ATTEMPTS), str(ctx.exception))
 
     def test_backoff_delays_are_10s_then_20s(self):
+        import tempfile
+
         mock_session = MagicMock()
         mock_session.post.side_effect = [
             MagicMock(**{"json.return_value": {"id": "e1"}}),
-            MagicMock(),
+            MagicMock(**{"content": b"", "json.return_value": {}}),  # deobf upload
+            MagicMock(),  # commit
         ]
         mock_session.put.return_value = MagicMock()
 
-        with patch.dict(os.environ, {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}):
-            with patch("deploy_playstore.os.path.exists", return_value=True):
-                with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
-                    with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
-                        with patch(
-                            "deploy_playstore._upload_aab_resumable",
-                            side_effect=[ValueError("e"), ValueError("e"), {"versionCode": 3}],
-                        ):
-                            with patch("deploy_playstore.time.sleep") as mock_sleep:
-                                deploy_playstore.main()
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+        try:
+            env = {
+                "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
+                "MAPPING_TXT_PATH": mapping_path,
+            }
+            real_exists = os.path.exists
+            with patch.dict(os.environ, env, clear=True):
+                with patch("deploy_playstore.os.path.exists",
+                           side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)):
+                    with patch("deploy_playstore.service_account.Credentials.from_service_account_info"):
+                        with patch("deploy_playstore.AuthorizedSession", return_value=mock_session):
+                            with patch(
+                                "deploy_playstore._upload_aab_resumable",
+                                side_effect=[ValueError("e"), ValueError("e"), {"versionCode": 3}],
+                            ):
+                                with patch("deploy_playstore._upload_deobfuscation_file", return_value={}):
+                                    with patch("deploy_playstore.time.sleep") as mock_sleep:
+                                        deploy_playstore.main()
+        finally:
+            os.unlink(mapping_path)
 
         mock_sleep.assert_has_calls([call(10), call(20)])
 
@@ -264,11 +303,12 @@ class TestDeobfuscationUpload(unittest.TestCase):
 
         return mock_session
 
-    def test_skips_when_env_unset(self):
-        session = self._run_main(mapping_path=None)
-        # Only edit-create + commit; no deobfuscationFiles call.
-        post_urls = [c[0][0] for c in session.post.call_args_list]
-        self.assertFalse(any("deobfuscationFiles" in u for u in post_urls))
+    def test_fails_when_env_unset(self):
+        # Missing MAPPING_TXT_PATH must be a hard failure: a release without
+        # its R8 mapping breaks Play Console deobfuscation.
+        with self.assertRaises(SystemExit) as ctx:
+            self._run_main(mapping_path=None)
+        self.assertEqual(ctx.exception.code, 1)
 
     def test_uploads_when_env_set(self):
         import tempfile
@@ -290,11 +330,12 @@ class TestDeobfuscationUpload(unittest.TestCase):
         # Google's endpoint uses /apks/{versionCode}/... even for AAB uploads.
         self.assertIn("/apks/11/deobfuscationFiles/proguard", deobf_urls[0])
 
-    def test_warns_when_path_missing(self):
-        # Point at a non-existent file: upload should be skipped but main() must succeed.
-        session = self._run_main(mapping_path="/tmp/does-not-exist-mapping.txt")
-        post_urls = [c[0][0] for c in session.post.call_args_list]
-        self.assertFalse(any("deobfuscationFiles" in u for u in post_urls))
+    def test_fails_when_path_missing(self):
+        # Env var set but the file has been deleted / never emitted: still a
+        # hard failure — we won't publish a release without the mapping.
+        with self.assertRaises(SystemExit) as ctx:
+            self._run_main(mapping_path="/tmp/does-not-exist-mapping.txt")
+        self.assertEqual(ctx.exception.code, 1)
 
     def test_retries_on_failure_then_succeeds(self):
         import tempfile

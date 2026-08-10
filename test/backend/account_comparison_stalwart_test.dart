@@ -544,6 +544,74 @@ void main() {
     );
   });
 
+  // #407: marking a message read via one protocol must propagate to the
+  // other's local DB on the next sync. Stalwart 0.14.x does not always bump
+  // HIGHESTMODSEQ when a keyword changes, so the IMAP incremental sync's
+  // CONDSTORE fast path misses the flag change; a full-FLAGS reconcile has
+  // to catch it. The mirror case guards the JMAP-side reconcile against
+  // Email/changes under-reporting keyword edits.
+  Future<void> runMarkSeenPropagates({
+    required String subjectPrefix,
+    required bool toggleFromJmap,
+  }) async {
+    final w = await setUpWorld();
+    final subject = '$subjectPrefix-${DateTime.now().millisecondsSinceEpoch}';
+    await seedInbox(subject);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.imap.id);
+    await syncAccount(w.db, w.emails, w.mailboxes, w.jmap.id);
+
+    final toggleFromId = toggleFromJmap ? w.jmap.id : w.imap.id;
+    final observedOnId = toggleFromJmap ? w.imap.id : w.jmap.id;
+    final observedLabel = toggleFromJmap ? 'IMAP' : 'JMAP';
+
+    Future<bool> seenOn(String accountId) async {
+      final id = await findEmailId(w.db, accountId, subject);
+      final row = await (w.db.select(w.db.emails)
+            ..where((t) => t.id.equals(id)))
+          .getSingle();
+      return row.isSeen;
+    }
+
+    expect(await seenOn(w.imap.id), isFalse);
+    expect(await seenOn(w.jmap.id), isFalse);
+
+    final toggleEmailId = await findEmailId(w.db, toggleFromId, subject);
+    await w.emails.setFlag(toggleEmailId, seen: true);
+    await w.emails.flushPendingChanges(toggleFromId, user.password);
+    // Only sync the observing side; the reconcile pass there must pick up the
+    // new \$seen keyword / \Seen flag even if the server did not advance its
+    // incremental-sync token.
+    await syncAccount(w.db, w.emails, w.mailboxes, observedOnId);
+
+    expect(
+      await seenOn(observedOnId),
+      isTrue,
+      reason: '$observedLabel still shows the message unread',
+    );
+    final result = await AccountComparison(w.db).compare(w.imap.id, w.jmap.id);
+    expect(
+      result.emails.where((d) => d.fields.contains(EmailFieldMismatch.seen)),
+      isEmpty,
+      reason: 'compare still reports a seen mismatch after reconcile',
+    );
+  }
+
+  test(
+    'mark read in JMAP account propagates to the IMAP account',
+    timeout: const Timeout(Duration(seconds: 90)),
+    () =>
+        runMarkSeenPropagates(subjectPrefix: 'seen-jmap', toggleFromJmap: true),
+  );
+
+  test(
+    'mark read in IMAP account propagates to the JMAP account',
+    timeout: const Timeout(Duration(seconds: 90)),
+    () => runMarkSeenPropagates(
+      subjectPrefix: 'seen-imap',
+      toggleFromJmap: false,
+    ),
+  );
+
   // Same as the multi-message case, but delivered over SMTP (the real-world
   // path) instead of IMAP APPEND, to catch any server-state quirk (e.g. the
   // Stalwart HIGHESTMODSEQ behaviour) that only shows with delivered mail.

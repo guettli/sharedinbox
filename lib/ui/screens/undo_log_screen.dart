@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
@@ -55,6 +56,7 @@ class _UndoActionTile extends ConsumerWidget {
         : '(Unknown Sender)';
     final count = action.emailIds.length;
     final extraCount = count > 1 ? ' (+${count - 1} more)' : '';
+    final account = ref.watch(accountByIdProvider(action.accountId)).value;
 
     return ListTile(
       onTap: () => context.go(
@@ -92,6 +94,12 @@ class _UndoActionTile extends ConsumerWidget {
               Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis),
               Text(
                 '$label • ${_timeFmt.format(action.timestamp.toLocal())}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              Text(
+                accountDisplayLabel(account, action.accountId),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],

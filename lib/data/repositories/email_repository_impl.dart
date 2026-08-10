@@ -13,16 +13,23 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
+import 'package:sharedinbox/core/models/pending_change.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/sync/account_comparison.dart';
+import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/mail_header_decode.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -127,7 +134,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.latestDate)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.latestDate),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_threadRowToModel).toList());
@@ -144,7 +154,10 @@ class EmailRepositoryImpl implements EmailRepository {
     ]);
     query
       ..where(_db.mailboxes.role.equals('inbox'))
-      ..orderBy([OrderingTerm.desc(_db.threads.latestDate)])
+      ..orderBy([
+        OrderingTerm.desc(_db.threads.isFlagged),
+        OrderingTerm.desc(_db.threads.latestDate),
+      ])
       ..limit(limit);
     return query.watch().map(
           (rows) => rows
@@ -566,6 +579,13 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
+        // Record that we've just fetched every flag so the periodic reconcile
+        // in _maybeReconcileImapFlagsMailbox doesn't repeat it immediately.
+        await _saveSyncState(
+          account.id,
+          'IMAP:FlagReconcile:$mailboxPath',
+          DateTime.now().toIso8601String(),
+        );
         return model.SyncEmailsResult(
           fetched: allUids.length,
           skipped: 0,
@@ -603,6 +623,13 @@ class EmailRepositoryImpl implements EmailRepository {
             serverModSeq != storedModSeq) {
           await _refreshFlagsImap(client, account, mailboxPath, storedModSeq);
         }
+
+        // Belt-and-braces: periodically re-fetch every FLAGS in the mailbox
+        // and rewrite `isSeen`/`isFlagged` from server truth. Catches drift
+        // when CONDSTORE misreports — Stalwart 0.14.x does not always bump
+        // HIGHESTMODSEQ when a flag is toggled via JMAP on the same account,
+        // so IMAP would otherwise never see the change (#407).
+        await _maybeReconcileImapFlagsMailbox(client, account.id, mailboxPath);
 
         // Detect remote deletions.
         final serverUids = (await client.uidSearchMessages(
@@ -664,6 +691,105 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  static const _imapFlagReconcileInterval = Duration(minutes: 15);
+
+  /// Periodic safety net: at most once per [_imapFlagReconcileInterval] per
+  /// mailbox, unconditionally `UID FETCH 1:* FLAGS` and rewrite `isSeen` /
+  /// `isFlagged` from server truth. Runs regardless of whether HIGHESTMODSEQ
+  /// changed, so it catches drift when the server fails to advance MODSEQ on
+  /// a flag mutation (Stalwart 0.14.x is known to do this for JMAP-side
+  /// keyword changes, leaving the paired IMAP account permanently stale —
+  /// #407). Skips rows whose flag change is still queued in `pendingChanges`
+  /// so an unflushed optimistic edit is not silently reverted.
+  Future<void> _maybeReconcileImapFlagsMailbox(
+    imap.ImapClient client,
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final key = 'IMAP:FlagReconcile:$mailboxPath';
+    final last = await _loadSyncState(accountId, key);
+    if (last != null) {
+      final lastAt = DateTime.tryParse(last);
+      if (lastAt != null &&
+          DateTime.now().difference(lastAt) < _imapFlagReconcileInterval) {
+        return;
+      }
+    }
+
+    final fetch = await client.uidFetchMessages(
+      imap.MessageSequence.fromAll(),
+      'FLAGS',
+    );
+    final byUid = <int, ({bool seen, bool flagged})>{};
+    for (final msg in fetch.messages) {
+      final uid = msg.uid;
+      if (uid == null) continue;
+      byUid[uid] = (
+        seen: msg.flags?.contains(r'\Seen') ?? false,
+        flagged: msg.flags?.contains(r'\Flagged') ?? false,
+      );
+    }
+
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
+        .get();
+
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'delete',
+                  ],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
+    final affectedThreads = <String>{};
+    var corrected = 0;
+    for (final row in localRows) {
+      if (inFlightSet.contains(row.id)) continue;
+      final serverFlags = byUid[row.uid];
+      if (serverFlags == null) continue; // handled by _reconcileDeletedImap
+      if (serverFlags.seen == row.isSeen &&
+          serverFlags.flagged == row.isFlagged) {
+        continue;
+      }
+      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+        EmailsCompanion(
+          isSeen: Value(serverFlags.seen),
+          isFlagged: Value(serverFlags.flagged),
+        ),
+      );
+      affectedThreads.add(row.threadId ?? row.id);
+      corrected++;
+    }
+
+    for (final tid in affectedThreads) {
+      await _updateThread(accountId, mailboxPath, tid);
+    }
+
+    if (corrected > 0) {
+      log(
+        'IMAP-sync: flag-reconcile mailbox=$mailboxPath corrected=$corrected '
+        '(local=${localRows.length}, server=${byUid.length})',
+      );
+    }
+    await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
   // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
   Future<int> _fetchAndUpsertImap(
     imap.ImapClient client,
@@ -714,15 +840,23 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$mailboxPath:$uid';
-        final msgId = _cleanMessageId(envelope.messageId);
-        final inReplyTo = _cleanMessageId(envelope.inReplyTo);
-        final refs = _cleanReferences(msg.getHeaderValue('References'));
+        final msgId = normaliseMessageId(envelope.messageId);
+        final inReplyTo = normaliseMessageId(envelope.inReplyTo);
+        final refs = normaliseReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
+        // Re-decode Subject from the raw header enough_mail stashed on the
+        // message during envelope parsing (#418). `envelope.subject` uses
+        // MailCodec.decodeHeader, which leaves stray spaces around ü/ö/ä
+        // when adjacent encoded-words differ in charset case or are folded
+        // with a tab.
+        final subject =
+            decodeMailHeader(msg.getHeaderValue('Subject')) ?? envelope.subject;
         final threadId = _computeThreadId(
-              emailId: emailId,
               messageId: msgId,
               inReplyTo: inReplyTo,
               references: refs,
+              subject: subject,
+              date: envelope.date,
             ) ??
             emailId;
         affectedThreads.add(threadId);
@@ -747,7 +881,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 accountId: account.id,
                 mailboxPath: mailboxPath,
                 uid: uid,
-                subject: Value(envelope.subject),
+                subject: Value(subject),
                 sentAt: Value(envelope.date),
                 receivedAt: envelope.date ?? DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
@@ -1128,6 +1262,10 @@ class EmailRepositoryImpl implements EmailRepository {
     'threadId',
     'mailboxIds',
     'subject',
+    // Raw Subject header so we can re-decode client-side when the server's
+    // RFC 2047 decoding leaves stray spaces around encoded-word boundaries
+    // (see #418, and [decodeMailHeader]).
+    'header:Subject:asRaw',
     'sentAt',
     'receivedAt',
     'from',
@@ -1462,13 +1600,17 @@ class EmailRepositoryImpl implements EmailRepository {
     return removed;
   }
 
-  static const _jmapReconcileInterval = Duration(hours: 1);
+  static const _jmapReconcileInterval = Duration(minutes: 15);
 
   /// Periodic safety net: at most once per [_jmapReconcileInterval] per
   /// mailbox, list all server-side email ids in [mailboxJmapId] and prune
-  /// local rows no longer present. Catches ghosts from Email/changes
-  /// under-reporting (Stalwart's IMAP-triggered mailbox moves have surfaced
-  /// this — see #262).
+  /// local rows no longer present. Also refreshes `keywords` for every
+  /// email still in the mailbox and rewrites `isSeen` / `isFlagged` from
+  /// server truth. Catches ghosts and flag drift from Email/changes
+  /// under-reporting — Stalwart's IMAP-triggered mailbox moves have surfaced
+  /// this for existence (#262) and Stalwart 0.14.x similarly under-reports
+  /// keyword changes to the paired IMAP account, causing "seen" drift on the
+  /// compare view (#407).
   Future<void> _maybeReconcileJmapMailbox(
     String accountId,
     JmapClient jmap,
@@ -1519,7 +1661,118 @@ class EmailRepositoryImpl implements EmailRepository {
         '(server=${serverIds.length})',
       );
     }
+    await _reconcileJmapFlagsForMailbox(
+      accountId,
+      jmap,
+      mailboxJmapId,
+      serverIds,
+    );
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  /// Fetches `keywords` for every local row in [mailboxJmapId] whose JMAP id
+  /// is still on the server and rewrites `isSeen` / `isFlagged` from truth.
+  /// Skips rows whose flag change is still queued in `pendingChanges` so an
+  /// unflushed optimistic edit is not silently reverted.
+  Future<void> _reconcileJmapFlagsForMailbox(
+    String accountId,
+    JmapClient jmap,
+    String mailboxJmapId,
+    Set<String> serverIds,
+  ) async {
+    if (serverIds.isEmpty) return;
+
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxJmapId),
+          ))
+        .get();
+    if (localRows.isEmpty) return;
+
+    final localByJmapId = <String, Email>{
+      for (final r in localRows) r.id.substring('$accountId:'.length): r,
+    };
+
+    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'delete',
+                  ],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    final inFlightSet = inFlightIds.toSet();
+
+    final toCheck = [
+      for (final jmapId in localByJmapId.keys)
+        if (serverIds.contains(jmapId) &&
+            !inFlightSet.contains(localByJmapId[jmapId]!.id))
+          jmapId,
+    ];
+    if (toCheck.isEmpty) return;
+
+    final affectedThreads = <String>{};
+    var corrected = 0;
+    for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
+      final batch = toCheck.sublist(
+        offset,
+        math.min(offset + _jmapPageSize, toCheck.length),
+      );
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': batch,
+            'properties': ['id', 'keywords'],
+          },
+          '0',
+        ],
+      ]);
+      final getResult = _responseArgs(responses, 0, 'Email/get');
+      final list = getResult['list'] as List<dynamic>;
+      for (final e in list) {
+        final m = e as Map<String, dynamic>;
+        final jmapId = m['id'] as String;
+        final row = localByJmapId[jmapId];
+        if (row == null) continue;
+        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+        final serverSeen = keywords.containsKey(r'$seen');
+        final serverFlagged = keywords.containsKey(r'$flagged');
+        if (serverSeen == row.isSeen && serverFlagged == row.isFlagged) {
+          continue;
+        }
+        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+          EmailsCompanion(
+            isSeen: Value(serverSeen),
+            isFlagged: Value(serverFlagged),
+          ),
+        );
+        affectedThreads.add(row.threadId ?? row.id);
+        corrected++;
+      }
+    }
+
+    for (final tid in affectedThreads) {
+      await _updateThread(accountId, mailboxJmapId, tid);
+    }
+    if (corrected > 0) {
+      log(
+        'JMAP-sync: flag-reconcile mailbox=$mailboxJmapId corrected=$corrected '
+        '(checked=${toCheck.length}, local=${localRows.length})',
+      );
+    }
   }
 
   String _briefIds(List<String> ids, {int keep = 10}) {
@@ -1632,6 +1885,15 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       final jmapListUnsubscribe =
           (m['header:List-Unsubscribe:asText'] as String?)?.trim();
+      // Re-decode Subject from the raw header when the server exposes it, so
+      // we get the same defensive handling as the IMAP path (#418). Falls
+      // back to the server-decoded `subject` property when the raw header is
+      // absent (e.g. mail with no Subject at all, or servers that reject
+      // `header:*:asRaw`).
+      final rawSubjectHeader = m['header:Subject:asRaw'] as String?;
+      final subject = rawSubjectHeader != null
+          ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
+          : m['subject'] as String?;
 
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
@@ -1639,7 +1901,7 @@ class EmailRepositoryImpl implements EmailRepository {
               accountId: accountId,
               mailboxPath: mailboxPath,
               uid: 0, // not used for JMAP accounts
-              subject: Value(m['subject'] as String?),
+              subject: Value(subject),
               sentAt: Value(sentAt),
               receivedAt: receivedAt,
               fromJson: Value(from),
@@ -1812,6 +2074,28 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── JMAP push ────────────────────────────────────────────────────────────
 
+  /// Records the outcome of a `watchJmapPush` subscription as a
+  /// `sync.jmap.push` app-log row. The `status` value is stable and used by
+  /// the sync-state view to render a human-readable "Push" row — see
+  /// `push_status.dart` for the enum of accepted values.
+  Future<void> _logPushStatus(
+    String accountId,
+    String status,
+    String message, {
+    AppLogLevel level = AppLogLevel.info,
+    Map<String, Object?>? data,
+  }) async {
+    final logger = _appLogger;
+    if (logger == null) return;
+    await logger.log(
+      level: level,
+      event: 'sync.jmap.push',
+      message: message,
+      accountId: accountId,
+      data: {'push_status': status, ...?data},
+    );
+  }
+
   @override
   Stream<void> watchJmapPush(String accountId, String password) {
     final controller = StreamController<void>();
@@ -1829,6 +2113,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
         final jmapUrl = account.jmapUrl;
         if (jmapUrl == null || jmapUrl.isEmpty) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push disabled: account has no JMAP URL',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1843,12 +2134,29 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         } catch (e) {
           log('JMAP push: connect failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.connectFailed.wireName,
+              'JMAP push: session connect failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
 
         final sseUrl = jmap.eventSourceUrl;
         if (sseUrl == null) {
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.unsupported.wireName,
+              'JMAP push unavailable: server does not advertise '
+              'an eventSourceUrl (falling back to poll)',
+            ),
+          );
           await controller.close();
           return;
         }
@@ -1866,14 +2174,42 @@ class EmailRepositoryImpl implements EmailRepository {
               .send(request)
               .timeout(const Duration(seconds: 10));
           if (response.statusCode != 200) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                '${JmapPushStatus.sseStatusPrefix.wireName}'
+                    '${response.statusCode}',
+                'JMAP push: SSE endpoint returned HTTP '
+                    '${response.statusCode}',
+                level: AppLogLevel.warn,
+                data: {'httpStatus': response.statusCode},
+              ),
+            );
             await controller.close();
             return;
           }
         } catch (e) {
           log('JMAP push: SSE request failed: $e');
+          unawaited(
+            _logPushStatus(
+              accountId,
+              JmapPushStatus.sseFailed.wireName,
+              'JMAP push: SSE request failed: $e',
+              level: AppLogLevel.warn,
+              data: {'error': e.toString()},
+            ),
+          );
           await controller.close();
           return;
         }
+
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.connected.wireName,
+            'JMAP push connected — waiting for StateChange events',
+          ),
+        );
 
         var buffer = '';
         innerSub = response.stream
@@ -1897,12 +2233,42 @@ class EmailRepositoryImpl implements EmailRepository {
               }
             }
           },
-          onDone: () => controller.close(),
-          onError: (_) => controller.close(),
+          onDone: () {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.closed.wireName,
+                'JMAP push stream ended (server closed connection '
+                'or 25-min cap reached)',
+              ),
+            );
+            unawaited(controller.close());
+          },
+          onError: (Object e) {
+            unawaited(
+              _logPushStatus(
+                accountId,
+                JmapPushStatus.errored.wireName,
+                'JMAP push stream errored: $e',
+                level: AppLogLevel.warn,
+                data: {'error': e.toString()},
+              ),
+            );
+            unawaited(controller.close());
+          },
           cancelOnError: true,
         );
       } catch (e) {
         log('JMAP push: unexpected error: $e');
+        unawaited(
+          _logPushStatus(
+            accountId,
+            JmapPushStatus.errored.wireName,
+            'JMAP push: unexpected error: $e',
+            level: AppLogLevel.warn,
+            data: {'error': e.toString()},
+          ),
+        );
         await controller.close();
       }
     }());
@@ -2088,11 +2454,23 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return;
-    final account = (await _accounts.getAccount(row.accountId))!;
+    if (row.mailboxPath == destMailboxPath) return;
 
-    if (row.mailboxPath == destMailboxPath) {
-      return;
-    }
+    await _moveRow(row, destMailboxPath);
+    await _mirrorMoveToCounterparts(
+      row.accountId,
+      row.messageId,
+      destMailboxPath,
+    );
+  }
+
+  /// Moves a single [row] to [destMailboxPath] on its own account: enqueues the
+  /// protocol change and applies the optimistic local update. Does not mirror
+  /// to counterpart accounts (see [_mirrorMoveToCounterparts]).
+  Future<void> _moveRow(Email row, String destMailboxPath) async {
+    if (row.mailboxPath == destMailboxPath) return;
+    final emailId = row.id;
+    final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
@@ -2157,6 +2535,18 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return null;
+
+    final dest = await _deleteRow(row);
+    await _mirrorDeleteToCounterparts(row.accountId, row.messageId);
+    return dest;
+  }
+
+  /// Deletes a single [row] on its own account: moves it to that account's
+  /// Trash when one exists (so the user can recover it), otherwise hard-deletes.
+  /// Returns the Trash path when moved, or null when hard-deleted. Does not
+  /// mirror to counterpart accounts (see [_mirrorDeleteToCounterparts]).
+  Future<String?> _deleteRow(Email row) async {
+    final emailId = row.id;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
@@ -2168,7 +2558,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
 
     if (trashRow != null && trashRow.path != row.mailboxPath) {
-      await moveEmail(emailId, trashRow.path);
+      await _moveRow(row, trashRow.path);
       return trashRow.path;
     }
 
@@ -2256,19 +2646,30 @@ class EmailRepositoryImpl implements EmailRepository {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingle();
-    final account = (await _accounts.getAccount(row.accountId))!;
+    await _snoozeRow(row, until);
+    await _mirrorSnoozeToCounterparts(
+      row.accountId,
+      row.messageId,
+      until: until,
+    );
+  }
+
+  /// Snoozes a single [row] on its own account: moves it to that account's
+  /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
+  Future<void> _snoozeRow(Email row, DateTime until) async {
+    final accountId = row.accountId;
 
     // Find or create Snoozed mailbox.
     var snoozedMailbox = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('snoozed'),
+            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
 
     snoozedMailbox ??= await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.name.equals('Snoozed'),
+            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -2277,7 +2678,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final destPath = snoozedMailbox?.path ?? 'Snoozed';
 
     // Optimistic local update.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(destPath),
         snoozedUntil: Value(until),
@@ -2286,8 +2687,8 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     await _enqueueChange(
-      account.id,
-      emailId,
+      accountId,
+      row.id,
       'snooze',
       jsonEncode({
         'uid': row.uid,
@@ -2297,12 +2698,8 @@ class EmailRepositoryImpl implements EmailRepository {
       }),
     );
 
-    await _updateThread(
-      row.accountId,
-      row.mailboxPath,
-      row.threadId ?? emailId,
-    );
-    await _updateThread(row.accountId, destPath, row.threadId ?? emailId);
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, destPath, row.threadId ?? row.id);
   }
 
   @override
@@ -2319,35 +2716,221 @@ class EmailRepositoryImpl implements EmailRepository {
     if (expired.isEmpty) return 0;
 
     for (final row in expired) {
-      // Per instructions: "get to inbox moved by app".
-      final inbox = await (_db.select(_db.mailboxes)
-            ..where(
-              (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
-            )
-            ..limit(1))
-          .getSingleOrNull();
-      final dest = inbox?.path ?? 'INBOX';
-
-      await _enqueueChange(
-        accountId,
-        row.id,
-        'unsnooze',
-        jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+      await _unsnoozeRow(row);
+      await _mirrorSnoozeToCounterparts(
+        row.accountId,
+        row.messageId,
+        until: null,
       );
-
-      // Optimistic local update.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-        EmailsCompanion(
-          mailboxPath: Value(dest),
-          snoozedUntil: const Value(null),
-          snoozedFromMailboxPath: const Value(null),
-        ),
-      );
-
-      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
-      await _updateThread(accountId, dest, row.threadId ?? row.id);
     }
     return expired.length;
+  }
+
+  /// Un-snoozes a single [row] on its own account: moves it back to that
+  /// account's Inbox, clears the snooze columns and enqueues the change.
+  Future<void> _unsnoozeRow(Email row) async {
+    final accountId = row.accountId;
+
+    // Per instructions: "get to inbox moved by app".
+    final inbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final dest = inbox?.path ?? 'INBOX';
+
+    await _enqueueChange(
+      accountId,
+      row.id,
+      'unsnooze',
+      jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+    );
+
+    // Optimistic local update.
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(dest),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
+    );
+
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, dest, row.threadId ?? row.id);
+  }
+
+  /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
+  /// message in every counterpart account — the same server mailbox connected
+  /// via the other protocol (see [AccountComparison]).
+  ///
+  /// A user who connects to one server via both IMAP and JMAP has two
+  /// independent [Account] rows, each with its own copy of every message, so
+  /// snoozing on one account leaves the other untouched. This bridges them:
+  /// messages are correlated by their normalised RFC 2822 Message-ID and the
+  /// same optimistic update + pending change is applied to the counterpart,
+  /// which then flushes through that account's own protocol path.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet are skipped
+  /// (their next sync reconstructs the snooze from the shared server-side
+  /// `snz:` keyword anyway), and rows already in the requested state are left
+  /// alone so no redundant change is enqueued.
+  Future<void> _mirrorSnoozeToCounterparts(
+    String sourceAccountId,
+    String? messageId, {
+    required DateTime? until,
+  }) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      if (until != null) {
+        // Already snoozed to (about) the same time → nothing to mirror.
+        final current = row.snoozedUntil;
+        if (current != null &&
+            current.difference(until).abs() < const Duration(seconds: 1)) {
+          continue;
+        }
+        await _snoozeRow(row, until);
+      } else {
+        // Already awake → nothing to mirror.
+        if (row.snoozedUntil == null) continue;
+        await _unsnoozeRow(row);
+      }
+    }
+  }
+
+  /// Looks up a single email row in [accountId] whose Message-ID matches [mid]
+  /// (already run through [normaliseMessageId]). Matches both the bracket-less
+  /// JMAP form and the legacy `<...>` IMAP form stored in the column.
+  Future<Email?> _findEmailRowByNormalisedMessageId(
+    String accountId,
+    String mid,
+  ) {
+    return (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  /// Mirrors a move (Archive / Spam / plain move) onto the matching message in
+  /// every counterpart account — the same server mailbox connected via the
+  /// other protocol (see [AccountComparison]).
+  ///
+  /// The destination path cannot simply be copied across: the IMAP and JMAP
+  /// copies of the same server mailbox live under different [Mailbox.path]s. So
+  /// the source destination's semantic [Mailbox.role] (e.g. `archive`, `junk`,
+  /// `trash`) is resolved on each counterpart and used to locate the equivalent
+  /// mailbox there; role-less custom folders fall back to a case-insensitive
+  /// name match.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet, that have
+  /// no equivalent destination mailbox, or that already hold the message in the
+  /// destination are skipped so no redundant change is enqueued.
+  Future<void> _mirrorMoveToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+    String destMailboxPath,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    // Resolve the destination's role/name on the source account so the same
+    // logical mailbox can be found on each counterpart.
+    final sourceDest = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) =>
+                t.accountId.equals(sourceAccountId) &
+                t.path.equals(destMailboxPath),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final destRole = sourceDest?.role;
+    final destName = sourceDest?.name ?? destMailboxPath;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      final counterpartDest = await _resolveCounterpartMailboxPath(
+        counterpart.id,
+        role: destRole,
+        name: destName,
+      );
+      if (counterpartDest == null) continue;
+      // Already in the destination → nothing to mirror.
+      if (row.mailboxPath == counterpartDest) continue;
+
+      await _moveRow(row, counterpartDest);
+    }
+  }
+
+  /// Mirrors a delete onto the matching message in every counterpart account.
+  /// Each counterpart runs its own [_deleteRow], so it independently moves the
+  /// message to its own Trash when it has one, or hard-deletes otherwise —
+  /// robust when only one side of the pair has a Trash folder.
+  Future<void> _mirrorDeleteToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+      await _deleteRow(row);
+    }
+  }
+
+  /// Finds the path of the mailbox on [accountId] that corresponds to a move
+  /// whose source destination had the given [role] / [name]. Prefers a role
+  /// match (roles are protocol-independent); falls back to a case-insensitive
+  /// name match for role-less custom folders. Returns null when the counterpart
+  /// has no equivalent mailbox.
+  Future<String?> _resolveCounterpartMailboxPath(
+    String accountId, {
+    required String? role,
+    required String name,
+  }) async {
+    final mailboxes = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    if (role != null) {
+      for (final m in mailboxes) {
+        if (m.role == role) return m.path;
+      }
+    }
+    final lowerName = name.toLowerCase();
+    for (final m in mailboxes) {
+      if (m.name.toLowerCase() == lowerName) return m.path;
+    }
+    return null;
   }
 
   @override
@@ -3623,46 +4206,75 @@ class EmailRepositoryImpl implements EmailRepository {
       throw JmapException('Email/set create failed: missing created email id');
     }
 
-    // Then submit the created email.
-    final submissionResponses = await jmap.call(
-      [
+    // Then submit the created email. If submission fails for any reason, the
+    // email was already created in the Sent mailbox above; destroy it so a
+    // message that was never actually sent doesn't linger in Sent and make the
+    // user think it went out.
+    try {
+      final submissionResponses = await jmap.call(
         [
-          'EmailSubmission/set',
-          {
-            'accountId': jmap.accountId,
-            'create': {
-              'sub1': {
-                'emailId': emailId,
-                'identityId': identityId,
-                'envelope': {
-                  'mailFrom': {'email': draft.from.email},
-                  'rcptTo': allRecipients,
+          [
+            'EmailSubmission/set',
+            {
+              'accountId': jmap.accountId,
+              'create': {
+                'sub1': {
+                  'emailId': emailId,
+                  'identityId': identityId,
+                  'envelope': {
+                    'mailFrom': {'email': draft.from.email},
+                    'rcptTo': allRecipients,
+                  },
                 },
               },
             },
-          },
-          '1',
+            '1',
+          ],
         ],
-      ],
-      withSubmission: true,
-    );
-
-    // Check EmailSubmission/set for submission errors.
-    final subResult = _responseArgs(
-      submissionResponses,
-      0,
-      'EmailSubmission/set',
-    );
-    final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
-    if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
-      final err = notSubmitted['sub1'] as Map<String, dynamic>;
-      throw JmapException(
-        'EmailSubmission/set failed: ${err['type']} '
-        '${err['description'] ?? ''} '
-        '${err['properties'] ?? ''} '
-        '(envelope mailFrom: ${draft.from.email}, '
-        'identity email: ${identityEmail ?? 'unknown'})',
+        withSubmission: true,
       );
+
+      // Check EmailSubmission/set for submission errors.
+      final subResult = _responseArgs(
+        submissionResponses,
+        0,
+        'EmailSubmission/set',
+      );
+      final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
+      if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
+        final err = notSubmitted['sub1'] as Map<String, dynamic>;
+        throw JmapException(
+          'EmailSubmission/set failed: ${err['type']} '
+          '${err['description'] ?? ''} '
+          '${err['properties'] ?? ''} '
+          '(envelope mailFrom: ${draft.from.email}, '
+          'identity email: ${identityEmail ?? 'unknown'})',
+        );
+      }
+    } catch (_) {
+      await _destroyJmapEmail(jmap, emailId);
+      rethrow;
+    }
+  }
+
+  /// Best-effort removal of a locally-created JMAP email (e.g. the Sent copy
+  /// created before a failed submission). Swallows errors: the original send
+  /// failure is what matters to the caller, and a failed cleanup must not mask
+  /// it.
+  Future<void> _destroyJmapEmail(JmapClient jmap, String emailId) async {
+    try {
+      await jmap.call([
+        [
+          'Email/set',
+          {
+            'accountId': jmap.accountId,
+            'destroy': [emailId],
+          },
+          '0',
+        ],
+      ]);
+    } catch (_) {
+      // Ignore — the send already failed and that error is being rethrown.
     }
   }
 
@@ -3851,9 +4463,11 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ? ORDER BY e.received_at DESC LIMIT 50'
+            ' WHERE email_fts MATCH ? AND e.account_id = ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? ORDER BY e.received_at DESC LIMIT 50';
+            ' WHERE email_fts MATCH ?'
+            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -3871,7 +4485,10 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
@@ -3902,7 +4519,7 @@ class EmailRepositoryImpl implements EmailRepository {
         ' JOIN emails e ON e.message_id = n.message_id'
         ' AND e.account_id = n.account_id'
         ' WHERE email_notes_fts MATCH ?$extraConditions'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
     final rows = await _db.customSelect(
       sql,
@@ -3925,7 +4542,10 @@ class EmailRepositoryImpl implements EmailRepository {
             if (accountId == null) return fe;
             return t.accountId.equals(accountId) & fe;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ])
           ..limit(100))
         .get();
     return rows.map(_toModel).toList();
@@ -3956,6 +4576,7 @@ class EmailRepositoryImpl implements EmailRepository {
       // Size is not stored in the local cache; skip silently.
       FilterField.size => const Constant(true),
       FilterField.header => _headerLike(leaf, t),
+      FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
     };
   }
 
@@ -4093,7 +4714,10 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return condition;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isFlagged),
+            (t) => OrderingTerm.desc(t.receivedAt),
+          ]))
         .get();
     return rows.map(_toModel).toList();
   }
@@ -4182,7 +4806,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.received_at DESC LIMIT 50';
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -4202,16 +4826,15 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...emailRows.map(_toModel), ...noteRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+    merged.sort((a, b) {
+      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+      return b.receivedAt.compareTo(a.receivedAt);
+    });
     return merged;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /// Computes a stable threadId from RFC 2822 headers.
-  /// Uses the first entry in References (= oldest ancestor) so all messages
-  /// in a thread share the same root Message-ID as their threadId.
-  /// Falls back to In-Reply-To, then own Message-ID, then internal emailId.
   /// JMAP header fields like messageId/inReplyTo/references come as arrays.
   /// We join them space-separated to match the IMAP convention.
   static String? _joinJmapStringList(List<dynamic>? list) {
@@ -4220,36 +4843,61 @@ class EmailRepositoryImpl implements EmailRepository {
     return joined.isEmpty ? null : joined;
   }
 
-  static String? _cleanMessageId(String? mid) {
-    if (mid == null) return null;
-    var s = mid.trim();
-    if (s.startsWith('<') && s.endsWith('>')) {
-      s = s.substring(1, s.length - 1);
-    }
-    return s.isEmpty ? null : s;
-  }
-
-  static String? _cleanReferences(String? refs) {
-    if (refs == null) return null;
-    final cleanTokens = refs
-        .split(RegExp(r'\s+'))
-        .map((t) => _cleanMessageId(t))
-        .whereType<String>();
-    return cleanTokens.isEmpty ? null : cleanTokens.join(' ');
-  }
-
-  static String? _computeThreadId({
-    required String emailId,
+  @visibleForTesting
+  static String? computeThreadIdForTest({
     required String? messageId,
     required String? inReplyTo,
     required String? references,
+    String? subject,
+    DateTime? date,
+  }) =>
+      _computeThreadId(
+        messageId: messageId,
+        inReplyTo: inReplyTo,
+        references: references,
+        subject: subject,
+        date: date,
+      );
+
+  /// Derives a stable thread key from RFC 2822 headers.
+  ///
+  /// Precedence, matching JWZ-style threading:
+  ///   1. First entry of `References` — the oldest ancestor, so every message
+  ///      down the chain agrees on the same root Message-ID.
+  ///   2. `In-Reply-To` — used when `References` is missing but the client
+  ///      still recorded the immediate parent.
+  ///   3. Own `Message-ID` — starts a fresh thread that later replies will
+  ///      attach to via their `In-Reply-To`.
+  ///   4. Subject fallback — when a message has no Message-ID/References/
+  ///      In-Reply-To at all (rare, non-conformant senders), group by
+  ///      normalised subject bucketed into a `yyyy-mm` window so unrelated
+  ///      re-uses of the same subject in a different month land in a
+  ///      separate thread. See [normalizedSubject] for the strip rules.
+  ///
+  /// Returns `null` only when nothing usable is available (no headers, no
+  /// subject); the caller then falls back to the per-message `emailId` so the
+  /// thread contains just this message.
+  static String? _computeThreadId({
+    required String? messageId,
+    required String? inReplyTo,
+    required String? references,
+    String? subject,
+    DateTime? date,
   }) {
     if (references != null && references.isNotEmpty) {
       final first = references.trim().split(RegExp(r'\s+')).firstOrNull;
       if (first != null && first.isNotEmpty) return first;
     }
     if (inReplyTo != null && inReplyTo.isNotEmpty) return inReplyTo;
-    return messageId; // null for messages with no Message-ID (rare)
+    if (messageId != null && messageId.isNotEmpty) return messageId;
+    final subj = normalizedSubject(subject);
+    if (subj.isNotEmpty && date != null) {
+      final utc = date.toUtc();
+      final bucket = '${utc.year.toString().padLeft(4, '0')}-'
+          '${utc.month.toString().padLeft(2, '0')}';
+      return 'subj:$bucket:$subj';
+    }
+    return null;
   }
 
   String _encodeAddresses(List<imap.MailAddress>? addresses) => jsonEncode(
@@ -4416,6 +5064,36 @@ class EmailRepositoryImpl implements EmailRepository {
       const PendingChangesCompanion(attempts: Value(0), lastError: Value(null)),
     );
   }
+
+  @override
+  Stream<List<model.PendingChange>> observePendingChanges(String accountId) {
+    return (_db.select(_db.pendingChanges)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows.map(_toPendingChange).toList());
+  }
+
+  @override
+  Stream<List<model.PendingChange>> observeAllPendingChanges() {
+    return (_db.select(_db.pendingChanges)
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch()
+        .map((rows) => rows.map(_toPendingChange).toList());
+  }
+
+  static model.PendingChange _toPendingChange(PendingChangeRow r) =>
+      model.PendingChange(
+        id: r.id,
+        accountId: r.accountId,
+        kind: r.changeType,
+        resourceType: r.resourceType,
+        resourceId: r.resourceId,
+        payload: r.payload,
+        createdAt: r.createdAt,
+        attempts: r.attempts,
+        lastError: r.lastError,
+      );
 
   @override
   Future<void> clearForResync(String accountId) async {

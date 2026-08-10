@@ -5,6 +5,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
@@ -204,6 +205,11 @@ class _CountingEmails implements EmailRepository {
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String a) =>
       Stream.value([]);
+  @override
+  Stream<List<PendingChange>> observePendingChanges(String a) =>
+      Stream.value([]);
+  @override
+  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
   @override
   Future<void> discardMutation(int id) async {}
   @override

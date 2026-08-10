@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
@@ -187,7 +188,7 @@ class MessageProbeImpl implements MessageProbe {
       return ProbeResult.snapshot(
         RemoteMessageSnapshot(
           mailboxPath: mailboxPath,
-          messageId: _cleanMessageId(envelope?.messageId),
+          messageId: normaliseMessageId(envelope?.messageId),
           subject: envelope?.subject,
           sentAt: envelope?.date,
           receivedAt: envelope?.date,
@@ -199,7 +200,7 @@ class MessageProbeImpl implements MessageProbe {
           from: _fromImapAddresses(envelope?.from),
           to: _fromImapAddresses(envelope?.to),
           cc: _fromImapAddresses(envelope?.cc),
-          inReplyTo: _cleanMessageId(envelope?.inReplyTo),
+          inReplyTo: normaliseMessageId(envelope?.inReplyTo),
           references: headers['references']?.trim(),
           listUnsubscribeHeader: headers['list-unsubscribe']?.trim(),
           headers: headers,
@@ -409,8 +410,8 @@ MessageComparison compareMessage(
   diff('mailboxPath', local.mailboxPath, remote.mailboxPath);
   diff(
     'messageId',
-    _normaliseMessageId(local.messageId),
-    _normaliseMessageId(remote.messageId),
+    normaliseMessageId(local.messageId),
+    normaliseMessageId(remote.messageId),
   );
   diff('subject', local.subject, remote.subject);
   diff(
@@ -433,8 +434,8 @@ MessageComparison compareMessage(
   diff('cc', _addressesToKey(local.cc), _addressesToKey(remote.cc));
   diff(
     'inReplyTo',
-    _normaliseMessageId(local.inReplyTo),
-    _normaliseMessageId(remote.inReplyTo),
+    normaliseMessageId(local.inReplyTo),
+    normaliseMessageId(remote.inReplyTo),
   );
   diff(
     'references',
@@ -463,16 +464,11 @@ String _addressesToKey(List<EmailAddress> addresses) {
   return parts.join(',');
 }
 
-String? _normaliseMessageId(String? raw) {
-  if (raw == null) return null;
-  final trimmed = raw.trim();
-  if (trimmed.isEmpty) return null;
-  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
-    return trimmed.substring(1, trimmed.length - 1);
-  }
-  return trimmed;
-}
-
+/// References may arrive from IMAP as one string containing `<a@b><c@d>` with
+/// no whitespace between adjacent ids (some clients skip the space), so this
+/// helper is more aggressive than [normaliseReferences]: it treats `<` and `>`
+/// as token boundaries. Only used by the per-message probe comparison, which
+/// needs to reconcile heterogeneous sources.
 String? _normaliseReferences(String? raw) {
   if (raw == null) return null;
   final tokens = raw
@@ -483,16 +479,6 @@ String? _normaliseReferences(String? raw) {
       .toList();
   if (tokens.isEmpty) return null;
   return tokens.join(' ');
-}
-
-String? _cleanMessageId(String? raw) {
-  if (raw == null) return null;
-  final t = raw.trim();
-  if (t.isEmpty) return null;
-  if (t.startsWith('<') && t.endsWith('>')) {
-    return t.substring(1, t.length - 1);
-  }
-  return t;
 }
 
 String? _joinJmapStringList(List<dynamic>? list) {

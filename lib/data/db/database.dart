@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/db_schema_version.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/db/db_encryption_migration.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:sqlite3/sqlite3.dart' show Database;
@@ -1038,6 +1039,49 @@ class AppDatabase extends _$AppDatabase {
               ''');
             }
             await m.createTable(attachmentFiles);
+          }
+          if (from < 49) {
+            // Normalise Message-ID / In-Reply-To / References for legacy IMAP
+            // rows written before `_cleanMessageId` (#143) stripped the RFC
+            // 5322 angle brackets at insert time. JMAP rows always stored
+            // them bracket-less (RFC 8621 §4.1.2.3), so a compare against
+            // JMAP would previously see `<foo@bar>` on the IMAP side and
+            // `foo@bar` on the JMAP side and treat them as unrelated. See
+            // #406.
+            if (await _tableExists(this, 'emails')) {
+              await customStatement(
+                'UPDATE emails '
+                'SET message_id = SUBSTR(message_id, 2, LENGTH(message_id) - 2) '
+                "WHERE message_id LIKE '<%>'",
+              );
+              await customStatement(
+                'UPDATE emails '
+                'SET in_reply_to = SUBSTR(in_reply_to, 2, LENGTH(in_reply_to) - 2) '
+                "WHERE in_reply_to LIKE '<%>'",
+              );
+              // References is a whitespace-separated list of ids; strip
+              // per-token in Dart because SQLite has no split/join.
+              final refRows = await customSelect(
+                'SELECT rowid, "references" AS refs FROM emails '
+                'WHERE "references" LIKE \'%<%\'',
+              ).get();
+              for (final r in refRows) {
+                final rowid = r.read<int>('rowid');
+                final refs = r.read<String>('refs');
+                final cleaned = normaliseReferences(refs);
+                if (cleaned == null) {
+                  await customStatement(
+                    'UPDATE emails SET "references" = NULL WHERE rowid = ?',
+                    [rowid],
+                  );
+                } else {
+                  await customStatement(
+                    'UPDATE emails SET "references" = ? WHERE rowid = ?',
+                    [cleaned, rowid],
+                  );
+                }
+              }
+            }
           }
         },
       );

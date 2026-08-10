@@ -3,10 +3,14 @@
 # Install with: task install-hooks
 set -euo pipefail
 
-# Only run if flutter is in PATH (i.e. inside the nix dev shell).
+# Flutter must be on PATH. Silently skipping the checks masks regressions
+# that only surface in CI, so fail loudly with install instructions.
 if ! command -v flutter >/dev/null 2>&1; then
-    echo "pre-commit: flutter not in PATH — skipping (run inside nix develop)"
-    exit 0
+    echo "pre-commit: flutter not in PATH." >&2
+    echo "Enter the nix dev shell first, then retry the commit:" >&2
+    echo "    nix develop" >&2
+    echo "Or install Flutter directly: https://docs.flutter.dev/get-started/install" >&2
+    exit 1
 fi
 
 echo "pre-commit: flutter analyze..."

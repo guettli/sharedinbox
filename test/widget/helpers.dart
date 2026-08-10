@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -310,6 +311,9 @@ class FakeOutboxRepository implements OutboxRepository {
   Future<void> retry(int id) async {}
 
   @override
+  Future<int> resetPendingBackoff() async => 0;
+
+  @override
   Future<void> discard(int id) async {}
 }
 
@@ -331,16 +335,20 @@ class FakeEmailRepository implements EmailRepository {
     EmailBody? emailBody,
     EmailBody? refreshedEmailBody,
     List<Email>? searchResults,
+    List<Email>? byAddressResults,
     List<Email>? structuredSearchResults,
     String rawRfc822 = '',
     this.onSearch,
   })  : _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
+        _byAddressResults = byAddressResults ?? const [],
         _structuredSearchResults = structuredSearchResults ?? const [],
         _rawRfc822 = rawRfc822,
         _refreshedEmailBody = refreshedEmailBody,
         _emailBody = emailBody ?? const EmailBody(emailId: '', attachments: []);
+
+  final List<Email> _byAddressResults;
 
   final List<Email> _structuredSearchResults;
 
@@ -515,19 +523,25 @@ class FakeEmailRepository implements EmailRepository {
   ) async =>
       _searchResults;
 
+  /// Every filter passed to [searchEmailsStructured] in call order, so tests
+  /// can assert that the UI produced the expected [FilterGroup].
+  final List<FilterGroup> structuredSearchCalls = [];
+
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
     FilterGroup filter,
-  ) async =>
-      List.of(_structuredSearchResults);
+  ) async {
+    structuredSearchCalls.add(filter);
+    return List.of(_structuredSearchResults);
+  }
 
   @override
   Future<List<Email>> getEmailsByAddress(
     String? accountId,
     String address,
   ) async =>
-      [];
+      List.of(_byAddressResults);
 
   @override
   Future<List<EmailAddress>> searchAddresses(
@@ -551,6 +565,13 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
       Stream.value([]);
+
+  @override
+  Stream<List<PendingChange>> observePendingChanges(String accountId) =>
+      Stream.value([]);
+
+  @override
+  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
 
   @override
   Future<void> discardMutation(int id) async {}
