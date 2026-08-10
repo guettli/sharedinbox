@@ -222,7 +222,7 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
 /// bubble up to the parent scroll view.
 @visibleForTesting
 Set<Factory<OneSequenceGestureRecognizer>> emailWebViewGestureRecognizers() {
-  return {
+  return const {
     Factory<OneSequenceGestureRecognizer>(LongPressGestureRecognizer.new),
   };
 }
