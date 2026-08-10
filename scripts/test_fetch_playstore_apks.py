@@ -95,6 +95,139 @@ class TestResolveVersionCode(unittest.TestCase):
         self.assertTrue(delete_url.endswith("/edits/edit-1"))
 
 
+class TestWithTransientRetries(unittest.TestCase):
+    """Regression for #457: the Play Developer API occasionally drops a
+    connection without a response (a ``RemoteDisconnected`` surfaced as
+    ``ConnectionError``). #455 hardened the poll GET; this helper extends the
+    same tolerance to the requests that run *outside* the poll loop (version
+    resolution, download) so a one-off blip there no longer crashes the fetch
+    and files a spurious "Firebase Tests failed" issue."""
+
+    def test_returns_value_on_first_success(self):
+        op = MagicMock(return_value="ok")
+        result = fetch_playstore_apks._with_transient_retries(op, "do a thing")
+        self.assertEqual(result, "ok")
+        op.assert_called_once_with()
+
+    def test_retries_through_transient_error_then_succeeds(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        op = MagicMock(
+            side_effect=[ReqConnectionError("Connection aborted."), "ok"]
+        )
+        with patch("fetch_playstore_apks.time.sleep") as sleep:
+            result = fetch_playstore_apks._with_transient_retries(
+                op, "do a thing"
+            )
+        self.assertEqual(result, "ok")
+        self.assertEqual(op.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_reraises_last_error_when_every_attempt_drops(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        op = MagicMock(side_effect=ReqConnectionError("Remote end closed"))
+        with patch("fetch_playstore_apks.time.sleep"):
+            with self.assertRaises(ReqConnectionError):
+                fetch_playstore_apks._with_transient_retries(op, "do a thing")
+        self.assertEqual(
+            op.call_count, fetch_playstore_apks._REQUEST_MAX_ATTEMPTS
+        )
+
+    def test_http_error_is_not_retried(self):
+        """An HTTP status error is a hard problem, not a transient connection
+        blip — it must propagate on the first attempt, not be retried away."""
+        from requests.exceptions import HTTPError
+
+        op = MagicMock(side_effect=HTTPError("500 Server Error"))
+        with patch("fetch_playstore_apks.time.sleep"):
+            with self.assertRaises(HTTPError):
+                fetch_playstore_apks._with_transient_retries(op, "do a thing")
+        op.assert_called_once_with()
+
+
+class TestResolveVersionCodeTransient(unittest.TestCase):
+    """Regression for #457: ``_resolve_version_code`` runs before the tolerant
+    poll loop, so a dropped connection on its edit/track requests used to crash
+    the whole fetch. A transient drop must now be retried transparently."""
+
+    def test_retries_transient_drop_on_edit_creation(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        edit_resp = MagicMock()
+        edit_resp.json.return_value = {"id": "edit-1"}
+        # First POST drops the connection, the retry succeeds.
+        session.post.side_effect = [
+            ReqConnectionError("Connection aborted."),
+            edit_resp,
+        ]
+        track_resp = MagicMock()
+        track_resp.json.return_value = {"releases": [{"versionCodes": ["77"]}]}
+        session.get.return_value = track_resp
+
+        with patch("fetch_playstore_apks.time.sleep"):
+            result = fetch_playstore_apks._resolve_version_code(
+                session, "pkg", "alpha"
+            )
+        self.assertEqual(result, 77)
+        self.assertEqual(session.post.call_count, 2)
+
+    def test_retries_transient_drop_on_track_read(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        edit_resp = MagicMock()
+        edit_resp.json.return_value = {"id": "edit-1"}
+        session.post.return_value = edit_resp
+        track_resp = MagicMock()
+        track_resp.json.return_value = {"releases": [{"versionCodes": ["88"]}]}
+        # First GET drops the connection, the retry succeeds.
+        session.get.side_effect = [
+            ReqConnectionError("Remote end closed connection"),
+            track_resp,
+        ]
+
+        with patch("fetch_playstore_apks.time.sleep"):
+            result = fetch_playstore_apks._resolve_version_code(
+                session, "pkg", "alpha"
+            )
+        self.assertEqual(result, 88)
+        self.assertEqual(session.get.call_count, 2)
+
+
+class TestDownloadTransient(unittest.TestCase):
+    """Regression for #457: the split-APK download also runs outside the poll
+    loop, so a dropped connection there must be retried (re-downloading from a
+    truncated file) rather than crashing the fetch."""
+
+    def test_retries_transient_drop_and_redownloads(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        with tempfile.TemporaryDirectory() as dest_dir:
+            dest = os.path.join(dest_dir, "base-master.apk")
+
+            good_resp = MagicMock()
+            good_resp.__enter__ = MagicMock(return_value=good_resp)
+            good_resp.__exit__ = MagicMock(return_value=False)
+            good_resp.iter_content.return_value = [b"apk-bytes"]
+
+            session = MagicMock()
+            session.get.side_effect = [
+                ReqConnectionError("Connection aborted."),
+                good_resp,
+            ]
+
+            with patch("fetch_playstore_apks.time.sleep"):
+                fetch_playstore_apks._download(
+                    session, "pkg", 42, "dl-1", dest
+                )
+
+            self.assertEqual(session.get.call_count, 2)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"apk-bytes")
+
+
 class TestListGeneratedApks(unittest.TestCase):
     def test_returns_none_on_404(self):
         """Play returns 404 until it has finished generating split APKs for a
