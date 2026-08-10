@@ -72,7 +72,14 @@ dependencies:
 
   # Background sync and local notifications
   flutter_local_notifications: ^22.0.0
-  workmanager: ^0.10.0
+  # Pinned to 0.9.x: workmanager_android 0.10.x drops the self-applied
+  # kotlin-android plugin and instead relies on AGP 9's built-in Kotlin to
+  # provide the `kotlin {}` extension. Our Android build keeps built-in Kotlin
+  # off (the app and several other plugins still apply kotlin-android), so
+  # 0.10.x fails to evaluate (`Could not find method kotlin()`) and breaks the
+  # release build. Revisit once we migrate the whole build to built-in Kotlin.
+  # Renovate is pinned to match in renovate.json.
+  workmanager: ^0.9.0
 
   # UnifiedPush — real-time push without proprietary services (Android only).
   # Calls are guarded with try/catch so a missing plugin channel never crashes
