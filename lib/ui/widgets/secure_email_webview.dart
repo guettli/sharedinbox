@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -203,9 +204,26 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
     }
     return SizedBox(
       height: _height,
-      child: WebViewWidget(controller: _controller!),
+      child: WebViewWidget(
+        controller: _controller!,
+        gestureRecognizers: emailWebViewGestureRecognizers(),
+      ),
     );
   }
+}
+
+/// Gesture recognizers registered on the email [WebViewWidget].
+///
+/// Without a long-press recognizer the surrounding scrollable detail screen
+/// wins the gesture arena, so the WebView never receives the long-press that
+/// starts a text selection and HTML email text cannot be selected (issue
+/// #462). Only the long-press is claimed here — vertical scroll drags still
+/// bubble up to the parent scroll view.
+@visibleForTesting
+Set<Factory<OneSequenceGestureRecognizer>> emailWebViewGestureRecognizers() {
+  return {
+    Factory<OneSequenceGestureRecognizer>(LongPressGestureRecognizer.new),
+  };
 }
 
 /// Whether [url] begins with the `mailto:` scheme. Case-insensitive, matching
