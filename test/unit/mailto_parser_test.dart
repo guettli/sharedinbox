@@ -61,6 +61,16 @@ void main() {
       expect(fields.to, isNull);
       expect(fields.subject, 'Hello');
     });
+
+    test('handles empty subject/body query params (#463)', () {
+      // The exact URI shape from the bug report: empty subject and body.
+      final fields = parseMailto(
+        Uri.parse('mailto:info@boofeladen.de?subject=&body='),
+      )!;
+      expect(fields.to, 'info@boofeladen.de');
+      expect(fields.subject, '');
+      expect(fields.body, '');
+    });
   });
 
   group('mailIntentFromMailtoString', () {
