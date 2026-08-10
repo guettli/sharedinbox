@@ -52,7 +52,7 @@ repos:
         language: system
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && scripts/check_dagger_versions.sh'
         pass_filenames: false
-        files: ^(ci/dagger\.json|Dockerfile\.dev|DAGGER\.md)$
+        files: ^(ci/dagger\.json|Dockerfile\.dev|DAGGER\.md|arc-runner-image/Dockerfile|scripts/check_dagger_versions\.sh)$
       - id: ci-monitor-sync
         name: ci-monitor.sh and k8s/ci-monitor.yaml stay in sync
         language: system
