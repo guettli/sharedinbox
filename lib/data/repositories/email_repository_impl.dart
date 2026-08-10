@@ -2454,11 +2454,23 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return;
-    final account = (await _accounts.getAccount(row.accountId))!;
+    if (row.mailboxPath == destMailboxPath) return;
 
-    if (row.mailboxPath == destMailboxPath) {
-      return;
-    }
+    await _moveRow(row, destMailboxPath);
+    await _mirrorMoveToCounterparts(
+      row.accountId,
+      row.messageId,
+      destMailboxPath,
+    );
+  }
+
+  /// Moves a single [row] to [destMailboxPath] on its own account: enqueues the
+  /// protocol change and applies the optimistic local update. Does not mirror
+  /// to counterpart accounts (see [_mirrorMoveToCounterparts]).
+  Future<void> _moveRow(Email row, String destMailboxPath) async {
+    if (row.mailboxPath == destMailboxPath) return;
+    final emailId = row.id;
+    final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
@@ -2523,6 +2535,18 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return null;
+
+    final dest = await _deleteRow(row);
+    await _mirrorDeleteToCounterparts(row.accountId, row.messageId);
+    return dest;
+  }
+
+  /// Deletes a single [row] on its own account: moves it to that account's
+  /// Trash when one exists (so the user can recover it), otherwise hard-deletes.
+  /// Returns the Trash path when moved, or null when hard-deleted. Does not
+  /// mirror to counterpart accounts (see [_mirrorDeleteToCounterparts]).
+  Future<String?> _deleteRow(Email row) async {
+    final emailId = row.id;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
@@ -2534,7 +2558,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
 
     if (trashRow != null && trashRow.path != row.mailboxPath) {
-      await moveEmail(emailId, trashRow.path);
+      await _moveRow(row, trashRow.path);
       return trashRow.path;
     }
 
@@ -2800,6 +2824,113 @@ class EmailRepositoryImpl implements EmailRepository {
           )
           ..limit(1))
         .getSingleOrNull();
+  }
+
+  /// Mirrors a move (Archive / Spam / plain move) onto the matching message in
+  /// every counterpart account — the same server mailbox connected via the
+  /// other protocol (see [AccountComparison]).
+  ///
+  /// The destination path cannot simply be copied across: the IMAP and JMAP
+  /// copies of the same server mailbox live under different [Mailbox.path]s. So
+  /// the source destination's semantic [Mailbox.role] (e.g. `archive`, `junk`,
+  /// `trash`) is resolved on each counterpart and used to locate the equivalent
+  /// mailbox there; role-less custom folders fall back to a case-insensitive
+  /// name match.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet, that have
+  /// no equivalent destination mailbox, or that already hold the message in the
+  /// destination are skipped so no redundant change is enqueued.
+  Future<void> _mirrorMoveToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+    String destMailboxPath,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    // Resolve the destination's role/name on the source account so the same
+    // logical mailbox can be found on each counterpart.
+    final sourceDest = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) =>
+                t.accountId.equals(sourceAccountId) &
+                t.path.equals(destMailboxPath),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final destRole = sourceDest?.role;
+    final destName = sourceDest?.name ?? destMailboxPath;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      final counterpartDest = await _resolveCounterpartMailboxPath(
+        counterpart.id,
+        role: destRole,
+        name: destName,
+      );
+      if (counterpartDest == null) continue;
+      // Already in the destination → nothing to mirror.
+      if (row.mailboxPath == counterpartDest) continue;
+
+      await _moveRow(row, counterpartDest);
+    }
+  }
+
+  /// Mirrors a delete onto the matching message in every counterpart account.
+  /// Each counterpart runs its own [_deleteRow], so it independently moves the
+  /// message to its own Trash when it has one, or hard-deletes otherwise —
+  /// robust when only one side of the pair has a Trash folder.
+  Future<void> _mirrorDeleteToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+      await _deleteRow(row);
+    }
+  }
+
+  /// Finds the path of the mailbox on [accountId] that corresponds to a move
+  /// whose source destination had the given [role] / [name]. Prefers a role
+  /// match (roles are protocol-independent); falls back to a case-insensitive
+  /// name match for role-less custom folders. Returns null when the counterpart
+  /// has no equivalent mailbox.
+  Future<String?> _resolveCounterpartMailboxPath(
+    String accountId, {
+    required String? role,
+    required String name,
+  }) async {
+    final mailboxes = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    if (role != null) {
+      for (final m in mailboxes) {
+        if (m.role == role) return m.path;
+      }
+    }
+    final lowerName = name.toLowerCase();
+    for (final m in mailboxes) {
+      if (m.name.toLowerCase() == lowerName) return m.path;
+    }
+    return null;
   }
 
   @override

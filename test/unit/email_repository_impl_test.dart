@@ -2321,6 +2321,220 @@ void main() {
     });
   });
 
+  group('Archive/Delete/Spam mirroring', () {
+    // Seeds a mailbox row. IMAP and JMAP copies of the same server mailbox live
+    // under different [path]s, so the mirror must resolve the counterpart by
+    // [role], never by copying the source path.
+    Future<void> seedMailbox(
+      AppDatabase db,
+      String accountId,
+      String path,
+      String name, {
+      String? role,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$accountId:$path',
+                accountId: accountId,
+                path: path,
+                name: name,
+                role: Value(role),
+              ),
+            );
+
+    Future<void> seedEmail(
+      AppDatabase db,
+      String id,
+      String accountId,
+      String mailboxPath,
+      String messageId,
+    ) =>
+        db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: accountId,
+                mailboxPath: mailboxPath,
+                uid: 0,
+                receivedAt: DateTime(2024),
+                messageId: Value(messageId),
+              ),
+            );
+
+    test('archive move on IMAP mirrors to the JMAP counterpart by role',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      // Deliberately a *different* path from the IMAP archive folder.
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      // Source moved to its own archive path.
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.mailboxPath, 'Archive');
+      // Counterpart moved to *its* archive path (resolved by role, not copied).
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-9');
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'move');
+      }
+    });
+
+    test('archive move on JMAP mirrors to the IMAP counterpart by role',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('jmap-p:e1', 'mbox-9');
+
+      final mirror = await r.emails.getEmail('imap-p:5');
+      expect(mirror!.mailboxPath, 'Archive');
+    });
+
+    test('spam move mirrors to the counterpart junk mailbox', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Junk', 'Junk', role: 'junk');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-junk', 'Spam', role: 'junk');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Junk');
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-junk');
+    });
+
+    test('delete-to-Trash mirrors onto the counterpart Trash', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(r.db, 'jmap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-t', 'Trash', role: 'trash');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'INBOX', 'abc@example.com');
+
+      final dest = await r.emails.deleteEmail('imap-p:5');
+      expect(dest, 'Trash');
+
+      final src = await r.emails.getEmail('imap-p:5');
+      expect(src!.mailboxPath, 'Trash');
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbox-t');
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'move');
+      }
+    });
+
+    test('hard delete (already in Trash) mirrors a hard delete', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-t', 'Trash', role: 'trash');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'Trash', '<abc@example.com>');
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'mbox-t', 'abc@example.com');
+
+      final dest = await r.emails.deleteEmail('imap-p:5');
+      expect(dest, isNull);
+
+      // Both copies are permanently removed.
+      expect(await r.emails.getEmail('imap-p:5'), isNull);
+      expect(await r.emails.getEmail('jmap-p:e1'), isNull);
+
+      for (final id in const ['imap-p', 'jmap-p']) {
+        final changes = await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.accountId.equals(id)))
+            .get();
+        expect(changes, hasLength(1), reason: id);
+        expect(changes.first.changeType, 'delete');
+      }
+    });
+
+    test(
+        'move mirror is a no-op when the counterpart has not synced the message',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      // No jmap-p email row: the counterpart hasn't cached this message yet.
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, isEmpty);
+    });
+
+    test('move mirror skips a counterpart already in the destination',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedMailbox(r.db, 'jmap-p', 'mbox-9', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      // Counterpart is already archived (e.g. from a previous sync).
+      await seedEmail(r.db, 'jmap-p:e1', 'jmap-p', 'mbox-9', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, isEmpty);
+    });
+
+    test('move is a no-op mirror when there is no counterpart account',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Archive', 'Archive', role: 'archive');
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+
+      await r.emails.moveEmail('imap-p:5', 'Archive');
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.first.accountId, 'imap-p');
+    });
+  });
+
   group('JMAP getEmailBody', () {
     http.Client mockBodyClient({
       String text = 'Hello from JMAP',
