@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -18,6 +19,7 @@ class UndoLogDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final account = ref.watch(accountByIdProvider(action.accountId)).value;
 
     return Scaffold(
       appBar: AppBar(
@@ -54,7 +56,7 @@ class UndoLogDetailScreen extends ConsumerWidget {
               ListTile(
                 leading: const Icon(Icons.account_circle),
                 title: const Text('Account'),
-                subtitle: Text(action.accountId),
+                subtitle: Text(accountDisplayLabel(account, action.accountId)),
               ),
               ListTile(
                 leading: Icon(

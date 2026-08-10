@@ -155,6 +155,69 @@ class TestPollGeneratedApks(unittest.TestCase):
                         )
         self.assertIn("42", str(ctx.exception))
 
+    def test_retries_through_transient_connection_error(self):
+        """Regression for #455: a dropped/reset connection to the Play API on one
+        polling GET (surfaced by requests as ``ConnectionError``, e.g. from a
+        ``RemoteDisconnected``) must be retried within the deadline, not crash
+        the whole fetch and file a spurious "Firebase Tests failed" issue."""
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        listing = {"generatedApks": [{"key": "v"}]}
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=[
+                ReqConnectionError("Connection aborted."),
+                None,
+                listing,
+            ],
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                result = fetch_playstore_apks._poll_generated_apks(
+                    session, "pkg", 42
+                )
+        self.assertIs(result, listing)
+
+    def test_timeout_names_transient_error_when_it_persists(self):
+        """If the transient connection error never clears within the window, the
+        poller still gives up with TimeoutError (so main() drops a PENDING skip
+        and the next run retries) and names the last error so the cause is
+        visible in the logs."""
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        session = MagicMock()
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=ReqConnectionError("Remote end closed connection"),
+        ):
+            with patch(
+                "fetch_playstore_apks.time.monotonic",
+                side_effect=[0.0, 10_000_000.0, 10_000_001.0],
+            ):
+                with patch("fetch_playstore_apks.time.sleep"):
+                    with self.assertRaises(TimeoutError) as ctx:
+                        fetch_playstore_apks._poll_generated_apks(
+                            session, "pkg", 42
+                        )
+        self.assertIn("42", str(ctx.exception))
+        self.assertIn("Remote end closed connection", str(ctx.exception))
+
+    def test_http_error_still_propagates(self):
+        """An HTTP status error (4xx/5xx) is a hard problem, not a transient
+        connection blip — it must propagate rather than being retried away."""
+        from requests.exceptions import HTTPError
+
+        session = MagicMock()
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=HTTPError("500 Server Error"),
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                with self.assertRaises(HTTPError):
+                    fetch_playstore_apks._poll_generated_apks(
+                        session, "pkg", 42
+                    )
+
 
 def _patches(dest_dir, *, version_code, list_apks, env=None):
     """Common patch stack used by the main() tests.

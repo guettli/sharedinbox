@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
+import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
@@ -2453,11 +2454,23 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return;
-    final account = (await _accounts.getAccount(row.accountId))!;
+    if (row.mailboxPath == destMailboxPath) return;
 
-    if (row.mailboxPath == destMailboxPath) {
-      return;
-    }
+    await _moveRow(row, destMailboxPath);
+    await _mirrorMoveToCounterparts(
+      row.accountId,
+      row.messageId,
+      destMailboxPath,
+    );
+  }
+
+  /// Moves a single [row] to [destMailboxPath] on its own account: enqueues the
+  /// protocol change and applies the optimistic local update. Does not mirror
+  /// to counterpart accounts (see [_mirrorMoveToCounterparts]).
+  Future<void> _moveRow(Email row, String destMailboxPath) async {
+    if (row.mailboxPath == destMailboxPath) return;
+    final emailId = row.id;
+    final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
@@ -2522,6 +2535,18 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return null;
+
+    final dest = await _deleteRow(row);
+    await _mirrorDeleteToCounterparts(row.accountId, row.messageId);
+    return dest;
+  }
+
+  /// Deletes a single [row] on its own account: moves it to that account's
+  /// Trash when one exists (so the user can recover it), otherwise hard-deletes.
+  /// Returns the Trash path when moved, or null when hard-deleted. Does not
+  /// mirror to counterpart accounts (see [_mirrorDeleteToCounterparts]).
+  Future<String?> _deleteRow(Email row) async {
+    final emailId = row.id;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
@@ -2533,7 +2558,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
 
     if (trashRow != null && trashRow.path != row.mailboxPath) {
-      await moveEmail(emailId, trashRow.path);
+      await _moveRow(row, trashRow.path);
       return trashRow.path;
     }
 
@@ -2621,19 +2646,30 @@ class EmailRepositoryImpl implements EmailRepository {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingle();
-    final account = (await _accounts.getAccount(row.accountId))!;
+    await _snoozeRow(row, until);
+    await _mirrorSnoozeToCounterparts(
+      row.accountId,
+      row.messageId,
+      until: until,
+    );
+  }
+
+  /// Snoozes a single [row] on its own account: moves it to that account's
+  /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
+  Future<void> _snoozeRow(Email row, DateTime until) async {
+    final accountId = row.accountId;
 
     // Find or create Snoozed mailbox.
     var snoozedMailbox = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('snoozed'),
+            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
 
     snoozedMailbox ??= await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.name.equals('Snoozed'),
+            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -2642,7 +2678,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final destPath = snoozedMailbox?.path ?? 'Snoozed';
 
     // Optimistic local update.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(destPath),
         snoozedUntil: Value(until),
@@ -2651,8 +2687,8 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     await _enqueueChange(
-      account.id,
-      emailId,
+      accountId,
+      row.id,
       'snooze',
       jsonEncode({
         'uid': row.uid,
@@ -2662,12 +2698,8 @@ class EmailRepositoryImpl implements EmailRepository {
       }),
     );
 
-    await _updateThread(
-      row.accountId,
-      row.mailboxPath,
-      row.threadId ?? emailId,
-    );
-    await _updateThread(row.accountId, destPath, row.threadId ?? emailId);
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, destPath, row.threadId ?? row.id);
   }
 
   @override
@@ -2684,35 +2716,221 @@ class EmailRepositoryImpl implements EmailRepository {
     if (expired.isEmpty) return 0;
 
     for (final row in expired) {
-      // Per instructions: "get to inbox moved by app".
-      final inbox = await (_db.select(_db.mailboxes)
-            ..where(
-              (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
-            )
-            ..limit(1))
-          .getSingleOrNull();
-      final dest = inbox?.path ?? 'INBOX';
-
-      await _enqueueChange(
-        accountId,
-        row.id,
-        'unsnooze',
-        jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+      await _unsnoozeRow(row);
+      await _mirrorSnoozeToCounterparts(
+        row.accountId,
+        row.messageId,
+        until: null,
       );
-
-      // Optimistic local update.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-        EmailsCompanion(
-          mailboxPath: Value(dest),
-          snoozedUntil: const Value(null),
-          snoozedFromMailboxPath: const Value(null),
-        ),
-      );
-
-      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
-      await _updateThread(accountId, dest, row.threadId ?? row.id);
     }
     return expired.length;
+  }
+
+  /// Un-snoozes a single [row] on its own account: moves it back to that
+  /// account's Inbox, clears the snooze columns and enqueues the change.
+  Future<void> _unsnoozeRow(Email row) async {
+    final accountId = row.accountId;
+
+    // Per instructions: "get to inbox moved by app".
+    final inbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final dest = inbox?.path ?? 'INBOX';
+
+    await _enqueueChange(
+      accountId,
+      row.id,
+      'unsnooze',
+      jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+    );
+
+    // Optimistic local update.
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(dest),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
+    );
+
+    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+    await _updateThread(accountId, dest, row.threadId ?? row.id);
+  }
+
+  /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
+  /// message in every counterpart account — the same server mailbox connected
+  /// via the other protocol (see [AccountComparison]).
+  ///
+  /// A user who connects to one server via both IMAP and JMAP has two
+  /// independent [Account] rows, each with its own copy of every message, so
+  /// snoozing on one account leaves the other untouched. This bridges them:
+  /// messages are correlated by their normalised RFC 2822 Message-ID and the
+  /// same optimistic update + pending change is applied to the counterpart,
+  /// which then flushes through that account's own protocol path.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet are skipped
+  /// (their next sync reconstructs the snooze from the shared server-side
+  /// `snz:` keyword anyway), and rows already in the requested state are left
+  /// alone so no redundant change is enqueued.
+  Future<void> _mirrorSnoozeToCounterparts(
+    String sourceAccountId,
+    String? messageId, {
+    required DateTime? until,
+  }) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      if (until != null) {
+        // Already snoozed to (about) the same time → nothing to mirror.
+        final current = row.snoozedUntil;
+        if (current != null &&
+            current.difference(until).abs() < const Duration(seconds: 1)) {
+          continue;
+        }
+        await _snoozeRow(row, until);
+      } else {
+        // Already awake → nothing to mirror.
+        if (row.snoozedUntil == null) continue;
+        await _unsnoozeRow(row);
+      }
+    }
+  }
+
+  /// Looks up a single email row in [accountId] whose Message-ID matches [mid]
+  /// (already run through [normaliseMessageId]). Matches both the bracket-less
+  /// JMAP form and the legacy `<...>` IMAP form stored in the column.
+  Future<Email?> _findEmailRowByNormalisedMessageId(
+    String accountId,
+    String mid,
+  ) {
+    return (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  /// Mirrors a move (Archive / Spam / plain move) onto the matching message in
+  /// every counterpart account — the same server mailbox connected via the
+  /// other protocol (see [AccountComparison]).
+  ///
+  /// The destination path cannot simply be copied across: the IMAP and JMAP
+  /// copies of the same server mailbox live under different [Mailbox.path]s. So
+  /// the source destination's semantic [Mailbox.role] (e.g. `archive`, `junk`,
+  /// `trash`) is resolved on each counterpart and used to locate the equivalent
+  /// mailbox there; role-less custom folders fall back to a case-insensitive
+  /// name match.
+  ///
+  /// Best-effort: counterparts that haven't synced the message yet, that have
+  /// no equivalent destination mailbox, or that already hold the message in the
+  /// destination are skipped so no redundant change is enqueued.
+  Future<void> _mirrorMoveToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+    String destMailboxPath,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    // Resolve the destination's role/name on the source account so the same
+    // logical mailbox can be found on each counterpart.
+    final sourceDest = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) =>
+                t.accountId.equals(sourceAccountId) &
+                t.path.equals(destMailboxPath),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final destRole = sourceDest?.role;
+    final destName = sourceDest?.name ?? destMailboxPath;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+
+      final counterpartDest = await _resolveCounterpartMailboxPath(
+        counterpart.id,
+        role: destRole,
+        name: destName,
+      );
+      if (counterpartDest == null) continue;
+      // Already in the destination → nothing to mirror.
+      if (row.mailboxPath == counterpartDest) continue;
+
+      await _moveRow(row, counterpartDest);
+    }
+  }
+
+  /// Mirrors a delete onto the matching message in every counterpart account.
+  /// Each counterpart runs its own [_deleteRow], so it independently moves the
+  /// message to its own Trash when it has one, or hard-deletes otherwise —
+  /// robust when only one side of the pair has a Trash folder.
+  Future<void> _mirrorDeleteToCounterparts(
+    String sourceAccountId,
+    String? messageId,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return;
+    final all = await _accounts.observeAccounts().first;
+    final counterparts = AccountComparison.counterpartsOf(source, all);
+    if (counterparts.isEmpty) return;
+
+    for (final counterpart in counterparts) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row == null) continue;
+      await _deleteRow(row);
+    }
+  }
+
+  /// Finds the path of the mailbox on [accountId] that corresponds to a move
+  /// whose source destination had the given [role] / [name]. Prefers a role
+  /// match (roles are protocol-independent); falls back to a case-insensitive
+  /// name match for role-less custom folders. Returns null when the counterpart
+  /// has no equivalent mailbox.
+  Future<String?> _resolveCounterpartMailboxPath(
+    String accountId, {
+    required String? role,
+    required String name,
+  }) async {
+    final mailboxes = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    if (role != null) {
+      for (final m in mailboxes) {
+        if (m.role == role) return m.path;
+      }
+    }
+    final lowerName = name.toLowerCase();
+    for (final m in mailboxes) {
+      if (m.name.toLowerCase() == lowerName) return m.path;
+    }
+    return null;
   }
 
   @override
@@ -3988,46 +4206,75 @@ class EmailRepositoryImpl implements EmailRepository {
       throw JmapException('Email/set create failed: missing created email id');
     }
 
-    // Then submit the created email.
-    final submissionResponses = await jmap.call(
-      [
+    // Then submit the created email. If submission fails for any reason, the
+    // email was already created in the Sent mailbox above; destroy it so a
+    // message that was never actually sent doesn't linger in Sent and make the
+    // user think it went out.
+    try {
+      final submissionResponses = await jmap.call(
         [
-          'EmailSubmission/set',
-          {
-            'accountId': jmap.accountId,
-            'create': {
-              'sub1': {
-                'emailId': emailId,
-                'identityId': identityId,
-                'envelope': {
-                  'mailFrom': {'email': draft.from.email},
-                  'rcptTo': allRecipients,
+          [
+            'EmailSubmission/set',
+            {
+              'accountId': jmap.accountId,
+              'create': {
+                'sub1': {
+                  'emailId': emailId,
+                  'identityId': identityId,
+                  'envelope': {
+                    'mailFrom': {'email': draft.from.email},
+                    'rcptTo': allRecipients,
+                  },
                 },
               },
             },
-          },
-          '1',
+            '1',
+          ],
         ],
-      ],
-      withSubmission: true,
-    );
-
-    // Check EmailSubmission/set for submission errors.
-    final subResult = _responseArgs(
-      submissionResponses,
-      0,
-      'EmailSubmission/set',
-    );
-    final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
-    if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
-      final err = notSubmitted['sub1'] as Map<String, dynamic>;
-      throw JmapException(
-        'EmailSubmission/set failed: ${err['type']} '
-        '${err['description'] ?? ''} '
-        '${err['properties'] ?? ''} '
-        '(envelope mailFrom: ${draft.from.email}, '
-        'identity email: ${identityEmail ?? 'unknown'})',
+        withSubmission: true,
       );
+
+      // Check EmailSubmission/set for submission errors.
+      final subResult = _responseArgs(
+        submissionResponses,
+        0,
+        'EmailSubmission/set',
+      );
+      final notSubmitted = subResult['notCreated'] as Map<String, dynamic>?;
+      if (notSubmitted != null && notSubmitted.containsKey('sub1')) {
+        final err = notSubmitted['sub1'] as Map<String, dynamic>;
+        throw JmapException(
+          'EmailSubmission/set failed: ${err['type']} '
+          '${err['description'] ?? ''} '
+          '${err['properties'] ?? ''} '
+          '(envelope mailFrom: ${draft.from.email}, '
+          'identity email: ${identityEmail ?? 'unknown'})',
+        );
+      }
+    } catch (_) {
+      await _destroyJmapEmail(jmap, emailId);
+      rethrow;
+    }
+  }
+
+  /// Best-effort removal of a locally-created JMAP email (e.g. the Sent copy
+  /// created before a failed submission). Swallows errors: the original send
+  /// failure is what matters to the caller, and a failed cleanup must not mask
+  /// it.
+  Future<void> _destroyJmapEmail(JmapClient jmap, String emailId) async {
+    try {
+      await jmap.call([
+        [
+          'Email/set',
+          {
+            'accountId': jmap.accountId,
+            'destroy': [emailId],
+          },
+          '0',
+        ],
+      ]);
+    } catch (_) {
+      // Ignore — the send already failed and that error is being rethrown.
     }
   }
 
