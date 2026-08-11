@@ -145,7 +145,6 @@ void main() {
 
     expect(find.text('Alice • IMAP'), findsOneWidget);
     expect(find.text('Bob • JMAP'), findsOneWidget);
-    expect(find.text('Move'), findsOneWidget);
     expect(find.text('Move: INBOX → Archive'), findsOneWidget);
     expect(find.text('Quarterly report · Carol'), findsOneWidget);
     expect(find.byIcon(Icons.error), findsOneWidget);
@@ -160,8 +159,8 @@ void main() {
   testWidgets('renders the concrete mutation for each change kind',
       (tester) async {
     final repo = _StubbedQueue([
-      _pc(id: 1, kind: 'flag_seen', payload: '{"seen":true}'),
-      _pc(id: 2, kind: 'flag_seen', payload: '{"seen":false}'),
+      _pc(payload: '{"seen":true}'),
+      _pc(id: 2, payload: '{"seen":false}'),
       _pc(id: 3, kind: 'flag_flagged', payload: '{"flagged":true}'),
       _pc(id: 4, kind: 'flag_flagged', payload: '{"flagged":false}'),
       _pc(
@@ -181,7 +180,7 @@ void main() {
 
   testWidgets('falls back to the raw id when the email is not stored locally',
       (tester) async {
-    final repo = _StubbedQueue([_pc(kind: 'flag_seen', payload: '{}')]);
+    final repo = _StubbedQueue([_pc()]);
     await pump(tester, repo: repo);
 
     expect(find.text('email acc-1:42'), findsOneWidget);

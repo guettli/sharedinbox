@@ -17,9 +17,8 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
 /// Global list of the outbound queue (`pending_changes`) across all accounts,
-/// grouped by account. Each row shows the change kind, the affected email
-/// (subject and sender), the concrete mutation, age, attempt count, and last
-/// error. Actions:
+/// grouped by account. Each row shows the concrete mutation, the affected
+/// email (subject and sender), age, attempt count, and last error. Actions:
 ///
 ///  * **Retry now** — resets the row's attempt/error state and asks the sync
 ///    manager to flush the account immediately.
@@ -153,15 +152,11 @@ class PendingChangeTile extends StatelessWidget {
         change.hasError ? Icons.error : Icons.sync,
         color: change.hasError ? theme.colorScheme.error : null,
       ),
-      title: Text(kindLabel(change.kind)),
+      title: Text(describeChange(change)),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _EmailIdentity(change: change, repo: repo),
-          Text(
-            describeChange(change),
-            overflow: TextOverflow.ellipsis,
-          ),
           Text(
             'Queued: ${_dateFmt.format(change.createdAt.toLocal())}'
             ' • age ${_formatAge(DateTime.now().difference(change.createdAt))}'
