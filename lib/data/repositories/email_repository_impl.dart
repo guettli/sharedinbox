@@ -4584,10 +4584,11 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final noteRows = await _searchEmailsByNotes(accountId, null, query);
+    final bodyRows = await _searchEmailsByBody(accountId, null, query);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort((a, b) {
@@ -4597,6 +4598,25 @@ class EmailRepositoryImpl implements EmailRepository {
     return merged;
   }
 
+  /// Returns emails whose plaintext body matches [query] via the
+  /// `email_body_fts` FTS5 index. Optionally filtered by [accountId] and
+  /// [mailboxPath].
+  Future<List<model.Email>> _searchEmailsByBody(
+    String? accountId,
+    String? mailboxPath,
+    String query,
+  ) =>
+      _searchEmailsByFts(
+        fromJoin: 'FROM email_body_fts f'
+            ' JOIN email_bodies b ON b.rowid = f.rowid'
+            ' JOIN emails e ON e.id = b.email_id',
+        ftsTable: 'email_body_fts',
+        readsFrom: {_db.emails, _db.emailBodies},
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+      );
+
   /// Returns emails whose associated notes match [query] via the
   /// `email_notes_fts` FTS5 index. Optionally filtered by [accountId] and
   /// [mailboxPath].
@@ -4604,7 +4624,33 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
-  ) async {
+  ) =>
+      _searchEmailsByFts(
+        fromJoin: 'FROM email_notes_fts f'
+            ' JOIN email_notes n ON n.rowid = f.rowid'
+            ' JOIN emails e ON e.message_id = n.message_id'
+            ' AND e.account_id = n.account_id',
+        ftsTable: 'email_notes_fts',
+        readsFrom: {_db.emails, _db.emailNotes},
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+      );
+
+  /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
+  /// `e`) and returns them as models, flagged and newest first. [fromJoin] is
+  /// the `FROM …` clause joining the [ftsTable] shadow index to `emails`;
+  /// [ftsTable] is the virtual-table name used in the `MATCH` predicate.
+  /// Optionally filtered by [accountId] and [mailboxPath]. Shared by the
+  /// body and note search paths.
+  Future<List<model.Email>> _searchEmailsByFts({
+    required String fromJoin,
+    required String ftsTable,
+    required Set<ResultSetImplementation> readsFrom,
+    required String? accountId,
+    required String? mailboxPath,
+    required String query,
+  }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
 
@@ -4619,18 +4665,17 @@ class EmailRepositoryImpl implements EmailRepository {
       extraVars.add(Variable<String>(mailboxPath));
     }
 
-    final sql = 'SELECT DISTINCT e.* FROM email_notes_fts f'
-        ' JOIN email_notes n ON n.rowid = f.rowid'
-        ' JOIN emails e ON e.message_id = n.message_id'
-        ' AND e.account_id = n.account_id'
-        ' WHERE email_notes_fts MATCH ?$extraConditions'
+    final sql = 'SELECT DISTINCT e.* $fromJoin'
+        ' WHERE $ftsTable MATCH ?$extraConditions'
         ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
-    final rows = await _db.customSelect(
-      sql,
-      variables: [Variable<String>(ftsQuery), ...extraVars],
-      readsFrom: {_db.emails, _db.emailNotes},
-    ).get();
+    final rows = await _db
+        .customSelect(
+          sql,
+          variables: [Variable<String>(ftsQuery), ...extraVars],
+          readsFrom: readsFrom,
+        )
+        .get();
     final emailRows =
         await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();
@@ -4925,10 +4970,11 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
+    final bodyRows = await _searchEmailsByBody(accountId, mailboxPath, query);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort((a, b) {
