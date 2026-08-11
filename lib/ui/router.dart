@@ -50,6 +50,13 @@ final router = GoRouter(
   initialLocation: '/inbox',
   observers: [appLogNavigatorObserver],
   routes: [
+    // Resolve the bare root path to the inbox so navigation to `/` (e.g. the
+    // "Home" button on go_router's default error page) lands on the home
+    // screen instead of the "Page Not Found" screen.
+    GoRoute(
+      path: '/',
+      redirect: (ctx, state) => '/inbox',
+    ),
     ShellRoute(
       builder: (ctx, state, child) => UndoShell(child: child),
       routes: [

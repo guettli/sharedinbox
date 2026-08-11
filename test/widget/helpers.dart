@@ -658,6 +658,12 @@ Widget buildApp({
     initialLocation: initialLocation,
     initialExtra: initialExtra,
     routes: [
+      // Mirror of the real app's root redirect (see lib/ui/router.dart): `/`
+      // resolves to the inbox instead of the "Page Not Found" screen.
+      GoRoute(
+        path: '/',
+        redirect: (ctx, state) => '/inbox',
+      ),
       GoRoute(
         path: '/accounts',
         builder: (ctx, state) => const AccountListScreen(),
