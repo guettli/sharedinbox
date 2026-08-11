@@ -7,6 +7,28 @@ import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 import 'helpers.dart';
 
+/// Pumps [MailboxListScreen] backed by [mailboxes] and settles the frame.
+Future<void> _pumpMailboxList(
+  WidgetTester tester,
+  List<Mailbox> mailboxes,
+) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/mailboxes',
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(
+          FakeMailboxRepository(mailboxes),
+        ),
+        emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('MailboxListScreen', () {
     testWidgets('shows mailbox name', (tester) async {
@@ -67,21 +89,7 @@ void main() {
         totalCount: 1,
         role: 'inbox',
       );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([inbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [inbox]);
 
       expect(find.text('Inbox'), findsOneWidget);
       expect(find.byIcon(Icons.inbox), findsOneWidget);
@@ -98,21 +106,7 @@ void main() {
         unreadCount: 0,
         totalCount: 1,
       );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([custom]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [custom]);
 
       expect(find.byIcon(Icons.folder), findsOneWidget);
       expect(find.text('Work'), findsOneWidget);
