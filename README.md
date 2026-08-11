@@ -71,6 +71,23 @@ openssl s_client -starttls sieve -connect mail.example.com:4190 -servername mail
 If `openssl` also reports the connection closing during negotiation, the problem is on the server
 side (check the ManageSieve listener config and certificate) or on the network path.
 
+**A filter's folder does not receive new messages**
+
+Server-side Sieve runs at delivery time on the mail server, so its *runtime* errors are written only
+to the **mail server's own logs** — no mail protocol (ManageSieve or JMAP) hands them back to a
+client, so the app cannot display them. The common causes the app *can* check for you are, in the
+**Remote Filters** list, the ⋮ menu → **Diagnose**:
+
+1. **The filter is not active.** The server only runs the active script; an inactive filter (shown in
+   orange) never sees incoming mail. Use **Set active**.
+2. **The target folder does not exist.** A `fileinto "Foo"` cannot file into `Foo` unless that folder
+   already exists (or the rule uses `fileinto :create "Foo"`).
+3. **Nothing matches.** The conditions may simply not match the mail you expect.
+
+If Diagnose reports no local problem, the filter reached the server correctly and any remaining
+failure is in the server's delivery pipeline — check the mail server's log (for Stalwart, its
+tracing/log output) for the Sieve execution.
+
 ---
 
 ## For developers

@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/sieve/sieve_diagnostics.dart';
+import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -261,6 +263,114 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     }
   }
 
+  /// Explains why a filter might not be moving mail — the "the folder does not
+  /// get new messages" case. Server-side Sieve *runtime* errors are only in the
+  /// mail server's logs (no protocol exposes them), so we check the causes the
+  /// app can see: script not active, missing target folder, no matching mail.
+  Future<void> _diagnose(SieveScript script) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 2),
+        content: Text('Diagnosing filter…'),
+      ),
+    );
+    List<SieveFinding> findings;
+    try {
+      final content = widget.isLocal
+          ? await ref
+              .read(localSieveRepositoryProvider)
+              .getScriptContent(widget.accountId, script.blobId)
+          : await ref
+              .read(sieveRepositoryProvider)
+              .getScriptContent(widget.accountId, script.blobId);
+      final rules = SieveParser().parse(content);
+      final mailboxes = await ref
+          .read(mailboxRepositoryProvider)
+          .observeMailboxes(widget.accountId)
+          .first;
+      final matchCount = await ref
+          .read(emailRepositoryProvider)
+          .previewSieveRuleMatches(widget.accountId, content);
+      findings = diagnoseSieve(
+        scriptIsActive: script.isActive,
+        fileIntoTargets: fileIntoTargets(rules),
+        existingFolderPaths: mailboxes.map((m) => m.displayPath).toSet(),
+        inboxMatchCount: matchCount,
+      );
+    } on SieveParseException {
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Could not parse this filter to diagnose it.'),
+          ),
+        );
+      }
+      return;
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.diagnose_failed',
+              'Failed to diagnose sieve script',
+              accountId: widget.accountId,
+              data: {
+                'scriptId': script.id,
+                'scriptName': script.name,
+                'isLocal': widget.isLocal,
+              },
+              error: e,
+              stack: stack,
+            ),
+      );
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Diagnose failed: $e')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Diagnose "${script.name}"'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final finding in findings)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      finding.level == SieveFindingLevel.ok
+                          ? Icons.check_circle_outline
+                          : Icons.warning_amber_rounded,
+                      size: AppIconSize.sm,
+                      color: finding.level == SieveFindingLevel.ok
+                          ? Colors.green.shade700
+                          : Colors.orange.shade800,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(child: Text(finding.message)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -322,6 +432,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
                       editRoute: _editRoute,
                       onActivate: () => _activate(scripts[i]),
                       onDeactivate: () => _deactivate(scripts[i]),
+                      onDiagnose: () => _diagnose(scripts[i]),
                       onDelete: () => _delete(scripts[i]),
                       onEdited: _load,
                     ),
@@ -383,6 +494,7 @@ class _ScriptTile extends StatelessWidget {
     required this.editRoute,
     required this.onActivate,
     required this.onDeactivate,
+    required this.onDiagnose,
     required this.onDelete,
     required this.onEdited,
   });
@@ -392,6 +504,7 @@ class _ScriptTile extends StatelessWidget {
   final String editRoute;
   final VoidCallback onActivate;
   final VoidCallback onDeactivate;
+  final VoidCallback onDiagnose;
   final VoidCallback onDelete;
   final VoidCallback onEdited;
 
@@ -424,6 +537,8 @@ class _ScriptTile extends StatelessWidget {
               onActivate();
             case _ScriptAction.deactivate:
               onDeactivate();
+            case _ScriptAction.diagnose:
+              onDiagnose();
             case _ScriptAction.delete:
               onDelete();
           }
@@ -440,6 +555,10 @@ class _ScriptTile extends StatelessWidget {
               value: _ScriptAction.activate,
               child: Text('Set active'),
             ),
+          const PopupMenuItem(
+            value: _ScriptAction.diagnose,
+            child: Text('Diagnose'),
+          ),
           const PopupMenuDivider(),
           const PopupMenuItem(
             value: _ScriptAction.delete,
@@ -455,4 +574,4 @@ class _ScriptTile extends StatelessWidget {
   }
 }
 
-enum _ScriptAction { edit, activate, deactivate, delete }
+enum _ScriptAction { edit, activate, deactivate, diagnose, delete }
