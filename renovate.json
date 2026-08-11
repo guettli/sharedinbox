@@ -28,6 +28,11 @@
       "enabled": false
     },
     {
+      "description": "Hold workmanager at 0.9.x: 0.10.x requires AGP 9 built-in Kotlin, which our Android build does not enable yet (see pubspec.yaml).",
+      "matchPackageNames": ["workmanager"],
+      "allowedVersions": "<0.10.0"
+    },
+    {
       "description": [
         "Dagger is lock-stepped with the engine, which Renovate cannot reach: the engine tag is pinned by Ansible in guettli/gitops (ansible/p16/systemd/system/dagger-engine.service) and CI talks to it over an SSH tunnel. A Dagger PR therefore stays red until that host is bumped and dagger-engine restarted.",
         "Never automerge, and keep every in-repo CLI pin in ONE PR so it is at least internally consistent. Landing it is a two-repo operation: merge the engine bump in gitops first, then this. See DAGGER.md and guettli/gitops#112."
