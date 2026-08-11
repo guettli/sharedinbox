@@ -2960,12 +2960,33 @@ class EmailRepositoryImpl implements EmailRepository {
         role: destRole,
         name: destName,
       );
-      if (counterpartDest == null) continue;
+      if (counterpartDest == null) {
+        // The counterpart has no equivalent destination mailbox yet — e.g. an
+        // Archive folder the primary account just created but that the
+        // counterpart discovers only on a later mailbox sync. Both accounts
+        // point at the same server, so the primary's move relocates the shared
+        // message there and the counterpart will observe it leave the inbox on
+        // its next sync. Until then, drop the now-stale local copy so the
+        // combined inbox doesn't re-surface it as a duplicate of the message
+        // the user just acted on (see #478).
+        await _dropStaleCounterpartRow(row);
+        continue;
+      }
       // Already in the destination → nothing to mirror.
       if (row.mailboxPath == counterpartDest) continue;
 
       await _moveRow(row, counterpartDest);
     }
+  }
+
+  /// Removes a stale local counterpart email [row] from the cache without
+  /// enqueuing a protocol change (the primary account already performs the
+  /// real server move on the shared message) and refreshes its thread so the
+  /// row stops appearing in the combined inbox until the next sync reconciles
+  /// it to its true server location. See [_mirrorMoveToCounterparts].
+  Future<void> _dropStaleCounterpartRow(Email row) async {
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+    await _updateThread(row.accountId, row.mailboxPath, row.threadId ?? row.id);
   }
 
   /// Mirrors a delete onto the matching message in every counterpart account.

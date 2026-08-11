@@ -2681,6 +2681,197 @@ void main() {
     });
   });
 
+  // Issue #478: one server added twice — once via IMAP, once via JMAP — so
+  // every message has two independent local copies. observeAllInboxThreads
+  // collapses each counterpart pair to a single row (see the de-duplication
+  // group above). Acting on the visible copy must take the twin out of the
+  // inbox too; otherwise the "next" mail after the action is the very same
+  // message reached through the other protocol.
+  group('combined inbox: acting on one copy never re-surfaces its twin (#478)',
+      () {
+    // Seeds an INBOX copy of a message (mailbox + email + thread) for
+    // [accountId]. Both protocol copies of the same server message share a
+    // Message-ID (bracketed for IMAP, bare for JMAP) so the pair collapses.
+    Future<void> seedInboxCopy(
+      ({
+        AppDatabase db,
+        AccountRepositoryImpl accounts,
+        EmailRepositoryImpl emails
+      }) r, {
+      required String accountId,
+      required String emailId,
+      required String threadId,
+      required String subject,
+      required String messageId,
+      required DateTime date,
+    }) async {
+      final existingInbox = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+            ))
+          .getSingleOrNull();
+      if (existingInbox == null) {
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$accountId:INBOX',
+                accountId: accountId,
+                path: 'INBOX',
+                name: 'Inbox',
+                role: const Value('inbox'),
+              ),
+            );
+      }
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: accountId,
+              mailboxPath: 'INBOX',
+              uid: 0,
+              receivedAt: date,
+              subject: Value(subject),
+              messageId: Value(messageId),
+              threadId: Value(threadId),
+            ),
+          );
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: threadId,
+              accountId: accountId,
+              mailboxPath: 'INBOX',
+              subject: Value(subject),
+              latestDate: date,
+              latestEmailId: emailId,
+            ),
+          );
+    }
+
+    // Two messages, each present in both accounts. 'First' is newest so it
+    // sits at the top of the combined inbox.
+    Future<void> seedTwoDuplicatedMails(
+      ({
+        AppDatabase db,
+        AccountRepositoryImpl accounts,
+        EmailRepositoryImpl emails
+      }) r,
+    ) async {
+      await seedInboxCopy(
+        r,
+        accountId: 'imap-p',
+        emailId: 'imap-p:first',
+        threadId: 'imap-first',
+        subject: 'First',
+        messageId: '<first@example.com>',
+        date: DateTime(2024, 6, 2),
+      );
+      await seedInboxCopy(
+        r,
+        accountId: 'jmap-p',
+        emailId: 'jmap-p:first',
+        threadId: 'jmap-first',
+        subject: 'First',
+        messageId: 'first@example.com',
+        date: DateTime(2024, 6, 2),
+      );
+      await seedInboxCopy(
+        r,
+        accountId: 'imap-p',
+        emailId: 'imap-p:second',
+        threadId: 'imap-second',
+        subject: 'Second',
+        messageId: '<second@example.com>',
+        date: DateTime(2024, 6),
+      );
+      await seedInboxCopy(
+        r,
+        accountId: 'jmap-p',
+        emailId: 'jmap-p:second',
+        threadId: 'jmap-second',
+        subject: 'Second',
+        messageId: 'second@example.com',
+        date: DateTime(2024, 6),
+      );
+    }
+
+    test('archiving the first mail does not resurface its JMAP twin', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      // Only the IMAP account has an Archive folder: Stalwart has no Archive
+      // mailbox until one is created, and the JMAP counterpart discovers it
+      // only on a later mailbox sync — so at archive time the mirror cannot
+      // resolve an equivalent destination on the counterpart.
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'imap-p:Archive',
+              accountId: 'imap-p',
+              path: 'Archive',
+              name: 'Archive',
+              role: const Value('archive'),
+            ),
+          );
+      await seedTwoDuplicatedMails(r);
+
+      // Combined inbox shows each mail once, newest first.
+      var threads = await r.emails.observeAllInboxThreads().first;
+      expect(threads.map((t) => t.subject), ['First', 'Second']);
+
+      // Archive the first (visible, IMAP) copy.
+      await r.emails.moveEmail('imap-p:first', 'Archive');
+
+      // The next mail must be the genuinely different 'Second', not the JMAP
+      // copy of 'First'.
+      threads = await r.emails.observeAllInboxThreads().first;
+      expect(
+        threads.map((t) => t.subject),
+        ['Second'],
+        reason: 'the archived mail must not reappear via the JMAP account',
+      );
+    });
+
+    test('deleting the first mail does not resurface its JMAP twin', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      // Only the IMAP account has a Trash folder; the JMAP counterpart must
+      // still leave the inbox (falling back to a hard delete).
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'imap-p:Trash',
+              accountId: 'imap-p',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await seedTwoDuplicatedMails(r);
+
+      await r.emails.deleteEmail('imap-p:first');
+
+      final threads = await r.emails.observeAllInboxThreads().first;
+      expect(
+        threads.map((t) => t.subject),
+        ['Second'],
+        reason: 'the deleted mail must not reappear via the JMAP account',
+      );
+    });
+
+    test('snoozing the first mail does not resurface its JMAP twin', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedTwoDuplicatedMails(r);
+
+      await r.emails.snoozeEmail('imap-p:first', DateTime(2026, 5, 10, 15));
+
+      final threads = await r.emails.observeAllInboxThreads().first;
+      expect(
+        threads.map((t) => t.subject),
+        ['Second'],
+        reason: 'the snoozed mail must not reappear via the JMAP account',
+      );
+    });
+  });
+
   group('JMAP getEmailBody', () {
     http.Client mockBodyClient({
       String text = 'Hello from JMAP',
