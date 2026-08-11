@@ -6,15 +6,34 @@ import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 import 'helpers.dart';
 
 PendingChange _pendingChange({int id = 1}) => PendingChange(
-      id: id,
-      accountId: kTestAccount.id,
-      kind: 'flag_seen',
-      resourceType: 'Email',
-      resourceId: 'acc-1:42',
-      payload: '{"seen": true}',
-      createdAt: DateTime(2024, 6),
-      attempts: 0,
-    );
+  id: id,
+  accountId: kTestAccount.id,
+  kind: 'flag_seen',
+  resourceType: 'Email',
+  resourceId: 'acc-1:42',
+  payload: '{"seen": true}',
+  createdAt: DateTime(2024, 6),
+  attempts: 0,
+);
+
+/// Pumps the account list with a single [kTestAccount] and the given
+/// [pendingChanges], then settles. Keeps the pending-changes tests free of
+/// repeated `buildApp`/`baseOverrides` boilerplate.
+Future<void> _pumpAccountsWithPending(
+  WidgetTester tester, {
+  List<PendingChange> pendingChanges = const [],
+}) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts',
+      overrides: baseOverrides(
+        accounts: [kTestAccount],
+        pendingChanges: pendingChanges,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
   group('AccountListScreen', () {
@@ -239,8 +258,7 @@ void main() {
       expect(find.textContaining('Healthy'), findsOneWidget);
     });
 
-    testWidgets('shows discrepancy details when sync health has discrepancies',
-        (
+    testWidgets('shows discrepancy details when sync health has discrepancies', (
       tester,
     ) async {
       const summary =
@@ -268,16 +286,10 @@ void main() {
     testWidgets('shows labeled pending-changes row when changes are queued', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            pendingChanges: [_pendingChange(), _pendingChange(id: 2)],
-          ),
-        ),
+      await _pumpAccountsWithPending(
+        tester,
+        pendingChanges: [_pendingChange(), _pendingChange(id: 2)],
       );
-      await tester.pumpAndSettle();
 
       expect(find.text('Pending changes: 2'), findsOneWidget);
     });
@@ -285,13 +297,7 @@ void main() {
     testWidgets('hides pending-changes row when there are no changes', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpAccountsWithPending(tester);
 
       expect(find.textContaining('Pending changes:'), findsNothing);
     });
@@ -299,16 +305,10 @@ void main() {
     testWidgets('tapping the pending-changes row opens the pending list', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            pendingChanges: [_pendingChange()],
-          ),
-        ),
+      await _pumpAccountsWithPending(
+        tester,
+        pendingChanges: [_pendingChange()],
       );
-      await tester.pumpAndSettle();
 
       await tester.tap(find.text('Pending changes: 1'));
       await tester.pumpAndSettle();
@@ -316,25 +316,21 @@ void main() {
       expect(find.text('Pending Changes'), findsOneWidget);
     });
 
-    testWidgets('pending-changes row is positioned below the account name row',
-        (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            pendingChanges: [_pendingChange()],
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
+    testWidgets(
+      'pending-changes row is positioned below the account name row',
+      (tester) async {
+        await _pumpAccountsWithPending(
+          tester,
+          pendingChanges: [_pendingChange()],
+        );
 
-      final namePos = tester.getTopLeft(find.text('Alice')).dy;
-      final pendingPos = tester.getTopLeft(find.text('Pending changes: 1')).dy;
-      expect(pendingPos, greaterThan(namePos));
-    });
+        final namePos = tester.getTopLeft(find.text('Alice')).dy;
+        final pendingPos = tester
+            .getTopLeft(find.text('Pending changes: 1'))
+            .dy;
+        expect(pendingPos, greaterThan(namePos));
+      },
+    );
 
     testWidgets('sync health row is positioned below the account name row', (
       tester,
