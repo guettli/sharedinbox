@@ -96,7 +96,8 @@ void main() {
       expect(find.byIcon(Icons.folder), findsNothing);
     });
 
-    testWidgets('shows the generic folder icon and no role label for a '
+    testWidgets(
+        'shows the generic folder icon and no role label for a '
         'user-created mailbox', (tester) async {
       const custom = Mailbox(
         id: 'acc-1:Work',
