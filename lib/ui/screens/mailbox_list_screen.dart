@@ -14,6 +14,7 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
+import 'package:sharedinbox/ui/widgets/mailbox_role.dart';
 
 class MailboxListScreen extends ConsumerWidget {
   const MailboxListScreen({super.key, required this.accountId});
@@ -96,14 +97,16 @@ class MailboxListScreen extends ConsumerWidget {
                   itemBuilder: (ctx, i) {
                     final mb = mailboxes[i];
                     final hasUnread = mb.unreadCount > 0;
+                    final roleLabel = mailboxRoleLabel(mb.role);
                     return ListTile(
-                      leading: const Icon(Icons.folder),
+                      leading: Icon(mailboxRoleIcon(mb.role)),
                       title: Text(
                         mb.name,
                         style: hasUnread
                             ? const TextStyle(fontWeight: FontWeight.bold)
                             : null,
                       ),
+                      subtitle: roleLabel == null ? null : Text(roleLabel),
                       trailing: MailboxCountLabel(
                         unread: mb.unreadCount,
                         total: mb.totalCount,
