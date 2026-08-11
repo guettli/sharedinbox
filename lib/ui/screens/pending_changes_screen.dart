@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
@@ -16,8 +17,9 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
 /// Global list of the outbound queue (`pending_changes`) across all accounts,
-/// grouped by account. Each row shows the change kind, target, age, attempt
-/// count, and last error. Actions:
+/// grouped by account. Each row shows the change kind, the affected email
+/// (subject and sender), the concrete mutation, age, attempt count, and last
+/// error. Actions:
 ///
 ///  * **Retry now** — resets the row's attempt/error state and asks the sync
 ///    manager to flush the account immediately.
@@ -155,8 +157,9 @@ class PendingChangeTile extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _EmailIdentity(change: change, repo: repo),
           Text(
-            'Target: ${describeTarget(change)}',
+            describeChange(change),
             overflow: TextOverflow.ellipsis,
           ),
           Text(
@@ -205,31 +208,86 @@ String kindLabel(String kind) {
   };
 }
 
-/// Renders the mutation target as `email {id} → {mailbox}` for moves, or the
-/// plain `email {id}` for flag/delete operations. Falls back gracefully when
-/// the payload is missing or the JSON can't be parsed.
-String describeTarget(PendingChange change) {
-  final dest = _destinationFromPayload(change.payload);
-  final subject = change.resourceType == 'Email'
-      ? 'email ${change.resourceId}'
-      : '${change.resourceType} ${change.resourceId}';
-  if (dest != null) return '$subject → $dest';
-  return subject;
+/// Describes the concrete mutation a change will apply, decoded from its
+/// protocol-specific JSON `payload`: the new read/flag state for flag changes,
+/// or the `src → dest` mailbox move for move/delete operations. Falls back to
+/// the plain [kindLabel] when the payload is missing or can't be parsed.
+String describeChange(PendingChange change) {
+  final payload = _decodePayload(change.payload);
+  switch (change.kind) {
+    case 'flag_seen':
+      final seen = payload['seen'];
+      if (seen is bool) return seen ? 'Mark as read' : 'Mark as unread';
+      return 'Mark read/unread';
+    case 'flag_flagged':
+      final flagged = payload['flagged'];
+      if (flagged is bool) return flagged ? 'Add flag' : 'Remove flag';
+      return 'Toggle flag';
+    case 'move':
+      final src = _string(payload['src']);
+      final dest = _string(payload['dest']);
+      if (src != null && dest != null) return 'Move: $src → $dest';
+      if (dest != null) return 'Move to $dest';
+      return 'Move';
+    case 'delete':
+      final from = _string(payload['mailboxPath']);
+      return from != null ? 'Delete from $from' : 'Delete';
+    default:
+      return kindLabel(change.kind);
+  }
 }
 
-String? _destinationFromPayload(String payload) {
-  if (payload.isEmpty) return null;
+Map<String, dynamic> _decodePayload(String payload) {
+  if (payload.isEmpty) return const {};
   try {
     final decoded = jsonDecode(payload);
-    if (decoded is Map<String, dynamic>) {
-      final dest = decoded['dest'] ?? decoded['mailboxPath'];
-      if (dest is String && dest.isNotEmpty) return dest;
-    }
+    if (decoded is Map<String, dynamic>) return decoded;
   } catch (_) {
     // Ignore — payloads are protocol-specific; the DB-level shape isn't
     // guaranteed here and this string is only for display.
   }
-  return null;
+  return const {};
+}
+
+String? _string(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
+/// Resolves the pending change's email into a human-readable `subject · sender`
+/// line. Falls back to the raw resource id while the lookup is in flight or
+/// when the referenced email is no longer stored locally.
+class _EmailIdentity extends StatelessWidget {
+  const _EmailIdentity({required this.change, required this.repo});
+
+  final PendingChange change;
+  final EmailRepository repo;
+
+  String get _fallback => change.resourceType == 'Email'
+      ? 'email ${change.resourceId}'
+      : '${change.resourceType} ${change.resourceId}';
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Email?>(
+      future: repo.getEmail(change.resourceId),
+      builder: (context, snapshot) {
+        final email = snapshot.data;
+        final text = email == null ? _fallback : _describeEmail(email);
+        return Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+      },
+    );
+  }
+
+  static String _describeEmail(Email email) {
+    final subject = email.subject ?? '(no subject)';
+    final sender = email.from.isNotEmpty
+        ? (email.from.first.name ?? email.from.first.email)
+        : null;
+    return sender == null ? subject : '$subject · $sender';
+  }
 }
 
 String _formatAge(Duration age) {

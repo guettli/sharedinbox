@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
@@ -12,8 +13,9 @@ import 'helpers.dart';
 /// FakeEmailRepository extension that seeds a fixed list of pending changes
 /// and records which rows are retried/discarded so tests can assert on it.
 class _StubbedQueue extends FakeEmailRepository {
-  _StubbedQueue([List<PendingChange> initial = const []])
-      : _changes = List.of(initial);
+  _StubbedQueue([List<PendingChange> initial = const [], List<Email>? emails])
+      : _changes = List.of(initial),
+        super(emails: emails);
 
   final List<PendingChange> _changes;
   final List<int> retriedIds = [];
@@ -53,6 +55,28 @@ PendingChange _pc({
       createdAt: DateTime.utc(2026, 3, 4, 9),
       attempts: attempts,
       lastError: lastError,
+    );
+
+Email _email({
+  String id = 'acc-1:42',
+  String account = 'acc-1',
+  String? subject = 'Quarterly report',
+  String senderName = 'Carol',
+  String senderEmail = 'carol@example.com',
+}) =>
+    Email(
+      id: id,
+      accountId: account,
+      mailboxPath: 'INBOX',
+      uid: 42,
+      subject: subject,
+      receivedAt: DateTime.utc(2026, 3, 4, 8),
+      from: [EmailAddress(name: senderName, email: senderEmail)],
+      to: const [],
+      cc: const [],
+      isSeen: false,
+      isFlagged: false,
+      hasAttachment: false,
     );
 
 void main() {
@@ -103,30 +127,65 @@ void main() {
     expect(find.text('No pending changes.'), findsOneWidget);
   });
 
-  testWidgets('groups rows by account and renders kind, target, error',
+  testWidgets('groups rows by account and renders kind, detail, error',
       (tester) async {
     final repo = _StubbedQueue([
       _pc(
         kind: 'move',
-        payload: '{"dest":"Archive"}',
+        payload: '{"src":"INBOX","dest":"Archive"}',
         attempts: 3,
         lastError: 'MOVE failed: mailbox is read-only',
       ),
       _pc(id: 2, account: 'acc-2', kind: 'delete', resourceId: 'acc-2:99'),
+    ], [
+      _email(),
+      _email(id: 'acc-2:99', account: 'acc-2', subject: 'Old newsletter'),
     ]);
     await pump(tester, repo: repo, accounts: const [alice, bob]);
 
     expect(find.text('Alice • IMAP'), findsOneWidget);
     expect(find.text('Bob • JMAP'), findsOneWidget);
     expect(find.text('Move'), findsOneWidget);
-    expect(find.text('Target: email acc-1:42 → Archive'), findsOneWidget);
+    expect(find.text('Move: INBOX → Archive'), findsOneWidget);
+    expect(find.text('Quarterly report · Carol'), findsOneWidget);
     expect(find.byIcon(Icons.error), findsOneWidget);
     expect(
       find.textContaining('MOVE failed: mailbox is read-only'),
       findsOneWidget,
     );
     expect(find.text('Delete'), findsOneWidget);
-    expect(find.text('Target: email acc-2:99'), findsOneWidget);
+    expect(find.text('Old newsletter · Carol'), findsOneWidget);
+  });
+
+  testWidgets('renders the concrete mutation for each change kind',
+      (tester) async {
+    final repo = _StubbedQueue([
+      _pc(id: 1, kind: 'flag_seen', payload: '{"seen":true}'),
+      _pc(id: 2, kind: 'flag_seen', payload: '{"seen":false}'),
+      _pc(id: 3, kind: 'flag_flagged', payload: '{"flagged":true}'),
+      _pc(id: 4, kind: 'flag_flagged', payload: '{"flagged":false}'),
+      _pc(
+        id: 5,
+        kind: 'delete',
+        payload: '{"uid":42,"mailboxPath":"INBOX"}',
+      ),
+    ]);
+    await pump(tester, repo: repo);
+
+    expect(find.text('Mark as read'), findsOneWidget);
+    expect(find.text('Mark as unread'), findsOneWidget);
+    expect(find.text('Add flag'), findsOneWidget);
+    expect(find.text('Remove flag'), findsOneWidget);
+    expect(find.text('Delete from INBOX'), findsOneWidget);
+  });
+
+  testWidgets('falls back to the raw id when the email is not stored locally',
+      (tester) async {
+    final repo = _StubbedQueue([_pc(kind: 'flag_seen', payload: '{}')]);
+    await pump(tester, repo: repo);
+
+    expect(find.text('email acc-1:42'), findsOneWidget);
+    expect(find.text('Mark read/unread'), findsOneWidget);
   });
 
   testWidgets('retry resets the row, kicks sync, and shows a SnackBar',
