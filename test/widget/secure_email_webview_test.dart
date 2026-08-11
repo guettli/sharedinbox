@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,6 +62,20 @@ void main() {
       expect(html, contains('max-width: 100%'));
       // Pre-formatted text wraps instead of stretching the page.
       expect(html, contains('white-space: pre-wrap'));
+    });
+  });
+
+  group('emailWebViewGestureRecognizers', () {
+    // The WebView needs a long-press recognizer so it wins the gesture arena
+    // against the surrounding scroll view; otherwise the long-press that
+    // starts a text selection never reaches the WebView and HTML email text
+    // cannot be selected (issue #462).
+    test('registers a long-press recognizer so text can be selected', () {
+      final recognizers = emailWebViewGestureRecognizers();
+      expect(recognizers, hasLength(1));
+      final recognizer = recognizers.single.constructor();
+      addTearDown(recognizer.dispose);
+      expect(recognizer, isA<LongPressGestureRecognizer>());
     });
   });
 

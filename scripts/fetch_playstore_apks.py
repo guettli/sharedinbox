@@ -78,6 +78,56 @@ _TRANSIENT_REQUEST_ERRORS = (
     requests.exceptions.Timeout,
 )
 
+# How many times to attempt a single Play request that drops its connection
+# transiently, and how long to wait between attempts. Kept small and quick:
+# these guard the requests that run *outside* the tolerant poll loop — the
+# version-code resolution and the split-APK download. #455 hardened the poll
+# GET, but a one-off ``RemoteDisconnected`` on those other calls still crashed
+# the whole fetch and filed a spurious "Firebase Tests failed" issue (see #457,
+# whose traceback died on the poll GET before that hardening landed, while the
+# resolve/download calls remained exposed to the exact same drop). Overridable
+# via env vars for testing.
+_REQUEST_MAX_ATTEMPTS = int(os.environ.get("PLAY_APKS_REQUEST_ATTEMPTS", "4"))
+_REQUEST_RETRY_BACKOFF_SECONDS = int(
+    os.environ.get("PLAY_APKS_REQUEST_BACKOFF_SECONDS", "3")
+)
+
+
+def _with_transient_retries(operation, description):
+    """Run ``operation()``, retrying it on a transient Play connection drop.
+
+    The Play Developer API occasionally closes a connection without a response
+    (a ``RemoteDisconnected`` that requests surfaces as ``ConnectionError`` —
+    see :data:`_TRANSIENT_REQUEST_ERRORS`). :func:`_poll_generated_apks`
+    already tolerates that on its GET, but the version-code resolution and the
+    split-APK download run outside that loop, so a single drop there crashed
+    the whole fetch (see #457). Retry the operation a bounded number of times
+    with a short backoff so a one-off blip no longer turns a healthy binary
+    into a red build; if every attempt drops, re-raise the last error so a
+    genuinely broken Play API still fails loudly.
+
+    HTTP status errors (4xx/5xx) are raised by the operation's own
+    ``raise_for_status`` and are NOT in the transient set, so they propagate on
+    the first attempt and are never retried away.
+    """
+    last_exc = None
+    for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
+        try:
+            return operation()
+        except _TRANSIENT_REQUEST_ERRORS as exc:
+            last_exc = exc
+            if attempt >= _REQUEST_MAX_ATTEMPTS:
+                break
+            print(
+                f"transient Play API error ({exc.__class__.__name__}) while "
+                f"trying to {description} — retry {attempt}/"
+                f"{_REQUEST_MAX_ATTEMPTS - 1} in "
+                f"{_REQUEST_RETRY_BACKOFF_SECONDS}s",
+                file=sys.stderr,
+            )
+            time.sleep(_REQUEST_RETRY_BACKOFF_SECONDS)
+    raise last_exc
+
 
 def _serves_apks(release):
     """Whether Play serves downloadable APKs for ``release``.
@@ -114,12 +164,18 @@ def _resolve_version_code(session, package, track):
     maximum so a served-but-genuinely-stuck version still surfaces (and skips
     via PENDING) rather than erroring.
     """
-    edit_resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
+    edit_resp = _with_transient_retries(
+        lambda: session.post(f"{_BASE}/{package}/edits", json={}, timeout=30),
+        "open a Play edit",
+    )
     edit_resp.raise_for_status()
     edit_id = edit_resp.json()["id"]
     try:
-        resp = session.get(
-            f"{_BASE}/{package}/edits/{edit_id}/tracks/{track}", timeout=30
+        resp = _with_transient_retries(
+            lambda: session.get(
+                f"{_BASE}/{package}/edits/{edit_id}/tracks/{track}", timeout=30
+            ),
+            f"read the {track} track",
         )
         resp.raise_for_status()
         releases = resp.json().get("releases") or []
@@ -227,12 +283,18 @@ def _download(session, package, version_code, download_id, dest):
         f"{_BASE}/{package}/generatedApks/{version_code}"
         f"/downloads/{download_id}:download"
     )
-    with session.get(url, stream=True, timeout=600) as resp:
-        resp.raise_for_status()
-        with open(dest, "wb") as out:
-            for chunk in resp.iter_content(chunk_size=1 << 20):
-                if chunk:
-                    out.write(chunk)
+    def _stream_to_file():
+        # ``open(dest, "wb")`` truncates on every attempt, so a retry after a
+        # mid-stream drop re-downloads from scratch rather than appending to a
+        # partial file.
+        with session.get(url, stream=True, timeout=600) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as out:
+                for chunk in resp.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        out.write(chunk)
+
+    _with_transient_retries(_stream_to_file, f"download split APK {download_id}")
 
 
 def _enumerate_downloads(listing):

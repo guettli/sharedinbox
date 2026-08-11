@@ -24,12 +24,35 @@ builds fast; nothing runs a throwaway engine per job.
 
 The engine version is kept in lockstep with the two Dagger CLIs that talk to it
 (the `sharedinbox-arc` runner image and the local dev container). The engine
-runs `github:dagger/nix/v0.21.7#dagger` (pinned in `ansible/p16.yml`); the CLIs
+runs `github:dagger/nix/v0.21.8#dagger` (pinned in `ansible/p16.yml`); the CLIs
 are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
 `scripts/check_dagger_versions.sh` enforces that all three agree — the CLI and
 engine must be the exact same version, there is no fallback when they differ
 (the tunnel authenticates but the protocol handshake fails). Bumping the engine
 means bumping `ansible/p16.yml` in gitops and restarting `dagger-engine`.
+
+The check has two modes:
+
+| Mode | Who runs it | What it compares |
+|---|---|---|
+| *(no args)* | pre-commit, `task check-dagger-versions` | the in-repo pins against each other |
+| `--engine` | CI, right after `setup_dagger_remote.sh` | the in-repo pins against the **running engine**, queried with `echo '{version}' \| dagger query` |
+
+Static mode compares files to other files, so all pins can agree and CI can
+still fail — the version that decides lives on the engine host, in another repo.
+`--engine` closes that gap and refuses to run without a reachable engine rather
+than quietly falling back to the weaker check.
+
+The check runs **outside** the Dagger pipeline on purpose: a version mismatch is
+what stops the pipeline from loading, so a check inside it can never report the
+problem it exists to catch.
+
+**`ci/dagger.json` is different from the three pins above.** Its `engineVersion`
+is a compatibility *floor*, not a pin — Dagger rejects a module only when
+`engineVersion` is **newer** than the running engine. It is therefore
+deliberately excluded from Renovate (see `renovate.json`): raising it buys
+nothing and can only break CI, which is what happened in #445. Raise it by hand
+when the module genuinely needs a newer engine, after the engine has moved.
 
 ## CI path
 

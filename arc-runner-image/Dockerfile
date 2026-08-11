@@ -23,6 +23,6 @@ RUN curl -fsSL -o /usr/local/bin/sops https://github.com/getsops/sops/releases/d
     && chmod +x /usr/local/bin/sops
 # Must match the pinned Dagger engine on p16 (gitops: ansible/p16/systemd/system/dagger-engine.service).
 # CLI and engine version must be identical or the engine appears "unreachable" to the runner.
-RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
 RUN curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin v3.48.0
 USER runner

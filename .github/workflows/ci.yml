@@ -66,7 +66,19 @@ jobs:
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
+      - name: Check Dagger version pins against the live engine
+        # Must run OUTSIDE the Dagger pipeline: a version mismatch is exactly
+        # the condition that stops the pipeline from loading, so a check that
+        # lives inside it can never report the problem it exists to catch.
+        # Runs after the tunnel is up so it can query the engine's real version
+        # instead of comparing in-repo pins to each other (issue #445).
+        run: scripts/check_dagger_versions.sh --engine
       - name: Print runner wait time
+        # Purely diagnostic: prints only how long the job waited in the runner
+        # queue. Don't let a Docker Hub hiccup while pulling its base image
+        # (TLS handshake timeout to auth.docker.io — see #453) fail the job
+        # before the real work runs.
+        continue-on-error: true
         env:
           DAGGER_NO_NAG: "1"
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}

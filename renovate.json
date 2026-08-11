@@ -1,5 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "ci/dagger.json is deliberately NOT managed here. Its engineVersion is a compatibility FLOOR, not a pin: Dagger rejects a module only when engineVersion is NEWER than the running engine (engine.CheckMaxVersionCompatibility -> 'module requires dagger vX, but you have vY'). Raising it buys nothing and can only break CI, which is exactly what happened in #445.",
+    "Raise engineVersion by hand, and only when the module actually needs a newer engine — after the engine itself has been bumped."
+  ],
   "extends": [
     "config:recommended"
   ],
@@ -13,6 +17,7 @@
   "packageRules": [
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
+      "matchDepNames": ["!dagger/dagger"],
       "addLabels": ["automerge"],
       "automerge": true,
       "platformAutomerge": true
@@ -21,6 +26,22 @@
       "matchManagers": ["gomod"],
       "matchFileNames": ["ci/**"],
       "enabled": false
+    },
+    {
+      "description": "Hold workmanager at 0.9.x: 0.10.x requires AGP 9 built-in Kotlin, which our Android build does not enable yet (see pubspec.yaml).",
+      "matchPackageNames": ["workmanager"],
+      "allowedVersions": "<0.10.0"
+    },
+    {
+      "description": [
+        "Dagger is lock-stepped with the engine, which Renovate cannot reach: the engine tag is pinned by Ansible in guettli/gitops (ansible/p16/systemd/system/dagger-engine.service) and CI talks to it over an SSH tunnel. A Dagger PR therefore stays red until that host is bumped and dagger-engine restarted.",
+        "Never automerge, and keep every in-repo CLI pin in ONE PR so it is at least internally consistent. Landing it is a two-repo operation: merge the engine bump in gitops first, then this. See DAGGER.md and guettli/gitops#112."
+      ],
+      "matchDepNames": ["dagger/dagger"],
+      "groupName": "dagger lock-step",
+      "automerge": false,
+      "platformAutomerge": false,
+      "addLabels": ["blocked-on-engine"]
     }
   ],
   "customManagers": [
@@ -33,6 +54,7 @@
       "versioningTemplate": "semver"
     },
     {
+      "description": "Dagger CLI baked into the local dev container. A deployment pin: must equal the engine version.",
       "customType": "regex",
       "fileMatch": ["^Dockerfile\\.dev$"],
       "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
@@ -41,17 +63,19 @@
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
+      "description": "Dagger CLI baked into the sharedinbox-arc CI runner image. A deployment pin: must equal the engine version. Without this manager Renovate moved the other pins and left this one behind, producing a PR that could not pass its own check_dagger_versions.sh.",
       "customType": "regex",
-      "fileMatch": ["^DAGGER\\.md$"],
-      "matchStrings": ["github:dagger/nix/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)#dagger"],
+      "fileMatch": ["^arc-runner-image/Dockerfile$"],
+      "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
+      "description": "Engine tag in the example systemd unit in DAGGER.md. A deployment pin: must equal the engine version.",
       "customType": "regex",
-      "fileMatch": ["^ci/dagger\\.json$"],
-      "matchStrings": ["\"engineVersion\"\\s*:\\s*\"v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""],
+      "fileMatch": ["^DAGGER\\.md$"],
+      "matchStrings": ["github:dagger/nix/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)#dagger"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"

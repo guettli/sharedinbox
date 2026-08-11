@@ -35,6 +35,16 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Disable Flutter's automatic deep-linking: mailto:/SENDTO/SEND
+                 intents are handled by MailIntentBridge, which parses them and
+                 pushes /compose. Leaving deep-linking on makes the engine also
+                 feed the raw `mailto:` URI to GoRouter as a navigation
+                 location, which has no matching route and shows "Page Not
+                 Found" (#463). -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

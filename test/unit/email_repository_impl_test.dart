@@ -556,6 +556,152 @@ void main() {
       },
     );
 
+    group('observeAllInboxThreads counterpart de-duplication', () {
+      // Inserts an inbox mailbox, a message and its inbox thread for [account].
+      // The thread's latest message carries [messageId] so counterpart copies
+      // of the same server message can be collapsed.
+      Future<void> seedInboxThread(
+        ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails
+        }) r, {
+        required String accountId,
+        required String threadId,
+        required String emailId,
+        required String? messageId,
+        DateTime? date,
+      }) async {
+        date ??= DateTime(2024, 6);
+        final existingInbox = await (r.db.select(r.db.mailboxes)
+              ..where(
+                (t) => t.accountId.equals(accountId) & t.role.equals('inbox'),
+              ))
+            .getSingleOrNull();
+        if (existingInbox == null) {
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: '$accountId:INBOX',
+                  accountId: accountId,
+                  path: 'INBOX',
+                  name: 'INBOX',
+                  role: const Value('inbox'),
+                ),
+              );
+        }
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: emailId,
+                accountId: accountId,
+                mailboxPath: 'INBOX',
+                uid: 0,
+                receivedAt: date,
+                messageId: Value(messageId),
+              ),
+            );
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: threadId,
+                accountId: accountId,
+                mailboxPath: 'INBOX',
+                latestDate: date,
+                latestEmailId: emailId,
+              ),
+            );
+      }
+
+      test('collapses counterpart copies to the IMAP row', () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_imapPair, 'pw');
+        await r.accounts.addAccount(_jmapPair, 'pw');
+
+        // Same message, different Message-ID flavours (IMAP keeps the angle
+        // brackets, JMAP drops them) — must still be recognised as one mail.
+        await seedInboxThread(
+          r,
+          accountId: 'imap-p',
+          threadId: 'imap-t',
+          emailId: 'imap-p:5',
+          messageId: '<abc@example.com>',
+        );
+        await seedInboxThread(
+          r,
+          accountId: 'jmap-p',
+          threadId: 'jmap-t',
+          emailId: 'jmap-p:e1',
+          messageId: 'abc@example.com',
+        );
+
+        final threads = await r.emails.observeAllInboxThreads().first;
+        expect(threads, hasLength(1));
+        expect(threads.first.accountId, 'imap-p');
+        expect(threads.first.threadId, 'imap-t');
+      });
+
+      test('keeps both copies for non-counterpart accounts', () async {
+        final r = _makeRepos();
+        // Same host but both IMAP → not a comparable pair; and a genuinely
+        // different account. Either way, the shared Message-ID must not merge.
+        await r.accounts.addAccount(_account, 'pw');
+        const account2 = Account(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        await r.accounts.addAccount(account2, 'pw');
+
+        await seedInboxThread(
+          r,
+          accountId: 'acc-1',
+          threadId: 'a-t',
+          emailId: 'acc-1:1',
+          messageId: 'shared@example.com',
+        );
+        await seedInboxThread(
+          r,
+          accountId: 'acc-2',
+          threadId: 'b-t',
+          emailId: 'acc-2:1',
+          messageId: 'shared@example.com',
+        );
+
+        final threads = await r.emails.observeAllInboxThreads().first;
+        expect(
+          threads.map((t) => t.threadId).toSet(),
+          {'a-t', 'b-t'},
+        );
+      });
+
+      test('never merges counterpart threads without a Message-ID', () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_imapPair, 'pw');
+        await r.accounts.addAccount(_jmapPair, 'pw');
+
+        await seedInboxThread(
+          r,
+          accountId: 'imap-p',
+          threadId: 'imap-t',
+          emailId: 'imap-p:5',
+          messageId: null,
+        );
+        await seedInboxThread(
+          r,
+          accountId: 'jmap-p',
+          threadId: 'jmap-t',
+          emailId: 'jmap-p:e1',
+          messageId: null,
+        );
+
+        final threads = await r.emails.observeAllInboxThreads().first;
+        expect(
+          threads.map((t) => t.threadId).toSet(),
+          {'imap-t', 'jmap-t'},
+        );
+      });
+    });
+
     test('observeEmailsInThread returns all emails for a thread', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');

@@ -103,6 +103,33 @@ else
     _fail "recovery: should exit 0 after retry succeeds" "$(cat "$out")"
 fi
 
+# --- Transient registry error (TLS handshake timeout) retries then recovers --
+echo 0 >"$attempts"
+cat >"$fakebin/cmd" <<EOF
+#!/usr/bin/env bash
+n=\$(cat $attempts); n=\$((n + 1)); echo \$n >$attempts
+if [ "\$n" -lt 2 ]; then
+    echo 'failed to resolve image "docker.io/library/alpine:3.21": failed to authorize: failed to fetch anonymous token: Get "https://auth.docker.io/token": net/http: TLS handshake timeout'
+    exit 1
+fi
+echo "recovered output"
+exit 0
+EOF
+chmod +x "$fakebin/cmd"
+
+if "$RETRY" "$fakebin/cmd" >"$out" 2>&1; then
+    if grep -q "recovered output" "$out"; then
+        _fail "registry: success output should not leak" "$(cat "$out")"
+    elif ! grep -q "network error on attempt 1/3" "$out"; then
+        _fail "registry: network-retry notice should appear on stderr" "$(cat "$out")"
+    else
+        n=$(cat "$attempts")
+        [ "$n" -eq 2 ] && _pass || _fail "registry: expected 2 attempts, got $n"
+    fi
+else
+    _fail "registry: should exit 0 after retry succeeds" "$(cat "$out")"
+fi
+
 export PATH="$PATH_SAVED"
 rm -rf "$fakebin" "$attempts"
 
