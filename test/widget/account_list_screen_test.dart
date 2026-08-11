@@ -1,8 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 
 import 'helpers.dart';
+
+PendingChange _pendingChange({int id = 1}) => PendingChange(
+      id: id,
+      accountId: kTestAccount.id,
+      kind: 'flag_seen',
+      resourceType: 'Email',
+      resourceId: 'acc-1:42',
+      payload: '{"seen": true}',
+      createdAt: DateTime(2024, 6),
+      attempts: 0,
+    );
 
 void main() {
   group('AccountListScreen', () {
@@ -251,6 +263,77 @@ void main() {
 
       expect(find.textContaining('missing locally: 3'), findsOneWidget);
       expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
+    });
+
+    testWidgets('shows labeled pending-changes row when changes are queued', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            pendingChanges: [_pendingChange(), _pendingChange(id: 2)],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pending changes: 2'), findsOneWidget);
+    });
+
+    testWidgets('hides pending-changes row when there are no changes', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(accounts: [kTestAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Pending changes:'), findsNothing);
+    });
+
+    testWidgets('tapping the pending-changes row opens the pending list', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            pendingChanges: [_pendingChange()],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Pending changes: 1'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pending Changes'), findsOneWidget);
+    });
+
+    testWidgets('pending-changes row is positioned below the account name row',
+        (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            pendingChanges: [_pendingChange()],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final namePos = tester.getTopLeft(find.text('Alice')).dy;
+      final pendingPos = tester.getTopLeft(find.text('Pending changes: 1')).dy;
+      expect(pendingPos, greaterThan(namePos));
     });
 
     testWidgets('sync health row is positioned below the account name row', (
