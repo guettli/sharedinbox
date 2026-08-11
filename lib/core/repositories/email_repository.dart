@@ -80,7 +80,7 @@ abstract class EmailRepository {
   );
 
   /// Searches the local DB across all mailboxes of [accountId] (or all accounts
-  /// if null) by subject, preview, and notes. Fast, works offline.
+  /// if null) by subject, preview, body, and notes. Fast, works offline.
   Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
 
   /// Searches the local DB using a structured [FilterGroup]. Fast, works offline.

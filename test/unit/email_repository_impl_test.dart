@@ -930,6 +930,126 @@ void main() {
       expect(results.first.subject, 'foobar baz');
     });
 
+    test('searchEmailsGlobal matches a single word only in the body', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Subject/preview do NOT contain the term — only the cached body does.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Trip planning'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('Please book the flamingo sanctuary tour'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'flamingo');
+      expect(results, hasLength(1));
+      expect(results.first.id, 'acc-1:1');
+    });
+
+    test('searchEmailsGlobal keeps AND-across-words semantics in the body',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 2,
+              subject: const Value('Weekend outing'),
+              receivedAt: DateTime(2023),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:2',
+              textBody: const Value('Reserve the pelican lagoon cruise'),
+            ),
+          );
+
+      // Both words present in the body — implicit AND matches.
+      final both = await r.emails.searchEmailsGlobal(null, 'pelican cruise');
+      expect(both, hasLength(1));
+
+      // One word missing from the body — AND semantics reject the row.
+      final partial = await r.emails.searchEmailsGlobal(null, 'pelican walrus');
+      expect(partial, isEmpty);
+    });
+
+    test('searchEmailsGlobal returns nothing when the body does not match',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:3',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 3,
+              subject: const Value('Invoice due'),
+              receivedAt: DateTime(2022),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:3',
+              textBody: const Value('Payment received for order eighty'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'kangaroo');
+      expect(results, isEmpty);
+    });
+
+    test('searchEmailsGlobal picks up body inserts via the FTS trigger',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:4',
+              accountId: 'acc-1',
+              mailboxPath: 'Drafts',
+              uid: 4,
+              subject: const Value('Standup notes'),
+              receivedAt: DateTime(2021),
+            ),
+          );
+
+      // No body yet — nothing to match.
+      expect(
+        await r.emails.searchEmailsGlobal(null, 'dolphin'),
+        isEmpty,
+      );
+
+      // Inserting the body after the email must keep the FTS index in sync
+      // via the email_body_fts_ai trigger.
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:4',
+              textBody: const Value('The dolphin workshop starts at noon'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'dolphin');
+      expect(results, hasLength(1));
+      expect(results.first.id, 'acc-1:4');
+    });
+
     test('searchEmails filters by mailboxPath using local FTS5', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
