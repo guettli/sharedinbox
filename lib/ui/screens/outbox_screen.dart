@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
@@ -17,6 +18,8 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 typedef SyncNowFn = bool Function(String accountId);
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
+
+const _subjectPreviewLength = 60;
 
 /// One-line explanation of why a queued message is still waiting, for rows that
 /// have not recorded an error yet. Without this a fresh or backing-off row
@@ -57,7 +60,7 @@ class OutboxScreen extends ConsumerWidget {
           return ListView.separated(
             itemCount: rows.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (ctx, i) => OutboxTile(
+            itemBuilder: (ctx, i) => OutboxQueueTile(
               message: rows[i],
               repo: repo,
               syncNow: ref.read(syncNowProvider),
@@ -69,87 +72,127 @@ class OutboxScreen extends ConsumerWidget {
   }
 }
 
-/// Individual queued-message row. Extracted so widget tests can construct one
-/// in isolation without needing to pump a full [Scaffold] + Riverpod scope.
-class OutboxTile extends StatelessWidget {
-  const OutboxTile({
+/// A single queued-message row, shared by the per-account [OutboxScreen] and
+/// the global Sent Queue. When [account] is supplied (only the global view
+/// does) the row also shows the owning account/type and the queued-at date;
+/// the per-account Outbox omits those. Sharing one tile keeps the two views —
+/// and their Retry/Discard wiring — from drifting apart. Extracted so widget
+/// tests can construct one without pumping a full [Scaffold] + Riverpod scope.
+class OutboxQueueTile extends StatelessWidget {
+  const OutboxQueueTile({
     super.key,
     required this.message,
     required this.repo,
     required this.syncNow,
+    this.account,
+    this.showAccountHeader = false,
   });
 
   final OutboxMessage message;
   final OutboxRepository repo;
   final SyncNowFn syncNow;
 
+  /// Owning account, supplied by the global Sent Queue so the row can name the
+  /// account the message belongs to. May be null there if the account was
+  /// deleted while a message was still queued.
+  final Account? account;
+
+  /// Whether to render the account/type and queued-at lines (the global Sent
+  /// Queue does; the per-account Outbox does not).
+  final bool showAccountHeader;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final rawSubject =
+        message.subject.isEmpty ? '(no subject)' : message.subject;
+    final subject = rawSubject.length > _subjectPreviewLength
+        ? '${rawSubject.substring(0, _subjectPreviewLength)}…'
+        : rawSubject;
+    final receiver = message.to.isNotEmpty
+        ? message.to.join(', ')
+        : (message.cc.isNotEmpty ? message.cc.join(', ') : '(no recipient)');
+    final account = this.account;
+    final accountLabel = (account?.displayName.isNotEmpty ?? false)
+        ? account!.displayName
+        : (account?.email ?? message.accountId);
+    final accountType = (account?.type ?? AccountType.imap).name.toUpperCase();
+
     return ListTile(
       leading: Icon(
         message.isFailed ? Icons.error : Icons.outbox,
         color: message.isFailed ? theme.colorScheme.error : null,
       ),
-      title: Text(
-        message.subject.isEmpty ? '(no subject)' : message.subject,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(subject, overflow: TextOverflow.ellipsis),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'To: ${message.to.join(', ')}',
-            overflow: TextOverflow.ellipsis,
-          ),
-          if (message.lastError != null)
-            _LastErrorLine(
-              message: message,
-              onTap: () => showOutboxErrorDetails(context, message),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.xs),
-              child: Text(
-                pendingOutboxStatus(message),
-                style: theme.textTheme.bodySmall,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+          if (showAccountHeader)
+            Text(
+              '$accountLabel • $accountType',
+              overflow: TextOverflow.ellipsis,
             ),
+          Text('To: $receiver', overflow: TextOverflow.ellipsis),
+          if (showAccountHeader)
+            Text(
+              _dateFmt.format(message.createdAt.toLocal()),
+              style: theme.textTheme.bodySmall,
+            ),
+          OutboxStatusLine(
+            message: message,
+            onErrorTap: () => showOutboxErrorDetails(context, message),
+          ),
         ],
       ),
       trailing: QueueRowActions(
-        onRetry: () => _retry(context),
+        onRetry: () => retryQueueRow(
+          context: context,
+          accountId: message.accountId,
+          retry: () => repo.retry(message.id),
+          syncNow: syncNow,
+          runningMessage: 'Retrying send…',
+          notRunningMessage: 'Sync for this account is stopped, so the message '
+              'cannot be sent. Check the account credentials.',
+        ),
         onDiscard: () => unawaited(repo.discard(message.id)),
       ),
     );
   }
-
-  Future<void> _retry(BuildContext context) => retryQueueRow(
-        context: context,
-        accountId: message.accountId,
-        retry: () => repo.retry(message.id),
-        syncNow: syncNow,
-        runningMessage: 'Retrying send…',
-        notRunningMessage: 'Sync for this account is stopped, so the message '
-            'cannot be sent. Check the account credentials.',
-      );
 }
 
-class _LastErrorLine extends StatelessWidget {
-  const _LastErrorLine({required this.message, required this.onTap});
+/// The single status line shown under a queued message. When the row has a
+/// recorded error it renders the tappable error summary (opening the details
+/// dialog via [onErrorTap]); otherwise it renders a plain "why is this still
+/// waiting?" line (#501). Shared by the per-account Outbox and the global Sent
+/// Queue so the two never drift and the block isn't copy-pasted.
+class OutboxStatusLine extends StatelessWidget {
+  const OutboxStatusLine({
+    super.key,
+    required this.message,
+    required this.onErrorTap,
+  });
 
   final OutboxMessage message;
-  final VoidCallback onTap;
+  final VoidCallback onErrorTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    if (message.lastError == null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: AppSpacing.xs),
+        child: Text(
+          pendingOutboxStatus(message),
+          style: theme.textTheme.bodySmall,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.xs),
       child: InkWell(
-        onTap: onTap,
+        onTap: onErrorTap,
         child: Text(
           '${message.isFailed ? 'Failed' : 'Pending'}'
           ' (attempts: ${message.attempts}): ${message.lastError} '
@@ -259,8 +302,9 @@ Future<void> showOutboxErrorDetails(
             const SizedBox(height: AppSpacing.sm),
             SelectableText(
               message.lastError ?? '(no error recorded)',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.error),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
             ),
           ],
         ),
