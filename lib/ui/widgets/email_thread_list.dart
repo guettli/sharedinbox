@@ -125,10 +125,12 @@ class EmailThreadList extends ConsumerStatefulWidget {
   final bool showAccountLabel;
   final Map<String, String> accountNames;
 
-  /// Show a per-tile location label like `"accountId • Archive/2026"`. Used
-  /// by global search results. The folder is resolved through the local
-  /// mailbox cache, so JMAP mailboxes render as their human-readable
-  /// hierarchical path — never as the opaque server id (#288).
+  /// Show a per-tile location label like `"Work • Archive/2026"`. Used by
+  /// global search results. The account is resolved through [accountNames]
+  /// (keyed by `accountId`), falling back to the raw id when the map lacks the
+  /// entry. The folder is resolved through the local mailbox cache, so JMAP
+  /// mailboxes render as their human-readable hierarchical path — never as the
+  /// opaque server id (#288).
   final bool showLocationLabel;
 
   /// Optional tap handler. When null, the default navigates to the email or
@@ -245,7 +247,7 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
     final isSelecting = widget.controller.isSelecting;
     final accountName = widget.accountNames[t.accountId];
     final locationLabel = widget.showLocationLabel
-        ? '${t.accountId} • ${_displayFolder(t.accountId, t.mailboxPath)}'
+        ? '${accountName ?? t.accountId} • ${_displayFolder(t.accountId, t.mailboxPath)}'
         : widget.showAccountLabel
             ? accountName
             : null;
