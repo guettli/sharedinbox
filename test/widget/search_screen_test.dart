@@ -423,9 +423,11 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // The location label must render the human-readable display path,
-        // never the opaque JMAP mailbox id.
-        expect(find.text('acc-1 • Archive/2026'), findsOneWidget);
+        // The location label must render the account's display name and the
+        // human-readable folder display path — never the account id or the
+        // opaque JMAP mailbox id.
+        expect(find.text('Alice • Archive/2026'), findsOneWidget);
+        expect(find.text('acc-1 • Archive/2026'), findsNothing);
         expect(find.text('acc-1 • a'), findsNothing);
       },
     );

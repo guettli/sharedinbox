@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
@@ -61,6 +62,10 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    final accountNames = {
+      for (final a in accounts) a.id: accountDisplayLabel(a, a.id),
+    };
     return Scaffold(
       appBar: _buildAppBar(context),
       bottomNavigationBar: _selection.isSelecting
@@ -78,6 +83,7 @@ class _AddressEmailsScreenState extends ConsumerState<AddressEmailsScreen> {
               items: _emails!.map(EmailThread.fromEmail).toList(),
               enableSwipe: false,
               showLocationLabel: true,
+              accountNames: accountNames,
             ),
     );
   }

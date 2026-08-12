@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
@@ -284,11 +285,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildResultsList(List<Email> emails) {
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    final accountNames = {
+      for (final a in accounts) a.id: accountDisplayLabel(a, a.id),
+    };
     return EmailThreadList(
       controller: _selection,
       items: emails.map(EmailThread.fromEmail).toList(),
       enableSwipe: false,
       showLocationLabel: true,
+      accountNames: accountNames,
     );
   }
 
