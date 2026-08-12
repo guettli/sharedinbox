@@ -69,6 +69,32 @@ void main() {
       m.dispose();
     },
   );
+
+  // Regression test for issue #501: pressing Retry on a queued message used to
+  // pop a "Retrying send…" snackbar even when the account's sync loop had
+  // already stopped on a permanent error — so nothing ran and no log entry
+  // appeared. syncNow must now report the truth (return false so the UI shows
+  // the "stopped" message) instead of faking success against a dead loop.
+  test('syncNow returns false for a stopped or absent loop', () async {
+    final m = AccountSyncManager(
+      _AccountRepositoryWithMissingPlugin(),
+      FakeMailboxRepositoryWithInbox(),
+      FakeEmailRepository(),
+      syncLog: FakeSyncLogRepository(),
+    );
+
+    m.start();
+
+    // Let the first (and only) sync cycle run and stop the loop permanently.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    // Loop registered but no longer running, and account with no loop at all:
+    // both must report false rather than faking a successful kick.
+    expect(m.syncNow('1'), isFalse);
+    expect(m.syncNow('unknown'), isFalse);
+
+    m.dispose();
+  });
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -146,10 +172,7 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
   @override
-  Future<List<Email>> searchEmailsStructured(
-    String? a,
-    FilterGroup f,
-  ) async =>
+  Future<List<Email>> searchEmailsStructured(String? a, FilterGroup f) async =>
       [];
   @override
   Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];

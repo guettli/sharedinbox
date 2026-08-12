@@ -198,14 +198,50 @@ class AccountSyncManager {
     unawaited(_syncPhaseCtrl.close());
   }
 
-  /// Wakes the idle/wait phase of the given account's sync loop so a new
-  /// sync cycle starts immediately. Returns `true` if a loop was actually
-  /// kicked, `false` if the account isn't currently active — used by the
-  /// Retry button on the sent queue so we can tell the user we did nothing
-  /// instead of silently faking success.
+  /// Wakes the given account's sync loop so a new sync cycle (which drains the
+  /// send queue) starts immediately. Returns `true` only if a live loop was
+  /// actually woken; `false` if the account has no loop or its loop has
+  /// stopped. Used by the Retry button on the sent queue so we can tell the
+  /// user what actually happened instead of silently faking success.
+  ///
+  /// A loop that stopped on a permanent error (bad credentials, TLS, or a
+  /// missing platform channel — see #200) stays registered in [_active] but is
+  /// no longer running; kicking it does nothing, which is exactly why the
+  /// Retry snackbar used to claim success while nothing ran and no log entry
+  /// appeared (#501). We now return `false` in that case (the UI reports that
+  /// sync is stopped) and do *not* restart the loop — a permanently-stopped
+  /// loop must stay stopped rather than retry indefinitely. Every outcome is
+  /// written to the application log so pressing Retry always leaves a trace.
   bool syncNow(String accountId) {
     final loop = _active[accountId];
-    if (loop == null) return false;
+    if (loop == null) {
+      unawaited(
+        _appLogger.warn(
+          'sync.now.no_loop',
+          'Cannot sync now: no sync loop is registered for this account.',
+          accountId: accountId,
+        ),
+      );
+      return false;
+    }
+    if (!loop.isRunning) {
+      unawaited(
+        _appLogger.warn(
+          'sync.now.stopped',
+          'Cannot sync now: this account\'s sync loop has stopped '
+              '(check the account credentials).',
+          accountId: accountId,
+        ),
+      );
+      return false;
+    }
+    unawaited(
+      _appLogger.info(
+        'sync.now.kick',
+        'Waking sync loop to send queued messages (manual retry).',
+        accountId: accountId,
+      ),
+    );
     loop.kick();
     return true;
   }
@@ -402,6 +438,11 @@ abstract class _SyncLoop {
   void start();
   void stop();
   void kick();
+
+  /// Whether the loop is currently running. A loop that stopped on a permanent
+  /// error stays registered but reports `false` here so [AccountSyncManager.
+  /// syncNow] can restart it instead of kicking a dead loop.
+  bool get isRunning;
 }
 
 // ── IMAP ──────────────────────────────────────────────────────────────────────
@@ -441,6 +482,9 @@ class _AccountSync implements _SyncLoop {
   int _backoffSeconds = 5;
   Completer<void>? _stopSignal;
   Timer? _waitTimer;
+
+  @override
+  bool get isRunning => _running;
 
   @override
   void start() {
@@ -774,6 +818,9 @@ class _JmapAccountSync implements _SyncLoop {
   /// the underlying stream ends. When push is connected the loop waits on
   /// real `StateChange` events instead, mirroring IMAP IDLE.
   static const _pollFallbackInterval = Duration(seconds: 30);
+
+  @override
+  bool get isRunning => _running;
 
   @override
   void start() {

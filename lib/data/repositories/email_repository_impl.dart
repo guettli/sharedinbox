@@ -4053,7 +4053,11 @@ class EmailRepositoryImpl implements EmailRepository {
     return OutboxFlushObserver(
       onAttempt: (job) {
         unawaited(
-          logger.debug(
+          // `info`, not `debug`: the default app-log filter hides debug, so a
+          // send in progress used to leave no visible trace at all (#501). One
+          // entry per eligible row per cycle, and backoff spaces retries out,
+          // so this stays quiet in steady state.
+          logger.info(
             'outbox.send.attempt',
             'Sending queued message ${describe(job)} (attempt ${job.attempts + 1})',
             accountId: accountId,
