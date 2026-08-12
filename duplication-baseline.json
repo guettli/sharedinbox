@@ -1145,6 +1145,13 @@
     {
       "tool": "jscpd",
       "file": "test/unit/account_comparison_test.dart",
+      "start_line": 153,
+      "end_line": 376,
+      "key": "f14abb032d95c642"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/account_comparison_test.dart",
       "start_line": 193,
       "end_line": 204,
       "key": "3b871b6b0c358e0e"
@@ -1218,6 +1225,13 @@
       "start_line": 404,
       "end_line": 415,
       "key": "3b871b6b0c358e0e"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/account_comparison_test.dart",
+      "start_line": 406,
+      "end_line": 416,
+      "key": "f14abb032d95c642"
     },
     {
       "tool": "jscpd",
