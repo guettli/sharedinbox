@@ -4,6 +4,27 @@ import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 
 import 'helpers.dart';
 
+/// Pumps the account list for a single [kTestAccount], optionally seeding its
+/// sync-health row and the set of accounts currently being verified. Keeps the
+/// buildApp/baseOverrides scaffold in one place so the sync-health tests differ
+/// only in what they assert.
+Future<void> _pumpAccountList(
+  WidgetTester tester, {
+  SyncHealthRow? syncHealth,
+  Set<String> verifying = const <String>{},
+}) {
+  return tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts',
+      overrides: baseOverrides(
+        accounts: [kTestAccount],
+        syncHealth: syncHealth,
+        verifying: verifying,
+      ),
+    ),
+  );
+}
+
 void main() {
   group('AccountListScreen', () {
     testWidgets('shows onboarding walkthrough when repository is empty', (
@@ -208,20 +229,21 @@ void main() {
       expect(find.text('sharedinbox.de'), findsOneWidget);
     });
 
+    SyncHealthRow healthRow({
+      required bool isHealthy,
+      String? discrepancySummary,
+      String? lastError,
+    }) =>
+        SyncHealthRow(
+          accountId: kTestAccount.id,
+          lastVerifiedAt: DateTime(2024, 6),
+          isHealthy: isHealthy,
+          discrepancySummary: discrepancySummary,
+          lastError: lastError,
+        );
+
     testWidgets('shows Healthy when sync health is healthy', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            syncHealth: SyncHealthRow(
-              accountId: kTestAccount.id,
-              lastVerifiedAt: DateTime(2024, 6),
-              isHealthy: true,
-            ),
-          ),
-        ),
-      );
+      await _pumpAccountList(tester, syncHealth: healthRow(isHealthy: true));
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Healthy'), findsOneWidget);
@@ -233,19 +255,9 @@ void main() {
     ) async {
       const summary =
           '{"INBOX":{"missingLocally":3,"missingOnServer":0,"flagMismatches":1}}';
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            syncHealth: SyncHealthRow(
-              accountId: kTestAccount.id,
-              lastVerifiedAt: DateTime(2024, 6),
-              isHealthy: false,
-              discrepancySummary: summary,
-            ),
-          ),
-        ),
+      await _pumpAccountList(
+        tester,
+        syncHealth: healthRow(isHealthy: false, discrepancySummary: summary),
       );
       await tester.pumpAndSettle();
 
@@ -256,19 +268,10 @@ void main() {
     testWidgets('shows failure reason when the sync health check failed', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            syncHealth: SyncHealthRow(
-              accountId: kTestAccount.id,
-              lastVerifiedAt: DateTime(2024, 6),
-              isHealthy: false,
-              lastError: 'JMAP connect failed',
-            ),
-          ),
-        ),
+      await _pumpAccountList(
+        tester,
+        syncHealth:
+            healthRow(isHealthy: false, lastError: 'JMAP connect failed'),
       );
       await tester.pumpAndSettle();
 
@@ -279,15 +282,7 @@ void main() {
     testWidgets('shows verifying indicator while a check is in progress', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            verifying: {kTestAccount.id},
-          ),
-        ),
-      );
+      await _pumpAccountList(tester, verifying: {kTestAccount.id});
       // Not pumpAndSettle: the in-progress row shows an indeterminate
       // CircularProgressIndicator that never stops animating. Pump a few frames
       // so the account and stream providers deliver their initial values.
@@ -301,19 +296,7 @@ void main() {
     testWidgets('sync health row is positioned below the account name row', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            syncHealth: SyncHealthRow(
-              accountId: kTestAccount.id,
-              lastVerifiedAt: DateTime(2024, 6),
-              isHealthy: true,
-            ),
-          ),
-        ),
-      );
+      await _pumpAccountList(tester, syncHealth: healthRow(isHealthy: true));
       await tester.pumpAndSettle();
 
       final namePos = tester.getTopLeft(find.text('Alice')).dy;

@@ -862,7 +862,8 @@ List<Override> baseOverrides({
       // Backed by the ReliabilityRunner's broadcast stream in production;
       // override with a plain stream so widget tests never build the real
       // runner and can drive the in-progress indicator directly.
-      syncHealthVerifyingProvider.overrideWith((ref) => Stream.value(verifying)),
+      syncHealthVerifyingProvider
+          .overrideWith((ref) => Stream.value(verifying)),
       // The real provider reads the resolved DB path which is only set in
       // production after initDatabasePath() runs. Point it at a temp file
       // so the Preferences screen can render in widget tests.

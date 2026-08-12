@@ -124,25 +124,21 @@ class ReliabilityRunner {
           );
 
       if (isHealthy) {
-        unawaited(
-          _appLogger.info(
-            'sync_health',
-            'Sync health verified: healthy',
-            accountId: accountId,
-          ),
+        await _appLogger.info(
+          'sync_health',
+          'Sync health verified: healthy',
+          accountId: accountId,
         );
       } else {
-        unawaited(
-          _appLogger.warn(
-            'sync_health',
-            'Sync health verified: discrepancies found',
-            accountId: accountId,
-            data: {
-              'missingLocally': totalMissingLocally,
-              'missingOnServer': totalMissingOnServer,
-              'flagMismatches': totalFlagMismatches,
-            },
-          ),
+        await _appLogger.warn(
+          'sync_health',
+          'Sync health verified: discrepancies found',
+          accountId: accountId,
+          data: {
+            'missingLocally': totalMissingLocally,
+            'missingOnServer': totalMissingOnServer,
+            'flagMismatches': totalFlagMismatches,
+          },
         );
       }
     } catch (e, s) {
@@ -161,14 +157,12 @@ class ReliabilityRunner {
       } catch (_) {
         // Best-effort: never let persisting the failure mask the original one.
       }
-      unawaited(
-        _appLogger.error(
-          'sync_health',
-          'Sync health verification failed',
-          accountId: accountId,
-          error: e,
-          stack: s,
-        ),
+      await _appLogger.error(
+        'sync_health',
+        'Sync health verification failed',
+        accountId: accountId,
+        error: e,
+        stack: s,
       );
     } finally {
       _setVerifying(accountId, active: false);
@@ -182,12 +176,10 @@ class ReliabilityRunner {
   /// runner being active.
   Future<void> checkNow() async {
     final accounts = await _accounts.observeAccounts().first;
-    unawaited(
-      _appLogger.info(
-        'sync_health',
-        'Manual sync health verification started',
-        data: {'accounts': accounts.length},
-      ),
+    await _appLogger.info(
+      'sync_health',
+      'Manual sync health verification started',
+      data: {'accounts': accounts.length},
     );
     for (final account in accounts) {
       await _runForAccount(account.id, force: true);
