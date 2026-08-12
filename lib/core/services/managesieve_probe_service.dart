@@ -38,7 +38,7 @@ Future<bool> _defaultManageSieveProbe({
 ///
 /// Runs after account add / edit so the IMAP/SMTP form can omit Sieve fields
 /// for the common case (port 4190 on the IMAP host). The result drives whether
-/// the "Email filters" menu item is shown for this account.
+/// the "Remote email filters" menu item is shown for this account.
 class ManageSieveProbeService {
   ManageSieveProbeService(
     this._accounts, {

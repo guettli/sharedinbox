@@ -141,7 +141,7 @@ class _AccountTile extends ConsumerWidget {
                   if (sieveSupported(account))
                     const PopupMenuItem(
                       value: 'emailFiltersRemote',
-                      child: Text('Server email filters'),
+                      child: Text('Remote email filters'),
                     ),
                   const PopupMenuItem(
                     value: 'emailFiltersLocal',

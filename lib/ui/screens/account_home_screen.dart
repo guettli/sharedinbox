@@ -131,7 +131,7 @@ class _AccountHomeBody extends ConsumerWidget {
         if (sieveSupported(account))
           ListTile(
             leading: const Icon(Icons.dns),
-            title: const Text('Server email filters'),
+            title: const Text('Remote email filters'),
             onTap: () => runAccountAction(
               context,
               ref,

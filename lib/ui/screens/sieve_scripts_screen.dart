@@ -371,7 +371,9 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isLocal ? 'Local Filters' : 'Remote Filters'),
+        title: Text(
+          widget.isLocal ? 'Local email filters' : 'Remote email filters',
+        ),
       ),
       body: _buildBody(),
       floatingActionButton: _canAdd
@@ -448,11 +450,11 @@ class _SieveSourceBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = isLocal
-        ? 'Local Filters run Sieve scripts directly on this device. '
-            'Remote Filters, which run on the mail server, are configured separately.'
-        : 'Remote Filters run Sieve scripts on the mail server '
+        ? 'Local email filters run Sieve scripts directly on this device. '
+            'Remote email filters, which run on the mail server, are configured separately.'
+        : 'Remote email filters run Sieve scripts on the mail server '
             '(ManageSieve or JMAP). '
-            'Local Filters, which run on this device, are configured separately.';
+            'Local email filters, which run on this device, are configured separately.';
     return Container(
       width: double.infinity,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
