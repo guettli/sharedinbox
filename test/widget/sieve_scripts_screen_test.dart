@@ -107,7 +107,7 @@ SieveScript _script(String id, {bool isActive = false, String? name}) =>
 void main() {
   configureSqliteForTests();
 
-  testWidgets('Remote Filters page shows correct title and banner', (
+  testWidgets('Remote email filters page shows correct title and banner', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -120,15 +120,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Remote Filters'), findsOneWidget);
+    expect(find.text('Remote email filters'), findsOneWidget);
     expect(
-      find.textContaining('Remote Filters run Sieve scripts'),
+      find.textContaining('Remote email filters run Sieve scripts'),
       findsOneWidget,
     );
-    expect(find.textContaining('Local Filters'), findsOneWidget);
+    expect(find.textContaining('Local email filters'), findsOneWidget);
   });
 
-  testWidgets('Remote Filters hides the "+" FAB when listScripts fails', (
+  testWidgets('Remote email filters hides the "+" FAB when listScripts fails', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -152,7 +152,7 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Retry'), findsOneWidget);
   });
 
-  testWidgets('Local Filters page shows correct title and banner', (
+  testWidgets('Local email filters page shows correct title and banner', (
     tester,
   ) async {
     final db = openTestDatabase();
@@ -172,12 +172,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Local Filters'), findsOneWidget);
+    expect(find.text('Local email filters'), findsOneWidget);
     expect(
-      find.textContaining('Local Filters run Sieve scripts'),
+      find.textContaining('Local email filters run Sieve scripts'),
       findsOneWidget,
     );
-    expect(find.textContaining('Remote Filters'), findsOneWidget);
+    expect(find.textContaining('Remote email filters'), findsOneWidget);
   });
 
   testWidgets('shows "Inactive" subtitle for inactive scripts', (tester) async {

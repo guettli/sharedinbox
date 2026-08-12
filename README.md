@@ -50,7 +50,7 @@ when sending mail.
 
 ### Troubleshooting
 
-**"TLS handshake aborted" when opening Remote Filters (ManageSieve, port 4190)**
+**"TLS handshake aborted" when opening Remote email filters (ManageSieve, port 4190)**
 
 The app speaks ManageSieve with STARTTLS over the plaintext port (RFC 5804). If the screen shows
 *"TLS handshake aborted on …:4190 — the connection was closed during TLS negotiation"*, the most
@@ -76,7 +76,7 @@ side (check the ManageSieve listener config and certificate) or on the network p
 Server-side Sieve runs at delivery time on the mail server, so its *runtime* errors are written only
 to the **mail server's own logs** — no mail protocol (ManageSieve or JMAP) hands them back to a
 client, so the app cannot display them. The common causes the app *can* check for you are, in the
-**Remote Filters** list, the ⋮ menu → **Diagnose**:
+**Remote email filters** list, the ⋮ menu → **Diagnose**:
 
 1. **The filter is not active.** The server only runs the active script; an inactive filter (shown in
    orange) never sees incoming mail. Use **Set active**.

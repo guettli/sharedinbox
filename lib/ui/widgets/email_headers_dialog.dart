@@ -307,12 +307,12 @@ Future<void> _showHeaderActions(
           ),
           ListTile(
             leading: const Icon(Icons.dns),
-            title: const Text('Create remote filter'),
+            title: const Text('Create remote email filter'),
             onTap: () => Navigator.pop(ctx, _HeaderAction.remoteFilter),
           ),
           ListTile(
             leading: const Icon(Icons.phone_android),
-            title: const Text('Create local filter'),
+            title: const Text('Create local email filter'),
             onTap: () => Navigator.pop(ctx, _HeaderAction.localFilter),
           ),
         ],

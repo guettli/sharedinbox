@@ -64,7 +64,7 @@ name so bug reports can be specific.
 
 | Screen | Source file | Reached from |
 | --- | --- | --- |
-| Sieve Scripts | `sieve_scripts_screen.dart` | Account Home → *Server email filters* / *Local email filters* |
+| Sieve Scripts | `sieve_scripts_screen.dart` | Account Home → *Remote email filters* / *Local email filters* |
 | Sieve Script Edit | `sieve_script_edit_screen.dart` | Sieve Scripts → tap a script or "+" |
 
 ## Info

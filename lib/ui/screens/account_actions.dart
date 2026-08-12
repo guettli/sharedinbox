@@ -21,7 +21,7 @@ enum AccountAction {
   delete,
 }
 
-/// Whether to surface the "Server email filters" (Sieve) entry for [account].
+/// Whether to surface the "Remote email filters" (Sieve) entry for [account].
 ///
 /// JMAP accounts always show it (Sieve over JMAP, no separate probe).
 /// IMAP accounts hide it only when a previous ManageSieve probe failed

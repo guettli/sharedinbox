@@ -107,7 +107,7 @@ void main() {
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
 
     await _openDialog(tester);
-    await tester.tap(find.text('Create remote filter'));
+    await tester.tap(find.text('Create remote email filter'));
     await tester.pumpAndSettle();
 
     expect(recorder.pushes, hasLength(1));
@@ -126,7 +126,7 @@ void main() {
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
 
     await _openDialog(tester);
-    await tester.tap(find.text('Create local filter'));
+    await tester.tap(find.text('Create local email filter'));
     await tester.pumpAndSettle();
 
     expect(recorder.pushes, hasLength(1));
