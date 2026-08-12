@@ -253,6 +253,51 @@ void main() {
       expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
     });
 
+    testWidgets('shows failure reason when the sync health check failed', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            syncHealth: SyncHealthRow(
+              accountId: kTestAccount.id,
+              lastVerifiedAt: DateTime(2024, 6),
+              isHealthy: false,
+              lastError: 'JMAP connect failed',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Sync check failed'), findsOneWidget);
+      expect(find.textContaining('JMAP connect failed'), findsOneWidget);
+    });
+
+    testWidgets('shows verifying indicator while a check is in progress', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts',
+          overrides: baseOverrides(
+            accounts: [kTestAccount],
+            verifying: {kTestAccount.id},
+          ),
+        ),
+      );
+      // Not pumpAndSettle: the in-progress row shows an indeterminate
+      // CircularProgressIndicator that never stops animating. Pump a few frames
+      // so the account and stream providers deliver their initial values.
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+
+      expect(find.textContaining('verifying'), findsOneWidget);
+    });
+
     testWidgets('sync health row is positioned below the account name row', (
       tester,
     ) async {

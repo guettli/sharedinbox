@@ -263,6 +263,9 @@ class SyncHealth extends Table {
   BoolColumn get isHealthy => boolean()();
   // JSON summary of discrepancies (missingLocally, missingOnServer, etc.)
   TextColumn get discrepancySummary => text().nullable()();
+  // Human-readable reason the last verification failed to complete (e.g. a
+  // JMAP/IMAP connection or auth error). Null when the check ran to completion.
+  TextColumn get lastError => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {accountId};
@@ -1134,6 +1137,15 @@ class AppDatabase extends _$AppDatabase {
                 SELECT rowid, text_body FROM email_bodies
               ''');
             }
+          }
+          if (from >= 19 &&
+              from < 51 &&
+              await _tableExists(this, 'sync_health')) {
+            // sync_health was created at v19; add the failure-reason column so
+            // a verification that throws surfaces why instead of leaving the
+            // account stuck on "not verified yet". Guarded against legacy test
+            // snapshots that never created the table.
+            await m.addColumn(syncHealth, syncHealth.lastError);
           }
         },
       );

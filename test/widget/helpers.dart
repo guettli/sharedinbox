@@ -836,6 +836,7 @@ List<Override> baseOverrides({
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
+  Set<String> verifying = const <String>{},
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
@@ -858,6 +859,10 @@ List<Override> baseOverrides({
       // syncHealthProvider is backed by a Drift StreamQuery; override with a
       // plain stream to avoid "A Timer is still pending" in tests.
       syncHealthProvider.overrideWith((ref, _) => Stream.value(syncHealth)),
+      // Backed by the ReliabilityRunner's broadcast stream in production;
+      // override with a plain stream so widget tests never build the real
+      // runner and can drive the in-progress indicator directly.
+      syncHealthVerifyingProvider.overrideWith((ref) => Stream.value(verifying)),
       // The real provider reads the resolved DB path which is only set in
       // production after initDatabasePath() runs. Point it at a temp file
       // so the Preferences screen can render in widget tests.

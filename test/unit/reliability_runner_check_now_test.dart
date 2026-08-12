@@ -10,8 +10,10 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/data/db/database.dart'
     hide Account, Email, EmailBody;
@@ -130,6 +132,12 @@ class _FakeMailboxes implements MailboxRepository {
 }
 
 class _FakeEmails implements EmailRepository {
+  _FakeEmails({this.error});
+
+  /// When non-null, [verifySyncReliability] throws this instead of returning a
+  /// healthy result — simulating a JMAP/IMAP connection or auth failure.
+  final Object? error;
+
   int verifyCallCount = 0;
 
   @override
@@ -138,6 +146,7 @@ class _FakeEmails implements EmailRepository {
     String mailboxPath,
   ) async {
     verifyCallCount++;
+    if (error != null) throw error!;
     return ReliabilityResult.healthy;
   }
 
@@ -252,6 +261,49 @@ class _FakeEmails implements EmailRepository {
       0;
 }
 
+/// Captures every logged entry synchronously so tests can assert on them
+/// without waiting for the runner's fire-and-forget log writes to flush.
+class _SpyAppLogRepo implements AppLogRepository {
+  final List<({String level, String event})> entries = [];
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    entries.add((level: level.wireName, event: event));
+    return entries.length;
+  }
+
+  @override
+  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
+      Stream.value(const []);
+
+  @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) =>
+      Stream.value(null);
+
+  @override
+  Future<void> trim({
+    int maxRows = 10000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
+
+  @override
+  Future<void> clearAll() async {}
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -262,12 +314,22 @@ void main() {
   group('ReliabilityRunner.checkNow()', () {
     late AppDatabase db;
     late _FakeEmails emails;
+    late _SpyAppLogRepo logRepo;
     late ReliabilityRunner runner;
+
+    ReliabilityRunner buildRunner(_FakeEmails e) => ReliabilityRunner(
+          db,
+          _FakeAccounts(),
+          _FakeMailboxes(),
+          e,
+          AppLogger(logRepo),
+        );
 
     setUp(() {
       db = openTestDatabase();
       emails = _FakeEmails();
-      runner = ReliabilityRunner(db, _FakeAccounts(), _FakeMailboxes(), emails);
+      logRepo = _SpyAppLogRepo();
+      runner = buildRunner(emails);
     });
 
     tearDown(() => db.close());
@@ -299,6 +361,50 @@ void main() {
 
       final rows = await db.select(db.syncHealth).get();
       expect(rows, hasLength(1));
+    });
+
+    test('writes a sync_health entry to the app log on every run', () async {
+      await runner.checkNow();
+
+      expect(
+        logRepo.entries.any((e) => e.event == 'sync_health'),
+        isTrue,
+        reason: 'a manual check must be discoverable in the App Log',
+      );
+    });
+
+    test('persists the error and logs it when verification throws', () async {
+      runner = buildRunner(_FakeEmails(error: Exception('jmap connect failed')));
+
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows, hasLength(1), reason: 'a failure must still write a row');
+      expect(rows.first.isHealthy, isFalse);
+      expect(rows.first.lastError, contains('jmap connect failed'));
+
+      expect(
+        logRepo.entries
+            .any((e) => e.level == 'error' && e.event == 'sync_health'),
+        isTrue,
+        reason: 'a failure must be logged at error level',
+      );
+    });
+
+    test('clears a previous error once the check succeeds', () async {
+      // First run fails and records an error.
+      await buildRunner(_FakeEmails(error: Exception('boom'))).checkNow();
+      expect(
+        (await db.select(db.syncHealth).get()).first.lastError,
+        isNotNull,
+      );
+
+      // A subsequent healthy run must clear the stale error.
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows.first.lastError, isNull);
+      expect(rows.first.isHealthy, isTrue);
     });
   });
 }

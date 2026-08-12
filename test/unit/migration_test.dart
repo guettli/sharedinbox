@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 50);
+      expect(db.schemaVersion, 51);
       await db.close();
     });
 
@@ -144,6 +144,10 @@ void main() {
           'outbox', // v46
         ]),
       );
+
+      // v51: last_error column on sync_health.
+      final syncHealthColumns = await _tableColumns(db, 'sync_health');
+      expect(syncHealthColumns, contains('last_error'));
 
       // v18, v22, v25: indexes.
       final allIndexes = await db
