@@ -8,9 +8,11 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:test/test.dart';
 
@@ -69,6 +71,95 @@ void main() {
       m.dispose();
     },
   );
+
+  // Regression test for issue #501: pressing Retry on a queued message used to
+  // pop a "Retrying send…" snackbar and leave no app-log entry even when the
+  // account's sync loop had already stopped on a permanent error. syncNow must
+  // now report the truth (return false so the UI shows the "stopped" message)
+  // and always write a visible app-log entry.
+  test(
+    'syncNow on a stopped loop returns false and logs why',
+    () async {
+      final appLog = RecordingAppLogRepository();
+
+      final m = AccountSyncManager(
+        _AccountRepositoryWithMissingPlugin(),
+        FakeMailboxRepositoryWithInbox(),
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        appLogger: AppLogger(appLog),
+      );
+
+      m.start();
+
+      // Let the first (and only) sync cycle run and stop the loop permanently.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // The loop is registered but no longer running: syncNow must not fake
+      // success, and must leave a trace.
+      expect(m.syncNow('1'), isFalse);
+      expect(
+        appLog.events.where((e) => e.event == 'sync.now.stopped'),
+        hasLength(1),
+      );
+
+      // An account with no loop at all is a distinct, also-logged outcome.
+      expect(m.syncNow('unknown'), isFalse);
+      expect(
+        appLog.events.where((e) => e.event == 'sync.now.no_loop'),
+        hasLength(1),
+      );
+
+      m.dispose();
+    },
+  );
+}
+
+class _RecordedLog {
+  _RecordedLog({required this.level, required this.event});
+  final AppLogLevel level;
+  final String event;
+}
+
+class RecordingAppLogRepository implements AppLogRepository {
+  final events = <_RecordedLog>[];
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    events.add(_RecordedLog(level: level, event: event));
+    return events.length;
+  }
+
+  @override
+  Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) =>
+      Stream.value([]);
+
+  @override
+  Stream<AppLogEntry?> watchLatestForAccount({
+    required String accountId,
+    required String event,
+  }) =>
+      Stream.value(null);
+
+  @override
+  Future<void> trim({
+    int maxRows = 10000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
+
+  @override
+  Future<void> clearAll() async {}
 }
 
 class FakeEmailRepository implements EmailRepository {

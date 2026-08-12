@@ -18,6 +18,18 @@ typedef SyncNowFn = bool Function(String accountId);
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
+/// One-line explanation of why a queued message is still waiting, for rows that
+/// have not recorded an error yet. Without this a fresh or backing-off row
+/// showed only its subject/recipient and looked stuck for no reason (#501).
+/// Rows that already have a `lastError` render the richer error line instead.
+String pendingOutboxStatus(OutboxMessage message, {DateTime? now}) {
+  final next = message.nextAttemptAt;
+  if (next != null && next.isAfter(now ?? DateTime.now())) {
+    return 'Waiting to retry — next attempt ${_dateFmt.format(next.toLocal())}';
+  }
+  return 'Queued — will send on the next sync';
+}
+
 /// Lists messages queued in the offline send queue for [accountId].
 /// Each row offers Retry (resets the backoff and kicks the account sync loop
 /// so the next attempt runs immediately, then reports the outcome via a
@@ -94,6 +106,16 @@ class OutboxTile extends StatelessWidget {
             _LastErrorLine(
               message: message,
               onTap: () => showOutboxErrorDetails(context, message),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.xs),
+              child: Text(
+                pendingOutboxStatus(message),
+                style: theme.textTheme.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
         ],
       ),
@@ -110,8 +132,8 @@ class OutboxTile extends StatelessWidget {
         retry: () => repo.retry(message.id),
         syncNow: syncNow,
         runningMessage: 'Retrying send…',
-        notRunningMessage: 'Sync is not running for this account. '
-            'Enable it to send the queued message.',
+        notRunningMessage: 'Sync for this account is stopped, so the message '
+            'cannot be sent. Check the account credentials.',
       );
 }
 

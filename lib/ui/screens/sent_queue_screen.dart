@@ -9,7 +9,12 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart'
-    show QueueRowActions, SyncNowFn, retryQueueRow, showOutboxErrorDetails;
+    show
+        QueueRowActions,
+        SyncNowFn,
+        pendingOutboxStatus,
+        retryQueueRow,
+        showOutboxErrorDetails;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
@@ -125,6 +130,16 @@ class SentQueueTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.xs),
+              child: Text(
+                pendingOutboxStatus(message),
+                style: theme.textTheme.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
         ],
       ),
@@ -141,7 +156,7 @@ class SentQueueTile extends StatelessWidget {
         retry: () => repo.retry(message.id),
         syncNow: syncNow,
         runningMessage: 'Retrying send…',
-        notRunningMessage: 'Sync is not running for this account. '
-            'Enable it to send the queued message.',
+        notRunningMessage: 'Sync for this account is stopped, so the message '
+            'cannot be sent. Check the account credentials.',
       );
 }
