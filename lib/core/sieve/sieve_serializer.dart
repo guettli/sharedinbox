@@ -75,12 +75,12 @@ class SieveSerializer {
       FilterField.cc => 'cc',
       _ => throw StateError('not an address field'),
     };
-    return 'address ${_matchType(leaf.comparison)} "$header" "${_esc(leaf.value)}"';
+    return 'address ${_matchType(leaf.comparison)} "$header" "${_esc(leaf.value.trim())}"';
   }
 
   String _serializeHeaderLeaf(FilterLeaf leaf, String headerName) =>
       'header ${_matchType(leaf.comparison)}'
-      ' "${_esc(headerName)}" "${_esc(leaf.value)}"';
+      ' "${_esc(headerName.trim())}" "${_esc(leaf.value.trim())}"';
 
   String _serializeSizeLeaf(FilterLeaf leaf) {
     final comp = leaf.comparison == FilterComparison.over ? ':over' : ':under';
@@ -95,7 +95,7 @@ class SieveSerializer {
       };
 
   String _serializeAction(SieveAction action) => switch (action) {
-        final FileIntoAction a => 'fileinto "${_esc(a.folder)}";',
+        final FileIntoAction a => 'fileinto "${_esc(a.folder.trim())}";',
         KeepAction() => 'keep;',
         DiscardAction() => 'discard;',
         MarkAsSeenAction() => r'setflag "\\Seen";',
