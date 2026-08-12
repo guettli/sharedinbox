@@ -219,6 +219,42 @@ void main() {
       );
     });
 
+    test('trims leading and trailing whitespace from match values', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.header,
+            comparison: FilterComparison.is_,
+            value: ' postmaster@thomas-guettler.de ',
+            headerName: ' Delivered-To ',
+          ),
+        ],
+      );
+      final script = ser.serialize(group, [FileIntoAction('  postmaster  ')]);
+      expect(
+        script,
+        contains('header :is "Delivered-To" "postmaster@thomas-guettler.de"'),
+      );
+      expect(script, contains('fileinto "postmaster";'));
+      expect(script, isNot(contains('" postmaster')));
+    });
+
+    test('trims whitespace from address match values', () {
+      final group = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.from_,
+            comparison: FilterComparison.is_,
+            value: '  alice@example.com  ',
+          ),
+        ],
+      );
+      final script = ser.serialize(group, [KeepAction()]);
+      expect(script, contains('"from" "alice@example.com"'));
+    });
+
     test('escapes quotes in values', () {
       final group = FilterGroup(
         operator: FilterOperator.and_,
