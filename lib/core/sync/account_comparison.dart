@@ -1,7 +1,9 @@
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/utils/mailbox_role_label.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/text_diff.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 // [Email] and [MailboxRow] are already part of this file's public API (they
@@ -206,6 +208,11 @@ class AccountComparison {
     return 'name:${row.name.toLowerCase()}';
   }
 
+  /// A human-readable folder name — the role label (e.g. "Trash") when the
+  /// mailbox has a known role, otherwise the folder's own name. JMAP folder
+  /// `path`s are opaque ids (e.g. "b"), so never surface those to the user.
+  String _folderLabel(MailboxRow row) => mailboxRoleLabel(row.role) ?? row.name;
+
   Future<void> _compareMailboxEmails(
     String mailboxKey,
     MailboxRow a,
@@ -214,6 +221,9 @@ class AccountComparison {
     List<BodyDiff> bodyDiffs,
     List<UnmatchableEmail> unmatchable,
   ) async {
+    // Both sides are the same logical folder, so a single friendly label is
+    // enough; prefer side A's (role labels are identical across the pair).
+    final folderName = _folderLabel(a);
     final emailsA = await _emailsIn(a.accountId, a.path);
     final emailsB = await _emailsIn(b.accountId, b.path);
 
@@ -229,6 +239,7 @@ class AccountComparison {
           UnmatchableEmail(
             side: ComparisonSide.a,
             mailboxKey: mailboxKey,
+            folderName: _folderLabel(a),
             email: e,
           ),
         );
@@ -245,6 +256,7 @@ class AccountComparison {
           UnmatchableEmail(
             side: ComparisonSide.b,
             mailboxKey: mailboxKey,
+            folderName: _folderLabel(b),
             email: e,
           ),
         );
@@ -266,6 +278,7 @@ class AccountComparison {
           EmailDiff(
             kind: EmailDiffKind.missingInB,
             mailboxKey: mailboxKey,
+            folderName: folderName,
             messageId: ea.messageId!,
             a: ea,
             b: null,
@@ -291,6 +304,7 @@ class AccountComparison {
           EmailDiff(
             kind: EmailDiffKind.fieldMismatch,
             mailboxKey: mailboxKey,
+            folderName: folderName,
             messageId: ea.messageId!,
             a: ea,
             b: eb,
@@ -299,7 +313,7 @@ class AccountComparison {
         );
       }
 
-      final body = await _diffBodies(ea.messageId!, ea, eb);
+      final body = await _diffBodies(ea.messageId!, folderName, ea, eb);
       if (body != null) bodyDiffs.add(body);
     }
     for (final eb in remainingB.values) {
@@ -307,6 +321,7 @@ class AccountComparison {
         EmailDiff(
           kind: EmailDiffKind.missingInA,
           mailboxKey: mailboxKey,
+          folderName: folderName,
           messageId: eb.messageId!,
           a: null,
           b: eb,
@@ -331,7 +346,12 @@ class AccountComparison {
     return a.difference(b).abs() <= const Duration(seconds: 1);
   }
 
-  Future<BodyDiff?> _diffBodies(String messageId, Email ea, Email eb) async {
+  Future<BodyDiff?> _diffBodies(
+    String messageId,
+    String folderName,
+    Email ea,
+    Email eb,
+  ) async {
     final ba = await (_db.select(_db.emailBodies)
           ..where((t) => t.emailId.equals(ea.id)))
         .getSingleOrNull();
@@ -343,7 +363,16 @@ class AccountComparison {
     final textB = _normalise(bb.textBody);
     if (textA == null && textB == null) return null;
     if (textA == textB) return null;
-    return BodyDiff(messageId: messageId, a: ea, b: eb);
+    // Equality is decided on the whitespace-normalised text, but the shown
+    // diff runs on the raw bodies so the reader sees the actual lines.
+    final diffLines = computeContextDiff(ba.textBody ?? '', bb.textBody ?? '');
+    return BodyDiff(
+      messageId: messageId,
+      folderName: folderName,
+      a: ea,
+      b: eb,
+      diffLines: diffLines,
+    );
   }
 
   String? _normalise(String? body) {
@@ -378,6 +407,7 @@ class EmailDiff {
   const EmailDiff({
     required this.kind,
     required this.mailboxKey,
+    required this.folderName,
     required this.messageId,
     required this.a,
     required this.b,
@@ -386,6 +416,9 @@ class EmailDiff {
 
   final EmailDiffKind kind;
   final String mailboxKey;
+
+  /// Human-readable folder name (never the opaque JMAP mailbox id).
+  final String folderName;
   final String messageId;
   final Email? a;
   final Email? b;
@@ -395,24 +428,36 @@ class EmailDiff {
 class BodyDiff {
   const BodyDiff({
     required this.messageId,
+    required this.folderName,
     required this.a,
     required this.b,
+    this.diffLines = const [],
   });
 
   final String messageId;
+
+  /// Human-readable folder name (never the opaque JMAP mailbox id).
+  final String folderName;
   final Email a;
   final Email b;
+
+  /// Short context diff between the two cached text bodies.
+  final List<DiffLine> diffLines;
 }
 
 class UnmatchableEmail {
   const UnmatchableEmail({
     required this.side,
     required this.mailboxKey,
+    required this.folderName,
     required this.email,
   });
 
   final ComparisonSide side;
   final String mailboxKey;
+
+  /// Human-readable folder name (never the opaque JMAP mailbox id).
+  final String folderName;
   final Email email;
 
   String get emailId => email.id;
