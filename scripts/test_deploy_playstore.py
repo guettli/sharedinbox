@@ -258,6 +258,42 @@ class TestUploadAabResumable(unittest.TestCase):
         put_call = mock_session.put.call_args
         self.assertEqual(put_call[0][0], "https://upload.example.com/sess")
 
+    def test_http_error_includes_response_body(self):
+        # Google returns the concrete reason for a 400 in the response body.
+        # The raised error must surface it so CI logs are diagnosable instead
+        # of showing only an opaque "400 Bad Request".
+        import requests
+
+        mock_session = MagicMock()
+        init_resp = MagicMock()
+        init_resp.headers = {"Location": "https://upload.example.com/sess"}
+        mock_session.post.return_value = init_resp
+
+        upload_resp = MagicMock()
+        upload_resp.text = (
+            '{"error": {"code": 400, "message": '
+            '"APK specifies a version code that has already been used."}}'
+        )
+        upload_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "400 Client Error: Bad Request for url: https://upload.example.com/sess"
+        )
+        mock_session.put.return_value = upload_resp
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"fake-aab-content")
+            aab_path = f.name
+
+        try:
+            with self.assertRaises(requests.exceptions.HTTPError) as ctx:
+                deploy_playstore._upload_aab_resumable(
+                    mock_session, "com.example.app", "edit-1", aab_path
+                )
+        finally:
+            os.unlink(aab_path)
+
+        self.assertIn("version code that has already been used", str(ctx.exception))
+
 
 class TestDeobfuscationUpload(unittest.TestCase):
     def _run_main(self, mapping_path=None, deobf_side_effects=None):

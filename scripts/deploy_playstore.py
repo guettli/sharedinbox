@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import requests
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 
@@ -20,6 +21,26 @@ _MAX_UPLOAD_ATTEMPTS = 3
 # without a matching mapping file breaks Play Console's stack-trace
 # deobfuscation, so the script refuses to deploy when it is missing.
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
+
+
+def _raise_for_status(resp):
+    """Like ``resp.raise_for_status()`` but append the response body to the error.
+
+    The Play API returns the concrete reason for a 4xx/5xx (e.g. "APK specifies
+    a version code that has already been used" or a bundle-validation message)
+    in the JSON response body. A bare ``HTTPError`` only carries the status line
+    and URL, so a failed upload would otherwise surface as an opaque
+    "400 Bad Request" with no cause — undiagnosable from the CI logs.
+    """
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        body = (resp.text or "").strip()
+        if body:
+            raise requests.exceptions.HTTPError(
+                f"{exc} — response body: {body}", response=resp
+            ) from exc
+        raise
 
 
 def _upload_aab_resumable(session, package, edit_id, aab_path):
@@ -38,7 +59,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
         },
         timeout=60,
     )
-    init_resp.raise_for_status()
+    _raise_for_status(init_resp)
     upload_url = init_resp.headers["Location"]
 
     # Step 2: upload the file in a single PUT to the session URI
@@ -52,7 +73,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
             },
             timeout=600,
         )
-    upload_resp.raise_for_status()
+    _raise_for_status(upload_resp)
     return upload_resp.json()
 
 
@@ -82,7 +103,7 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
         },
         timeout=600,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json() if resp.content else {}
 
 
@@ -103,7 +124,7 @@ def main():
     session = AuthorizedSession(creds)
 
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
-    edit_resp.raise_for_status()
+    _raise_for_status(edit_resp)
     edit_id = edit_resp.json()["id"]
 
     last_exc = None
@@ -176,13 +197,13 @@ def main():
             json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
             timeout=30,
         )
-        track_resp.raise_for_status()
+        _raise_for_status(track_resp)
 
     commit_resp = session.post(
         f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
         timeout=30,
     )
-    commit_resp.raise_for_status()
+    _raise_for_status(commit_resp)
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
