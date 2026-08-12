@@ -104,6 +104,7 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
   );
 });
 

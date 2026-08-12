@@ -266,7 +266,7 @@ void main() {
       },
     );
 
-    testWidgets('shows no count label when totalCount is zero', (tester) async {
+    testWidgets('shows a bare 0 when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(
         id: 'acc-1:Empty',
         accountId: 'acc-1',
@@ -292,11 +292,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Empty'), findsOneWidget);
-      // The label widget is present but renders nothing when total is 0.
+      // An empty folder shows "0" (not a blank), so it is distinct from a
+      // folder whose count could not be computed (#498).
       final label = tester.widget<MailboxCountLabel>(
         find.byType(MailboxCountLabel),
       );
       expect(label.total, 0);
+      expect(find.text('0'), findsOneWidget);
       expect(find.textContaining('/', findRichText: true), findsNothing);
     });
   });
