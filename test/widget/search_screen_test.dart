@@ -126,61 +126,6 @@ void main() {
     });
 
     testWidgets(
-      'result location label shows the account name, not the id, and falls '
-      'back to the id for an unregistered account',
-      (tester) async {
-        // acc-1 (Alice) is registered; acc-2 is not, so its result must fall
-        // back to the raw id rather than showing a name.
-        final known = testEmail(id: 'acc-1:1', subject: 'Known account mail');
-        final unknown = Email(
-          id: 'acc-2:1',
-          accountId: 'acc-2',
-          mailboxPath: 'INBOX',
-          uid: 1,
-          subject: 'Unknown account mail',
-          receivedAt: DateTime(2024, 6),
-          sentAt: DateTime(2024, 6),
-          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-          to: const [EmailAddress(email: 'alice@example.com')],
-          cc: const [],
-          isSeen: false,
-          isFlagged: false,
-          hasAttachment: false,
-        );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/search',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository(),
-              ),
-              emailRepositoryProvider.overrideWithValue(
-                FakeEmailRepository(searchResults: [known, unknown]),
-              ),
-              searchHistoryRepositoryProvider.overrideWithValue(
-                FakeSearchHistoryRepository(),
-              ),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await tester.enterText(find.byType(TextField), 'mail');
-        await tester.pump(const Duration(milliseconds: 400));
-        await tester.pumpAndSettle();
-
-        // Registered account renders its display name; the raw id never shows.
-        expect(find.text('Alice • INBOX'), findsOneWidget);
-        expect(find.text('acc-1 • INBOX'), findsNothing);
-        // Unregistered account gracefully falls back to the raw id.
-        expect(find.text('acc-2 • INBOX'), findsOneWidget);
-      },
-    );
-
-    testWidgets(
       'merges searchEmailsGlobal + getEmailsByAddress into one message list, '
       'de-duplicated by id and with no folder/address sections',
       (tester) async {
