@@ -317,13 +317,15 @@ void main() {
     late _SpyAppLogRepo logRepo;
     late ReliabilityRunner runner;
 
-    ReliabilityRunner buildRunner(_FakeEmails e) => ReliabilityRunner(
-          db,
-          _FakeAccounts(),
-          _FakeMailboxes(),
-          e,
-          AppLogger(logRepo),
-        );
+    ReliabilityRunner buildRunner(_FakeEmails e) {
+      return ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        _FakeMailboxes(),
+        e,
+        AppLogger(logRepo),
+      );
+    }
 
     setUp(() {
       db = openTestDatabase();
@@ -374,7 +376,9 @@ void main() {
     });
 
     test('persists the error and logs it when verification throws', () async {
-      runner = buildRunner(_FakeEmails(error: Exception('jmap connect failed')));
+      runner = buildRunner(
+        _FakeEmails(error: Exception('jmap connect failed')),
+      );
 
       await runner.checkNow();
 

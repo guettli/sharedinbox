@@ -246,7 +246,7 @@ class _SyncHealthVerifyingRow extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 2),
         ),
         SizedBox(width: AppSpacing.xs),
-        Text('Sync health: verifying…'),
+        Text('Sync health: verifying...'),
       ],
     );
   }
