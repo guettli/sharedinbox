@@ -1917,6 +1917,64 @@ void main() {
     );
 
     test(
+      'moving every mail out of a folder empties it, incl. orphan thread rows',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // One email in 'foo' with an up-to-date thread row.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:e',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                uid: 1,
+                receivedAt: DateTime(2024),
+                threadId: const Value('t-current'),
+              ),
+            );
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 't-current',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                latestDate: DateTime(2024),
+                latestEmailId: 'acc-1:e',
+                emailIdsJson: Value(jsonEncode(['acc-1:e'])),
+              ),
+            );
+        // A stale/orphaned thread row that still lists the same email but whose
+        // id no longer matches the email's current threadId. Such rows are left
+        // behind when a thread-id derivation change (message-id / subject
+        // normalisation, see #418, #500) re-threads a message on resync.
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 't-stale',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                latestDate: DateTime(2024),
+                latestEmailId: 'acc-1:e',
+                emailIdsJson: Value(jsonEncode(['acc-1:e'])),
+              ),
+            );
+
+        // The user selects all and moves every email the folder lists.
+        final before = await r.emails.observeThreads('acc-1', 'foo').first;
+        final allEmailIds = {for (final t in before) ...t.emailIds};
+        for (final id in allEmailIds) {
+          await r.emails.moveEmail(id, 'dest');
+        }
+
+        final after = await r.emails.observeThreads('acc-1', 'foo').first;
+        expect(
+          after,
+          isEmpty,
+          reason: 'foo should be empty after moving all of its mail',
+        );
+      },
+    );
+
+    test(
       'deleteEmail enqueues delete change and removes email from local DB',
       () async {
         final r = _makeRepos();

@@ -7,7 +7,11 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/imap/imap_client_factory.dart'
+    show ImapConnectFn;
 import 'package:sharedinbox/data/jmap/jmap_client.dart' show JmapException;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
@@ -111,16 +115,76 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
   AppDatabase db,
   AccountRepositoryImpl accounts,
   MailboxRepositoryImpl mailboxes,
-}) _makeRepos({http.Client? httpClient}) {
+}) _makeRepos({
+  http.Client? httpClient,
+  ImapConnectFn? imapConnect,
+  AppLogger? appLogger,
+}) {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
   final mailboxes = MailboxRepositoryImpl(
     db,
     accounts,
-    imapConnect: _noImapConnect,
+    imapConnect: imapConnect ?? _noImapConnect,
     httpClient: httpClient,
+    appLogger: appLogger,
   );
   return (db: db, accounts: accounts, mailboxes: mailboxes);
+}
+
+/// In-memory [AppLogRepository] that records inserted entries so tests can
+/// assert what was logged.
+class _RecordingAppLogRepository extends NoOpAppLogRepository {
+  final List<({AppLogLevel level, String event, String? mailboxPath})> entries =
+      [];
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    entries.add((level: level, event: event, mailboxPath: mailboxPath));
+    return entries.length;
+  }
+}
+
+/// Fake IMAP client that lists one mailbox but fails every STATUS request,
+/// exercising the count-computation failure path (#498).
+class _StatusFailsImapClient extends SnoozeSpyImapClient {
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [
+        imap.Mailbox(
+          encodedName: 'foo',
+          encodedPath: 'foo',
+          pathSeparator: '/',
+          flags: const [],
+        ),
+      ];
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox mailbox,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      throw Exception('STATUS failed');
+
+  @override
+  Future<dynamic> logout() async {}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -229,6 +293,35 @@ void main() {
         throwsA(isA<UnsupportedError>()),
       );
     });
+
+    test(
+      'syncMailboxes logs a warning when STATUS count computation fails (#498)',
+      () async {
+        final logs = _RecordingAppLogRepository();
+        final r = _makeRepos(
+          imapConnect: (_, __, ___) async => _StatusFailsImapClient(),
+          appLogger: AppLogger(logs),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.mailboxes.syncMailboxes('acc-1');
+
+        // The mailbox is still persisted, falling back to a zero count…
+        final mailboxes = await r.mailboxes.observeMailboxes('acc-1').first;
+        expect(mailboxes.single.totalCount, 0);
+        // …and the silent failure is recorded in the App Log.
+        expect(
+          logs.entries,
+          contains(
+            (
+              level: AppLogLevel.warn,
+              event: 'mailbox_count_failed',
+              mailboxPath: 'foo',
+            ),
+          ),
+        );
+      },
+    );
 
     group('JMAP syncMailboxes', () {
       test('full sync: upserts all mailboxes and persists state', () async {

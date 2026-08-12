@@ -347,6 +347,39 @@ class EmailRepositoryImpl implements EmailRepository {
         );
   }
 
+  /// Recomputes the source-mailbox thread for an email that just left
+  /// [mailboxPath], and sweeps any *other* thread rows in that mailbox that
+  /// still list [emailId].
+  ///
+  /// A folder can accumulate stale thread rows whose `id` no longer matches any
+  /// email's current `threadId` — e.g. when a thread-id derivation change
+  /// (message-id / subject normalisation, see #418, #500) re-threads a message
+  /// on resync and leaves the previous row behind. Moving every message out of
+  /// such a folder must remove those orphans too, otherwise the folder keeps
+  /// showing rows backed by no local mail (#498).
+  Future<void> _reconcileSourceThreads(
+    String accountId,
+    String mailboxPath,
+    String emailId,
+    String currentThreadId,
+  ) async {
+    final referencing = await (_db.select(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                t.emailIdsJson.like('%"$emailId"%'),
+          ))
+        .get();
+    final threadIds = <String>{
+      currentThreadId,
+      for (final row in referencing) row.id,
+    };
+    for (final id in threadIds) {
+      await _updateThread(accountId, mailboxPath, id);
+    }
+  }
+
   @override
   Future<model.Email?> getEmail(String emailId) async {
     final row = await (_db.select(
@@ -2622,9 +2655,10 @@ class EmailRepositoryImpl implements EmailRepository {
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
         EmailsCompanion(mailboxPath: Value(destMailboxPath)),
       );
-      await _updateThread(
+      await _reconcileSourceThreads(
         row.accountId,
         row.mailboxPath,
+        emailId,
         row.threadId ?? emailId,
       );
       await _updateThread(
@@ -2653,9 +2687,10 @@ class EmailRepositoryImpl implements EmailRepository {
         snoozedFromMailboxPath: const Value(null),
       ),
     );
-    await _updateThread(
+    await _reconcileSourceThreads(
       row.accountId,
       row.mailboxPath,
+      emailId,
       row.threadId ?? emailId,
     );
     await _updateThread(
