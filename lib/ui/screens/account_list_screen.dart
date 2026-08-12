@@ -70,6 +70,9 @@ class _AccountTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(accountConnectionStatusProvider(account.id));
     final health = ref.watch(syncHealthProvider(account.id));
+    final isVerifying =
+        (ref.watch(syncHealthVerifyingProvider).value ?? const <String>{})
+            .contains(account.id);
     final pendingCount =
         ref.watch(pendingChangeCountForAccountProvider(account.id)).value ?? 0;
     final counterparts =
@@ -174,7 +177,11 @@ class _AccountTile extends ConsumerWidget {
               const EdgeInsets.fromLTRB(72, 0, AppSpacing.lg, AppSpacing.sm),
           child: health.when(
             data: (h) {
+              if (isVerifying) return const _SyncHealthVerifyingRow();
               if (h == null) return const Text('Sync health: Not verified yet');
+              if (h.lastError != null) {
+                return _SyncHealthErrorRow(error: h.lastError!);
+              }
               final date = h.lastVerifiedAt.toLocal().toString().split('.')[0];
               return Row(
                 children: [
@@ -199,7 +206,9 @@ class _AccountTile extends ConsumerWidget {
                 ],
               );
             },
-            loading: () => const Text('Sync health: checking...'),
+            loading: () => isVerifying
+                ? const _SyncHealthVerifyingRow()
+                : const Text('Sync health: checking...'),
             error: (e, _) => Text('Sync health error: $e'),
           ),
         ),
@@ -219,6 +228,50 @@ class _AccountTile extends ConsumerWidget {
     }
     final action = AccountAction.values.byName(value);
     await runAccountAction(context, ref, account, action);
+  }
+}
+
+/// Shown in the sync-health row while a verification is in flight, so a manual
+/// "Verify sync health" is visibly running instead of silently unchanged.
+class _SyncHealthVerifyingRow extends StatelessWidget {
+  const _SyncHealthVerifyingRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      children: [
+        SizedBox(
+          width: AppIconSize.sm,
+          height: AppIconSize.sm,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        SizedBox(width: AppSpacing.xs),
+        Text('Sync health: verifying...'),
+      ],
+    );
+  }
+}
+
+/// Shown when the last verification failed to complete, so the user can see
+/// why instead of the row staying on "Not verified yet".
+class _SyncHealthErrorRow extends StatelessWidget {
+  const _SyncHealthErrorRow({required this.error});
+
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(
+          Icons.error_outline,
+          size: AppIconSize.sm,
+          color: Colors.red,
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        Expanded(child: Text('Sync check failed: $error')),
+      ],
+    );
   }
 }
 
