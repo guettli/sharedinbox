@@ -5076,6 +5076,86 @@ void main() {
 
       await sub.cancel();
     });
+
+    test('expands the RFC 8620 eventSourceUrl template (issue #490)', () async {
+      // Stalwart advertises a URI template — the placeholders must be filled
+      // in before the request or the server rejects it with HTTP 400.
+      final client = _SseTestClient(
+        eventSourceUrl: 'https://jmap.example.com/eventsource/'
+            '?types={types}&closeafter={closeafter}&ping={ping}',
+        sseStream: const Stream.empty(),
+      );
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final uri = client.capturedSseUri;
+      expect(uri, isNotNull);
+      expect(uri.toString(), isNot(contains('{')));
+      expect(uri!.queryParameters['types'], '*');
+      expect(uri.queryParameters['closeafter'], 'no');
+      expect(uri.queryParameters['ping'], '30');
+
+      await sub.cancel();
+    });
+
+    test('logs the resolved sseUrl on the connected row', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: _SseTestClient(
+          eventSourceUrl: 'https://jmap.example.com/eventsource/'
+              '?types={types}&closeafter={closeafter}&ping={ping}',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final connected = recorder.entries.singleWhere(
+        (e) =>
+            e.event == 'sync.jmap.push' &&
+            (e.dataJson ?? '').contains('"push_status":"connected"'),
+      );
+      expect(connected.dataJson, contains('"sseUrl":'));
+      expect(connected.dataJson, contains('types=*'));
+
+      await sub.cancel();
+      await sseController.close();
+    });
+
+    test(
+      'logs push_status=sse_status_400 with the response body when the '
+      'endpoint rejects the request',
+      () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          httpClient: _SseTestClient(
+            eventSourceUrl: 'https://jmap.example.com/eventsource/',
+            sseStream: const Stream.empty(),
+            sseStatus: 400,
+            sseBody: 'Missing required "types" parameter',
+          ),
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await r.emails.watchJmapPush('jmap-1', 'pw').toList();
+
+        final row = recorder.entries.singleWhere(
+          (e) => e.event == 'sync.jmap.push',
+        );
+        expect(row.dataJson, contains('"push_status":"sse_status_400"'));
+        expect(row.dataJson, contains('"httpStatus":400'));
+        expect(row.dataJson, contains('Missing required'));
+        expect(row.dataJson, contains('"sseUrl":'));
+      },
+    );
   });
 
   // ── CONDSTORE tests ──────────────────────────────────────────────────────────
@@ -6018,10 +6098,26 @@ class _AttachmentBodyImapClient extends FakeImapClient {
 // ── SSE test helper ──────────────────────────────────────────────────────────
 
 class _SseTestClient extends http.BaseClient {
-  _SseTestClient({required this.eventSourceUrl, required this.sseStream});
+  _SseTestClient({
+    required this.eventSourceUrl,
+    required this.sseStream,
+    this.sseStatus = 200,
+    this.sseBody = '',
+  });
 
   final String? eventSourceUrl;
   final Stream<List<int>> sseStream;
+
+  /// HTTP status to return for the SSE `GET` (200 = happy path).
+  final int sseStatus;
+
+  /// Body served alongside a non-200 [sseStatus] (e.g. the server's 400
+  /// explanation). Ignored when [sseStatus] is 200.
+  final String sseBody;
+
+  /// The exact URI the repo requested for the SSE stream, captured so tests
+  /// can assert the RFC 8620 §7.3 template was expanded before sending.
+  Uri? capturedSseUri;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -6044,6 +6140,13 @@ class _SseTestClient extends http.BaseClient {
       return http.StreamedResponse(Stream.value(utf8.encode(session)), 200);
     }
     if (request.headers['Accept'] == 'text/event-stream') {
+      capturedSseUri = request.url;
+      if (sseStatus != 200) {
+        return http.StreamedResponse(
+          Stream.value(utf8.encode(sseBody)),
+          sseStatus,
+        );
+      }
       return http.StreamedResponse(sseStream, 200);
     }
     return http.StreamedResponse(Stream.value(utf8.encode('{}')), 200);
