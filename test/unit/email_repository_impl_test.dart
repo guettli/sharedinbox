@@ -430,6 +430,67 @@ void main() {
       expect(body.htmlBody, '<p>Hello</p>');
     });
 
+    // ── JMAP body parsing ────────────────────────────────────────────────────
+
+    group('parseJmapBody type guarding', () {
+      // JMAP's textBody/htmlBody fall back to the other representation for
+      // single-part mail (RFC 8621 §4.1.4). The parser must key on the part's
+      // MIME `type` so the cached columns match the IMAP path, which uses the
+      // type-specific decodeTextPlainPart()/decodeTextHtmlPart() (#514).
+
+      test('HTML-only mail leaves textBody null, keeps htmlBody', () {
+        final r = _makeRepos();
+        final (textBody, htmlBody, _) = r.emails.parseJmapBodyForTest({
+          'textBody': [
+            {'partId': '1', 'type': 'text/html'},
+          ],
+          'htmlBody': [
+            {'partId': '1', 'type': 'text/html'},
+          ],
+          'bodyValues': {
+            '1': {'value': '<html><body>Hi</body></html>'},
+          },
+        });
+        expect(textBody, isNull);
+        expect(htmlBody, '<html><body>Hi</body></html>');
+      });
+
+      test('plain-only mail leaves htmlBody null, keeps textBody', () {
+        final r = _makeRepos();
+        final (textBody, htmlBody, _) = r.emails.parseJmapBodyForTest({
+          'textBody': [
+            {'partId': '1', 'type': 'text/plain'},
+          ],
+          'htmlBody': [
+            {'partId': '1', 'type': 'text/plain'},
+          ],
+          'bodyValues': {
+            '1': {'value': 'Plain hello'},
+          },
+        });
+        expect(textBody, 'Plain hello');
+        expect(htmlBody, isNull);
+      });
+
+      test('multipart/alternative fills both from their matching parts', () {
+        final r = _makeRepos();
+        final (textBody, htmlBody, _) = r.emails.parseJmapBodyForTest({
+          'textBody': [
+            {'partId': '1', 'type': 'text/plain'},
+          ],
+          'htmlBody': [
+            {'partId': '2', 'type': 'text/html'},
+          ],
+          'bodyValues': {
+            '1': {'value': 'Plain hello'},
+            '2': {'value': '<p>Hello</p>'},
+          },
+        });
+        expect(textBody, 'Plain hello');
+        expect(htmlBody, '<p>Hello</p>');
+      });
+    });
+
     // ── Threading tests ──────────────────────────────────────────────────────
 
     test('observeThreads returns aggregated thread rows from DB', () async {
