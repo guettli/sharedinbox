@@ -7,6 +7,21 @@ import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 import 'helpers.dart';
 
+/// Builds a folder [Mailbox] from a `/`-joined [displayPath]. When [path] is
+/// omitted it mirrors the display path (IMAP-style); pass an opaque [path] to
+/// mimic a JMAP mailbox whose id differs from its human-readable tree.
+Mailbox _folder(String displayPath, {String? path}) {
+  return Mailbox(
+    id: 'acc-1:${path ?? displayPath}',
+    accountId: 'acc-1',
+    path: path ?? displayPath,
+    name: displayPath.split('/').last,
+    displayPath: displayPath,
+    unreadCount: 0,
+    totalCount: 1,
+  );
+}
+
 /// Pumps [MailboxListScreen] backed by [mailboxes] and settles the frame.
 Future<void> _pumpMailboxList(
   WidgetTester tester,
@@ -284,25 +299,10 @@ void main() {
     testWidgets(
       'renders sub-folders indented deeper than their parent',
       (tester) async {
-        const parent = Mailbox(
-          id: 'acc-1:Archive',
-          accountId: 'acc-1',
-          path: 'Archive',
-          name: 'Archive',
-          displayPath: 'Archive',
-          unreadCount: 0,
-          totalCount: 1,
-        );
-        const child = Mailbox(
-          id: 'acc-1:Archive/2026',
-          accountId: 'acc-1',
-          path: 'Archive/2026',
-          name: '2026',
-          displayPath: 'Archive/2026',
-          unreadCount: 0,
-          totalCount: 1,
-        );
-        await _pumpMailboxList(tester, [child, parent]);
+        await _pumpMailboxList(tester, [
+          _folder('Archive/2026'),
+          _folder('Archive'),
+        ]);
 
         // Both rows show their leaf name.
         expect(find.text('Archive'), findsOneWidget);
@@ -327,25 +327,10 @@ void main() {
       'nested folder tap navigates via its real (opaque) path',
       (tester) async {
         // JMAP-style: path is an opaque id, displayPath is hierarchical.
-        const parent = Mailbox(
-          id: 'acc-1:a',
-          accountId: 'acc-1',
-          path: 'a',
-          name: 'Parent',
-          displayPath: 'Parent',
-          unreadCount: 0,
-          totalCount: 1,
-        );
-        const child = Mailbox(
-          id: 'acc-1:b',
-          accountId: 'acc-1',
-          path: 'b',
-          name: 'Child',
-          displayPath: 'Parent/Child',
-          unreadCount: 0,
-          totalCount: 1,
-        );
-        await _pumpMailboxList(tester, [parent, child]);
+        await _pumpMailboxList(tester, [
+          _folder('Parent', path: 'a'),
+          _folder('Parent/Child', path: 'b'),
+        ]);
 
         await tester.tap(find.text('Child'));
         await tester.pumpAndSettle();
@@ -359,16 +344,7 @@ void main() {
       'renders a non-tappable header for an inferred phantom parent',
       (tester) async {
         // Only the leaf exists as a real mailbox; "Archive" is inferred.
-        const child = Mailbox(
-          id: 'acc-1:Archive/2026',
-          accountId: 'acc-1',
-          path: 'Archive/2026',
-          name: '2026',
-          displayPath: 'Archive/2026',
-          unreadCount: 0,
-          totalCount: 1,
-        );
-        await _pumpMailboxList(tester, [child]);
+        await _pumpMailboxList(tester, [_folder('Archive/2026')]);
 
         expect(find.text('Archive'), findsOneWidget);
         expect(find.text('2026'), findsOneWidget);
