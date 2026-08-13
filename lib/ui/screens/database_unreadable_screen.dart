@@ -33,21 +33,13 @@ class DatabaseUnreadableScreen extends StatelessWidget {
 
   String get _body => switch (result.reason) {
         DbUnreadableReason.buildMissingCipher =>
-          'This build of sharedinbox was compiled without database encryption '
-              'support, but your local database is encrypted. This is a bug in '
-              'the build, not a problem with your data. Please report it — do '
-              'not delete anything.',
+          'This build of sharedinbox was compiled without database encryption support, but your local database is encrypted. This is a bug in the build, not a problem with your data. Please report it — do not delete anything.',
         DbUnreadableReason.keyMissing =>
-          'The key for your encrypted local database is no longer in the '
-              'device keystore, so the cache cannot be decrypted. This happens '
-              'after a device restore. Your mail is safe on the server.',
+          'The key for your encrypted local database is no longer in the device keystore, so the cache cannot be decrypted. This happens after a device restore. Your mail is safe on the server.',
         DbUnreadableReason.wrongKeyOrFormat =>
-          'The local mail cache was written by a different version of the app '
-              'and this build cannot open it. Your mail is safe on the server; '
-              'your accounts and passwords are kept.',
+          'The local mail cache was written by a different version of the app and this build cannot open it. Your mail is safe on the server; your accounts and passwords are kept.',
         DbUnreadableReason.corrupt =>
-          'The local mail cache is damaged and cannot be opened. Your mail is '
-              'safe on the server; your accounts and passwords are kept.',
+          'The local mail cache is damaged and cannot be opened. Your mail is safe on the server; your accounts and passwords are kept.',
         null => 'The local mail cache could not be opened.',
       };
 
@@ -154,7 +146,9 @@ class DatabaseUnreadableScreen extends StatelessWidget {
                 const SizedBox(height: AppSpacing.lg),
                 OutlinedButton.icon(
                   onPressed: () async {
-                    final title = Uri.encodeComponent('Cannot open DB: $_title');
+                    final title = Uri.encodeComponent(
+                      'Cannot open DB: $_title',
+                    );
                     final url = Uri.parse(
                       'https://github.com/guettli/sharedinbox/issues/new?title=$title',
                     );
@@ -172,7 +166,9 @@ class DatabaseUnreadableScreen extends StatelessWidget {
                       foregroundColor:
                           Theme.of(ctx).colorScheme.onErrorContainer,
                     ),
-                    onPressed: () => _confirmDelete(ctx),
+                    onPressed: () async {
+                      await _confirmDelete(ctx);
+                    },
                     icon: const Icon(Icons.delete_outline),
                     label: const Text('Delete local cache and restart'),
                   ),
