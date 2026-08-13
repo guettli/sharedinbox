@@ -125,6 +125,29 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     );
   }
 
+  /// Logs a per-script failure and, if still mounted, surfaces it to the user.
+  /// Shared by the activate/deactivate/delete handlers, whose catch blocks are
+  /// otherwise identical.
+  void _reportScriptError(
+    String code,
+    String logMessage,
+    String userMessage,
+    SieveScript script,
+    Object error,
+    StackTrace stack,
+  ) {
+    _logScriptError(code, logMessage, script, error, stack);
+    if (mounted) {
+      context.showAppSnackBar(
+        userMessage,
+        level: AppLogLevel.error,
+        error: error,
+        stack: stack,
+        duration: const Duration(seconds: 5),
+      );
+    }
+  }
+
   Future<void> _activate(SieveScript script) async {
     try {
       if (widget.isLocal) {
@@ -150,22 +173,14 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         duration: const Duration(seconds: 3),
       );
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.activate_failed',
         'Failed to activate sieve script',
+        'Failed to activate: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        context.showAppSnackBar(
-          'Failed to activate: $e',
-          level: AppLogLevel.error,
-          error: e,
-          stack: stack,
-          duration: const Duration(seconds: 5),
-        );
-      }
     }
   }
 
@@ -194,22 +209,14 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         duration: const Duration(seconds: 3),
       );
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.deactivate_failed',
         'Failed to deactivate sieve script',
+        'Failed to deactivate: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        context.showAppSnackBar(
-          'Failed to deactivate: $e',
-          level: AppLogLevel.error,
-          error: e,
-          stack: stack,
-          duration: const Duration(seconds: 5),
-        );
-      }
     }
   }
 
@@ -244,22 +251,14 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       }
       await _load();
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.delete_failed',
         'Failed to delete sieve script',
+        'Failed to delete: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        context.showAppSnackBar(
-          'Failed to delete: $e',
-          level: AppLogLevel.error,
-          error: e,
-          stack: stack,
-          duration: const Duration(seconds: 5),
-        );
-      }
     }
   }
 

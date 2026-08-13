@@ -72,7 +72,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     }
   }
 
-  Future<void> _launchUrl(BuildContext context, Uri url) async {
+  Future<void> _launchUrl(
+    BuildContext context,
+    Uri url, {
+    String event = 'about.launch_url_failed',
+  }) async {
     try {
       final launched = await launchUrl(
         url,
@@ -83,7 +87,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           context.showAppSnackBar(
             'Could not open browser.',
             level: AppLogLevel.warn,
-            event: 'about.launch_url_failed',
+            event: event,
             data: {'url': url.toString()},
             duration: const Duration(seconds: 5),
           );
@@ -94,7 +98,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         context.showAppSnackBar(
           'Error: $e',
           level: AppLogLevel.error,
-          event: 'about.launch_url_failed',
+          event: event,
           data: {'url': url.toString()},
           error: e,
           stack: stack,
@@ -130,35 +134,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final url = Uri.parse(
       'https://github.com/guettli/sharedinbox/issues/new?body=$body',
     );
-    try {
-      final launched = await launchUrl(
-        url,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        if (context.mounted) {
-          context.showAppSnackBar(
-            'Could not open browser.',
-            level: AppLogLevel.warn,
-            event: 'about.create_issue_failed',
-            data: {'url': url.toString()},
-            duration: const Duration(seconds: 5),
-          );
-        }
-      }
-    } catch (e, stack) {
-      if (context.mounted) {
-        context.showAppSnackBar(
-          'Error: $e',
-          level: AppLogLevel.error,
-          event: 'about.create_issue_failed',
-          data: {'url': url.toString()},
-          error: e,
-          stack: stack,
-          duration: const Duration(seconds: 5),
-        );
-      }
-    }
+    await _launchUrl(context, url, event: 'about.create_issue_failed');
   }
 
   @override
