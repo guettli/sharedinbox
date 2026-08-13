@@ -7,14 +7,17 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/storage/db_encryption.dart';
+import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
+import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
+import 'package:sharedinbox/ui/screens/database_unreadable_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
-import 'package:sqlcipher_flutter_libs/sqlcipher_flutter_libs.dart';
 import 'package:stack_trace/stack_trace.dart' as stack_trace;
 
 void main({List<Override> overrides = const []}) {
@@ -62,20 +65,8 @@ void main({List<Override> overrides = const []}) {
           );
         };
 
-        // Ensure libsqlcipher.so is loaded before any sqlite3 API. On
-        // Android 6 (minSdk=23) dlopen can fail unless the library is first
-        // opened via Java; the workaround handles that transparently.
-        await applyWorkaroundToOpenSqlCipherOnOldAndroidVersions();
-
         await initDatabasePath();
-        if (Platform.isAndroid) {
-          await initNotifications();
-          await registerBackgroundSync();
-          await _registerPrefetchTaskFromStoredPrefs();
-        }
-        runApp(
-          ProviderScope(overrides: overrides, child: const SharedInboxApp()),
-        );
+        await _bootOrShowUnreadable(overrides);
       },
       // This handler runs in the parent zone — runApp cannot be called here.
       // Framework errors are already handled by FlutterError.onError above.
@@ -83,6 +74,58 @@ void main({List<Override> overrides = const []}) {
         FlutterErrorDetails(exception: error, stack: stack),
       ),
     ),
+  );
+}
+
+/// Probes the DB before the first frame and either boots the app or, when the
+/// cache cannot be opened, shows [DatabaseUnreadableScreen] with a recovery
+/// action instead of letting a raw SqliteException surface later from a
+/// background Drift isolate into the generic CrashScreen.
+Future<void> _bootOrShowUnreadable(List<Override> overrides) async {
+  final probe = await _safeProbe();
+  if (probe == null || probe.ok) {
+    // Probe passed, or failed to run at all (e.g. path_provider not ready).
+    // Either way, boot normally — the lazy Drift open retries path resolution
+    // and any genuine open failure still surfaces later.
+    await _bootApp(overrides);
+    return;
+  }
+  runApp(
+    DatabaseUnreadableScreen(
+      result: probe,
+      onDeleteAndRestart: probe.allowsDelete
+          ? () async {
+              await deleteLocalDatabaseCache(
+                currentDatabasePath(),
+                const FlutterSecureStorageImpl(),
+              );
+              await _bootApp(overrides);
+            }
+          : null,
+    ),
+  );
+}
+
+/// Runs [probeDatabase], swallowing a probe that cannot even run (returns
+/// null) so a broken environment never blocks startup — only a *classified*
+/// open failure diverts to the recovery screen.
+Future<DbProbeResult?> _safeProbe() async {
+  try {
+    return await probeDatabase();
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Completes app startup once the DB is known to be openable.
+Future<void> _bootApp(List<Override> overrides) async {
+  if (Platform.isAndroid) {
+    await initNotifications();
+    await registerBackgroundSync();
+    await _registerPrefetchTaskFromStoredPrefs();
+  }
+  runApp(
+    ProviderScope(overrides: overrides, child: const SharedInboxApp()),
   );
 }
 

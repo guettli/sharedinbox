@@ -47,9 +47,6 @@ const _noCode = {
 const _excluded = <String, String>{
   'lib/data/db/database.dart':
       'Drift schema opened via path_provider + flutter_secure_storage plugins',
-  'lib/data/db/db_encryption_migration.dart':
-      'sqlcipher_export path needs SQLCipher-linked sqlite3; pure-Dart '
-          'branches exercised by test/unit/db_encryption_migration_test.dart',
   'lib/data/imap/imap_client_factory.dart':
       'Opens a real IMAP TLS socket to a mail server',
   'lib/data/imap/managesieve_client.dart':
@@ -88,6 +85,8 @@ const _excluded = <String, String>{
       'Widget-only compose form with drafts, attachments, send flow',
   'lib/ui/screens/crash_screen.dart':
       'Widget-only crash reporter shown by FlutterError.onError',
+  'lib/ui/screens/database_unreadable_screen.dart':
+      'Widget-only startup fallback shown when the DB cannot be opened',
   'lib/ui/screens/edit_account_screen.dart': 'Widget-only account edit form',
   'lib/ui/screens/email_action_helpers.dart':
       'BuildContext- and WidgetRef-heavy batch action helpers (widget-tested)',
@@ -121,6 +120,8 @@ const _excluded = <String, String>{
   'lib/ui/screens/user_preferences_screen.dart': 'Widget-only preferences form',
   'lib/ui/widgets/app_drawer.dart': 'Widget-only navigation drawer',
   'lib/ui/widgets/email_headers_dialog.dart': 'Widget-only headers dialog',
+  'lib/ui/widgets/error_report_scaffold.dart':
+      'Widget-only shared error-screen shell + Copy/Report buttons',
   'lib/ui/widgets/email_thread_list.dart':
       'Widget with a controller — controller has unit test, widget slice needs BuildContext',
   'lib/ui/widgets/email_tile.dart': 'Widget-only list tile',

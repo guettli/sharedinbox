@@ -40,7 +40,11 @@ android {
         applicationId = "de.sharedinbox.mua"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23
+        // package:sqlite3 ships prebuilt native libraries compiled with
+        // targetNdkApi = 24, so the app floor must be at least API 24
+        // (Android 7.0). This also retires the Android 6 dlopen load-order
+        // workaround removed in #436 (was applyWorkaroundToOpenSqlCipher…).
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -65,4 +65,19 @@ void main() {
     service.cancelPendingChange();
     expect(service.status().pendingChange, isNull);
   });
+
+  test('status() surfaces a recorded migration error', () {
+    expect(service.status().lastError, isNull);
+    writeEncryptionError(dbPath, 'Encryption could not be enabled: boom');
+    expect(
+      service.status().lastError,
+      'Encryption could not be enabled: boom',
+    );
+  });
+
+  test('dismissError clears the recorded migration error', () {
+    writeEncryptionError(dbPath, 'boom');
+    service.dismissError();
+    expect(service.status().lastError, isNull);
+  });
 }

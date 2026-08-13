@@ -17,6 +17,11 @@ const String encryptedMarkerSuffix = '.encrypted';
 /// either `enable` or `disable`.
 const String pendingMarkerSuffix = '.encryption_pending';
 
+/// File-name suffix that records the message of a failed encryption migration
+/// so the Preferences screen can tell the user their data is still unencrypted
+/// (the migration runs in [initDatabasePath], where there is no UI to show it).
+const String encryptionErrorSuffix = '.encryption_error';
+
 /// 256 bits — the SQLCipher v4 default key size when supplied as a raw key.
 const int _keyByteLength = 32;
 
@@ -51,6 +56,7 @@ Future<void> deleteDbCipherKey(SecureStorage storage) =>
 
 String _encryptedMarkerPath(String dbPath) => '$dbPath$encryptedMarkerSuffix';
 String _pendingMarkerPath(String dbPath) => '$dbPath$pendingMarkerSuffix';
+String _encryptionErrorPath(String dbPath) => '$dbPath$encryptionErrorSuffix';
 
 /// Whether the DB at [dbPath] is currently encrypted. Cheap synchronous
 /// `stat()` call so the boot path stays fast.
@@ -95,4 +101,47 @@ void writePendingEncryptionChange(
 void clearPendingEncryptionChange(String dbPath) {
   final f = File(_pendingMarkerPath(dbPath));
   if (f.existsSync()) f.deleteSync();
+}
+
+/// Records that the last encryption migration for [dbPath] failed, with a
+/// human-readable [message]. Read by the Preferences screen and cleared on the
+/// next successful migration.
+void writeEncryptionError(String dbPath, String message) {
+  File(_encryptionErrorPath(dbPath)).writeAsStringSync(message);
+}
+
+/// The message of the last failed encryption migration, or null if the last
+/// migration succeeded (or none has run).
+String? readEncryptionError(String dbPath) {
+  final f = File(_encryptionErrorPath(dbPath));
+  return f.existsSync() ? f.readAsStringSync() : null;
+}
+
+void clearEncryptionError(String dbPath) {
+  final f = File(_encryptionErrorPath(dbPath));
+  if (f.existsSync()) f.deleteSync();
+}
+
+/// Deletes the local mail-cache database at [dbPath] and every sidecar file
+/// (WAL/SHM, the encrypted/pending/error markers) plus the SQLCipher key, so
+/// the next app start rebuilds a fresh empty DB.
+///
+/// Account credentials live under different secure-storage keys and are left
+/// untouched, so the user does not have to re-enter passwords.
+Future<void> deleteLocalDatabaseCache(
+  String dbPath,
+  SecureStorage storage,
+) async {
+  for (final path in [
+    dbPath,
+    '$dbPath-wal',
+    '$dbPath-shm',
+    _encryptedMarkerPath(dbPath),
+    _pendingMarkerPath(dbPath),
+    _encryptionErrorPath(dbPath),
+  ]) {
+    final f = File(path);
+    if (f.existsSync()) f.deleteSync();
+  }
+  await deleteDbCipherKey(storage);
 }

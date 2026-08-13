@@ -33,11 +33,6 @@
       "allowedVersions": "<0.10.0"
     },
     {
-      "description": "Hold sqlcipher_flutter_libs at 0.6.x: 0.7.0+eol marks the package end-of-life and strips all functional code, including applyWorkaroundToOpenSqlCipherOnOldAndroidVersions (called in lib/main.dart and lib/core/sync/background_sync.dart for the Android 6 / minSdk 23 dlopen load-order bug) and the Gradle plugin that ships libsqlcipher.so, which pubspec.yaml's `name_android: sqlcipher` hook resolves against. Bumping to 0.7 would break encrypted DBs on Android at runtime (#582). The durable fix is to migrate to package:sqlite3's bundled SQLCipher (hooks user_defines `source: sqlcipher`), which needs on-device Android verification; tracked in #436. Blocks the #350 bump from resurfacing.",
-      "matchPackageNames": ["sqlcipher_flutter_libs"],
-      "allowedVersions": "<0.7.0"
-    },
-    {
       "description": [
         "Dagger is lock-stepped with the engine, which Renovate cannot reach: the engine tag is pinned by Ansible in guettli/gitops (ansible/p16/systemd/system/dagger-engine.service) and CI talks to it over an SSH tunnel. A Dagger PR therefore stays red until that host is bumped and dagger-engine restarted.",
         "Never automerge, and keep every in-repo CLI pin in ONE PR so it is at least internally consistent. Landing it is a two-repo operation: merge the engine bump in gitops first, then this. See DAGGER.md and guettli/gitops#112."

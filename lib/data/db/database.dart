@@ -8,11 +8,12 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/db_schema_version.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
+import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/db/db_encryption_migration.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
-import 'package:sqlite3/sqlite3.dart' show Database;
+import 'package:sqlite3/sqlite3.dart' show Database, SqliteException, sqlite3;
 
 part 'database.g.dart';
 
@@ -1201,16 +1202,83 @@ Future<void> initDatabasePath() async {
     // on first access, after runApp() completes initialization.
   }
   if (_dbPath != null) {
+    // Read the queued direction before running, because the pending marker is
+    // cleared once processPendingDbEncryptionChange completes.
+    final pending = readPendingEncryptionChange(_dbPath!);
     try {
       await processPendingDbEncryptionChange(
         dbPath: _dbPath!,
         storage: const FlutterSecureStorageImpl(),
       );
-    } catch (_) {
-      // Migration is best-effort: any failure leaves the original DB in
-      // place. Surfacing a UI error here would require a context we don't
-      // have yet; the user can re-toggle from Preferences.
+      clearEncryptionError(_dbPath!);
+    } catch (e) {
+      // Never block startup: a failed migration leaves the original DB in
+      // place. But record why so Preferences can tell the user their data is
+      // still unencrypted, instead of the toggle silently looking "on".
+      final verb =
+          pending == PendingEncryptionChange.disable ? 'disabled' : 'enabled';
+      writeEncryptionError(_dbPath!, 'Encryption could not be $verb: $e');
     }
+  }
+}
+
+/// Opens the DB file eagerly at startup to move any "cannot open" failure from
+/// a random moment in a background Drift isolate to before the first frame,
+/// where the UI can explain it. Resolves the path and key exactly as
+/// [_openConnection] does, runs a trivial read, and closes.
+///
+/// Returns [DbProbeResult.ok] when the file is absent (a fresh install) or
+/// opens cleanly; otherwise a classified failure the caller renders on a
+/// dedicated screen instead of running the app against an unreadable cache.
+Future<DbProbeResult> probeDatabase() async {
+  final path = await _resolveDatabasePath();
+  if (!File(path).existsSync()) return const DbProbeResult.ok();
+
+  final markerPresent = isDbEncrypted(path);
+  final keyHex = markerPresent
+      ? await readDbCipherKey(const FlutterSecureStorageImpl())
+      : null;
+  final hasKey = keyHex != null && keyHex.isNotEmpty;
+
+  Database? db;
+  try {
+    db = sqlite3.open(path);
+    if (hasKey) {
+      db.execute('PRAGMA key = "x\'$keyHex\'";');
+      db.execute('PRAGMA cipher_compatibility = 4;');
+    }
+    db.select('SELECT count(*) FROM sqlite_master;');
+    return const DbProbeResult.ok();
+  } on SqliteException catch (e) {
+    return DbProbeResult.unreadable(
+      classifyDbOpenFailure(
+        markerPresent: markerPresent,
+        hasKey: hasKey,
+        cipherAvailable: _sqlCipherAvailable(),
+        sqliteResultCode: e.resultCode,
+      ),
+      e,
+    );
+  } finally {
+    db?.close();
+  }
+}
+
+/// True when the linked sqlite3 is actually SQLCipher. Plain sqlite3 silently
+/// ignores `PRAGMA cipher_version` and returns an empty row, so a non-empty
+/// value is proof the cipher is compiled in.
+bool _sqlCipherAvailable() {
+  Database? db;
+  try {
+    db = sqlite3.openInMemory();
+    final rows = db.select('PRAGMA cipher_version;');
+    if (rows.isEmpty) return false;
+    final v = rows.first.values.first;
+    return v != null && v.toString().isNotEmpty;
+  } catch (_) {
+    return false;
+  } finally {
+    db?.close();
   }
 }
 
