@@ -941,6 +941,13 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 757,
+      "end_line": 769,
+      "key": "9267e3edd66296b3"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/backend/concurrent_sync_test.dart",
       "start_line": 31,
       "end_line": 43,
@@ -1341,6 +1348,13 @@
     {
       "tool": "jscpd",
       "file": "test/unit/account_sync_manager_test.dart",
+      "start_line": 210,
+      "end_line": 222,
+      "key": "9267e3edd66296b3"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/account_sync_manager_test.dart",
       "start_line": 212,
       "end_line": 232,
       "key": "0b22b56a111398ff"
@@ -1592,6 +1606,20 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/force_resync_test.dart",
+      "start_line": 91,
+      "end_line": 100,
+      "key": "f954a7abde833d0a"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/force_resync_test.dart",
+      "start_line": 140,
+      "end_line": 150,
+      "key": "f954a7abde833d0a"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/jmap_client_test.dart",
       "start_line": 100,
       "end_line": 112,
@@ -1823,6 +1851,13 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/reliability_runner_check_now_test.dart",
+      "start_line": 242,
+      "end_line": 266,
+      "key": "e183ebbcbf8f76d6"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
       "start_line": 33,
       "end_line": 45,
@@ -1890,6 +1925,13 @@
       "start_line": 239,
       "end_line": 258,
       "key": "8cc9b8ea6b098b58"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_test.dart",
+      "start_line": 242,
+      "end_line": 266,
+      "key": "e183ebbcbf8f76d6"
     },
     {
       "tool": "jscpd",

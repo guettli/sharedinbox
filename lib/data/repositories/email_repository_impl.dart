@@ -5728,6 +5728,66 @@ class EmailRepositoryImpl implements EmailRepository {
       await _db.customStatement('PRAGMA foreign_keys = ON');
     }
   }
+
+  @override
+  Future<void> clearMailboxForResync(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    // Disable FK constraints so EmailBodies rows survive the emails deletion —
+    // re-inserting emails with the same IDs after the next sync reuses the
+    // cached body without a network round-trip.
+    await _db.customStatement('PRAGMA foreign_keys = OFF');
+    try {
+      await _db.transaction(() async {
+        // Clear pending changes that target emails in this mailbox first —
+        // they are keyed by resourceId, so this must run before the emails
+        // themselves are deleted.
+        final mailboxEmailIds = _db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.id])
+          ..where(
+            _db.emails.accountId.equals(accountId) &
+                _db.emails.mailboxPath.equals(mailboxPath),
+          );
+        await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.resourceType.equals('Email') &
+                    t.resourceId.isInQuery(mailboxEmailIds),
+              ))
+            .go();
+
+        await (_db.delete(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.mailboxPath.equals(mailboxPath),
+              ))
+            .go();
+        await (_db.delete(_db.threads)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.mailboxPath.equals(mailboxPath),
+              ))
+            .go();
+        // Reset this mailbox's sync checkpoint. Only the row matching the
+        // account's protocol exists; deleting both variants is a no-op for the
+        // other. The global 'Email' state is left intact.
+        await (_db.delete(_db.syncStates)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    (t.resourceType.equals('IMAP:$mailboxPath') |
+                        t.resourceType.equals('JMAP:Email:$mailboxPath')),
+              ))
+            .go();
+      });
+    } finally {
+      await _db.customStatement('PRAGMA foreign_keys = ON');
+    }
+  }
 }
 
 /// Derives a JMAP-style preview snippet from an IMAP [imap.MimeMessage].

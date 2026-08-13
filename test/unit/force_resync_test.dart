@@ -69,6 +69,8 @@ const _inbox = Mailbox(
   when(m.clearForResync(_accountId)).thenAnswer((_) async {});
 
   when(e.clearForResync(_accountId)).thenAnswer((_) async {});
+  when(e.clearMailboxForResync(_accountId, _inbox.path))
+      .thenAnswer((_) async {});
   when(e.watchJmapPush(any, any)).thenAnswer((_) => const Stream.empty());
   when(e.wakeUpEmails(any)).thenAnswer((_) async => 0);
   when(e.flushPendingChanges(any, any)).thenAnswer((_) async => 0);
@@ -130,6 +132,67 @@ void main() {
         .thenThrow(StateError('permission denied'));
 
     final snapshots = await rig.manager.forceResync(_accountId).toList();
+    expect(snapshots.last.phase, ForceResyncPhase.failed);
+    expect(snapshots.last.error, contains('permission denied'));
+  });
+
+  test('forceResyncMailbox resyncs only the target folder', () async {
+    final rig = makeRig();
+    when(rig.emails.syncEmails(_accountId, _inbox.path)).thenAnswer(
+      (_) async => const SyncEmailsResult(
+        fetched: 0,
+        skipped: 2,
+        bytesTransferred: 0,
+      ),
+    );
+
+    final snapshots =
+        await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.complete);
+
+    // Only the mailbox-scoped clear ran; the account-wide clears and the
+    // mailbox-list sync were never touched.
+    verify(rig.emails.clearMailboxForResync(_accountId, _inbox.path)).called(1);
+    verifyNever(rig.emails.clearForResync(_accountId));
+    verifyNever(rig.mailboxes.clearForResync(_accountId));
+    verifyNever(rig.mailboxes.syncMailboxes(_accountId));
+    verify(rig.emails.syncEmails(_accountId, _inbox.path))
+        .called(greaterThanOrEqualTo(1));
+
+    final phases = snapshots.map((s) => s.phase).toList();
+    expect(phases.first, ForceResyncPhase.clearing);
+    expect(phases, contains(ForceResyncPhase.syncingEmails));
+    expect(phases, isNot(contains(ForceResyncPhase.syncingMailboxes)));
+
+    expect(snapshots.last.totalMailboxes, 1);
+    expect(snapshots.last.mailboxStats, hasLength(1));
+    expect(snapshots.last.mailboxStats.single.mailboxName, 'INBOX');
+    expect(snapshots.last.totalSkipped, 2);
+    expect(snapshots.last.totalFetched, 0);
+  });
+
+  test('forceResyncMailbox reports a failed snapshot for an unknown folder',
+      () async {
+    final rig = makeRig();
+
+    final snapshots = await rig.manager
+        .forceResyncMailbox(_accountId, 'Does-Not-Exist')
+        .toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.failed);
+    expect(snapshots.last.error, contains('Folder not found'));
+    verifyNever(rig.emails.clearMailboxForResync(any, any));
+  });
+
+  test('forceResyncMailbox surfaces sync errors in the terminal snapshot',
+      () async {
+    final rig = makeRig();
+    when(rig.emails.syncEmails(_accountId, _inbox.path))
+        .thenThrow(StateError('permission denied'));
+
+    final snapshots =
+        await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
     expect(snapshots.last.phase, ForceResyncPhase.failed);
     expect(snapshots.last.error, contains('permission denied'));
   });
