@@ -735,15 +735,15 @@ class _FakeEmails implements EmailRepository {
   }
 
   @override
+  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
+      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
+
+  @override
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,
   ) async =>
       ReliabilityResult.healthy;
-
-  @override
-  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
-      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
 
   @override
   Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);

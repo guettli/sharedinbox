@@ -73,6 +73,17 @@ class _FakeReliabilityResult_3 extends _i1.SmartFake
         );
 }
 
+class _FakeMailboxDiagnostics_4 extends _i1.SmartFake
+    implements _i3.MailboxDiagnostics {
+  _FakeMailboxDiagnostics_4(
+    Object parent,
+    Invocation parentInvocation,
+  ) : super(
+          parent,
+          parentInvocation,
+        );
+}
+
 /// A class which mocks [AccountRepository].
 ///
 /// See the documentation for Mockito's code generation for more information.
@@ -933,6 +944,32 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ),
         )),
       ) as _i5.Future<_i3.ReliabilityResult>);
+
+  @override
+  _i5.Future<_i3.MailboxDiagnostics> diagnoseMailbox(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #diagnoseMailbox,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue:
+            _i5.Future<_i3.MailboxDiagnostics>.value(_FakeMailboxDiagnostics_4(
+          this,
+          Invocation.method(
+            #diagnoseMailbox,
+            [
+              accountId,
+              mailboxPath,
+            ],
+          ),
+        )),
+      ) as _i5.Future<_i3.MailboxDiagnostics>);
 
   @override
   _i5.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(

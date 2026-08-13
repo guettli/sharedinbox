@@ -1320,7 +1320,8 @@ class EmailRepositoryImpl implements EmailRepository {
       // list's STATUS query trusts.
       final selected = await client.selectMailboxByPath(mailboxPath);
       final serverTotal = selected.messagesExists;
-      final unseen = await client.uidSearchMessages(searchCriteria: 'UNSEEN');
+      // uidSearchMessages defaults to the UNSEEN criteria.
+      final unseen = await client.uidSearchMessages();
       final all = await client.uidSearchMessages(searchCriteria: 'ALL');
       final unseenUids = unseen.matchingSequence?.toList() ?? <int>[];
       final serverUids = all.matchingSequence?.toList() ?? <int>[];
