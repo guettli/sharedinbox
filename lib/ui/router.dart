@@ -249,6 +249,13 @@ final router = GoRouter(
                   ),
                 ),
                 GoRoute(
+                  path: ':mailboxPath/force-resync',
+                  builder: (ctx, state) => ForceResyncScreen(
+                    accountId: state.pathParameters['accountId']!,
+                    mailboxPath: state.pathParameters['mailboxPath']!,
+                  ),
+                ),
+                GoRoute(
                   path: ':mailboxPath/threads/:threadId',
                   builder: (ctx, state) => ThreadDetailScreen(
                     accountId: state.pathParameters['accountId']!,

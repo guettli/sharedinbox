@@ -200,4 +200,11 @@ abstract class EmailRepository {
   /// while preserving EmailBodies so already-downloaded content is not lost.
   /// Also resets sync-state checkpoints so the next sync fetches everything fresh.
   Future<void> clearForResync(String accountId);
+
+  /// Like [clearForResync] but scoped to a single mailbox: deletes the cached
+  /// emails, threads and pending changes for [mailboxPath] under [accountId],
+  /// and resets that mailbox's sync checkpoint so the next sync re-fetches it
+  /// in full. EmailBodies are preserved so already-downloaded content is not
+  /// re-downloaded. Other mailboxes are untouched.
+  Future<void> clearMailboxForResync(String accountId, String mailboxPath);
 }

@@ -9,14 +9,23 @@ import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
-/// Full-screen view driven by [AccountSyncManager.forceResync]. Streams
+/// Full-screen view driven by [AccountSyncManager.forceResync] (or, when
+/// [mailboxPath] is set, [AccountSyncManager.forceResyncMailbox]). Streams
 /// progress snapshots and shows per-mailbox counts, a running total, and any
 /// errors that occurred. Cached email bodies/attachments are preserved by the
 /// underlying resync so this screen never re-downloads them.
 class ForceResyncScreen extends ConsumerStatefulWidget {
-  const ForceResyncScreen({super.key, required this.accountId});
+  const ForceResyncScreen({
+    super.key,
+    required this.accountId,
+    this.mailboxPath,
+  });
 
   final String accountId;
+
+  /// When non-null, only this folder is cleared and re-synced. When null, the
+  /// whole account is resynced.
+  final String? mailboxPath;
 
   @override
   ConsumerState<ForceResyncScreen> createState() => _ForceResyncScreenState();
@@ -29,10 +38,12 @@ class _ForceResyncScreenState extends ConsumerState<ForceResyncScreen> {
   @override
   void initState() {
     super.initState();
-    _sub = ref
-        .read(syncManagerProvider)
-        .forceResync(widget.accountId)
-        .listen((p) => setState(() => _progress = p));
+    final manager = ref.read(syncManagerProvider);
+    final path = widget.mailboxPath;
+    final stream = path == null
+        ? manager.forceResync(widget.accountId)
+        : manager.forceResyncMailbox(widget.accountId, path);
+    _sub = stream.listen((p) => setState(() => _progress = p));
   }
 
   @override
@@ -52,7 +63,11 @@ class _ForceResyncScreenState extends ConsumerState<ForceResyncScreen> {
       canPop: terminal,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Force full re-sync'),
+          title: Text(
+            widget.mailboxPath == null
+                ? 'Force full re-sync'
+                : 'Re-sync folder',
+          ),
           leading: terminal
               ? IconButton(
                   icon: const Icon(Icons.close),

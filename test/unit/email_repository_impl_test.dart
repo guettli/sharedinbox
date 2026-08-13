@@ -305,6 +305,88 @@ void main() {
       expect(email!.mailboxPath, 'INBOX');
     });
 
+    test('clearMailboxForResync only clears the target folder', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Seed two folders, each with an email, thread, pending change and a
+      // per-folder sync checkpoint. INBOX also has a cached body.
+      for (final (mb, uid) in [('INBOX', 1), ('Archive', 2)]) {
+        final id = 'acc-1:$uid';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: mb,
+                uid: uid,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 't-$uid',
+                accountId: 'acc-1',
+                mailboxPath: mb,
+                latestDate: DateTime(2024),
+                latestEmailId: id,
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: id,
+                changeType: 'flag_seen',
+                payload: '{"seen":true}',
+                createdAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.syncStates).insert(
+              SyncStatesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'IMAP:$mb',
+                state: '{}',
+                syncedAt: DateTime(2024),
+              ),
+            );
+      }
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('cached body'),
+            ),
+          );
+
+      await r.emails.clearMailboxForResync('acc-1', 'INBOX');
+
+      // The INBOX rows and its checkpoint are gone…
+      expect(await r.emails.observeEmails('acc-1', 'INBOX').first, isEmpty);
+      final inboxState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('IMAP:INBOX')))
+          .get();
+      expect(inboxState, isEmpty);
+      final inboxPending = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.resourceId.equals('acc-1:1')))
+          .get();
+      expect(inboxPending, isEmpty);
+
+      // …while Archive is untouched.
+      expect(
+        await r.emails.observeEmails('acc-1', 'Archive').first,
+        hasLength(1),
+      );
+      final archiveState = await (r.db.select(r.db.syncStates)
+            ..where((t) => t.resourceType.equals('IMAP:Archive')))
+          .get();
+      expect(archiveState, hasLength(1));
+
+      // The cached body survives so a re-sync never re-downloads it.
+      final body = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals('acc-1:1')))
+          .getSingleOrNull();
+      expect(body?.textBody, 'cached body');
+    });
+
     test('observeEmails orders by receivedAt descending', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');

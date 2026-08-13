@@ -79,8 +79,10 @@ class FolderDiagnosticsScreen extends ConsumerWidget {
             }
             ref.invalidate(folderDiagnosticsProvider(key));
           },
-          onForceResync: () =>
-              context.push('/accounts/$accountId/force-resync'),
+          onForceResync: () => context.push(
+            '/accounts/$accountId/mailboxes/'
+            '${Uri.encodeComponent(mailboxPath)}/force-resync',
+          ),
         ),
       ),
     );
@@ -221,7 +223,7 @@ class _DiagnosticsBody extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: onForceResync,
               icon: const Icon(Icons.restart_alt),
-              label: const Text('Force resync'),
+              label: const Text('Resync this folder'),
             ),
             OutlinedButton.icon(
               onPressed: () async {
