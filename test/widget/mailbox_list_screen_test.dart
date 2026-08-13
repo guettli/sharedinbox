@@ -281,6 +281,106 @@ void main() {
       },
     );
 
+    testWidgets(
+      'renders sub-folders indented deeper than their parent',
+      (tester) async {
+        const parent = Mailbox(
+          id: 'acc-1:Archive',
+          accountId: 'acc-1',
+          path: 'Archive',
+          name: 'Archive',
+          displayPath: 'Archive',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        const child = Mailbox(
+          id: 'acc-1:Archive/2026',
+          accountId: 'acc-1',
+          path: 'Archive/2026',
+          name: '2026',
+          displayPath: 'Archive/2026',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        await _pumpMailboxList(tester, [child, parent]);
+
+        // Both rows show their leaf name.
+        expect(find.text('Archive'), findsOneWidget);
+        expect(find.text('2026'), findsOneWidget);
+
+        double startIndent(String label) {
+          final tile = tester.widget<ListTile>(
+            find.ancestor(
+              of: find.text(label),
+              matching: find.byType(ListTile),
+            ),
+          );
+          return (tile.contentPadding! as EdgeInsetsDirectional).start;
+        }
+
+        // The child is indented one level deeper than its parent.
+        expect(startIndent('2026'), greaterThan(startIndent('Archive')));
+      },
+    );
+
+    testWidgets(
+      'nested folder tap navigates via its real (opaque) path',
+      (tester) async {
+        // JMAP-style: path is an opaque id, displayPath is hierarchical.
+        const parent = Mailbox(
+          id: 'acc-1:a',
+          accountId: 'acc-1',
+          path: 'a',
+          name: 'Parent',
+          displayPath: 'Parent',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        const child = Mailbox(
+          id: 'acc-1:b',
+          accountId: 'acc-1',
+          path: 'b',
+          name: 'Child',
+          displayPath: 'Parent/Child',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        await _pumpMailboxList(tester, [parent, child]);
+
+        await tester.tap(find.text('Child'));
+        await tester.pumpAndSettle();
+
+        // Navigated into an (empty) email list rather than staying on Folders.
+        expect(find.text('No emails'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'renders a non-tappable header for an inferred phantom parent',
+      (tester) async {
+        // Only the leaf exists as a real mailbox; "Archive" is inferred.
+        const child = Mailbox(
+          id: 'acc-1:Archive/2026',
+          accountId: 'acc-1',
+          path: 'Archive/2026',
+          name: '2026',
+          displayPath: 'Archive/2026',
+          unreadCount: 0,
+          totalCount: 1,
+        );
+        await _pumpMailboxList(tester, [child]);
+
+        expect(find.text('Archive'), findsOneWidget);
+        expect(find.text('2026'), findsOneWidget);
+        expect(find.byIcon(Icons.folder_open), findsOneWidget);
+
+        // Tapping the phantom header does nothing (stays on Folders).
+        await tester.tap(find.text('Archive'));
+        await tester.pumpAndSettle();
+        expect(find.text('Folders'), findsOneWidget);
+      },
+    );
+
     testWidgets('shows a bare 0 when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(
         id: 'acc-1:Empty',
