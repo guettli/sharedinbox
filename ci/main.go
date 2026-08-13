@@ -233,22 +233,20 @@ func (m *Ci) toolchain() *dagger.Container {
 		WithEnvVariable("PATH", "/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:${JAVA_HOME}/bin:${PATH}",
 			dagger.ContainerWithEnvVariableOpts{Expand: true}).
 		// Combined update+install so a stale cached index cannot pin a
-		// superseded .deb (404). libssl-dev is here (not in a later layer) so
-		// the entire apt state lives in one cache entry that is stable across
-		// Flutter version bumps.
+		// superseded .deb (404). Keeping the whole apt state in one exec means
+		// it lives in a single cache entry that is stable across Flutter bumps.
 		WithExec([]string{"/bin/sh", "-c",
 			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
 				// Flutter/Android runtime deps
 				"ca-certificates curl git unzip xz-utils zip openjdk-17-jdk-headless python3 " +
-				// Linux desktop build deps. sqlcipher_flutter_libs needs
-				// libssl-dev (#582). libsqlite3-dev is required for the
-				// unversioned /usr/lib/.../libsqlite3.so symlink that the Dart
-				// sqlite3 FFI package dlopens; without it, widget tests fail to
-				// load the native library (cirruslabs baked this in; ubuntu:24.04
-				// does not).
+				// Linux desktop build deps. SQLCipher (with OpenSSL statically
+				// linked) is now bundled by package:sqlite3's build hook
+				// (`source: sqlcipher`), so neither libssl-dev nor libsqlite3-dev
+				// is needed any more. The `sqlite3` CLI stays: it seeds Stalwart
+				// in the integration tests, unrelated to the Dart FFI package.
 				"clang cmake ninja-build pkg-config " +
-				"libgtk-3-dev liblzma-dev libsecret-1-dev libgcrypt20-dev libjsoncpp-dev libssl-dev " +
-				"sqlite3 libsqlite3-dev " +
+				"libgtk-3-dev liblzma-dev libsecret-1-dev libgcrypt20-dev libjsoncpp-dev " +
+				"sqlite3 " +
 				// Integration testing / networking
 				"iproute2 netcat-openbsd xvfb libosmesa6 libegl1 lld"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "ci"}).
