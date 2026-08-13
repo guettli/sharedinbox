@@ -120,8 +120,8 @@ const _excluded = <String, String>{
   'lib/ui/screens/user_preferences_screen.dart': 'Widget-only preferences form',
   'lib/ui/widgets/app_drawer.dart': 'Widget-only navigation drawer',
   'lib/ui/widgets/email_headers_dialog.dart': 'Widget-only headers dialog',
-  'lib/ui/widgets/error_details_actions.dart':
-      'Widget-only shared error-report block (Copy/Report buttons)',
+  'lib/ui/widgets/error_report_scaffold.dart':
+      'Widget-only shared error-screen shell + Copy/Report buttons',
   'lib/ui/widgets/email_thread_list.dart':
       'Widget with a controller — controller has unit test, widget slice needs BuildContext',
   'lib/ui/widgets/email_tile.dart': 'Widget-only list tile',

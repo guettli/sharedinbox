@@ -50,7 +50,10 @@ DbUnreadableReason classifyDbOpenFailure({
 /// Outcome of probing the DB at startup. [ok] is true when the file opened and
 /// a trivial read succeeded; otherwise [reason] and [error] describe why.
 class DbProbeResult {
-  const DbProbeResult.ok() : ok = true, reason = null, error = null;
+  const DbProbeResult.ok()
+      : ok = true,
+        reason = null,
+        error = null;
 
   const DbProbeResult.unreadable(this.reason, this.error) : ok = false;
 

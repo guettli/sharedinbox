@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
-import 'package:sharedinbox/ui/widgets/error_details_actions.dart';
+import 'package:sharedinbox/ui/widgets/error_report_scaffold.dart';
 
 /// Full-screen fallback shown by `main()` when the local mail-cache database
 /// cannot be opened at startup (see [probeDatabase]). Unlike the generic
@@ -74,69 +74,53 @@ class DatabaseUnreadableScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      theme: ThemeData(splashFactory: NoSplash.splashFactory),
-      home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Cannot open local cache'),
-          backgroundColor: Theme.of(context).colorScheme.errorContainer,
+    return ErrorReportScaffold(
+      appBarTitle: 'Cannot open local cache',
+      heroIcon: Icons.lock_outline,
+      bodyBuilder: (ctx) => [
+        Text(
+          _title,
+          style: Theme.of(ctx).textTheme.titleMedium,
+          textAlign: TextAlign.center,
         ),
-        body: Builder(
-          builder: (ctx) => SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Icon(
-                  Icons.lock_outline,
-                  color: Colors.red,
-                  size: AppIconSize.hero,
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  _title,
-                  style: Theme.of(ctx).textTheme.titleMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  _body,
-                  style: Theme.of(ctx).textTheme.bodyMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                ErrorDetailsActions(
-                  detail: '${result.error ?? 'unknown error'}',
-                  issueTitle: 'Cannot open DB: $_title',
-                  buildReport: () async => '$_title\n\n${result.error}',
-                ),
-                if (_showDelete) ...[
-                  const SizedBox(height: AppSpacing.xl),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor:
-                          Theme.of(ctx).colorScheme.errorContainer,
-                      foregroundColor:
-                          Theme.of(ctx).colorScheme.onErrorContainer,
-                    ),
-                    onPressed: () async {
-                      await _confirmDelete(ctx);
-                    },
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Delete local cache and restart'),
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Your accounts and passwords are kept.',
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ],
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          _body,
+          style: Theme.of(ctx).textTheme.bodyMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        LabeledMonospaceBox(
+          label: 'Error Details:',
+          text: '${result.error ?? 'unknown error'}',
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        CopyToClipboardButton(
+          buildText: () async => '$_title\n\n${result.error}',
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        ReportIssueButton(issueTitle: 'Cannot open DB: $_title'),
+        if (_showDelete) ...[
+          const SizedBox(height: AppSpacing.xl),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.errorContainer,
+              foregroundColor: Theme.of(ctx).colorScheme.onErrorContainer,
             ),
+            onPressed: () async {
+              await _confirmDelete(ctx);
+            },
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Delete local cache and restart'),
           ),
-        ),
-      ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Your accounts and passwords are kept.',
+            style: Theme.of(ctx).textTheme.bodySmall,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ],
     );
   }
 }
