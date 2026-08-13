@@ -190,6 +190,26 @@ void main() {
       expect(result.emails.single.messageId, '<only-in-a@example.com>');
     });
 
+    test('surfaces the human folder name, not the opaque JMAP id', () async {
+      // JMAP folder "b" carries the role but its path is an opaque id; the
+      // diff must expose "Inbox", never "b".
+      await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
+      await _seedMailbox(db, 'jmap-1', path: 'b', role: 'inbox');
+      await _seedEmail(
+        db,
+        accountId: 'jmap-1',
+        id: 'jmap-1:1',
+        mailboxPath: 'b',
+        uid: 0,
+        messageId: '<only-in-b@example.com>',
+        subject: 'Solo B',
+      );
+
+      final result = await service.compare('imap-1', 'jmap-1');
+      expect(result.emails, hasLength(1));
+      expect(result.emails.single.folderName, 'Inbox');
+    });
+
     test('detects field mismatches on matched emails', () async {
       await _seedMailbox(db, 'imap-1', path: 'INBOX', role: 'inbox');
       await _seedMailbox(db, 'jmap-1', path: 'a', role: 'inbox');
@@ -429,6 +449,10 @@ void main() {
       final result = await service.compare('imap-1', 'jmap-1');
       expect(result.bodies, hasLength(1));
       expect(result.bodies.single.messageId, messageId);
+      // The body diff carries a friendly folder name and a non-empty context
+      // diff so the UI can show what actually changed.
+      expect(result.bodies.single.folderName, 'Inbox');
+      expect(result.bodies.single.diffLines, isNotEmpty);
     });
 
     test('ignores whitespace-only body differences', () async {

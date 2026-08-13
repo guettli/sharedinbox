@@ -104,6 +104,7 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
   );
 });
 
@@ -228,9 +229,17 @@ final reliabilityRunnerProvider = Provider<ReliabilityRunner>((ref) {
     ref.watch(accountRepositoryProvider),
     ref.watch(mailboxRepositoryProvider),
     ref.watch(emailRepositoryProvider),
+    ref.watch(appLoggerProvider),
   );
   ref.onDispose(runner.stop);
   return runner;
+});
+
+/// Account ids whose sync health is currently being verified. The account list
+/// shows an in-progress indicator for these so a manual "Verify sync health"
+/// is visibly running rather than silent.
+final syncHealthVerifyingProvider = StreamProvider<Set<String>>((ref) {
+  return ref.watch(reliabilityRunnerProvider).verifyingAccounts;
 });
 
 final syncHealthProvider =

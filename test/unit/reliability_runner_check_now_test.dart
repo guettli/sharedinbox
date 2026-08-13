@@ -12,9 +12,11 @@ import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/data/db/database.dart'
     hide Account, Email, EmailBody;
+import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 
 import 'db_test_helper.dart';
 
@@ -264,10 +266,20 @@ void main() {
     late _FakeEmails emails;
     late ReliabilityRunner runner;
 
+    ReliabilityRunner buildRunner(_FakeEmails e) {
+      return ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        _FakeMailboxes(),
+        e,
+        AppLogger(AppLogRepositoryImpl(db)),
+      );
+    }
+
     setUp(() {
       db = openTestDatabase();
       emails = _FakeEmails();
-      runner = ReliabilityRunner(db, _FakeAccounts(), _FakeMailboxes(), emails);
+      runner = buildRunner(emails);
     });
 
     tearDown(() => db.close());
@@ -300,5 +312,63 @@ void main() {
       final rows = await db.select(db.syncHealth).get();
       expect(rows, hasLength(1));
     });
+
+    test('writes a sync_health entry to the app log on every run', () async {
+      await runner.checkNow();
+
+      final logs = await db.select(db.appLogs).get();
+      expect(
+        logs.any((l) => l.event == 'sync_health'),
+        isTrue,
+        reason: 'a manual check must be discoverable in the App Log',
+      );
+    });
+
+    test('persists the error and logs it when verification throws', () async {
+      runner = buildRunner(_ThrowingEmails(Exception('jmap connect failed')));
+
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows, hasLength(1), reason: 'a failure must still write a row');
+      expect(rows.first.isHealthy, isFalse);
+      expect(rows.first.lastError, contains('jmap connect failed'));
+
+      final logs = await db.select(db.appLogs).get();
+      expect(
+        logs.any((l) => l.level == 'error' && l.event == 'sync_health'),
+        isTrue,
+        reason: 'a failure must be logged at error level',
+      );
+    });
+
+    test('clears a previous error once the check succeeds', () async {
+      // First run fails and records an error.
+      await buildRunner(_ThrowingEmails(Exception('boom'))).checkNow();
+      expect(
+        (await db.select(db.syncHealth).get()).first.lastError,
+        isNotNull,
+      );
+
+      // A subsequent healthy run must clear the stale error.
+      await runner.checkNow();
+
+      final rows = await db.select(db.syncHealth).get();
+      expect(rows.first.lastError, isNull);
+      expect(rows.first.isHealthy, isTrue);
+    });
   });
+}
+
+/// A [_FakeEmails] whose reliability check always fails, exercising the
+/// error-handling path (a JMAP/IMAP connection or auth failure).
+class _ThrowingEmails extends _FakeEmails {
+  _ThrowingEmails(this.error);
+
+  final Object error;
+
+  @override
+  Future<ReliabilityResult> verifySyncReliability(String a, String m) async {
+    throw error;
+  }
 }

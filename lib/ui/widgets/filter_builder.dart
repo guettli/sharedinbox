@@ -291,77 +291,131 @@ class _LeafRowState extends State<_LeafRow> {
     widget.onChanged(widget.leaf.copyWith(comparison: c));
   }
 
+  /// Below this width the leaf controls stack onto two rows so the header
+  /// name and value inputs stay tappable and full-width instead of being
+  /// squeezed to zero by the fixed-width dropdowns on a narrow phone screen.
+  static const _narrowBreakpoint = 480.0;
+
+  Widget _fieldDropdown() => DropdownButton<FilterField>(
+        value: widget.leaf.field,
+        onChanged: _onFieldChanged,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        items: widget.availableFields
+            .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
+            .toList(),
+      );
+
+  Widget _comparisonDropdown() => DropdownButton<FilterComparison>(
+        value: widget.leaf.comparison,
+        onChanged: _onCompChanged,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        items: widget.leaf.field.allowedComparisons
+            .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
+            .toList(),
+      );
+
+  Widget _headerNameField() => TextField(
+        controller: _headerNameCtrl,
+        onChanged: (v) => widget.onChanged(widget.leaf.copyWith(headerName: v)),
+        decoration: _leafFieldDecoration('header name'),
+      );
+
+  Widget _valueField() => TextField(
+        controller: _ctrl,
+        onChanged: (v) => widget.onChanged(widget.leaf.copyWith(value: v)),
+        decoration: _leafFieldDecoration('value'),
+      );
+
+  // Folder is always an exact match against the picked mailbox, so there is no
+  // comparison dropdown — just the picker button, which stores the mailbox's
+  // raw `path` (opaque JMAP id or IMAP path) so the LIKE against
+  // `emails.mailbox_path` matches.
+  Widget _folderPicker() => MailboxPickerButton(
+        accountId: widget.accountId,
+        value: widget.leaf.value,
+        onPicked: (picked, displayPath) => widget.onChanged(
+          widget.leaf.copyWith(value: picked?.path ?? displayPath),
+        ),
+      );
+
+  Widget _deleteButton() => IconButton(
+        icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
+        tooltip: 'Remove',
+        onPressed: widget.onDelete,
+      );
+
   @override
   Widget build(BuildContext context) {
-    final isHeader = widget.leaf.field == FilterField.header;
-    final isFolder = widget.leaf.field == FilterField.folder;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-      child: Row(
-        children: [
-          DropdownButton<FilterField>(
-            value: widget.leaf.field,
-            onChanged: _onFieldChanged,
-            isDense: true,
-            underline: const SizedBox.shrink(),
-            items: widget.availableFields
-                .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
-                .toList(),
-          ),
-          if (isHeader) ...[
-            const SizedBox(width: AppSpacing.sm),
-            SizedBox(
-              width: 140,
-              child: TextField(
-                controller: _headerNameCtrl,
-                onChanged: (v) =>
-                    widget.onChanged(widget.leaf.copyWith(headerName: v)),
-                decoration: _leafFieldDecoration('header name'),
-              ),
-            ),
-          ],
-          const SizedBox(width: AppSpacing.sm),
-          if (isFolder)
-            // Folder is always an exact match against the picked mailbox, so
-            // there is no comparison dropdown — just the picker button, which
-            // stores the mailbox's raw `path` (opaque JMAP id or IMAP path)
-            // so the LIKE against `emails.mailbox_path` matches.
-            Expanded(
-              child: MailboxPickerButton(
-                accountId: widget.accountId,
-                value: widget.leaf.value,
-                onPicked: (picked, displayPath) => widget.onChanged(
-                  widget.leaf.copyWith(value: picked?.path ?? displayPath),
-                ),
-              ),
-            )
-          else ...[
-            DropdownButton<FilterComparison>(
-              value: widget.leaf.comparison,
-              onChanged: _onCompChanged,
-              isDense: true,
-              underline: const SizedBox.shrink(),
-              items: widget.leaf.field.allowedComparisons
-                  .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
-                  .toList(),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: TextField(
-                controller: _ctrl,
-                onChanged: (v) =>
-                    widget.onChanged(widget.leaf.copyWith(value: v)),
-                decoration: _leafFieldDecoration('value'),
-              ),
-            ),
-          ],
-          IconButton(
-            icon: const Icon(Icons.remove_circle_outline, size: AppIconSize.sm),
-            tooltip: 'Remove',
-            onPressed: widget.onDelete,
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < _narrowBreakpoint;
+          return narrow ? _buildStacked() : _buildSingleRow();
+        },
       ),
+    );
+  }
+
+  /// Wide layout: everything on one line.
+  Widget _buildSingleRow() {
+    final isHeader = widget.leaf.field == FilterField.header;
+    final isFolder = widget.leaf.field == FilterField.folder;
+    return Row(
+      children: [
+        _fieldDropdown(),
+        if (isHeader) ...[
+          const SizedBox(width: AppSpacing.sm),
+          SizedBox(width: 140, child: _headerNameField()),
+        ],
+        const SizedBox(width: AppSpacing.sm),
+        if (isFolder)
+          Expanded(child: _folderPicker())
+        else ...[
+          _comparisonDropdown(),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(child: _valueField()),
+        ],
+        _deleteButton(),
+      ],
+    );
+  }
+
+  /// Narrow (phone) layout: dropdowns on the first row, the header name and
+  /// value inputs on a second row where they can use the full width.
+  Widget _buildStacked() {
+    final isHeader = widget.leaf.field == FilterField.header;
+    final isFolder = widget.leaf.field == FilterField.folder;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            _fieldDropdown(),
+            if (!isFolder) ...[
+              const SizedBox(width: AppSpacing.sm),
+              _comparisonDropdown(),
+            ],
+            const Spacer(),
+            _deleteButton(),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        if (isFolder)
+          _folderPicker()
+        else if (isHeader)
+          Row(
+            children: [
+              Expanded(child: _headerNameField()),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(child: _valueField()),
+            ],
+          )
+        else
+          _valueField(),
+      ],
     );
   }
 }

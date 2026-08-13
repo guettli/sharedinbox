@@ -930,6 +930,126 @@ void main() {
       expect(results.first.subject, 'foobar baz');
     });
 
+    test('searchEmailsGlobal matches a single word only in the body', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Subject/preview do NOT contain the term — only the cached body does.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Trip planning'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:1',
+              textBody: const Value('Please book the flamingo sanctuary tour'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'flamingo');
+      expect(results, hasLength(1));
+      expect(results.first.id, 'acc-1:1');
+    });
+
+    test('searchEmailsGlobal keeps AND-across-words semantics in the body',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 2,
+              subject: const Value('Weekend outing'),
+              receivedAt: DateTime(2023),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:2',
+              textBody: const Value('Reserve the pelican lagoon cruise'),
+            ),
+          );
+
+      // Both words present in the body — implicit AND matches.
+      final both = await r.emails.searchEmailsGlobal(null, 'pelican cruise');
+      expect(both, hasLength(1));
+
+      // One word missing from the body — AND semantics reject the row.
+      final partial = await r.emails.searchEmailsGlobal(null, 'pelican walrus');
+      expect(partial, isEmpty);
+    });
+
+    test('searchEmailsGlobal returns nothing when the body does not match',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:3',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 3,
+              subject: const Value('Invoice due'),
+              receivedAt: DateTime(2022),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:3',
+              textBody: const Value('Payment received for order eighty'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'kangaroo');
+      expect(results, isEmpty);
+    });
+
+    test('searchEmailsGlobal picks up body inserts via the FTS trigger',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:4',
+              accountId: 'acc-1',
+              mailboxPath: 'Drafts',
+              uid: 4,
+              subject: const Value('Standup notes'),
+              receivedAt: DateTime(2021),
+            ),
+          );
+
+      // No body yet — nothing to match.
+      expect(
+        await r.emails.searchEmailsGlobal(null, 'dolphin'),
+        isEmpty,
+      );
+
+      // Inserting the body after the email must keep the FTS index in sync
+      // via the email_body_fts_ai trigger.
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:4',
+              textBody: const Value('The dolphin workshop starts at noon'),
+            ),
+          );
+
+      final results = await r.emails.searchEmailsGlobal(null, 'dolphin');
+      expect(results, hasLength(1));
+      expect(results.first.id, 'acc-1:4');
+    });
+
     test('searchEmails filters by mailboxPath using local FTS5', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -1793,6 +1913,64 @@ void main() {
         final email = await r.emails.getEmail('acc-1:5');
         expect(email, isNotNull);
         expect(email!.mailboxPath, 'Archive');
+      },
+    );
+
+    test(
+      'moving every mail out of a folder empties it, incl. orphan thread rows',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // One email in 'foo' with an up-to-date thread row.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:e',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                uid: 1,
+                receivedAt: DateTime(2024),
+                threadId: const Value('t-current'),
+              ),
+            );
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 't-current',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                latestDate: DateTime(2024),
+                latestEmailId: 'acc-1:e',
+                emailIdsJson: Value(jsonEncode(['acc-1:e'])),
+              ),
+            );
+        // A stale/orphaned thread row that still lists the same email but whose
+        // id no longer matches the email's current threadId. Such rows are left
+        // behind when a thread-id derivation change (message-id / subject
+        // normalisation, see #418, #500) re-threads a message on resync.
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 't-stale',
+                accountId: 'acc-1',
+                mailboxPath: 'foo',
+                latestDate: DateTime(2024),
+                latestEmailId: 'acc-1:e',
+                emailIdsJson: Value(jsonEncode(['acc-1:e'])),
+              ),
+            );
+
+        // The user selects all and moves every email the folder lists.
+        final before = await r.emails.observeThreads('acc-1', 'foo').first;
+        final allEmailIds = {for (final t in before) ...t.emailIds};
+        for (final id in allEmailIds) {
+          await r.emails.moveEmail(id, 'dest');
+        }
+
+        final after = await r.emails.observeThreads('acc-1', 'foo').first;
+        expect(
+          after,
+          isEmpty,
+          reason: 'foo should be empty after moving all of its mail',
+        );
       },
     );
 
@@ -4956,6 +5134,86 @@ void main() {
 
       await sub.cancel();
     });
+
+    test('expands the RFC 8620 eventSourceUrl template (issue #490)', () async {
+      // Stalwart advertises a URI template — the placeholders must be filled
+      // in before the request or the server rejects it with HTTP 400.
+      final client = _SseTestClient(
+        eventSourceUrl: 'https://jmap.example.com/eventsource/'
+            '?types={types}&closeafter={closeafter}&ping={ping}',
+        sseStream: const Stream.empty(),
+      );
+      final r = _makeRepos(httpClient: client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final uri = client.capturedSseUri;
+      expect(uri, isNotNull);
+      expect(uri.toString(), isNot(contains('{')));
+      expect(uri!.queryParameters['types'], '*');
+      expect(uri.queryParameters['closeafter'], 'no');
+      expect(uri.queryParameters['ping'], '30');
+
+      await sub.cancel();
+    });
+
+    test('logs the resolved sseUrl on the connected row', () async {
+      final sseController = StreamController<List<int>>();
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        httpClient: _SseTestClient(
+          eventSourceUrl: 'https://jmap.example.com/eventsource/'
+              '?types={types}&closeafter={closeafter}&ping={ping}',
+          sseStream: sseController.stream,
+        ),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      final sub = r.emails.watchJmapPush('jmap-1', 'pw').listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final connected = recorder.entries.singleWhere(
+        (e) =>
+            e.event == 'sync.jmap.push' &&
+            (e.dataJson ?? '').contains('"push_status":"connected"'),
+      );
+      expect(connected.dataJson, contains('"sseUrl":'));
+      expect(connected.dataJson, contains('types=*'));
+
+      await sub.cancel();
+      await sseController.close();
+    });
+
+    test(
+      'logs push_status=sse_status_400 with the response body when the '
+      'endpoint rejects the request',
+      () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          httpClient: _SseTestClient(
+            eventSourceUrl: 'https://jmap.example.com/eventsource/',
+            sseStream: const Stream.empty(),
+            sseStatus: 400,
+            sseBody: 'Missing required "types" parameter',
+          ),
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await r.emails.watchJmapPush('jmap-1', 'pw').toList();
+
+        final row = recorder.entries.singleWhere(
+          (e) => e.event == 'sync.jmap.push',
+        );
+        expect(row.dataJson, contains('"push_status":"sse_status_400"'));
+        expect(row.dataJson, contains('"httpStatus":400'));
+        expect(row.dataJson, contains('Missing required'));
+        expect(row.dataJson, contains('"sseUrl":'));
+      },
+    );
   });
 
   // ── CONDSTORE tests ──────────────────────────────────────────────────────────
@@ -5898,10 +6156,26 @@ class _AttachmentBodyImapClient extends FakeImapClient {
 // ── SSE test helper ──────────────────────────────────────────────────────────
 
 class _SseTestClient extends http.BaseClient {
-  _SseTestClient({required this.eventSourceUrl, required this.sseStream});
+  _SseTestClient({
+    required this.eventSourceUrl,
+    required this.sseStream,
+    this.sseStatus = 200,
+    this.sseBody = '',
+  });
 
   final String? eventSourceUrl;
   final Stream<List<int>> sseStream;
+
+  /// HTTP status to return for the SSE `GET` (200 = happy path).
+  final int sseStatus;
+
+  /// Body served alongside a non-200 [sseStatus] (e.g. the server's 400
+  /// explanation). Ignored when [sseStatus] is 200.
+  final String sseBody;
+
+  /// The exact URI the repo requested for the SSE stream, captured so tests
+  /// can assert the RFC 8620 §7.3 template was expanded before sending.
+  Uri? capturedSseUri;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -5924,6 +6198,13 @@ class _SseTestClient extends http.BaseClient {
       return http.StreamedResponse(Stream.value(utf8.encode(session)), 200);
     }
     if (request.headers['Accept'] == 'text/event-stream') {
+      capturedSseUri = request.url;
+      if (sseStatus != 200) {
+        return http.StreamedResponse(
+          Stream.value(utf8.encode(sseBody)),
+          sseStatus,
+        );
+      }
       return http.StreamedResponse(sseStream, 200);
     }
     return http.StreamedResponse(Stream.value(utf8.encode('{}')), 200);

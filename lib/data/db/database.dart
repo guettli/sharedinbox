@@ -263,6 +263,9 @@ class SyncHealth extends Table {
   BoolColumn get isHealthy => boolean()();
   // JSON summary of discrepancies (missingLocally, missingOnServer, etc.)
   TextColumn get discrepancySummary => text().nullable()();
+  // Human-readable reason the last verification failed to complete (e.g. a
+  // JMAP/IMAP connection or auth error). Null when the check ran to completion.
+  TextColumn get lastError => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {accountId};
@@ -602,6 +605,44 @@ class AppDatabase extends _$AppDatabase {
     ''');
   }
 
+  /// FTS5 shadow index over [EmailBodies.textBody]. Contentless mirror keyed
+  /// on the email_bodies rowid; join back via
+  /// `email_body_fts.rowid = email_bodies.rowid`, then to `emails` on
+  /// `email_bodies.email_id = emails.id`. Lets search cover the full body,
+  /// not just the [Emails.preview] snippet.
+  Future<void> _createEmailBodyFts() async {
+    await customStatement('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS email_body_fts USING fts5(
+        text_body,
+        content='email_bodies',
+        content_rowid='rowid'
+      )
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_body_fts_ai
+      AFTER INSERT ON email_bodies BEGIN
+        INSERT INTO email_body_fts(rowid, text_body)
+        VALUES (new.rowid, new.text_body);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_body_fts_au
+      AFTER UPDATE OF text_body ON email_bodies BEGIN
+        INSERT INTO email_body_fts(email_body_fts, rowid, text_body)
+        VALUES ('delete', old.rowid, old.text_body);
+        INSERT INTO email_body_fts(rowid, text_body)
+        VALUES (new.rowid, new.text_body);
+      END
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS email_body_fts_ad
+      AFTER DELETE ON email_bodies BEGIN
+        INSERT INTO email_body_fts(email_body_fts, rowid, text_body)
+        VALUES ('delete', old.rowid, old.text_body);
+      END
+    ''');
+  }
+
   Future<void> _createAppLogsIndexes() async {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS app_logs_created_at '
@@ -627,6 +668,7 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
           await _createEmailFts();
           await _createEmailNotesFts();
+          await _createEmailBodyFts();
           await _createAppLogsIndexes();
         },
         onUpgrade: (m, from, to) async {
@@ -1082,6 +1124,28 @@ class AppDatabase extends _$AppDatabase {
                 }
               }
             }
+          }
+          if (from < 50) {
+            // Add FTS5 shadow table for email bodies so full-body search no
+            // longer falls back to LIKE scans as the local DB grows. Some
+            // legacy test snapshots omit email_bodies, so guard the create +
+            // backfill against its absence.
+            if (await _tableExists(this, 'email_bodies')) {
+              await _createEmailBodyFts();
+              await customStatement('''
+                INSERT INTO email_body_fts(rowid, text_body)
+                SELECT rowid, text_body FROM email_bodies
+              ''');
+            }
+          }
+          if (from >= 19 &&
+              from < 51 &&
+              await _tableExists(this, 'sync_health')) {
+            // sync_health was created at v19; add the failure-reason column so
+            // a verification that throws surfaces why instead of leaving the
+            // account stuck on "not verified yet". Guarded against legacy test
+            // snapshots that never created the table.
+            await m.addColumn(syncHealth, syncHealth.lastError);
           }
         },
       );

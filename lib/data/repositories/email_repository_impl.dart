@@ -347,6 +347,39 @@ class EmailRepositoryImpl implements EmailRepository {
         );
   }
 
+  /// Recomputes the source-mailbox thread for an email that just left
+  /// [mailboxPath], and sweeps any *other* thread rows in that mailbox that
+  /// still list [emailId].
+  ///
+  /// A folder can accumulate stale thread rows whose `id` no longer matches any
+  /// email's current `threadId` — e.g. when a thread-id derivation change
+  /// (message-id / subject normalisation, see #418, #500) re-threads a message
+  /// on resync and leaves the previous row behind. Moving every message out of
+  /// such a folder must remove those orphans too, otherwise the folder keeps
+  /// showing rows backed by no local mail (#498).
+  Future<void> _reconcileSourceThreads(
+    String accountId,
+    String mailboxPath,
+    String emailId,
+    String currentThreadId,
+  ) async {
+    final referencing = await (_db.select(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                t.emailIdsJson.like('%"$emailId"%'),
+          ))
+        .get();
+    final threadIds = <String>{
+      currentThreadId,
+      for (final row in referencing) row.id,
+    };
+    for (final id in threadIds) {
+      await _updateThread(accountId, mailboxPath, id);
+    }
+  }
+
   @override
   Future<model.Email?> getEmail(String emailId) async {
     final row = await (_db.select(
@@ -2158,6 +2191,48 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── JMAP push ────────────────────────────────────────────────────────────
 
+  /// Expands the RFC 8620 §7.3 `eventSourceUrl` URI template.
+  ///
+  /// Servers advertise a template such as
+  /// `.../eventsource/?types={types}&closeafter={closeafter}&ping={ping}`.
+  /// Sending it verbatim — with the literal `{…}` placeholders still in the
+  /// query string — makes servers reject the request with HTTP 400, which
+  /// silently drops the account back to the 30 s poll. We subscribe to all
+  /// types, keep the stream open (we enforce our own 25-min cap below), and
+  /// ask for a 30 s keep-alive ping to survive NAT/proxy idle timeouts.
+  static String _expandEventSourceUrl(String template) {
+    return template
+        .replaceAll('{types}', '*')
+        .replaceAll('{closeafter}', 'no')
+        .replaceAll('{ping}', '30');
+  }
+
+  /// Strips any embedded `user:pass@` userinfo from [url] so it is safe to
+  /// persist in the app log. JMAP SSE auth travels in the `Authorization`
+  /// header rather than the URL, so this is belt-and-braces.
+  static String _redactUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      if (uri.userInfo.isEmpty) return url;
+      return uri.replace(userInfo: '').toString();
+    } catch (_) {
+      return url;
+    }
+  }
+
+  /// Drains a failed SSE [response] body into a short string for logging.
+  /// Truncated so a chatty HTML error page can't bloat the app log.
+  static Future<String> _readSseErrorBody(
+    http.StreamedResponse response,
+  ) async {
+    try {
+      final body = (await response.stream.bytesToString()).trim();
+      return body.length > 500 ? '${body.substring(0, 500)}…' : body;
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// Records the outcome of a `watchJmapPush` subscription as a
   /// `sync.jmap.push` app-log row. The `status` value is stable and used by
   /// the sync-state view to render a human-readable "Push" row — see
@@ -2245,19 +2320,26 @@ class EmailRepositoryImpl implements EmailRepository {
           return;
         }
 
+        // The advertised URL is an RFC 8620 §7.3 URI template — expand the
+        // `{types}`/`{closeafter}`/`{ping}` placeholders before requesting it,
+        // or the server rejects the literal `{…}` query with HTTP 400.
+        final resolvedSseUrl = _expandEventSourceUrl(sseUrl);
+        final redactedSseUrl = _redactUrl(resolvedSseUrl);
+
         final credentials = base64.encode(
           utf8.encode('${_effectiveUsername(account)}:$password'),
         );
 
         http.StreamedResponse response;
         try {
-          final request = http.Request('GET', Uri.parse(sseUrl));
+          final request = http.Request('GET', Uri.parse(resolvedSseUrl));
           request.headers['Accept'] = 'text/event-stream';
           request.headers['Authorization'] = 'Basic $credentials';
           response = await _httpClient
               .send(request)
               .timeout(const Duration(seconds: 10));
           if (response.statusCode != 200) {
+            final body = await _readSseErrorBody(response);
             unawaited(
               _logPushStatus(
                 accountId,
@@ -2266,7 +2348,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 'JMAP push: SSE endpoint returned HTTP '
                     '${response.statusCode}',
                 level: AppLogLevel.warn,
-                data: {'httpStatus': response.statusCode},
+                data: {
+                  'httpStatus': response.statusCode,
+                  'sseUrl': redactedSseUrl,
+                  if (body.isNotEmpty) 'responseBody': body,
+                },
               ),
             );
             await controller.close();
@@ -2280,7 +2366,7 @@ class EmailRepositoryImpl implements EmailRepository {
               JmapPushStatus.sseFailed.wireName,
               'JMAP push: SSE request failed: $e',
               level: AppLogLevel.warn,
-              data: {'error': e.toString()},
+              data: {'error': e.toString(), 'sseUrl': redactedSseUrl},
             ),
           );
           await controller.close();
@@ -2292,6 +2378,7 @@ class EmailRepositoryImpl implements EmailRepository {
             accountId,
             JmapPushStatus.connected.wireName,
             'JMAP push connected — waiting for StateChange events',
+            data: {'sseUrl': redactedSseUrl},
           ),
         );
 
@@ -2568,9 +2655,10 @@ class EmailRepositoryImpl implements EmailRepository {
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
         EmailsCompanion(mailboxPath: Value(destMailboxPath)),
       );
-      await _updateThread(
+      await _reconcileSourceThreads(
         row.accountId,
         row.mailboxPath,
+        emailId,
         row.threadId ?? emailId,
       );
       await _updateThread(
@@ -2599,9 +2687,10 @@ class EmailRepositoryImpl implements EmailRepository {
         snoozedFromMailboxPath: const Value(null),
       ),
     );
-    await _updateThread(
+    await _reconcileSourceThreads(
       row.accountId,
       row.mailboxPath,
+      emailId,
       row.threadId ?? emailId,
     );
     await _updateThread(
@@ -3999,7 +4088,11 @@ class EmailRepositoryImpl implements EmailRepository {
     return OutboxFlushObserver(
       onAttempt: (job) {
         unawaited(
-          logger.debug(
+          // `info`, not `debug`: the default app-log filter hides debug, so a
+          // send in progress used to leave no visible trace at all (#501). One
+          // entry per eligible row per cycle, and backoff spaces retries out,
+          // so this stays quiet in steady state.
+          logger.info(
             'outbox.send.attempt',
             'Sending queued message ${describe(job)} (attempt ${job.attempts + 1})',
             accountId: accountId,
@@ -4584,10 +4677,11 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final noteRows = await _searchEmailsByNotes(accountId, null, query);
+    final bodyRows = await _searchEmailsByBody(accountId, null, query);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort((a, b) {
@@ -4597,6 +4691,25 @@ class EmailRepositoryImpl implements EmailRepository {
     return merged;
   }
 
+  /// Returns emails whose plaintext body matches [query] via the
+  /// `email_body_fts` FTS5 index. Optionally filtered by [accountId] and
+  /// [mailboxPath].
+  Future<List<model.Email>> _searchEmailsByBody(
+    String? accountId,
+    String? mailboxPath,
+    String query,
+  ) =>
+      _searchEmailsByFts(
+        fromJoin: 'FROM email_body_fts f'
+            ' JOIN email_bodies b ON b.rowid = f.rowid'
+            ' JOIN emails e ON e.id = b.email_id',
+        ftsTable: 'email_body_fts',
+        readsFrom: {_db.emails, _db.emailBodies},
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+      );
+
   /// Returns emails whose associated notes match [query] via the
   /// `email_notes_fts` FTS5 index. Optionally filtered by [accountId] and
   /// [mailboxPath].
@@ -4604,7 +4717,33 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
-  ) async {
+  ) =>
+      _searchEmailsByFts(
+        fromJoin: 'FROM email_notes_fts f'
+            ' JOIN email_notes n ON n.rowid = f.rowid'
+            ' JOIN emails e ON e.message_id = n.message_id'
+            ' AND e.account_id = n.account_id',
+        ftsTable: 'email_notes_fts',
+        readsFrom: {_db.emails, _db.emailNotes},
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+      );
+
+  /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
+  /// `e`) and returns them as models, flagged and newest first. [fromJoin] is
+  /// the `FROM …` clause joining the [ftsTable] shadow index to `emails`;
+  /// [ftsTable] is the virtual-table name used in the `MATCH` predicate.
+  /// Optionally filtered by [accountId] and [mailboxPath]. Shared by the
+  /// body and note search paths.
+  Future<List<model.Email>> _searchEmailsByFts({
+    required String fromJoin,
+    required String ftsTable,
+    required Set<ResultSetImplementation> readsFrom,
+    required String? accountId,
+    required String? mailboxPath,
+    required String query,
+  }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
 
@@ -4619,18 +4758,17 @@ class EmailRepositoryImpl implements EmailRepository {
       extraVars.add(Variable<String>(mailboxPath));
     }
 
-    final sql = 'SELECT DISTINCT e.* FROM email_notes_fts f'
-        ' JOIN email_notes n ON n.rowid = f.rowid'
-        ' JOIN emails e ON e.message_id = n.message_id'
-        ' AND e.account_id = n.account_id'
-        ' WHERE email_notes_fts MATCH ?$extraConditions'
+    final sql = 'SELECT DISTINCT e.* $fromJoin'
+        ' WHERE $ftsTable MATCH ?$extraConditions'
         ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
-    final rows = await _db.customSelect(
-      sql,
-      variables: [Variable<String>(ftsQuery), ...extraVars],
-      readsFrom: {_db.emails, _db.emailNotes},
-    ).get();
+    final rows = await _db
+        .customSelect(
+          sql,
+          variables: [Variable<String>(ftsQuery), ...extraVars],
+          readsFrom: readsFrom,
+        )
+        .get();
     final emailRows =
         await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();
@@ -4925,10 +5063,11 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
+    final bodyRows = await _searchEmailsByBody(accountId, mailboxPath, query);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows]) {
+    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort((a, b) {

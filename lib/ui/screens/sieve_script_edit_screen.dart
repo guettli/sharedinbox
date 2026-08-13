@@ -414,6 +414,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
                   Expanded(
                     child: TabBarView(
                       controller: _tabController,
+                      // Disable swipe-to-switch: a horizontal drag while
+                      // editing a filter row must not page over to the raw
+                      // Script tab. Users switch views via the tab bar.
+                      physics: const NeverScrollableScrollPhysics(),
                       children: [_buildVisualTab(), _buildScriptTab()],
                     ),
                   ),

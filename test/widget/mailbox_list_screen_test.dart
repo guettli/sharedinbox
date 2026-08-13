@@ -7,6 +7,28 @@ import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 
 import 'helpers.dart';
 
+/// Pumps [MailboxListScreen] backed by [mailboxes] and settles the frame.
+Future<void> _pumpMailboxList(
+  WidgetTester tester,
+  List<Mailbox> mailboxes,
+) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/mailboxes',
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(
+          FakeMailboxRepository(mailboxes),
+        ),
+        emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('MailboxListScreen', () {
     testWidgets('shows mailbox name', (tester) async {
@@ -53,6 +75,44 @@ void main() {
         find.text('3 / 10', findRichText: true),
         findsOneWidget,
       );
+    });
+
+    testWidgets('shows the role label and role icon for a roled mailbox', (
+      tester,
+    ) async {
+      const inbox = Mailbox(
+        id: 'acc-1:INBOX',
+        accountId: 'acc-1',
+        path: 'INBOX',
+        name: 'INBOX',
+        unreadCount: 0,
+        totalCount: 1,
+        role: 'inbox',
+      );
+      await _pumpMailboxList(tester, [inbox]);
+
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.byIcon(Icons.inbox), findsOneWidget);
+      expect(find.byIcon(Icons.folder), findsNothing);
+    });
+
+    testWidgets(
+        'shows the generic folder icon and no role label for a '
+        'user-created mailbox', (tester) async {
+      const custom = Mailbox(
+        id: 'acc-1:Work',
+        accountId: 'acc-1',
+        path: 'Work',
+        name: 'Work',
+        unreadCount: 0,
+        totalCount: 1,
+      );
+      await _pumpMailboxList(tester, [custom]);
+
+      expect(find.byIcon(Icons.folder), findsOneWidget);
+      expect(find.text('Work'), findsOneWidget);
+      // No role sub-label for user folders.
+      expect(find.text('Inbox'), findsNothing);
     });
 
     testWidgets('tapping a mailbox tile navigates to its email list', (
@@ -206,7 +266,7 @@ void main() {
       },
     );
 
-    testWidgets('shows no count label when totalCount is zero', (tester) async {
+    testWidgets('shows a bare 0 when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(
         id: 'acc-1:Empty',
         accountId: 'acc-1',
@@ -232,11 +292,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Empty'), findsOneWidget);
-      // The label widget is present but renders nothing when total is 0.
+      // An empty folder shows "0" (not a blank), so it is distinct from a
+      // folder whose count could not be computed (#498).
       final label = tester.widget<MailboxCountLabel>(
         find.byType(MailboxCountLabel),
       );
       expect(label.total, 0);
+      expect(find.text('0'), findsOneWidget);
       expect(find.textContaining('/', findRichText: true), findsNothing);
     });
   });

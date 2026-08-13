@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -8,6 +9,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/mailbox.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
@@ -19,13 +21,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     http.Client? httpClient,
+    AppLogger? appLogger,
   })  : _imapConnect = imapConnect,
-        _httpClient = httpClient ?? http.Client();
+        _httpClient = httpClient ?? http.Client(),
+        _appLogger = appLogger;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final http.Client _httpClient;
+  final AppLogger? _appLogger;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
@@ -109,8 +114,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
           ]);
           unread = status.messagesUnseen;
           total = status.messagesExists;
-        } catch (e) {
+        } catch (e, stack) {
           log('STATUS skipped for $path: $e');
+          // Surface the failure in the App Log so a folder that silently shows
+          // no count (falling back to 0) is discoverable (#498).
+          unawaited(
+            _appLogger?.warn(
+              'mailbox_count_failed',
+              'Could not compute message count for "$path"',
+              accountId: account.id,
+              mailboxPath: path,
+              error: e,
+              stack: stack,
+            ),
+          );
         }
 
         // Use the server-assigned role when available; fall back to the
@@ -324,6 +341,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final name = m['name'] as String? ?? jmapId;
       final role = m['role'] as String? ?? _fallbackJmapRole(name);
       final displayPath = buildDisplayPath(jmapId);
+      if (m['totalEmails'] is! int || m['unreadEmails'] is! int) {
+        // The server omitted the count properties; we fall back to 0 but log it
+        // so a folder that shows no real count is discoverable (#498).
+        unawaited(
+          _appLogger?.warn(
+            'mailbox_count_failed',
+            'JMAP mailbox "$name" is missing totalEmails/unreadEmails',
+            accountId: accountId,
+            mailboxPath: jmapId,
+          ),
+        );
+      }
       await _db.into(_db.mailboxes).insertOnConflictUpdate(
             MailboxesCompanion.insert(
               id: dbId,

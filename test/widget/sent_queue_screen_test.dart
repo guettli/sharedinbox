@@ -222,7 +222,60 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(
-        find.textContaining('Sync is not running for this account'),
+        find.textContaining('Sync for this account is stopped'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'a pending row with no error explains why it is still queued',
+    (tester) async {
+      final repo = _RecordingOutboxRepository();
+      repo.messages.addAll([
+        // Fresh row, no backoff yet.
+        OutboxMessage(
+          id: 1,
+          accountId: 'acc-1',
+          subject: 'Waiting one',
+          to: const ['carol@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 0,
+          status: 'pending',
+        ),
+        // Row that failed once and is backing off until a future time.
+        OutboxMessage(
+          id: 2,
+          accountId: 'acc-1',
+          subject: 'Waiting two',
+          to: const ['dave@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 1,
+          status: 'pending',
+          nextAttemptAt: DateTime.now().add(const Duration(minutes: 5)),
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        _wrap(
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([accountA]),
+            ),
+            outboxRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Queued — will send on the next sync'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Waiting to retry — next attempt'),
         findsOneWidget,
       );
     },
