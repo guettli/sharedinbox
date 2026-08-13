@@ -467,7 +467,6 @@ class AccountSyncManager {
       emit(
         ForceResyncProgress(
           phase: ForceResyncPhase.syncingEmails,
-          currentMailboxIndex: 0,
           totalMailboxes: 1,
           currentMailboxName: mailbox.name,
         ),
