@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/folder_tree.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -91,17 +92,54 @@ class MailboxListScreen extends ConsumerWidget {
                 if (!snap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final mailboxes = List.of(snap.data!)..sort(compareMailboxes);
+                final mailboxes = snap.data!;
+                final byDisplayPath = {
+                  for (final m in mailboxes) m.displayPath: m,
+                };
+                // Flatten the hierarchy (built by splitting each displayPath
+                // on `/`) into a pre-order list of rows so the tree renders as
+                // an indented, always-expanded list.
+                final rows = _flattenTree(buildFolderTree(mailboxes));
                 return ListView.builder(
-                  itemCount: mailboxes.length,
+                  itemCount: rows.length,
                   itemBuilder: (ctx, i) {
-                    final mb = mailboxes[i];
+                    final row = rows[i];
+                    final node = row.node;
+                    final indent = AppSpacing.lg + row.depth * AppSpacing.lg;
+                    // Phantom parent: an intermediate path segment with no
+                    // real mailbox of its own. Render a non-tappable header so
+                    // the tree still reads correctly.
+                    final mb = node.displayPath == null
+                        ? null
+                        : byDisplayPath[node.displayPath];
+                    if (mb == null) {
+                      return ListTile(
+                        contentPadding: EdgeInsetsDirectional.only(
+                          start: indent,
+                          end: AppSpacing.lg,
+                        ),
+                        leading: Icon(
+                          Icons.folder_open,
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                        ),
+                        title: Text(
+                          node.label,
+                          style: TextStyle(
+                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      );
+                    }
                     final hasUnread = mb.unreadCount > 0;
                     final roleLabel = mailboxRoleLabel(mb.role);
                     return ListTile(
+                      contentPadding: EdgeInsetsDirectional.only(
+                        start: indent,
+                        end: AppSpacing.lg,
+                      ),
                       leading: Icon(mailboxRoleIcon(mb.role)),
                       title: Text(
-                        mb.name,
+                        node.label,
                         style: hasUnread
                             ? const TextStyle(fontWeight: FontWeight.bold)
                             : null,
@@ -130,6 +168,23 @@ class MailboxListScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Flattens [roots] into a pre-order list of `(node, depth)` rows, so the
+/// folder hierarchy can be rendered as an always-expanded, indented list.
+List<({FolderNode node, int depth})> _flattenTree(List<FolderNode> roots) {
+  final rows = <({FolderNode node, int depth})>[];
+  void visit(FolderNode node, int depth) {
+    rows.add((node: node, depth: depth));
+    for (final child in node.children) {
+      visit(child, depth + 1);
+    }
+  }
+
+  for (final root in roots) {
+    visit(root, 0);
+  }
+  return rows;
 }
 
 /// Opens the long-press action sheet for [mailbox]: rename / move / delete.

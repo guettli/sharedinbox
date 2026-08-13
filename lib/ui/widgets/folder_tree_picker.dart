@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/core/models/folder_tree.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -69,7 +70,7 @@ class FolderTreePickerDialog extends ConsumerStatefulWidget {
 
 class _FolderTreePickerDialogState
     extends ConsumerState<FolderTreePickerDialog> {
-  List<_FolderNode> _roots = const [];
+  List<FolderNode> _roots = const [];
   List<Mailbox> _mailboxes = const [];
   String? _initialDisplayPath;
   final Set<String> _expanded = {};
@@ -84,7 +85,7 @@ class _FolderTreePickerDialogState
         final data = snap.data;
         if (data != null) {
           _mailboxes = data;
-          _roots = _buildTree(data);
+          _roots = buildFolderTree(data);
           if (!_resolved) {
             _initialDisplayPath = _resolveInitial(data, widget.initialPath);
             final init = _initialDisplayPath;
@@ -149,7 +150,7 @@ class _FolderTreePickerDialogState
     return initial;
   }
 
-  Widget _buildRow(_FolderNode node, {required int depth}) {
+  Widget _buildRow(FolderNode node, {required int depth}) {
     final hasChildren = node.children.isNotEmpty;
     final isExpanded = _expanded.contains(node.key);
     final isSelected =
@@ -369,76 +370,4 @@ class _NewFolderDialogState extends State<_NewFolderDialog> {
       ],
     );
   }
-}
-
-class _FolderNode {
-  _FolderNode({required this.key, required this.label});
-
-  /// Unique key for expansion tracking — equals the joined displayPath prefix.
-  final String key;
-  final String label;
-
-  /// The mailbox's `displayPath` when this node corresponds to a real
-  /// mailbox. `null` means the node is a phantom parent inferred from a
-  /// child's path components.
-  String? displayPath;
-  final Map<String, _FolderNode> _children = {};
-
-  List<_FolderNode> get children => _children.values.toList(growable: false);
-}
-
-/// Builds a hierarchy by splitting each [Mailbox.displayPath] on `/`.
-/// Mailboxes that share a prefix become siblings under a common parent;
-/// intermediate components that do not exist as real mailboxes become phantom
-/// parents. Roots are sorted with [compareMailboxes] when both have a backing
-/// mailbox, alphabetically otherwise.
-List<_FolderNode> _buildTree(List<Mailbox> mailboxes) {
-  final roots = <String, _FolderNode>{};
-  final byDisplayPath = {for (final m in mailboxes) m.displayPath: m};
-
-  for (final m in mailboxes) {
-    final parts = m.displayPath.split('/');
-    Map<String, _FolderNode> level = roots;
-    final prefix = <String>[];
-    for (var i = 0; i < parts.length; i++) {
-      prefix.add(parts[i]);
-      final key = prefix.join('/');
-      final isLeaf = i == parts.length - 1;
-      final node = level.putIfAbsent(
-        key,
-        () => _FolderNode(key: key, label: parts[i]),
-      );
-      if (isLeaf) node.displayPath = m.displayPath;
-      level = node._children;
-    }
-  }
-
-  final sortedRoots = roots.values.toList()
-    ..sort((a, b) => _compareNodes(a, b, byDisplayPath));
-  for (final node in sortedRoots) {
-    _sortDescendants(node, byDisplayPath);
-  }
-  return sortedRoots;
-}
-
-void _sortDescendants(_FolderNode node, Map<String, Mailbox> byDisplayPath) {
-  final sorted = node._children.values.toList()
-    ..sort((a, b) => _compareNodes(a, b, byDisplayPath));
-  node._children
-    ..clear()
-    ..addEntries(sorted.map((c) => MapEntry(c.key, c)));
-  for (final c in node._children.values) {
-    _sortDescendants(c, byDisplayPath);
-  }
-}
-
-int _compareNodes(
-  _FolderNode a,
-  _FolderNode b,
-  Map<String, Mailbox> byDisplayPath,
-) {
-  final ma = a.displayPath == null ? null : byDisplayPath[a.displayPath];
-  final mb = b.displayPath == null ? null : byDisplayPath[b.displayPath];
-  if (ma != null && mb != null) return compareMailboxes(ma, mb);
-  return a.label.toLowerCase().compareTo(b.label.toLowerCase());
 }
