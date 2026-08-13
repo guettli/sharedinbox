@@ -6,15 +6,15 @@ import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 import 'helpers.dart';
 
 PendingChange _pendingChange({int id = 1}) => PendingChange(
-  id: id,
-  accountId: kTestAccount.id,
-  kind: 'flag_seen',
-  resourceType: 'Email',
-  resourceId: 'acc-1:42',
-  payload: '{"seen": true}',
-  createdAt: DateTime(2024, 6),
-  attempts: 0,
-);
+      id: id,
+      accountId: kTestAccount.id,
+      kind: 'flag_seen',
+      resourceType: 'Email',
+      resourceId: 'acc-1:42',
+      payload: '{"seen": true}',
+      createdAt: DateTime(2024, 6),
+      attempts: 0,
+    );
 
 /// Pumps the account list with a single [kTestAccount] and the given
 /// [pendingChanges], then settles. Keeps the pending-changes tests free of
@@ -280,7 +280,8 @@ void main() {
       expect(find.textContaining('Healthy'), findsOneWidget);
     });
 
-    testWidgets('shows discrepancy details when sync health has discrepancies', (
+    testWidgets('shows discrepancy details when sync health has discrepancies',
+        (
       tester,
     ) async {
       const summary =
@@ -337,9 +338,8 @@ void main() {
         );
 
         final namePos = tester.getTopLeft(find.text('Alice')).dy;
-        final pendingPos = tester
-            .getTopLeft(find.text('Pending changes: 1'))
-            .dy;
+        final pendingPos =
+            tester.getTopLeft(find.text('Pending changes: 1')).dy;
         expect(pendingPos, greaterThan(namePos));
       },
     );
