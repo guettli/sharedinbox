@@ -208,21 +208,7 @@ void main() {
     testWidgets(
       'choosing Diagnose navigates to the folder diagnostics screen',
       (tester) async {
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/mailboxes',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository([kTestMailbox]),
-              ),
-              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
+        await _pumpMailboxList(tester, [kTestMailbox]);
 
         await tester.longPress(find.text('INBOX').first);
         await tester.pumpAndSettle();

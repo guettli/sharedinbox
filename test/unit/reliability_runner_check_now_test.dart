@@ -144,20 +144,8 @@ class _FakeEmails implements EmailRepository {
   }
 
   @override
-  Future<MailboxDiagnostics> diagnoseMailbox(
-    String accountId,
-    String mailboxPath,
-  ) async {
-    return MailboxDiagnostics(
-      accountId: accountId,
-      mailboxPath: mailboxPath,
-      protocol: 'IMAP',
-      cachedTotal: 0,
-      cachedUnread: 0,
-      localEmailRows: 0,
-      localThreadRows: 0,
-    );
-  }
+  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
+      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
 
   // All remaining methods are unused by ReliabilityRunner.
   @override

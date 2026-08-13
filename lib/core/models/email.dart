@@ -439,6 +439,23 @@ class MailboxDiagnostics {
     this.error,
   });
 
+  /// A zero-valued snapshot (all counts 0, server not consulted). Convenience
+  /// for test doubles that satisfy the interface without exercising the check.
+  factory MailboxDiagnostics.empty({
+    required String accountId,
+    required String mailboxPath,
+    String protocol = 'IMAP',
+  }) =>
+      MailboxDiagnostics(
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        protocol: protocol,
+        cachedTotal: 0,
+        cachedUnread: 0,
+        localEmailRows: 0,
+        localThreadRows: 0,
+      );
+
   final String accountId;
   final String mailboxPath;
 
