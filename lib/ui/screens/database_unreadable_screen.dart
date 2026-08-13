@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:sharedinbox/ui/widgets/error_details_actions.dart';
 
 /// Full-screen fallback shown by `main()` when the local mail-cache database
 /// cannot be opened at startup (see [probeDatabase]). Unlike the generic
@@ -106,56 +105,10 @@ class DatabaseUnreadableScreen extends StatelessWidget {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: AppSpacing.xl),
-                const Text(
-                  'Error Details:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Container(
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${result.error ?? 'unknown error'}',
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                FilledButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(text: '$_title\n\n${result.error}'),
-                    );
-                    if (ctx.mounted) {
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(
-                          duration: Duration(seconds: 5),
-                          content: Text('Copied to clipboard'),
-                        ),
-                      );
-                    }
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy to Clipboard'),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final title = Uri.encodeComponent(
-                      'Cannot open DB: $_title',
-                    );
-                    final url = Uri.parse(
-                      'https://github.com/guettli/sharedinbox/issues/new?title=$title',
-                    );
-                    await launchUrl(url, mode: LaunchMode.externalApplication);
-                  },
-                  icon: const Icon(Icons.bug_report),
-                  label: const Text('Report Issue on GitHub'),
+                ErrorDetailsActions(
+                  detail: '${result.error ?? 'unknown error'}',
+                  issueTitle: 'Cannot open DB: $_title',
+                  buildReport: () async => '$_title\n\n${result.error}',
                 ),
                 if (_showDelete) ...[
                   const SizedBox(height: AppSpacing.xl),
