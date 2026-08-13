@@ -6449,7 +6449,8 @@ void main() {
       expect(d.missingOnServer, ['acc-1:9']);
     });
 
-    test('counts orphaned thread rows and no longer reports "no '
+    test(
+        'counts orphaned thread rows and no longer reports "no '
         'discrepancies" (#523)', () async {
       // Cached/server/local all agree at 1 message, but the folder carries
       // extra thread rows backed by no email — the reported symptom.
