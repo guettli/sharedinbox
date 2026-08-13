@@ -25,6 +25,21 @@ class _ThrowingSecureStorage implements SecureStorage {
   Future<void> delete({required String key}) async {}
 }
 
+/// SecureStorage whose write silently no-ops and whose read always returns
+/// null — mimicking libsecret with no running keyring daemon. Used to prove
+/// the key round-trip check aborts before the DB is rewritten, so we never end
+/// up with an encrypted file whose key nobody has.
+class _NoOpWriteSecureStorage implements SecureStorage {
+  @override
+  Future<String?> read({required String key}) async => null;
+
+  @override
+  Future<void> write({required String key, required String? value}) async {}
+
+  @override
+  Future<void> delete({required String key}) async {}
+}
+
 /// The 16-byte plaintext SQLite header — the ASCII string "SQLite format 3"
 /// followed by a single NUL byte (see https://sqlite.org/fileformat.html).
 /// SQLCipher stores a random 16-byte salt at the same offset, so a header
@@ -33,24 +48,19 @@ final Uint8List _plaintextMagic = Uint8List.fromList(
   <int>[...'SQLite format 3'.codeUnits, 0],
 );
 
-/// True when the linked sqlite3 library is actually SQLCipher. Plain sqlite3
-/// silently ignores unknown pragmas and returns an empty ResultSet for
-/// `PRAGMA cipher_version`, so we treat any non-empty row as proof. Returns
-/// false when the sqlite3 native library itself is not loadable — most CI
-/// hosts only ship `libsqlite3.so.0` (versioned SONAME), which the sqlite3
-/// Dart package can't resolve, and in that case there is nothing to test.
-bool _sqlcipherAvailable() {
-  sqlite.Database? db;
+/// The SQLCipher version string reported by the linked sqlite3. Plain sqlite3
+/// silently ignores `PRAGMA cipher_version` and returns an empty ResultSet, so
+/// an empty value means the `source: sqlcipher` build hook is not in effect —
+/// which, since the migration to package:sqlite3's bundled SQLCipher (#436),
+/// is a build regression that must fail CI, not a reason to skip.
+String _cipherVersion() {
+  final db = sqlite.sqlite3.openInMemory();
   try {
-    db = sqlite.sqlite3.openInMemory();
     final rows = db.select('PRAGMA cipher_version;');
-    if (rows.isEmpty) return false;
-    final v = rows.first.values.first;
-    return v != null && v.toString().isNotEmpty;
-  } catch (_) {
-    return false;
+    if (rows.isEmpty) return '';
+    return rows.first.values.first?.toString() ?? '';
   } finally {
-    db?.close();
+    db.close();
   }
 }
 
@@ -65,6 +75,19 @@ void main() {
 
   tearDown(() {
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+  });
+
+  // Loud, single assertion that the bundled SQLCipher hook is actually in
+  // effect. If it regresses, every test in this file fails here rather than
+  // silently skipping the encryption round-trips (the pre-#436 behaviour).
+  setUpAll(() {
+    expect(
+      _cipherVersion(),
+      isNotEmpty,
+      reason: 'sqlite3 is not linked against SQLCipher — check the '
+          '`hooks: user_defines: sqlite3: source: sqlcipher` block in '
+          'pubspec.yaml.',
+    );
   });
 
   group('processPendingDbEncryptionChange — pure Dart branches', () {
@@ -155,21 +178,32 @@ void main() {
         expect(isDbEncrypted(dbPath), isFalse);
       },
     );
+
+    test(
+      'enable aborts without rewriting the DB when the key will not persist',
+      () async {
+        // A silently-failed key write followed by a successful encrypt is
+        // permanent data loss (an encrypted file whose key nobody has), so the
+        // migration must verify the key round-trips first and abort otherwise.
+        final storage = _NoOpWriteSecureStorage();
+        File(dbPath).writeAsBytesSync(_plaintextMagic);
+        writePendingEncryptionChange(dbPath, PendingEncryptionChange.enable);
+
+        await expectLater(
+          processPendingDbEncryptionChange(dbPath: dbPath, storage: storage),
+          throwsA(isA<StateError>()),
+        );
+
+        // Marker cleared, DB left plaintext and byte-for-byte untouched.
+        expect(readPendingEncryptionChange(dbPath), isNull);
+        expect(isDbEncrypted(dbPath), isFalse);
+        expect(File(dbPath).readAsBytesSync(), _plaintextMagic);
+      },
+    );
   });
 
   group('processPendingDbEncryptionChange — SQLCipher round-trip', () {
-    late bool sqlcipher;
-
-    setUpAll(() {
-      sqlcipher = _sqlcipherAvailable();
-    });
-
     test('enable rewrites a plaintext DB into an encrypted one', () async {
-      if (!sqlcipher) {
-        markTestSkipped('SQLCipher not linked into sqlite3 on this host.');
-        return;
-      }
-
       // Seed a plaintext DB with known content.
       final seed = sqlite.sqlite3.open(dbPath);
       seed.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);');
@@ -220,11 +254,6 @@ void main() {
     });
 
     test('disable rewrites an encrypted DB back to plaintext', () async {
-      if (!sqlcipher) {
-        markTestSkipped('SQLCipher not linked into sqlite3 on this host.');
-        return;
-      }
-
       // Seed a plaintext DB, then enable encryption.
       final seed = sqlite.sqlite3.open(dbPath);
       seed.execute('CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT);');
@@ -273,20 +302,9 @@ void main() {
   });
 
   group('setupPragmasForTesting — cipher key path', () {
-    late bool sqlcipher;
-
-    setUpAll(() {
-      sqlcipher = _sqlcipherAvailable();
-    });
-
     test(
       'a correct key unlocks the DB so subsequent reads succeed',
       () async {
-        if (!sqlcipher) {
-          markTestSkipped('SQLCipher not linked into sqlite3 on this host.');
-          return;
-        }
-
         // Create an encrypted DB via the production migration path so the
         // on-disk format matches what _openConnection expects at runtime.
         final storage = FakeSecureStorage();
@@ -312,11 +330,6 @@ void main() {
     );
 
     test('a wrong key leaves the DB unreadable', () async {
-      if (!sqlcipher) {
-        markTestSkipped('SQLCipher not linked into sqlite3 on this host.');
-        return;
-      }
-
       // Encrypt with one key, then try to open with a fresh one.
       final storage = FakeSecureStorage();
       final seed = sqlite.sqlite3.open(dbPath);
