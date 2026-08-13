@@ -238,6 +238,21 @@ class _CountingEmails implements EmailRepository {
   ) async =>
       ReliabilityResult.healthy;
   @override
+  Future<MailboxDiagnostics> diagnoseMailbox(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    return MailboxDiagnostics(
+      accountId: accountId,
+      mailboxPath: mailboxPath,
+      protocol: 'IMAP',
+      cachedTotal: 0,
+      cachedUnread: 0,
+      localEmailRows: 0,
+      localThreadRows: 0,
+    );
+  }
+  @override
   Future<void> clearForResync(String accountId) async {}
   @override
   Future<int> applySieveRules(String accountId) async => 0;

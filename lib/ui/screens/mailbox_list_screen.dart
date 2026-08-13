@@ -163,6 +163,12 @@ Future<void> _showFolderActions(
             onTap: () => Navigator.pop(ctx, _FolderAction.move),
           ),
           ListTile(
+            leading: const Icon(Icons.bug_report_outlined),
+            title: const Text('Diagnose'),
+            subtitle: const Text('Compare folder count with the server'),
+            onTap: () => Navigator.pop(ctx, _FolderAction.diagnose),
+          ),
+          ListTile(
             leading: Icon(
               Icons.delete_outline,
               color: Theme.of(ctx).colorScheme.error,
@@ -184,12 +190,17 @@ Future<void> _showFolderActions(
       await _promptRename(context, ref, repo, accountId, mailbox);
     case _FolderAction.move:
       await _promptMove(context, ref, repo, accountId, mailbox);
+    case _FolderAction.diagnose:
+      await context.push(
+        '/accounts/$accountId/mailboxes/'
+        '${Uri.encodeComponent(mailbox.path)}/diagnostics',
+      );
     case _FolderAction.delete:
       await _promptDelete(context, ref, repo, accountId, mailbox);
   }
 }
 
-enum _FolderAction { rename, move, delete }
+enum _FolderAction { rename, move, diagnose, delete }
 
 Future<void> _promptRename(
   BuildContext context,

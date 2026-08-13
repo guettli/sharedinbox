@@ -406,3 +406,130 @@ class FlagMismatch {
   final bool serverFlagged;
   final bool localFlagged;
 }
+
+/// A folder-scoped diagnostic snapshot, produced on demand (long-press a folder
+/// → "Diagnose") to explain why a folder's cached message count can disagree
+/// with what the folder actually holds — the symptom reported in #511, where a
+/// folder shows a count of `0` yet opening it reveals messages.
+///
+/// It lines up three sources of truth for one mailbox:
+///   * the **cached** count shown in the folder list ([cachedTotal] /
+///     [cachedUnread], read straight from the `mailboxes` row),
+///   * the **local** cache ([localEmailRows] / [localThreadRows]), and
+///   * the **server's** live view ([serverTotal] / [serverUnread] /
+///     [serverMessageCount], fetched over IMAP or JMAP).
+///
+/// When the server cannot be reached [error] is populated and the server-side
+/// figures stay null, so the report degrades to the local numbers instead of
+/// failing outright.
+class MailboxDiagnostics {
+  const MailboxDiagnostics({
+    required this.accountId,
+    required this.mailboxPath,
+    required this.protocol,
+    required this.cachedTotal,
+    required this.cachedUnread,
+    required this.localEmailRows,
+    required this.localThreadRows,
+    this.serverTotal,
+    this.serverUnread,
+    this.serverMessageCount,
+    this.missingLocally = const [],
+    this.missingOnServer = const [],
+    this.error,
+  });
+
+  final String accountId;
+  final String mailboxPath;
+
+  /// `IMAP` or `JMAP` — the account's protocol, shown in the report.
+  final String protocol;
+
+  /// The total/unread counts cached in the `mailboxes` row — i.e. exactly the
+  /// numbers the folder list renders.
+  final int cachedTotal;
+  final int cachedUnread;
+
+  /// How many rows the local cache actually holds for this mailbox.
+  final int localEmailRows;
+  final int localThreadRows;
+
+  /// The server's own total/unread counts (IMAP `SELECT`/`STATUS`, JMAP
+  /// `Mailbox/get` `totalEmails`/`unreadEmails`). Null when [error] is set.
+  final int? serverTotal;
+  final int? serverUnread;
+
+  /// The number of messages the server actually lists for this mailbox (IMAP
+  /// `UID SEARCH ALL`, JMAP `Email/query inMailbox`). Null when [error] is set.
+  final int? serverMessageCount;
+
+  /// Server message ids/UIDs absent from the local cache.
+  final List<String> missingLocally;
+
+  /// Locally cached ids no longer present on the server.
+  final List<String> missingOnServer;
+
+  /// Non-null when the live server check could not complete; the server-side
+  /// figures are then unavailable.
+  final String? error;
+
+  /// Whether the live server check completed and produced counts.
+  bool get reachedServer => error == null && serverMessageCount != null;
+
+  /// Plain-English observations describing any mismatch between the cached
+  /// folder count, the local cache and the server's live message list. Empty
+  /// only in the (impossible) case that nothing at all could be said.
+  List<String> get conclusions {
+    final out = <String>[];
+    if (error != null) {
+      out.add(
+        'Could not reach the server ($error). '
+        'The figures below reflect only the local cache.',
+      );
+      return out;
+    }
+    final serverCount = serverMessageCount;
+    if (serverCount != null) {
+      if (cachedTotal == 0 && serverCount > 0) {
+        out.add(
+          'The folder count shows 0 but the server holds $serverCount '
+          'message(s) — the cached count is stale. Re-fetch counts or resync '
+          'this folder to fix it.',
+        );
+      } else if (cachedTotal != serverCount) {
+        out.add(
+          'The cached folder count ($cachedTotal) does not match the '
+          "server's live count ($serverCount).",
+        );
+      }
+      if (missingLocally.isNotEmpty) {
+        out.add(
+          '${missingLocally.length} message(s) are on the server but not '
+          'cached locally — a resync will download them.',
+        );
+      }
+      if (missingOnServer.isNotEmpty) {
+        out.add(
+          '${missingOnServer.length} locally cached message(s) are no longer '
+          'on the server — a resync will remove them.',
+        );
+      }
+      if (serverCount == 0 && localEmailRows == 0) {
+        out.add('This folder is empty on the server and locally.');
+      }
+    }
+    if (cachedTotal == 0 && localEmailRows > 0) {
+      out.add(
+        'The folder count shows 0 but $localEmailRows message(s) are cached '
+        'locally — the cached count is out of date.',
+      );
+    }
+    if (out.isEmpty) {
+      out.add(
+        'No discrepancies found — the cached count matches the server and the '
+        'local cache.',
+      );
+    }
+    return out;
+  }
+}

@@ -200,7 +200,36 @@ void main() {
 
         expect(find.text('Rename'), findsOneWidget);
         expect(find.text('Move'), findsOneWidget);
+        expect(find.text('Diagnose'), findsOneWidget);
         expect(find.text('Delete'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'choosing Diagnose navigates to the folder diagnostics screen',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('INBOX').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Diagnose'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Folder diagnostics'), findsOneWidget);
       },
     );
 
