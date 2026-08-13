@@ -345,9 +345,16 @@ void main() {
       final wrong = generateDbCipherKeyHex();
       final db = sqlite.sqlite3.open(dbPath);
       try {
-        setupPragmasForTesting(db, cipherKeyHex: wrong);
+        // A wrong key must leave the DB unreadable. With the bundled SQLCipher
+        // the failure can surface either while applying the pragmas
+        // (journal_mode = WAL reads the header, which cannot be decrypted) or
+        // on the first query — assert the combined operation throws, which
+        // holds regardless of which statement trips first.
         expect(
-          () => db.select('SELECT x FROM t;'),
+          () {
+            setupPragmasForTesting(db, cipherKeyHex: wrong);
+            db.select('SELECT x FROM t;');
+          },
           throwsA(isA<sqlite.SqliteException>()),
         );
       } finally {
