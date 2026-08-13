@@ -1585,42 +1585,54 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     final flagMismatches = <model.FlagMismatch>[];
-    if (allServerIds.isNotEmpty && allServerIds.length < 5000) {
-      final responses = await jmap.call([
-        [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            'ids': allServerIds,
-            'properties': ['id', 'keywords'],
-          },
-          '0',
-        ],
-      ]);
-      final getResult = _responseArgs(responses, 0, 'Email/get');
-      final list = getResult['list'] as List<dynamic>;
+    if (allServerIds.isNotEmpty) {
       final localMap = {for (final r in localRows) r.id.split(':').last: r};
 
-      for (final e in list) {
-        final m = e as Map<String, dynamic>;
-        final id = m['id'] as String;
-        final local = localMap[id];
-        if (local == null) continue;
+      // Fetch keywords in pages: sending every id in a single Email/get can
+      // exceed the server's maxObjectsInGet and fail with requestTooLarge
+      // (see #513). Mirror the batching used elsewhere in this file.
+      for (var offset = 0;
+          offset < allServerIds.length;
+          offset += _jmapPageSize) {
+        final batch = allServerIds.sublist(
+          offset,
+          math.min(offset + _jmapPageSize, allServerIds.length),
+        );
+        final responses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': batch,
+              'properties': ['id', 'keywords'],
+            },
+            '0',
+          ],
+        ]);
+        final getResult = _responseArgs(responses, 0, 'Email/get');
+        final list = getResult['list'] as List<dynamic>;
 
-        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
-        final serverSeen = keywords.containsKey(r'$seen');
-        final serverFlagged = keywords.containsKey(r'$flagged');
+        for (final e in list) {
+          final m = e as Map<String, dynamic>;
+          final id = m['id'] as String;
+          final local = localMap[id];
+          if (local == null) continue;
 
-        if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
-          flagMismatches.add(
-            model.FlagMismatch(
-              id: local.id,
-              serverSeen: serverSeen,
-              localSeen: local.isSeen,
-              serverFlagged: serverFlagged,
-              localFlagged: local.isFlagged,
-            ),
-          );
+          final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+          final serverSeen = keywords.containsKey(r'$seen');
+          final serverFlagged = keywords.containsKey(r'$flagged');
+
+          if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
+            flagMismatches.add(
+              model.FlagMismatch(
+                id: local.id,
+                serverSeen: serverSeen,
+                localSeen: local.isSeen,
+                serverFlagged: serverFlagged,
+                localFlagged: local.isFlagged,
+              ),
+            );
+          }
         }
       }
     }
@@ -2337,25 +2349,24 @@ class EmailRepositoryImpl implements EmailRepository {
     final htmlBodyParts = m['htmlBody'] as List<dynamic>? ?? [];
     final jmapAttachments = m['attachments'] as List<dynamic>? ?? [];
 
-    String? textBody;
-    if (textBodyParts.isNotEmpty) {
-      final partId =
-          (textBodyParts.first as Map<String, dynamic>)['partId'] as String?;
-      if (partId != null) {
-        textBody =
-            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
-      }
-    }
-
-    String? htmlBody;
-    if (htmlBodyParts.isNotEmpty) {
-      final partId =
-          (htmlBodyParts.first as Map<String, dynamic>)['partId'] as String?;
-      if (partId != null) {
-        htmlBody =
-            (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
-      }
-    }
+    // JMAP's `textBody`/`htmlBody` fall back to the other representation when
+    // the message has only one part: an HTML-only mail lists its `text/html`
+    // part in `textBody`, and a plain-only mail lists its `text/plain` part in
+    // `htmlBody` (RFC 8621 §4.1.4). Storing those cross-typed parts would put
+    // raw HTML into `textBody` (and vice versa), which the IMAP path never does
+    // — `decodeTextPlainPart()`/`decodeTextHtmlPart()` are type-specific and
+    // return null when the matching part is absent. Guard on the part's `type`
+    // so both sync paths agree (#514).
+    final textBody = _jmapBodyValueOfType(
+      textBodyParts,
+      bodyValues,
+      'text/plain',
+    );
+    final htmlBody = _jmapBodyValueOfType(
+      htmlBodyParts,
+      bodyValues,
+      'text/html',
+    );
 
     final attachmentsJson = jsonEncode(
       jmapAttachments.map((a) {
@@ -2370,6 +2381,28 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     return (textBody, htmlBody, attachmentsJson);
+  }
+
+  @visibleForTesting
+  (String? textBody, String? htmlBody, String attachmentsJson)
+      parseJmapBodyForTest(Map<String, dynamic> m) => _parseJmapBody(m);
+
+  /// Resolves the decoded value of the first [bodyParts] entry, but only when
+  /// its MIME `type` equals [expectedType]. Returns null otherwise, so a
+  /// cross-typed fallback part (HTML listed under `textBody`, or plain text
+  /// listed under `htmlBody`) is not stored as if it were the other kind.
+  static String? _jmapBodyValueOfType(
+    List<dynamic> bodyParts,
+    Map<String, dynamic> bodyValues,
+    String expectedType,
+  ) {
+    if (bodyParts.isEmpty) return null;
+    final part = bodyParts.first as Map<String, dynamic>;
+    final type = (part['type'] as String?)?.toLowerCase();
+    if (type != expectedType) return null;
+    final partId = part['partId'] as String?;
+    if (partId == null) return null;
+    return (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
   }
 
   // ── Pending-change helpers ────────────────────────────────────────────────
