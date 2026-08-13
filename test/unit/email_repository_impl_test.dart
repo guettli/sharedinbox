@@ -627,7 +627,7 @@ void main() {
           AccountRepositoryImpl accounts,
           EmailRepositoryImpl emails
         }) r, {
-        int orphanCount = 17,
+        required int orphanCount,
       }) async {
         await r.accounts.addAccount(_account, 'pw');
 

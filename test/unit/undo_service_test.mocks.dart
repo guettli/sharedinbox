@@ -690,6 +690,22 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<_i2.MailboxDiagnostics>);
 
   @override
+  _i4.Future<int> sweepOrphanThreads(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #sweepOrphanThreads,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i4.Future<int>.value(0),
+      ) as _i4.Future<int>);
+
+  @override
   _i4.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #clearForResync,
