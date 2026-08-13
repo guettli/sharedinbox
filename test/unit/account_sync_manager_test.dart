@@ -206,6 +206,10 @@ class FakeEmailRepository implements EmailRepository {
       ReliabilityResult.healthy;
 
   @override
+  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
+      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
+
+  @override
   Future<void> clearForResync(String accountId) async {}
 
   @override

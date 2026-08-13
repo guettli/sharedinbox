@@ -914,6 +914,13 @@
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 735,
+      "end_line": 749,
+      "key": "f89a953ac94d5ee4"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
       "start_line": 746,
       "end_line": 757,
       "key": "a6dcb239acf6c955"
@@ -1309,6 +1316,13 @@
       "start_line": 183,
       "end_line": 206,
       "key": "ac834f9d26be3edf"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/account_sync_manager_test.dart",
+      "start_line": 199,
+      "end_line": 213,
+      "key": "f89a953ac94d5ee4"
     },
     {
       "tool": "jscpd",

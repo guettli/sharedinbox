@@ -51,6 +51,7 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/folder_diagnostics_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
@@ -568,6 +569,10 @@ class FakeEmailRepository implements EmailRepository {
       ReliabilityResult.healthy;
 
   @override
+  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
+      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
+
+  @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
       Stream.value([]);
 
@@ -741,6 +746,13 @@ Widget buildApp({
                     ),
                   ),
                 ],
+              ),
+              GoRoute(
+                path: ':mailboxPath/diagnostics',
+                builder: (ctx, state) => FolderDiagnosticsScreen(
+                  accountId: state.pathParameters['accountId']!,
+                  mailboxPath: state.pathParameters['mailboxPath']!,
+                ),
               ),
               GoRoute(
                 path: ':mailboxPath/threads/:threadId',

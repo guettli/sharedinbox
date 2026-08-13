@@ -186,6 +186,16 @@ abstract class EmailRepository {
     String mailboxPath,
   );
 
+  /// Gathers an on-demand diagnostic snapshot for a single folder, lining up
+  /// the cached folder count, the local cache and the server's live view so a
+  /// discrepancy (e.g. a folder that shows 0 yet contains mail, #511) is
+  /// explained rather than silent. A failed server check is reported via
+  /// [MailboxDiagnostics.error] instead of throwing.
+  Future<MailboxDiagnostics> diagnoseMailbox(
+    String accountId,
+    String mailboxPath,
+  );
+
   /// Deletes all locally-cached email rows and pending changes for [accountId],
   /// while preserving EmailBodies so already-downloaded content is not lost.
   /// Also resets sync-state checkpoints so the next sync fetches everything fresh.

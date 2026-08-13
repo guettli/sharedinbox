@@ -6168,6 +6168,230 @@ void main() {
       expect(emailRow.preview, 'Existing preview');
     });
   });
+
+  group('diagnoseMailbox (#511)', () {
+    Future<void> insertMailboxRow(
+      AppDatabase db,
+      String accountId,
+      String path, {
+      int total = 0,
+      int unread = 0,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$accountId:$path',
+                accountId: accountId,
+                path: path,
+                name: path,
+                totalCount: Value(total),
+                unreadCount: Value(unread),
+              ),
+            );
+
+    Future<void> insertEmailRow(
+      AppDatabase db,
+      String accountId,
+      String path,
+      int uid,
+    ) =>
+        db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: '$accountId:$uid',
+                accountId: accountId,
+                mailboxPath: path,
+                uid: uid,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+    test('surfaces a stale zero IMAP folder count', () async {
+      final client = _DiagnosticsImapClient(
+        exists: 3,
+        allUids: [1, 2, 3],
+        unseenUids: [1],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => client);
+      await r.accounts.addAccount(_account, 'pw');
+      // Cached count is 0 even though the folder holds three messages (#511).
+      await insertMailboxRow(r.db, 'acc-1', 'INBOX');
+      for (final uid in [1, 2, 3]) {
+        await insertEmailRow(r.db, 'acc-1', 'INBOX', uid);
+      }
+
+      final d = await r.emails.diagnoseMailbox('acc-1', 'INBOX');
+
+      expect(d.protocol, 'IMAP');
+      expect(d.cachedTotal, 0);
+      expect(d.localEmailRows, 3);
+      expect(d.serverTotal, 3);
+      expect(d.serverUnread, 1);
+      expect(d.serverMessageCount, 3);
+      expect(d.missingLocally, isEmpty);
+      expect(d.missingOnServer, isEmpty);
+      expect(d.error, isNull);
+      expect(d.reachedServer, isTrue);
+      expect(d.conclusions.first, contains('shows 0'));
+    });
+
+    test('detects IMAP messages missing locally and on the server', () async {
+      final client = _DiagnosticsImapClient(
+        exists: 2,
+        allUids: [1, 2],
+        unseenUids: [],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => client);
+      await r.accounts.addAccount(_account, 'pw');
+      // Local cache holds uid 1 (also on the server) and a ghost uid 9.
+      await insertEmailRow(r.db, 'acc-1', 'INBOX', 1);
+      await insertEmailRow(r.db, 'acc-1', 'INBOX', 9);
+
+      final d = await r.emails.diagnoseMailbox('acc-1', 'INBOX');
+
+      expect(d.serverMessageCount, 2);
+      expect(d.missingLocally, ['2']);
+      expect(d.missingOnServer, ['acc-1:9']);
+    });
+
+    test('surfaces a stale zero JMAP folder count', () async {
+      final r = _makeRepos(httpClient: _mockJmapDiagnostics());
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await insertMailboxRow(r.db, 'jmap-1', 'a');
+
+      final d = await r.emails.diagnoseMailbox('jmap-1', 'a');
+
+      expect(d.protocol, 'JMAP');
+      expect(d.cachedTotal, 0);
+      expect(d.serverTotal, 5);
+      expect(d.serverUnread, 2);
+      expect(d.serverMessageCount, 5);
+      expect(d.missingLocally, hasLength(5));
+      expect(d.missingOnServer, isEmpty);
+      expect(d.reachedServer, isTrue);
+      expect(d.conclusions.first, contains('shows 0'));
+    });
+
+    test('reports the error when the server cannot be reached', () async {
+      // Default _makeRepos uses an IMAP connect that always throws.
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await insertMailboxRow(r.db, 'acc-1', 'INBOX');
+      await insertEmailRow(r.db, 'acc-1', 'INBOX', 1);
+      await insertEmailRow(r.db, 'acc-1', 'INBOX', 2);
+
+      final d = await r.emails.diagnoseMailbox('acc-1', 'INBOX');
+
+      expect(d.error, isNotNull);
+      expect(d.serverMessageCount, isNull);
+      expect(d.reachedServer, isFalse);
+      expect(d.localEmailRows, 2);
+      expect(d.conclusions.first, contains('Could not reach the server'));
+    });
+  });
+}
+
+// ── Fakes for folder diagnostics tests (#511) ────────────────────────────────
+
+/// IMAP fake that reports an EXISTS count and answers `UID SEARCH ALL/UNSEEN`
+/// from fixed uid lists, so [EmailRepositoryImpl.diagnoseMailbox] sees the
+/// same figures a real server would return for a SELECTed mailbox.
+class _DiagnosticsImapClient extends FakeImapClient {
+  _DiagnosticsImapClient({
+    required this.exists,
+    required this.allUids,
+    required this.unseenUids,
+  });
+
+  final int exists;
+  final List<int> allUids;
+  final List<int> unseenUids;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+        messagesExists: exists,
+      );
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    final hits = searchCriteria == 'UNSEEN' ? unseenUids : allUids;
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
+  }
+}
+
+/// Mock JMAP transport returning a session, one `Mailbox/get` (total 5,
+/// unread 2) and one `Email/query` (five ids) — a folder whose cached count
+/// has drifted to zero while the server still holds messages.
+http.Client _mockJmapDiagnostics() {
+  var callIndex = 0;
+  final apiResponses = <Map<String, dynamic>>[
+    {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'Mailbox/get',
+          {
+            'accountId': 'acct1',
+            'state': 'mbstate',
+            'list': [
+              {'id': 'a', 'totalEmails': 5, 'unreadEmails': 2},
+            ],
+          },
+          '0',
+        ],
+      ],
+    },
+    {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'Email/query',
+          {
+            'accountId': 'acct1',
+            'ids': ['e1', 'e2', 'e3', 'e4', 'e5'],
+            'total': 5,
+            'position': 0,
+          },
+          '0',
+        ],
+      ],
+    },
+  ];
+  return MockClient((req) async {
+    if (req.url.path.contains('well-known')) {
+      return http.Response(
+        jsonEncode({
+          'apiUrl': 'https://jmap.example.com/api/',
+          'accounts': {
+            'acct1': {'name': 'alice@example.com', 'isPersonal': true},
+          },
+          'primaryAccounts': {
+            'urn:ietf:params:jmap:core': 'acct1',
+            'urn:ietf:params:jmap:mail': 'acct1',
+          },
+          'capabilities': {},
+          'username': 'alice@example.com',
+          'state': 'sess1',
+        }),
+        200,
+      );
+    }
+    final resp = apiResponses[callIndex % apiResponses.length];
+    callIndex++;
+    return http.Response(jsonEncode(resp), 200);
+  });
 }
 
 // ── Fakes for IMAP send hang protection tests ────────────────────────────────

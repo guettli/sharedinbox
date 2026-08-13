@@ -143,6 +143,10 @@ class _FakeEmails implements EmailRepository {
     return ReliabilityResult.healthy;
   }
 
+  @override
+  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
+      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
+
   // All remaining methods are unused by ReliabilityRunner.
   @override
   Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>

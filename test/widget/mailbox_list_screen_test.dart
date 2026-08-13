@@ -200,7 +200,22 @@ void main() {
 
         expect(find.text('Rename'), findsOneWidget);
         expect(find.text('Move'), findsOneWidget);
+        expect(find.text('Diagnose'), findsOneWidget);
         expect(find.text('Delete'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'choosing Diagnose navigates to the folder diagnostics screen',
+      (tester) async {
+        await _pumpMailboxList(tester, [kTestMailbox]);
+
+        await tester.longPress(find.text('INBOX').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Diagnose'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Folder diagnostics'), findsOneWidget);
       },
     );
 
