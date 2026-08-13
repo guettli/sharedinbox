@@ -7,16 +7,16 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
   flutter: '>=3.22.0'
 
-# Tell sqlite3's native-assets hook to resolve its FFI bindings against
-# libsqlcipher.so on Android (provided by sqlcipher_flutter_libs via Gradle)
-# instead of the default plain sqlite3 binary it would otherwise download and
-# bundle. Without this, PRAGMA key silently no-ops and any previously-encrypted
-# database appears corrupt, crashing the app on startup.
+# package:sqlite3's build hook downloads and bundles a SQLCipher build for every
+# target platform (Android, Linux, iOS/macOS/Windows). SQLCipher gives the Drift
+# database AES-256 page-level encryption once `PRAGMA key` is issued in
+# _setupPragmas; without a key it behaves exactly like plain SQLite, so
+# unencrypted installs are unaffected. OpenSSL is statically linked into the
+# downloaded library, so there is no runtime libcrypto dependency.
 hooks:
   user_defines:
     sqlite3:
-      source: system
-      name_android: sqlcipher
+      source: sqlcipher
 
 dependencies:
   flutter:
@@ -30,12 +30,10 @@ dependencies:
 
   # Local persistence (offline-first)
   drift: ^2.20.3
-  sqlite3: ^3.1.5  # used directly in lib/data/db/database.dart (_setupPragmas)
-  # SQLCipher provides AES-256 page-level encryption for the Drift database
-  # when the user opts in via Preferences (#582). The library is API-compatible
-  # with plain SQLite, so unencrypted installs continue to work unchanged — the
-  # cipher only activates after `PRAGMA key` is issued in _setupPragmas.
-  sqlcipher_flutter_libs: ^0.6.0
+  # SQLCipher is pulled in via the `hooks: user_defines` block above (needs the
+  # `source: sqlcipher` support restored in sqlite3 3.3.3). Used directly in
+  # lib/data/db/database.dart (_setupPragmas).
+  sqlite3: ^3.5.1
   path_provider: ^2.1.5
   path: ^1.9.1
 

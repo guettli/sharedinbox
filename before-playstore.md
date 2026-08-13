@@ -6,6 +6,12 @@ Your generated `.aab` (App Bundle) is technically valid, but to be fully "Play S
 Google requires apps to target at least **Android 14 (API level 34)**.
 Current status: **PASS** (Flutter defaults to 34+ in recent versions).
 
+**Minimum SDK:** `minSdk = 24` (Android 7.0). Raised from 23 in #436 because
+`package:sqlite3` ships its bundled SQLCipher compiled with `targetNdkApi = 24`.
+This drops Android 6.0/6.0.1 devices (~0.4% of Play-active devices as of Dec
+2025). No user-facing release note is needed while the install base is one
+phone, but it changes device eligibility on Play.
+
 ## 2. Versioning
 *   **`versionName`**: Currently `0.1.1`. This is visible to users.
 *   **`versionCode`**: This must be a **unique integer** for every single upload to the Play Console.

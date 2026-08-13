@@ -21,7 +21,6 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
-import 'package:sqlcipher_flutter_libs/sqlcipher_flutter_libs.dart';
 
 import 'package:workmanager/workmanager.dart';
 
@@ -35,10 +34,10 @@ void callbackDispatcher() {
   // background isolate (issue #192).
   WidgetsFlutterBinding.ensureInitialized();
   Workmanager().executeTask((taskName, __) async {
-    // Pre-load libsqlcipher.so before any sqlite3 call. This isolate runs
-    // independently of the main app process, so the workaround must be applied
-    // here rather than relying on main() having done it earlier.
-    await applyWorkaroundToOpenSqlCipherOnOldAndroidVersions();
+    // An unreadable DB (e.g. missing cipher key after a device restore) throws
+    // when the background isolate opens it. Catch and return success so
+    // WorkManager stops retrying instead of crash-looping against a DB that
+    // will never open — the foreground app surfaces the problem to the user.
     try {
       if (taskName == _kPrefetchTaskName) {
         await _doBodyPrefetch();
