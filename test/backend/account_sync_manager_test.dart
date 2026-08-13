@@ -760,6 +760,12 @@ class _FakeEmails implements EmailRepository {
   Future<void> clearForResync(String accountId) async {}
 
   @override
+  Future<void> clearMailboxForResync(
+    String accountId,
+    String mailboxPath,
+  ) async {}
+
+  @override
   Future<void> retryMutation(int id) async {}
 
   @override
