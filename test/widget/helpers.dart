@@ -53,6 +53,7 @@ import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
+import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
@@ -329,6 +330,8 @@ class FakeEmailRepository implements EmailRepository {
   /// returning [_searchResults]. Useful for testing race-condition fixes.
   final Future<List<Email>> Function(String query)? onSearch;
 
+  final List<PendingChange> _pendingChanges;
+
   FakeEmailRepository({
     List<Email>? emails,
     Email? emailDetail,
@@ -337,9 +340,11 @@ class FakeEmailRepository implements EmailRepository {
     List<Email>? searchResults,
     List<Email>? byAddressResults,
     List<Email>? structuredSearchResults,
+    List<PendingChange>? pendingChanges,
     String rawRfc822 = '',
     this.onSearch,
-  })  : _emails = emails ?? [],
+  })  : _pendingChanges = pendingChanges ?? const [],
+        _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
         _byAddressResults = byAddressResults ?? const [],
@@ -568,10 +573,13 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Stream<List<PendingChange>> observePendingChanges(String accountId) =>
-      Stream.value([]);
+      Stream.value(
+        _pendingChanges.where((c) => c.accountId == accountId).toList(),
+      );
 
   @override
-  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
+  Stream<List<PendingChange>> observeAllPendingChanges() =>
+      Stream.value(List.of(_pendingChanges));
 
   @override
   Future<void> discardMutation(int id) async {}
@@ -769,6 +777,10 @@ Widget buildApp({
         builder: (ctx, state) => const CombinedInboxScreen(),
       ),
       GoRoute(
+        path: '/pending-changes',
+        builder: (ctx, state) => const PendingChangesScreen(),
+      ),
+      GoRoute(
         path: '/debug/messages',
         builder: (ctx, state) {
           final messages = (state.extra as List<DebugMessageRef>?) ?? const [];
@@ -836,6 +848,7 @@ List<Override> baseOverrides({
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
+  List<PendingChange>? pendingChanges,
   Set<String> verifying = const <String>{},
 }) =>
     [
@@ -844,7 +857,9 @@ List<Override> baseOverrides({
       ),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
-      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      emailRepositoryProvider.overrideWithValue(
+        FakeEmailRepository(pendingChanges: pendingChanges),
+      ),
       outboxRepositoryProvider.overrideWithValue(FakeOutboxRepository()),
       draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
       accountDiscoveryServiceProvider.overrideWithValue(

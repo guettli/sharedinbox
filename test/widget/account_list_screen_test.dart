@@ -1,8 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 
 import 'helpers.dart';
+
+PendingChange _pendingChange({int id = 1}) => PendingChange(
+      id: id,
+      accountId: kTestAccount.id,
+      kind: 'flag_seen',
+      resourceType: 'Email',
+      resourceId: 'acc-1:42',
+      payload: '{"seen": true}',
+      createdAt: DateTime(2024, 6),
+      attempts: 0,
+    );
+
+/// Pumps the account list with a single [kTestAccount] and the given
+/// [pendingChanges], then settles. Keeps the pending-changes tests free of
+/// repeated `buildApp`/`baseOverrides` boilerplate.
+Future<void> _pumpAccountsWithPending(
+  WidgetTester tester, {
+  List<PendingChange> pendingChanges = const [],
+}) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts',
+      overrides: baseOverrides(
+        accounts: [kTestAccount],
+        pendingChanges: pendingChanges,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 /// Pumps the account list for a single [kTestAccount], optionally seeding its
 /// sync-health row and the set of accounts currently being verified. Keeps the
@@ -264,6 +295,54 @@ void main() {
       expect(find.textContaining('missing locally: 3'), findsOneWidget);
       expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
     });
+
+    testWidgets('shows labeled pending-changes row when changes are queued', (
+      tester,
+    ) async {
+      await _pumpAccountsWithPending(
+        tester,
+        pendingChanges: [_pendingChange(), _pendingChange(id: 2)],
+      );
+
+      expect(find.text('Pending changes: 2'), findsOneWidget);
+    });
+
+    testWidgets('hides pending-changes row when there are no changes', (
+      tester,
+    ) async {
+      await _pumpAccountsWithPending(tester);
+
+      expect(find.textContaining('Pending changes:'), findsNothing);
+    });
+
+    testWidgets('tapping the pending-changes row opens the pending list', (
+      tester,
+    ) async {
+      await _pumpAccountsWithPending(
+        tester,
+        pendingChanges: [_pendingChange()],
+      );
+
+      await tester.tap(find.text('Pending changes: 1'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pending Changes'), findsOneWidget);
+    });
+
+    testWidgets(
+      'pending-changes row is positioned below the account name row',
+      (tester) async {
+        await _pumpAccountsWithPending(
+          tester,
+          pendingChanges: [_pendingChange()],
+        );
+
+        final namePos = tester.getTopLeft(find.text('Alice')).dy;
+        final pendingPos =
+            tester.getTopLeft(find.text('Pending changes: 1')).dy;
+        expect(pendingPos, greaterThan(namePos));
+      },
+    );
 
     testWidgets('shows failure reason when the sync health check failed', (
       tester,

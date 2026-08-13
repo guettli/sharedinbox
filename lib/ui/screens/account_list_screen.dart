@@ -91,21 +91,6 @@ class _AccountTile extends ConsumerWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (pendingCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
-                  child: Tooltip(
-                    message: '$pendingCount pending change'
-                        '${pendingCount == 1 ? '' : 's'} — tap to view',
-                    child: InkWell(
-                      onTap: () => context.push('/pending-changes'),
-                      child: Badge(
-                        label: Text('$pendingCount'),
-                        child: const Icon(Icons.sync_problem),
-                      ),
-                    ),
-                  ),
-                ),
               status.when(
                 loading: () => const SizedBox(
                   width: AppIconSize.md,
@@ -170,6 +155,39 @@ class _AccountTile extends ConsumerWidget {
           ),
           onTap: () => context.push('/accounts/${account.id}/mailboxes'),
         ),
+        if (pendingCount > 0)
+          InkWell(
+            onTap: () => context.push('/pending-changes'),
+            child: Padding(
+              // 72 aligns with the ListTile leading indent so this row lines
+              // up with the title above.
+              padding: const EdgeInsets.fromLTRB(
+                72,
+                0,
+                AppSpacing.lg,
+                AppSpacing.sm,
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.sync_problem,
+                    size: AppIconSize.sm,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  Expanded(
+                    child: Text(
+                      'Pending changes: $pendingCount',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, size: AppIconSize.sm),
+                ],
+              ),
+            ),
+          ),
         Padding(
           // 72 aligns with the ListTile leading indent so the health row
           // lines up with the title above.
