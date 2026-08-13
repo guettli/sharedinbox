@@ -5,6 +5,7 @@ class DbEncryptionStatus {
   const DbEncryptionStatus({
     required this.isEncrypted,
     required this.pendingChange,
+    this.lastError,
   });
 
   /// True when the live DB file is currently encrypted with SQLCipher.
@@ -13,6 +14,11 @@ class DbEncryptionStatus {
   /// Non-null when the user has queued a toggle that will apply on next
   /// app start. Used by the UI to render a "Restart to apply" hint.
   final PendingEncryptionChange? pendingChange;
+
+  /// Non-null when the last encryption migration failed (e.g. the SQLCipher
+  /// key would not persist). The DB is unchanged; the UI surfaces this so the
+  /// user knows their data is still unencrypted.
+  final String? lastError;
 
   bool get hasPendingChange => pendingChange != null;
 }
@@ -31,7 +37,11 @@ class DbEncryptionService {
   DbEncryptionStatus status() => DbEncryptionStatus(
         isEncrypted: isDbEncrypted(_dbPath),
         pendingChange: readPendingEncryptionChange(_dbPath),
+        lastError: readEncryptionError(_dbPath),
       );
+
+  /// Clears a surfaced migration error once the user has acknowledged it.
+  void dismissError() => clearEncryptionError(_dbPath);
 
   /// Requests that encryption be enabled on next app start. Idempotent — a
   /// second call while already pending does nothing.

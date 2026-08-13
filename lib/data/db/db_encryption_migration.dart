@@ -43,13 +43,13 @@ Future<void> _encryptInPlace({
     // No data yet — just mint a key and write the marker so the next open
     // creates the DB encrypted from scratch.
     final key = generateDbCipherKeyHex();
-    await writeDbCipherKey(storage, key);
+    await _writeKeyVerified(storage, key);
     markDbEncrypted(dbPath);
     return;
   }
 
   final keyHex = await readDbCipherKey(storage) ?? generateDbCipherKeyHex();
-  await writeDbCipherKey(storage, keyHex);
+  await _writeKeyVerified(storage, keyHex);
 
   final tmpPath = '$dbPath.enc.tmp';
   _deleteIfExists(tmpPath);
@@ -100,6 +100,21 @@ Future<void> _decryptInPlace({
   await _atomicReplace(tmpPath, dbPath);
   markDbPlaintext(dbPath);
   await deleteDbCipherKey(storage);
+}
+
+/// Writes [keyHex] to secure storage and reads it back to confirm the write
+/// actually persisted. On some platforms (e.g. libsecret with no running
+/// keyring daemon) a write can silently no-op; encrypting the DB with a key
+/// that nobody can read back is permanent data loss, so abort loudly instead.
+Future<void> _writeKeyVerified(SecureStorage storage, String keyHex) async {
+  await writeDbCipherKey(storage, keyHex);
+  final readBack = await readDbCipherKey(storage);
+  if (readBack != keyHex) {
+    throw StateError(
+      'SQLCipher key did not persist to secure storage; aborting encryption '
+      'to avoid an unrecoverable database.',
+    );
+  }
 }
 
 void _deleteIfExists(String path) {

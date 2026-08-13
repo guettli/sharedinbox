@@ -293,6 +293,38 @@ class _EncryptionSectionState extends ConsumerState<_EncryptionSection> {
             'database file.',
           ),
         ),
+        if (status.lastError != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              0,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Encryption could not be enabled — your data is still '
+                    'unencrypted.\n${status.lastError}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(service.dismissError),
+                  child: const Text('Dismiss'),
+                ),
+              ],
+            ),
+          ),
         SwitchListTile(
           title: Text(effectiveValue ? 'Enabled' : 'Disabled'),
           value: effectiveValue,
