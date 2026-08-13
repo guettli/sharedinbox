@@ -617,6 +617,121 @@ void main() {
       },
     );
 
+    group('sweepOrphanThreads (#523)', () {
+      // Seeds one real email in `Done` plus [orphanCount] thread rows whose ids
+      // are not backed by that email — the "18 threads, 1 email" shape from
+      // #523. Follows the `seedInboxThread(r, ...)` pattern used below.
+      Future<void> seedOrphans(
+        ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails
+        }) r, {
+        int orphanCount = 17,
+      }) async {
+        await r.accounts.addAccount(_account, 'pw');
+
+        // One real email whose thread row is legitimately backed.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'Done',
+                uid: 1,
+                receivedAt: DateTime(2024),
+                threadId: const Value('tid-live'),
+              ),
+            );
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 'tid-live',
+                accountId: 'acc-1',
+                mailboxPath: 'Done',
+                latestDate: DateTime(2024),
+                latestEmailId: 'acc-1:1',
+              ),
+            );
+        // Orphan thread rows backed by no email in the folder.
+        for (var i = 0; i < orphanCount; i++) {
+          await r.db.into(r.db.threads).insert(
+                ThreadsCompanion.insert(
+                  id: 'orphan-$i',
+                  accountId: 'acc-1',
+                  mailboxPath: 'Done',
+                  latestDate: DateTime(2024),
+                  latestEmailId: 'orphan-$i-latest',
+                ),
+              );
+        }
+      }
+
+      test('removes orphan rows and keeps the backed thread', () async {
+        final r = _makeRepos();
+        await seedOrphans(r, orphanCount: 17);
+
+        // Before: the folder view shows all 18 phantom+real rows.
+        expect(
+          await r.emails.observeThreads('acc-1', 'Done').first,
+          hasLength(18),
+        );
+
+        final removed = await r.emails.sweepOrphanThreads('acc-1', 'Done');
+        expect(removed, 17);
+
+        final remaining = await r.emails.observeThreads('acc-1', 'Done').first;
+        expect(remaining, hasLength(1));
+        expect(remaining.single.threadId, 'tid-live');
+      });
+
+      test('is a no-op on a healthy folder', () async {
+        final r = _makeRepos();
+        await seedOrphans(r, orphanCount: 0);
+        expect(await r.emails.sweepOrphanThreads('acc-1', 'Done'), 0);
+        expect(
+          await r.emails.observeThreads('acc-1', 'Done').first,
+          hasLength(1),
+        );
+      });
+
+      test('removes every thread when the folder has no emails', () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        for (var i = 0; i < 3; i++) {
+          await r.db.into(r.db.threads).insert(
+                ThreadsCompanion.insert(
+                  id: 'ghost-$i',
+                  accountId: 'acc-1',
+                  mailboxPath: 'Done',
+                  latestDate: DateTime(2024),
+                  latestEmailId: 'ghost-$i-latest',
+                ),
+              );
+        }
+        expect(await r.emails.sweepOrphanThreads('acc-1', 'Done'), 3);
+        expect(await r.emails.observeThreads('acc-1', 'Done').first, isEmpty);
+      });
+
+      test('does not touch another folder', () async {
+        final r = _makeRepos();
+        await seedOrphans(r, orphanCount: 2);
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 'orphan-0',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                latestDate: DateTime(2024),
+                latestEmailId: 'inbox-latest',
+              ),
+            );
+        await r.emails.sweepOrphanThreads('acc-1', 'Done');
+        // The identically-named row in INBOX is untouched (per-folder scope).
+        expect(
+          await r.emails.observeThreads('acc-1', 'INBOX').first,
+          hasLength(1),
+        );
+      });
+    });
+
     group('observeAllInboxThreads counterpart de-duplication', () {
       // Inserts an inbox mailbox, a message and its inbox thread for [account].
       // The thread's latest message carries [messageId] so counterpart copies
@@ -6250,6 +6365,44 @@ void main() {
       expect(d.serverMessageCount, 2);
       expect(d.missingLocally, ['2']);
       expect(d.missingOnServer, ['acc-1:9']);
+    });
+
+    test('counts orphaned thread rows and no longer reports "no '
+        'discrepancies" (#523)', () async {
+      // Cached/server/local all agree at 1 message, but the folder carries
+      // extra thread rows backed by no email — the reported symptom.
+      final client = _DiagnosticsImapClient(
+        exists: 1,
+        allUids: [1],
+        unseenUids: [],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => client);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertMailboxRow(r.db, 'acc-1', 'Done', total: 1);
+      await insertEmailRow(r.db, 'acc-1', 'Done', 1);
+      for (var i = 0; i < 17; i++) {
+        await r.db.into(r.db.threads).insert(
+              ThreadsCompanion.insert(
+                id: 'orphan-$i',
+                accountId: 'acc-1',
+                mailboxPath: 'Done',
+                latestDate: DateTime(2024),
+                latestEmailId: 'orphan-$i-latest',
+              ),
+            );
+      }
+
+      final d = await r.emails.diagnoseMailbox('acc-1', 'Done');
+
+      expect(d.localEmailRows, 1);
+      expect(d.localThreadRows, 17);
+      expect(d.orphanThreadRows, 17);
+      // The misleading "No discrepancies found" fallback must not fire.
+      expect(
+        d.conclusions.any((c) => c.contains('No discrepancies')),
+        isFalse,
+      );
+      expect(d.conclusions.any((c) => c.contains('phantom')), isTrue);
     });
 
     test('surfaces a stale zero JMAP folder count', () async {

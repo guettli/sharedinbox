@@ -431,6 +431,7 @@ class MailboxDiagnostics {
     required this.cachedUnread,
     required this.localEmailRows,
     required this.localThreadRows,
+    this.orphanThreadRows = 0,
     this.serverTotal,
     this.serverUnread,
     this.serverMessageCount,
@@ -470,6 +471,12 @@ class MailboxDiagnostics {
   /// How many rows the local cache actually holds for this mailbox.
   final int localEmailRows;
   final int localThreadRows;
+
+  /// How many of [localThreadRows] are orphans — thread rows whose id no longer
+  /// matches any email currently in the folder, so the folder view shows them
+  /// as phantom conversations backed by no mail (#523). Swept during sync and
+  /// removable on demand from the diagnostics screen.
+  final int orphanThreadRows;
 
   /// The server's own total/unread counts (IMAP `SELECT`/`STATUS`, JMAP
   /// `Mailbox/get` `totalEmails`/`unreadEmails`). Null when [error] is set.
@@ -539,6 +546,14 @@ class MailboxDiagnostics {
       out.add(
         'The folder count shows 0 but $localEmailRows message(s) are cached '
         'locally — the cached count is out of date.',
+      );
+    }
+    if (orphanThreadRows > 0) {
+      out.add(
+        'This folder lists $localThreadRows conversation(s) but only '
+        '$localEmailRows message(s) are cached — $orphanThreadRows stale '
+        'row(s) are showing mail that no longer exists here. Remove the '
+        'phantom rows to fix it.',
       );
     }
     if (out.isEmpty) {
