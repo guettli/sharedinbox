@@ -7,11 +7,13 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 
 class EmailListScreen extends ConsumerStatefulWidget {
@@ -141,12 +143,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     _gonePending = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Folder "${widget.mailboxPath}" was deleted on the server.',
-          ),
-        ),
+      context.showAppSnackBar(
+        'Folder "${widget.mailboxPath}" was deleted on the server.',
       );
       context.go('/accounts/${widget.accountId}/mailboxes');
     });
@@ -323,11 +321,11 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                 );
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    duration: const Duration(seconds: 5),
-                    content: Text('Sync failed: $e'),
-                  ),
+                context.showAppSnackBar(
+                  'Sync failed: $e',
+                  level: AppLogLevel.error,
+                  error: e,
+                  duration: const Duration(seconds: 5),
                 );
               }
             },

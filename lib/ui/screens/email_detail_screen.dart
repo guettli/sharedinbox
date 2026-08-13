@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
@@ -23,6 +24,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
@@ -372,29 +374,28 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                             .read(userPreferencesRepositoryProvider)
                             .addTrustedImageSender(senderEmail),
                       );
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        SnackBar(
-                          duration: const Duration(seconds: 3),
-                          // SnackBar defaults to persist=true when an action
-                          // is set, which disables the auto-dismiss timer.
-                          // Explicitly opt back into duration-based dismiss.
-                          persist: false,
-                          content: const Text(
-                            'Images will be loaded automatically for this sender.',
-                          ),
-                          action: SnackBarAction(
-                            label: 'View',
-                            onPressed: () {
-                              if (mounted) {
-                                unawaited(
-                                  context.push(
-                                    '/accounts/trusted-senders',
-                                    extra: senderEmail,
-                                  ),
-                                );
-                              }
-                            },
-                          ),
+                      ctx.showAppSnackBar(
+                        'Images will be loaded automatically for this sender.',
+                        event: 'email.trust_image_sender',
+                        emailId: widget.emailId,
+                        data: {'sender': senderEmail},
+                        duration: const Duration(seconds: 3),
+                        // SnackBar defaults to persist=true when an action is
+                        // set, which disables the auto-dismiss timer. Explicitly
+                        // opt back into duration-based dismiss.
+                        persist: false,
+                        action: SnackBarAction(
+                          label: 'View',
+                          onPressed: () {
+                            if (mounted) {
+                              unawaited(
+                                context.push(
+                                  '/accounts/trusted-senders',
+                                  extra: senderEmail,
+                                ),
+                              );
+                            }
+                          },
                         ),
                       );
                     }
@@ -509,20 +510,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .downloadAttachment(widget.emailId, att);
       await OpenFilex.open(path);
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.attachment.open_failed',
-              'Opening attachment failed',
-              emailId: widget.emailId,
-              data: {'filename': att.filename},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Opening file failed: $e')));
+      context.showAppSnackBar(
+        'Opening file failed: $e',
+        level: AppLogLevel.error,
+        event: 'email.attachment.open_failed',
+        emailId: widget.emailId,
+        data: {'filename': att.filename},
+        error: e,
+        stack: stack,
+      );
     } finally {
       if (mounted) setState(() => _downloading.remove(att.filename));
     }
@@ -1015,13 +1012,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     await repo.snoozeEmail(widget.emailId, until);
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 5),
-          content: Text(
-            'Snoozed until ${DateFormat('MMM d, HH:mm').format(until)}',
-          ),
-        ),
+      context.showAppSnackBar(
+        'Snoozed until ${DateFormat('MMM d, HH:mm').format(until)}',
+        event: 'email.snooze',
+        emailId: widget.emailId,
+        accountId: header.accountId,
+        mailboxPath: header.mailboxPath,
+        duration: const Duration(seconds: 5),
       );
       _navigateTo(context, header, nextEmail);
     }
@@ -1034,20 +1031,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .read(emailRepositoryProvider)
           .fetchRawRfc822(widget.emailId);
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.raw.fetch_failed',
-              'Failed to fetch raw email',
-              accountId: header?.accountId,
-              emailId: widget.emailId,
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to fetch raw email: $e')));
+      context.showAppSnackBar(
+        'Failed to fetch raw email: $e',
+        level: AppLogLevel.error,
+        event: 'email.raw.fetch_failed',
+        accountId: header?.accountId,
+        emailId: widget.emailId,
+        error: e,
+        stack: stack,
+      );
       return;
     }
 
@@ -1089,8 +1082,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: raw));
                 if (ctx.mounted) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('Copied to clipboard')),
+                  ctx.showAppSnackBar(
+                    'Copied to clipboard',
+                    event: 'email.raw.copied',
+                    emailId: widget.emailId,
                   );
                 }
               },
@@ -1138,32 +1133,29 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 ShareParams(files: [XFile(saved.path)]),
               ),
             );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          // SnackBar defaults to persist=true when an action is set, which
-          // disables the auto-dismiss timer. Explicitly opt back into
-          // duration-based dismiss so the "Saved" snack bar slides away on
-          // its own while the Open/Share action button still works.
-          persist: false,
-          content: Text('Saved ${saved.displayLocation}'),
-          action: action,
-        ),
+      context.showAppSnackBar(
+        'Saved ${saved.displayLocation}',
+        event: 'email.raw.download',
+        accountId: header?.accountId,
+        emailId: widget.emailId,
+        // SnackBar defaults to persist=true when an action is set, which
+        // disables the auto-dismiss timer. Explicitly opt back into
+        // duration-based dismiss so the "Saved" snack bar slides away on its
+        // own while the Open/Share action button still works.
+        persist: false,
+        action: action,
       );
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.raw.download_failed',
-              'Saving raw email failed',
-              accountId: header?.accountId,
-              emailId: widget.emailId,
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+      context.showAppSnackBar(
+        'Download failed: $e',
+        level: AppLogLevel.error,
+        event: 'email.raw.download_failed',
+        accountId: header?.accountId,
+        emailId: widget.emailId,
+        error: e,
+        stack: stack,
+      );
     }
   }
 
@@ -1182,21 +1174,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// that earlier sync versions did not store. Shows a progress snackbar
   /// while the fetch is in flight and returns null on error.
   Future<EmailBody?> _refetchBody(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final controller = messenger.showSnackBar(
-      const SnackBar(
-        duration: Duration(minutes: 1),
-        content: Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            SizedBox(width: AppSpacing.sm),
-            Text('Fetching mail details…'),
-          ],
-        ),
+    final messenger = context.appMessenger();
+    final controller = messenger.show(
+      'Fetching mail details…',
+      event: 'email.body.refetch',
+      emailId: widget.emailId,
+      duration: const Duration(minutes: 1),
+      content: const Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: AppSpacing.sm),
+          Text('Fetching mail details…'),
+        ],
       ),
     );
     try {
@@ -1204,18 +1197,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .read(emailRepositoryProvider)
           .getEmailBody(widget.emailId, forceRefresh: true);
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.body.refetch_failed',
-              'Failed to fetch mail details',
-              emailId: widget.emailId,
-              error: e,
-              stack: stack,
-            ),
-      );
       if (context.mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Failed to fetch mail details: $e')),
+        messenger.show(
+          'Failed to fetch mail details: $e',
+          level: AppLogLevel.error,
+          event: 'email.body.refetch_failed',
+          emailId: widget.emailId,
+          error: e,
+          stack: stack,
         );
       }
       return null;
@@ -1234,11 +1223,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       effective = await _refetchBody(context) ?? effective;
       if (!context.mounted) return;
       if (effective.headers.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 5),
-            content: Text('Server did not return headers for this message.'),
-          ),
+        context.showAppSnackBar(
+          'Server did not return headers for this message.',
+          level: AppLogLevel.warn,
+          event: 'email.headers.missing',
+          emailId: widget.emailId,
+          duration: const Duration(seconds: 5),
         );
         return;
       }
@@ -1263,18 +1253,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       if (!context.mounted) return;
       tree = effective.mimeTree;
       if (tree == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: const Text(
-              'Server did not return MIME structure for this message.',
-            ),
-            action: SnackBarAction(
-              label: 'View raw email',
-              onPressed: () {
-                unawaited(_showRaw(context, null));
-              },
-            ),
+        context.showAppSnackBar(
+          'Server did not return MIME structure for this message.',
+          level: AppLogLevel.warn,
+          event: 'email.structure.missing',
+          emailId: widget.emailId,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'View raw email',
+            onPressed: () {
+              unawaited(_showRaw(context, null));
+            },
           ),
         );
         return;
@@ -1452,8 +1441,12 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
 
     final ok = await launchUrl(chosen, mode: LaunchMode.externalApplication);
     if (ok || !context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Could not open unsubscribe link')),
+    context.showAppSnackBar(
+      'Could not open unsubscribe link',
+      level: AppLogLevel.warn,
+      event: 'email.unsubscribe.open_failed',
+      accountId: widget.email.accountId,
+      emailId: widget.email.id,
     );
   }
 
@@ -1527,15 +1520,19 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
       uri.scheme == 'mailto' ? Icons.email_outlined : Icons.open_in_new;
 
   Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = context.appMessenger();
     setState(() => _sending = true);
     try {
       final accountId = widget.email.accountId;
       final account =
           await ref.read(accountRepositoryProvider).getAccount(accountId);
       if (account == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Account not found')),
+        messenger.show(
+          'Account not found',
+          level: AppLogLevel.warn,
+          event: 'email.unsubscribe.account_missing',
+          accountId: accountId,
+          emailId: widget.email.id,
         );
         return;
       }
@@ -1554,23 +1551,22 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
       );
       await ref.read(emailRepositoryProvider).sendEmail(accountId, draft);
       if (!mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Unsubscribe email sent')),
+      messenger.show(
+        'Unsubscribe email sent',
+        event: 'email.unsubscribe.sent',
+        accountId: widget.email.accountId,
+        emailId: widget.email.id,
       );
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.unsubscribe.send_failed',
-              'Failed to send unsubscribe email',
-              accountId: widget.email.accountId,
-              emailId: widget.email.id,
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Failed to send unsubscribe: $e')),
+      messenger.show(
+        'Failed to send unsubscribe: $e',
+        level: AppLogLevel.error,
+        event: 'email.unsubscribe.send_failed',
+        accountId: widget.email.accountId,
+        emailId: widget.email.id,
+        error: e,
+        stack: stack,
       );
     } finally {
       if (mounted) setState(() => _sending = false);

@@ -6,12 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/filter_sieve_converter.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SieveParseException;
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
 
@@ -256,23 +258,26 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     required String content,
   }) async {
     final emails = ref.read(emailRepositoryProvider);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = context.appMessenger();
 
     int count;
     try {
       count = await emails.previewSieveRuleMatches(widget.accountId, content);
     } on SieveParseException {
       if (mounted) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Could not evaluate this filter against your inbox.'),
-          ),
+        messenger.show(
+          'Could not evaluate this filter against your inbox.',
+          level: AppLogLevel.warn,
         );
       }
       return;
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Preview failed: $e')));
+        messenger.show(
+          'Preview failed: $e',
+          level: AppLogLevel.error,
+          error: e,
+        );
       }
       return;
     }
@@ -341,14 +346,16 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
         content,
       );
       if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Filter applied to $applied message(s).')),
+        messenger.show(
+          'Filter applied to $applied message(s).',
         );
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Failed to apply filter: $e')),
+        messenger.show(
+          'Failed to apply filter: $e',
+          level: AppLogLevel.error,
+          error: e,
         );
       }
     }

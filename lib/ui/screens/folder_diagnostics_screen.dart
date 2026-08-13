@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Runs [EmailRepository.diagnoseMailbox] for one folder. Keyed by
 /// `(accountId, mailboxPath)` and auto-disposed so leaving the screen (or
@@ -67,13 +69,15 @@ class FolderDiagnosticsScreen extends ConsumerWidget {
           diagnostics: d,
           folderTitle: title,
           onRefetchCounts: () async {
-            final messenger = ScaffoldMessenger.of(context);
+            final messenger = context.appMessenger();
             final repo = ref.read(mailboxRepositoryProvider);
             try {
               await repo.syncMailboxes(accountId);
             } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Could not re-fetch counts: $e')),
+              messenger.show(
+                'Could not re-fetch counts: $e',
+                level: AppLogLevel.error,
+                error: e,
               );
               return;
             }
@@ -227,8 +231,8 @@ class _DiagnosticsBody extends StatelessWidget {
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: _plainReport()));
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Report copied')),
+                  context.showAppSnackBar(
+                    'Report copied',
                   );
                 }
               },

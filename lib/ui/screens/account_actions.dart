@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// All per-account actions surfaced from the long-press menu on
 /// [AccountListScreen] and from the account home screen. Kept in one place so
@@ -47,11 +48,9 @@ Future<void> runAccountAction(
     case AccountAction.verifySync:
       unawaited(ref.read(reliabilityRunnerProvider).checkNow());
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 5),
-            content: Text('Starting sync verification...'),
-          ),
+        context.showAppSnackBar(
+          'Starting sync verification...',
+          duration: const Duration(seconds: 5),
         );
       }
       break;

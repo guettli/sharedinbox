@@ -7,9 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AboutScreen extends ConsumerStatefulWidget {
@@ -63,11 +65,9 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       ),
     );
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('Copied to clipboard'),
-        ),
+      context.showAppSnackBar(
+        'Copied to clipboard',
+        duration: const Duration(seconds: 5),
       );
     }
   }
@@ -79,38 +79,26 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         mode: LaunchMode.externalApplication,
       );
       if (!launched) {
-        unawaited(
-          ref.read(appLoggerProvider).warn(
-            'about.launch_url_failed',
-            'Browser refused to open URL',
-            data: {'url': url.toString()},
-          ),
-        );
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Could not open browser.'),
-            ),
+          context.showAppSnackBar(
+            'Could not open browser.',
+            level: AppLogLevel.warn,
+            event: 'about.launch_url_failed',
+            data: {'url': url.toString()},
+            duration: const Duration(seconds: 5),
           );
         }
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'about.launch_url_failed',
-              'Failed to open URL',
-              data: {'url': url.toString()},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Error: $e'),
-          ),
+        context.showAppSnackBar(
+          'Error: $e',
+          level: AppLogLevel.error,
+          event: 'about.launch_url_failed',
+          data: {'url': url.toString()},
+          error: e,
+          stack: stack,
+          duration: const Duration(seconds: 5),
         );
       }
     }
@@ -148,38 +136,26 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         mode: LaunchMode.externalApplication,
       );
       if (!launched) {
-        unawaited(
-          ref.read(appLoggerProvider).warn(
-            'about.create_issue_failed',
-            'Browser refused to open new-issue URL',
-            data: {'url': url.toString()},
-          ),
-        );
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Could not open browser.'),
-            ),
+          context.showAppSnackBar(
+            'Could not open browser.',
+            level: AppLogLevel.warn,
+            event: 'about.create_issue_failed',
+            data: {'url': url.toString()},
+            duration: const Duration(seconds: 5),
           );
         }
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'about.create_issue_failed',
-              'Failed to open new-issue URL',
-              data: {'url': url.toString()},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Error: $e'),
-          ),
+        context.showAppSnackBar(
+          'Error: $e',
+          level: AppLogLevel.error,
+          event: 'about.create_issue_failed',
+          data: {'url': url.toString()},
+          error: e,
+          stack: stack,
+          duration: const Duration(seconds: 5),
         );
       }
     }

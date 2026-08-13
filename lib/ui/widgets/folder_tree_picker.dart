@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/mailbox.dart';
-import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Callback used by [FolderTreePickerDialog] to create a new folder.
 ///
@@ -261,19 +262,15 @@ class _FolderTreePickerDialogState
       }
       Navigator.pop(context, displayPath);
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'folder_picker.create_failed',
-              'Failed to create folder from picker',
-              data: {'name': name, 'parent': parent},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!mounted) return;
       setState(() => _creating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not create folder: $e')),
+      context.showAppSnackBar(
+        'Could not create folder: $e',
+        level: AppLogLevel.error,
+        event: 'folder_picker.create_failed',
+        data: {'name': name, 'parent': parent},
+        error: e,
+        stack: stack,
       );
     }
   }

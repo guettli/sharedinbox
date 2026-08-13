@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _timeFmt = DateFormat('HH:mm:ss');
 
@@ -112,11 +113,9 @@ class _UndoActionTile extends ConsumerWidget {
               .read(undoServiceProvider.notifier)
               .undo(actionId: action.id);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                duration: Duration(seconds: 5),
-                content: Text('Action undone.'),
-              ),
+            context.showAppSnackBar(
+              'Action undone.',
+              duration: const Duration(seconds: 5),
             );
           }
         },

@@ -10,10 +10,12 @@ import 'package:open_filex/open_filex.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({
@@ -199,21 +201,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final path = _attachments[index].path;
       await OpenFilex.open(path);
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'compose.attachment.open_failed',
-              'Failed to open compose attachment',
-              data: {'index': index},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 5),
-          content: Text('Failed to open file: $e'),
-        ),
+      context.showAppSnackBar(
+        'Failed to open file: $e',
+        level: AppLogLevel.error,
+        event: 'compose.attachment.open_failed',
+        data: {'index': index},
+        error: e,
+        stack: stack,
+        duration: const Duration(seconds: 5),
       );
     } finally {
       if (mounted) setState(() => _opening = false);
@@ -226,16 +222,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   Future<void> _send() async {
     if (_accountId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('Select an account first'),
-        ),
+      context.showAppSnackBar(
+        'Select an account first',
+        duration: const Duration(seconds: 5),
       );
       return;
     }
     setState(() => _sending = true);
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = context.appMessenger();
     try {
       final account =
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
@@ -268,30 +262,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         await _draftRepo.deleteDraft(_draftId!);
       }
       if (mounted) {
-        messenger.showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 3),
-            content: Text('Message queued'),
-          ),
+        messenger.show(
+          'Message queued',
+          duration: const Duration(seconds: 3),
         );
         context.pop();
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'compose.enqueue_failed',
-              'Failed to enqueue outgoing message',
-              accountId: _accountId,
-              error: e,
-              stack: stack,
-            ),
-      );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 5),
-          content: Text('Queue failed: $e'),
-        ),
+      messenger.show(
+        'Queue failed: $e',
+        level: AppLogLevel.error,
+        event: 'compose.enqueue_failed',
+        accountId: _accountId,
+        error: e,
+        stack: stack,
+        duration: const Duration(seconds: 5),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
