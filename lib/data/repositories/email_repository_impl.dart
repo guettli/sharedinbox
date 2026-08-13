@@ -1319,42 +1319,54 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     final flagMismatches = <model.FlagMismatch>[];
-    if (allServerIds.isNotEmpty && allServerIds.length < 5000) {
-      final responses = await jmap.call([
-        [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            'ids': allServerIds,
-            'properties': ['id', 'keywords'],
-          },
-          '0',
-        ],
-      ]);
-      final getResult = _responseArgs(responses, 0, 'Email/get');
-      final list = getResult['list'] as List<dynamic>;
+    if (allServerIds.isNotEmpty) {
       final localMap = {for (final r in localRows) r.id.split(':').last: r};
 
-      for (final e in list) {
-        final m = e as Map<String, dynamic>;
-        final id = m['id'] as String;
-        final local = localMap[id];
-        if (local == null) continue;
+      // Fetch keywords in pages: sending every id in a single Email/get can
+      // exceed the server's maxObjectsInGet and fail with requestTooLarge
+      // (see #513). Mirror the batching used elsewhere in this file.
+      for (var offset = 0;
+          offset < allServerIds.length;
+          offset += _jmapPageSize) {
+        final batch = allServerIds.sublist(
+          offset,
+          math.min(offset + _jmapPageSize, allServerIds.length),
+        );
+        final responses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': batch,
+              'properties': ['id', 'keywords'],
+            },
+            '0',
+          ],
+        ]);
+        final getResult = _responseArgs(responses, 0, 'Email/get');
+        final list = getResult['list'] as List<dynamic>;
 
-        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
-        final serverSeen = keywords.containsKey(r'$seen');
-        final serverFlagged = keywords.containsKey(r'$flagged');
+        for (final e in list) {
+          final m = e as Map<String, dynamic>;
+          final id = m['id'] as String;
+          final local = localMap[id];
+          if (local == null) continue;
 
-        if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
-          flagMismatches.add(
-            model.FlagMismatch(
-              id: local.id,
-              serverSeen: serverSeen,
-              localSeen: local.isSeen,
-              serverFlagged: serverFlagged,
-              localFlagged: local.isFlagged,
-            ),
-          );
+          final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+          final serverSeen = keywords.containsKey(r'$seen');
+          final serverFlagged = keywords.containsKey(r'$flagged');
+
+          if (serverSeen != local.isSeen || serverFlagged != local.isFlagged) {
+            flagMismatches.add(
+              model.FlagMismatch(
+                id: local.id,
+                serverSeen: serverSeen,
+                localSeen: local.isSeen,
+                serverFlagged: serverFlagged,
+                localFlagged: local.isFlagged,
+              ),
+            );
+          }
         }
       }
     }

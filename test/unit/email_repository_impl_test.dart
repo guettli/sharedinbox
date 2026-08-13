@@ -3947,6 +3947,117 @@ void main() {
     );
   });
 
+  group('JMAP verifySyncReliability batches Email/get', () {
+    test(
+      'chunks flag verification so a large mailbox never sends one huge '
+      'Email/get (see #513)',
+      () async {
+        // 600 server ids > _jmapPageSize (500) forces at least two batches.
+        const total = 600;
+        final serverIds = [for (var i = 0; i < total; i++) 'e$i'];
+        // One local row disagrees with the server, and it lives in the second
+        // batch (index >= 500) so we prove mismatches aggregate across pages.
+        const mismatchIndex = 550;
+
+        final getBatchSizes = <int>[];
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          final body = jsonDecode(req.body) as Map<String, dynamic>;
+          final call = (body['methodCalls'] as List).first as List;
+          final method = call[0] as String;
+          final args = call[1] as Map<String, dynamic>;
+          if (method == 'Email/query') {
+            final position = (args['position'] as int?) ?? 0;
+            final limit = args['limit'] as int;
+            final page = serverIds.skip(position).take(limit).toList();
+            return http.Response(
+              jsonEncode({
+                'sessionState': 'sess1',
+                'methodResponses': [
+                  [
+                    'Email/query',
+                    {'accountId': 'acct1', 'ids': page, 'total': total},
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
+          // Email/get for keywords — record the batch size and echo each id
+          // back with its (unseen, unflagged) server keywords.
+          final ids = List<String>.from(args['ids'] as List);
+          getBatchSizes.add(ids.length);
+          return http.Response(
+            jsonEncode({
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/get',
+                  {
+                    'accountId': 'acct1',
+                    'list': [
+                      for (final id in ids)
+                        {'id': id, 'keywords': <String, dynamic>{}},
+                    ],
+                  },
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        for (var i = 0; i < total; i++) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'jmap-1:e$i',
+                  accountId: 'jmap-1',
+                  mailboxPath: 'mbx1',
+                  uid: i,
+                  receivedAt: DateTime(2024),
+                  // Server reports every mail as unseen; only this row claims
+                  // to be seen locally, so exactly one mismatch is expected.
+                  isSeen: Value(i == mismatchIndex),
+                ),
+              );
+        }
+
+        final result = await r.emails.verifySyncReliability('jmap-1', 'mbx1');
+
+        // Every Email/get stayed within the page size — no single oversized
+        // request that a server could reject with requestTooLarge.
+        expect(getBatchSizes.length, greaterThan(1));
+        expect(getBatchSizes.every((n) => n <= 500), isTrue);
+        expect(getBatchSizes.reduce((a, b) => a + b), total);
+
+        // The mismatch in the second batch was still detected.
+        expect(result.flagMismatches, hasLength(1));
+        expect(result.flagMismatches.single.id, 'jmap-1:e$mismatchIndex');
+        expect(result.flagMismatches.single.localSeen, isTrue);
+        expect(result.flagMismatches.single.serverSeen, isFalse);
+      },
+    );
+  });
+
   group('JMAP setFlag / moveEmail / deleteEmail enqueue pending_changes', () {
     Future<void> seedJmapEmail(
       AppDatabase db,
