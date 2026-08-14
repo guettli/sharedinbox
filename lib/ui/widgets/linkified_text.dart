@@ -3,8 +3,9 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/utils/linkify.dart';
-import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Renders plain [text] and turns any http(s) URL inside it into a tappable
@@ -107,19 +108,13 @@ class _LinkifiedTextState extends ConsumerState<LinkifiedText> {
     if (confirmed != true || !mounted) return;
 
     final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched) {
-      unawaited(
-        ref.read(appLoggerProvider).warn(
-          'link.open_failed',
-          'Browser refused to open link',
-          data: {'url': url},
-        ),
+    if (!launched && mounted) {
+      context.showAppSnackBar(
+        'Could not open: $url',
+        level: AppLogLevel.warn,
+        event: 'link.open_failed',
+        data: {'url': url},
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open: $url')),
-        );
-      }
     }
   }
 }

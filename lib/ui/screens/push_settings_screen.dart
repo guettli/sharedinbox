@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// User-facing screen for configuring [UnifiedPush] real-time notifications.
 ///
@@ -141,8 +142,8 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
                           ClipboardData(text: _endpoint!),
                         );
                         if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Endpoint copied')),
+                        context.showAppSnackBar(
+                          'Endpoint copied',
                         );
                       },
                     ),

@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Kicks the sync loop for [accountId] so the next flush attempt runs
 /// immediately. Returns `true` when a loop was actually notified — see
@@ -259,14 +260,14 @@ Future<void> retryQueueRow({
   // Capture the messenger BEFORE the async gap so a mid-await rebuild (queue
   // row disappears once the flush succeeds) does not invalidate the context
   // we're about to show the snackbar from.
-  final messenger = ScaffoldMessenger.of(context);
+  final messenger = context.appMessenger();
   await retry();
   final kicked = syncNow(accountId);
-  messenger.showSnackBar(
-    SnackBar(
-      content: Text(kicked ? runningMessage : notRunningMessage),
-      duration: const Duration(seconds: 3),
-    ),
+  messenger.show(
+    kicked ? runningMessage : notRunningMessage,
+    event: 'outbox.retry',
+    accountId: accountId,
+    duration: const Duration(seconds: 3),
   );
 }
 

@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
@@ -153,11 +154,9 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
     await Clipboard.setData(ClipboardData(text: '$syncMd\n$aboutMd'));
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 3),
-          content: Text('Copied to clipboard'),
-        ),
+      context.showAppSnackBar(
+        'Copied to clipboard',
+        duration: const Duration(seconds: 3),
       );
     }
   }

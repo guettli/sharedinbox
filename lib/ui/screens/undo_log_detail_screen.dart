@@ -6,8 +6,10 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _dateTimeFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
 
@@ -32,11 +34,9 @@ class UndoLogDetailScreen extends ConsumerWidget {
                   .undo(actionId: action.id);
               if (context.mounted) {
                 Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    duration: Duration(seconds: 5),
-                    content: Text('Action undone.'),
-                  ),
+                context.showAppSnackBar(
+                  'Action undone.',
+                  duration: const Duration(seconds: 5),
                 );
               }
             },
@@ -219,13 +219,12 @@ class _EmailTile extends ConsumerWidget {
 
   Future<void> _openEmail(BuildContext context, WidgetRef ref) async {
     final messageId = email.messageId;
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = context.appMessenger();
     if (messageId == null) {
-      messenger.showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('Cannot locate this email — no Message-ID.'),
-        ),
+      messenger.show(
+        'Cannot locate this email — no Message-ID.',
+        level: AppLogLevel.warn,
+        duration: const Duration(seconds: 5),
       );
       return;
     }
@@ -234,14 +233,11 @@ class _EmailTile extends ConsumerWidget {
         .findEmailByMessageId(accountId, messageId);
     if (!context.mounted) return;
     if (found == null) {
-      messenger.showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text(
-            'Email no longer exists at its previous location. '
-            'Use Undo to restore it.',
-          ),
-        ),
+      messenger.show(
+        'Email no longer exists at its previous location. '
+        'Use Undo to restore it.',
+        level: AppLogLevel.warn,
+        duration: const Duration(seconds: 5),
       );
       return;
     }

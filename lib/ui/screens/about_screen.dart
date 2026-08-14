@@ -7,9 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AboutScreen extends ConsumerStatefulWidget {
@@ -63,54 +65,44 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       ),
     );
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          duration: Duration(seconds: 5),
-          content: Text('Copied to clipboard'),
-        ),
+      context.showAppSnackBar(
+        'Copied to clipboard',
+        duration: const Duration(seconds: 5),
       );
     }
   }
 
-  Future<void> _launchUrl(BuildContext context, Uri url) async {
+  Future<void> _launchUrl(
+    BuildContext context,
+    Uri url, {
+    String event = 'about.launch_url_failed',
+  }) async {
     try {
       final launched = await launchUrl(
         url,
         mode: LaunchMode.externalApplication,
       );
       if (!launched) {
-        unawaited(
-          ref.read(appLoggerProvider).warn(
-            'about.launch_url_failed',
-            'Browser refused to open URL',
-            data: {'url': url.toString()},
-          ),
-        );
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Could not open browser.'),
-            ),
+          context.showAppSnackBar(
+            'Could not open browser.',
+            level: AppLogLevel.warn,
+            event: event,
+            data: {'url': url.toString()},
+            duration: const Duration(seconds: 5),
           );
         }
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'about.launch_url_failed',
-              'Failed to open URL',
-              data: {'url': url.toString()},
-              error: e,
-              stack: stack,
-            ),
-      );
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Error: $e'),
-          ),
+        context.showAppSnackBar(
+          'Error: $e',
+          level: AppLogLevel.error,
+          event: event,
+          data: {'url': url.toString()},
+          error: e,
+          stack: stack,
+          duration: const Duration(seconds: 5),
         );
       }
     }
@@ -142,47 +134,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final url = Uri.parse(
       'https://github.com/guettli/sharedinbox/issues/new?body=$body',
     );
-    try {
-      final launched = await launchUrl(
-        url,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        unawaited(
-          ref.read(appLoggerProvider).warn(
-            'about.create_issue_failed',
-            'Browser refused to open new-issue URL',
-            data: {'url': url.toString()},
-          ),
-        );
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Could not open browser.'),
-            ),
-          );
-        }
-      }
-    } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'about.create_issue_failed',
-              'Failed to open new-issue URL',
-              data: {'url': url.toString()},
-              error: e,
-              stack: stack,
-            ),
-      );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Error: $e'),
-          ),
-        );
-      }
-    }
+    await _launchUrl(context, url, event: 'about.create_issue_failed');
   }
 
   @override

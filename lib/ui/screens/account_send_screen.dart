@@ -8,9 +8,11 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Sending side of the secure account-sharing flow.
 ///
@@ -102,13 +104,10 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     final parsed = ShareEncryptionService.parsePublicKeyQr(rawValue);
     if (parsed == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Not a valid sharedinbox.de public-key QR code. '
-              'Ask the receiver to show step 1 of "Receive accounts".',
-            ),
-          ),
+        context.showAppSnackBar(
+          'Not a valid sharedinbox.de public-key QR code. '
+          'Ask the receiver to show step 1 of "Receive accounts".',
+          level: AppLogLevel.warn,
         );
         // Allow retry.
         setState(() => _scannerActive = true);
@@ -360,10 +359,8 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
             label: const Text('Copy encrypted code'),
             onPressed: () {
               unawaited(Clipboard.setData(ClipboardData(text: _encryptedQr!)));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Encrypted code copied to clipboard'),
-                ),
+              context.showAppSnackBar(
+                'Encrypted code copied to clipboard',
               );
             },
           ),

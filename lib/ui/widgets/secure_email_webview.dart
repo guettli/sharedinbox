@@ -6,9 +6,10 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/mailto_parser.dart';
-import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -177,19 +178,13 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
         uri,
         mode: LaunchMode.externalApplication,
       );
-      if (!launched) {
-        unawaited(
-          ref.read(appLoggerProvider).warn(
-            'webview.open_url_failed',
-            'Browser refused to open URL from webview',
-            data: {'url': url},
-          ),
+      if (!launched && mounted) {
+        context.showAppSnackBar(
+          'Could not open: $url',
+          level: AppLogLevel.warn,
+          event: 'webview.open_url_failed',
+          data: {'url': url},
         );
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Could not open: $url')));
-        }
       }
     }
   }

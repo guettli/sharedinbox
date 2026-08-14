@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,11 +6,13 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/folder_tree.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_role.dart';
@@ -272,24 +272,20 @@ Future<void> _promptRename(
   try {
     await repo.renameMailbox(accountId, mailbox.path, newName);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Folder renamed to "$newName"')),
+    context.showAppSnackBar(
+      'Folder renamed to "$newName"',
     );
   } catch (e, stack) {
-    unawaited(
-      ref.read(appLoggerProvider).error(
-            'mailbox.rename_failed',
-            'Failed to rename mailbox',
-            accountId: accountId,
-            mailboxPath: mailbox.path,
-            data: {'newName': newName},
-            error: e,
-            stack: stack,
-          ),
-    );
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Could not rename folder: $e')),
+    context.showAppSnackBar(
+      'Could not rename folder: $e',
+      level: AppLogLevel.error,
+      event: 'mailbox.rename_failed',
+      accountId: accountId,
+      mailboxPath: mailbox.path,
+      data: {'newName': newName},
+      error: e,
+      stack: stack,
     );
   }
 }
@@ -327,24 +323,20 @@ Future<void> _promptMove(
       newParentDisplayPath: destination,
     );
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Folder moved under "$destination"')),
+    context.showAppSnackBar(
+      'Folder moved under "$destination"',
     );
   } catch (e, stack) {
-    unawaited(
-      ref.read(appLoggerProvider).error(
-            'mailbox.move_failed',
-            'Failed to move mailbox',
-            accountId: accountId,
-            mailboxPath: mailbox.path,
-            data: {'destination': destination},
-            error: e,
-            stack: stack,
-          ),
-    );
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Could not move folder: $e')),
+    context.showAppSnackBar(
+      'Could not move folder: $e',
+      level: AppLogLevel.error,
+      event: 'mailbox.move_failed',
+      accountId: accountId,
+      mailboxPath: mailbox.path,
+      data: {'destination': destination},
+      error: e,
+      stack: stack,
     );
   }
 }
@@ -383,23 +375,19 @@ Future<void> _promptDelete(
   try {
     await repo.deleteMailbox(accountId, mailbox.path);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Folder "${mailbox.name}" deleted')),
+    context.showAppSnackBar(
+      'Folder "${mailbox.name}" deleted',
     );
   } catch (e, stack) {
-    unawaited(
-      ref.read(appLoggerProvider).error(
-            'mailbox.delete_failed',
-            'Failed to delete mailbox',
-            accountId: accountId,
-            mailboxPath: mailbox.path,
-            error: e,
-            stack: stack,
-          ),
-    );
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Could not delete folder: $e')),
+    context.showAppSnackBar(
+      'Could not delete folder: $e',
+      level: AppLogLevel.error,
+      event: 'mailbox.delete_failed',
+      accountId: accountId,
+      mailboxPath: mailbox.path,
+      error: e,
+      stack: stack,
     );
   }
 }

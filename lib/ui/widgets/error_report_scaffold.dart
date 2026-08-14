@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Full-screen error page shared by the crash and database-unreadable screens:
@@ -99,11 +101,9 @@ class CopyToClipboardButton extends StatelessWidget {
         final data = await buildText();
         await Clipboard.setData(ClipboardData(text: data));
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              duration: Duration(seconds: 5),
-              content: Text('Copied to clipboard'),
-            ),
+          context.showAppSnackBar(
+            'Copied to clipboard',
+            duration: const Duration(seconds: 5),
           );
         }
       },
@@ -136,20 +136,19 @@ class ReportIssueButton extends StatelessWidget {
             mode: LaunchMode.externalApplication,
           );
           if (!launched && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                duration: Duration(seconds: 5),
-                content: Text('Could not open browser.'),
-              ),
+            context.showAppSnackBar(
+              'Could not open browser.',
+              level: AppLogLevel.warn,
+              duration: const Duration(seconds: 5),
             );
           }
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                duration: const Duration(seconds: 5),
-                content: Text('Error: $e'),
-              ),
+            context.showAppSnackBar(
+              'Error: $e',
+              level: AppLogLevel.error,
+              error: e,
+              duration: const Duration(seconds: 5),
             );
           }
         }

@@ -9,9 +9,11 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Receiving side of the secure account-sharing flow.
 ///
@@ -156,24 +158,12 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
 
       if (mounted) {
         setState(() => _step = _Step.done);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Imported ${accounts.length} account${accounts.length == 1 ? '' : 's'} successfully.',
-            ),
-          ),
+        context.showAppSnackBar(
+          'Imported ${accounts.length} account${accounts.length == 1 ? '' : 's'} successfully.',
         );
         context.pop();
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'account.receive.import_failed',
-              'Failed to import shared account(s)',
-              error: e,
-              stack: stack,
-            ),
-      );
       if (mounted) {
         setState(() {
           _errorMessage = _friendlyError(e);
@@ -181,11 +171,13 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
           // Let user retry from the pubkey step.
           _step = _Step.showingPubKey;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_friendlyError(e)),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
+        context.showAppSnackBar(
+          _friendlyError(e),
+          level: AppLogLevel.error,
+          event: 'account.receive.import_failed',
+          backgroundColor: Theme.of(context).colorScheme.error,
+          error: e,
+          stack: stack,
         );
       }
     }
@@ -281,8 +273,8 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             label: const Text('Copy public key'),
             onPressed: () {
               unawaited(Clipboard.setData(ClipboardData(text: _pubKeyQr!)));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Public key copied to clipboard')),
+              context.showAppSnackBar(
+                'Public key copied to clipboard',
               );
             },
           ),

@@ -1,14 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
@@ -221,10 +224,35 @@ class _FilterBar extends StatelessWidget {
   }
 }
 
-class _AppLogTile extends StatelessWidget {
+class _AppLogTile extends ConsumerWidget {
   const _AppLogTile({required this.entry});
 
   final AppLogEntry entry;
+
+  /// Resolves [AppLogEntry.emailId] to its message and deep-links to it. The
+  /// stored entry only carries the email id, so the account + mailbox needed
+  /// to build the route are looked up at tap time; if the message has since
+  /// been deleted or moved the lookup returns null and we say so.
+  Future<void> _openEmail(BuildContext context, WidgetRef ref) async {
+    final emailId = entry.emailId;
+    if (emailId == null) return;
+    final email = await ref.read(emailRepositoryProvider).getEmail(emailId);
+    if (!context.mounted) return;
+    if (email == null) {
+      context.showAppSnackBar(
+        'Message no longer available',
+        level: AppLogLevel.warn,
+        event: 'app_log.open_email_missing',
+        emailId: emailId,
+      );
+      return;
+    }
+    await context.push(
+      '/accounts/${email.accountId}/mailboxes'
+      '/${Uri.encodeComponent(email.mailboxPath)}'
+      '/emails/${Uri.encodeComponent(email.id)}',
+    );
+  }
 
   IconData get _icon => switch (entry.level) {
         AppLogLevel.debug => Icons.bug_report_outlined,
@@ -285,7 +313,7 @@ class _AppLogTile extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final color = _color(context);
     final theme = Theme.of(context);
     final small = theme.textTheme.bodySmall;
@@ -294,7 +322,6 @@ class _AppLogTile extends StatelessWidget {
       if (entry.screen != null) 'screen=${entry.screen}',
       if (entry.accountId != null) 'account=${entry.accountId}',
       if (entry.mailboxPath != null) 'mailbox=${entry.mailboxPath}',
-      if (entry.emailId != null) 'email=${entry.emailId}',
       if (entry.syncLogId != null) 'sync=${entry.syncLogId}',
     ];
     final data = _prettyData;
@@ -317,18 +344,32 @@ class _AppLogTile extends StatelessWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (badges.isNotEmpty)
+            if (badges.isNotEmpty || entry.emailId != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.xs),
                 child: Wrap(
                   spacing: AppSpacing.xs,
                   runSpacing: AppSpacing.xs,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     for (final b in badges)
                       Chip(
                         label: Text(b, style: small),
                         visualDensity: VisualDensity.compact,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    // Entries tied to one email link straight to that message.
+                    if (entry.emailId != null)
+                      ActionChip(
+                        avatar: Icon(
+                          Icons.open_in_new,
+                          size: AppIconSize.sm,
+                          color: theme.colorScheme.primary,
+                        ),
+                        label: Text('email=${entry.emailId}', style: small),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onPressed: () => unawaited(_openEmail(context, ref)),
                       ),
                   ],
                 ),
@@ -372,11 +413,10 @@ class _AppLogTile extends StatelessWidget {
                     ClipboardData(text: _buildMarkdown()),
                   );
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      duration: Duration(seconds: 2),
-                      content: Text('Copied to clipboard'),
-                    ),
+                  context.showAppSnackBar(
+                    'Copied to clipboard',
+                    event: 'app_log.entry_copied',
+                    duration: const Duration(seconds: 2),
                   );
                 },
               ),

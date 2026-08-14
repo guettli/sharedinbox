@@ -6,10 +6,12 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/sieve/sieve_diagnostics.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 class SieveScriptsScreen extends ConsumerStatefulWidget {
   const SieveScriptsScreen({
@@ -123,6 +125,29 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
     );
   }
 
+  /// Logs a per-script failure and, if still mounted, surfaces it to the user.
+  /// Shared by the activate/deactivate/delete handlers, whose catch blocks are
+  /// otherwise identical.
+  void _reportScriptError(
+    String code,
+    String logMessage,
+    String userMessage,
+    SieveScript script,
+    Object error,
+    StackTrace stack,
+  ) {
+    _logScriptError(code, logMessage, script, error, stack);
+    if (mounted) {
+      context.showAppSnackBar(
+        userMessage,
+        level: AppLogLevel.error,
+        error: error,
+        stack: stack,
+        duration: const Duration(seconds: 5),
+      );
+    }
+  }
+
   Future<void> _activate(SieveScript script) async {
     try {
       if (widget.isLocal) {
@@ -141,32 +166,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         orElse: () => script,
       );
       final took = reloaded?.isActive ?? false;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 3),
-          content: Text(
-            took
-                ? 'Activated "${script.name}"'
-                : 'Activation may not have taken effect — please refresh.',
-          ),
-        ),
+      context.showAppSnackBar(
+        took
+            ? 'Activated "${script.name}"'
+            : 'Activation may not have taken effect — please refresh.',
+        duration: const Duration(seconds: 3),
       );
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.activate_failed',
         'Failed to activate sieve script',
+        'Failed to activate: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Failed to activate: $e'),
-          ),
-        );
-      }
     }
   }
 
@@ -188,32 +202,21 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         orElse: () => script,
       );
       final took = !(reloaded?.isActive ?? true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 3),
-          content: Text(
-            took
-                ? 'Deactivated "${script.name}"'
-                : 'Deactivation may not have taken effect — please refresh.',
-          ),
-        ),
+      context.showAppSnackBar(
+        took
+            ? 'Deactivated "${script.name}"'
+            : 'Deactivation may not have taken effect — please refresh.',
+        duration: const Duration(seconds: 3),
       );
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.deactivate_failed',
         'Failed to deactivate sieve script',
+        'Failed to deactivate: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Failed to deactivate: $e'),
-          ),
-        );
-      }
     }
   }
 
@@ -248,21 +251,14 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       }
       await _load();
     } catch (e, stack) {
-      _logScriptError(
+      _reportScriptError(
         'sieve.delete_failed',
         'Failed to delete sieve script',
+        'Failed to delete: $e',
         script,
         e,
         stack,
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            content: Text('Failed to delete: $e'),
-          ),
-        );
-      }
     }
   }
 
@@ -271,12 +267,10 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
   /// mail server's logs (no protocol exposes them), so we check the causes the
   /// app can see: script not active, missing target folder, no matching mail.
   Future<void> _diagnose(SieveScript script) async {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      const SnackBar(
-        duration: Duration(seconds: 2),
-        content: Text('Diagnosing filter…'),
-      ),
+    final messenger = context.appMessenger();
+    messenger.show(
+      'Diagnosing filter…',
+      duration: const Duration(seconds: 2),
     );
     List<SieveFinding> findings;
     try {
@@ -303,10 +297,9 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       );
     } on SieveParseException {
       if (mounted) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Could not parse this filter to diagnose it.'),
-          ),
+        messenger.show(
+          'Could not parse this filter to diagnose it.',
+          level: AppLogLevel.warn,
         );
       }
       return;
@@ -319,8 +312,11 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         stack,
       );
       if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Diagnose failed: $e')),
+        messenger.show(
+          'Diagnose failed: $e',
+          level: AppLogLevel.error,
+          error: e,
+          stack: stack,
         );
       }
       return;

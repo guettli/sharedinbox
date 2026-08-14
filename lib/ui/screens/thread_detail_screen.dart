@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 
@@ -225,29 +226,29 @@ class _EmailMessageCardState extends ConsumerState<_EmailMessageCard> {
                                   .read(userPreferencesRepositoryProvider)
                                   .addTrustedImageSender(senderEmail),
                             );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                duration: const Duration(seconds: 3),
-                                // SnackBar defaults to persist=true when an
-                                // action is set, which disables auto-dismiss.
-                                // Explicitly opt into duration-based dismiss.
-                                persist: false,
-                                content: const Text(
-                                  'Images will be loaded automatically for this sender.',
-                                ),
-                                action: SnackBarAction(
-                                  label: 'View',
-                                  onPressed: () {
-                                    if (mounted) {
-                                      unawaited(
-                                        context.push(
-                                          '/accounts/trusted-senders',
-                                          extra: senderEmail,
-                                        ),
-                                      );
-                                    }
-                                  },
-                                ),
+                            context.showAppSnackBar(
+                              'Images will be loaded automatically for this sender.',
+                              event: 'email.trust_image_sender',
+                              accountId: widget.email.accountId,
+                              emailId: widget.email.id,
+                              data: {'sender': senderEmail},
+                              duration: const Duration(seconds: 3),
+                              // SnackBar defaults to persist=true when an action
+                              // is set, which disables auto-dismiss. Explicitly
+                              // opt into duration-based dismiss.
+                              persist: false,
+                              action: SnackBarAction(
+                                label: 'View',
+                                onPressed: () {
+                                  if (mounted) {
+                                    unawaited(
+                                      context.push(
+                                        '/accounts/trusted-senders',
+                                        extra: senderEmail,
+                                      ),
+                                    );
+                                  }
+                                },
                               ),
                             );
                           }

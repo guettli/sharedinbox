@@ -10,10 +10,12 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 const _bugReportApiUrl = String.fromEnvironment(
   'BUG_REPORT_API_URL',
@@ -120,17 +122,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
         _attachments.addAll(newFiles);
       });
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'bug_report.pick_files_failed',
-              'Failed to pick files for bug report',
-              error: e,
-              stack: stack,
-            ),
-      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to pick files: $e')),
+        context.showAppSnackBar(
+          'Failed to pick files: $e',
+          level: AppLogLevel.error,
+          event: 'bug_report.pick_files_failed',
+          error: e,
+          stack: stack,
         );
       }
     }
@@ -172,13 +170,10 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
     final totalSize = _totalAttachmentSize;
     if (totalSize > 20 * 1024 * 1024) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Total attachments size exceeds the 20 MB limit. Please remove some files.',
-          ),
-          backgroundColor: Colors.red,
-        ),
+      context.showAppSnackBar(
+        'Total attachments size exceeds the 20 MB limit. Please remove some files.',
+        level: AppLogLevel.warn,
+        backgroundColor: Colors.red,
       );
       return;
     }
@@ -261,11 +256,10 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
         _showSuccessDialog(reportId);
       } else if (response.statusCode == 429) {
         final retryAfter = response.headers['retry-after'] ?? '6';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Rate limited. Please retry in $retryAfter seconds.'),
-            backgroundColor: Colors.orange,
-          ),
+        context.showAppSnackBar(
+          'Rate limited. Please retry in $retryAfter seconds.',
+          level: AppLogLevel.warn,
+          backgroundColor: Colors.orange,
         );
       } else {
         String errorMsg =
@@ -276,38 +270,26 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
             errorMsg = resData['error'] as String;
           }
         } catch (_) {}
-        unawaited(
-          ref.read(appLoggerProvider).error(
-            'bug_report.submit_failed',
-            'Bug-report submission returned non-2xx status',
-            data: {
-              'statusCode': response.statusCode,
-              'errorMsg': errorMsg,
-            },
-          ),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMsg),
-            backgroundColor: Colors.red,
-          ),
+        context.showAppSnackBar(
+          errorMsg,
+          level: AppLogLevel.warn,
+          event: 'bug_report.submit_failed',
+          data: {
+            'statusCode': response.statusCode,
+            'errorMsg': errorMsg,
+          },
+          backgroundColor: Colors.red,
         );
       }
     } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'bug_report.submit_failed',
-              'Bug-report submission threw',
-              error: e,
-              stack: stack,
-            ),
-      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('An error occurred: $e'),
-            backgroundColor: Colors.red,
-          ),
+        context.showAppSnackBar(
+          'An error occurred: $e',
+          level: AppLogLevel.error,
+          event: 'bug_report.submit_failed',
+          backgroundColor: Colors.red,
+          error: e,
+          stack: stack,
         );
       }
     } finally {

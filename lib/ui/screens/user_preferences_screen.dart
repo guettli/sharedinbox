@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 class UserPreferencesScreen extends ConsumerWidget {
   const UserPreferencesScreen({super.key});
@@ -337,12 +338,8 @@ class _EncryptionSectionState extends ConsumerState<_EncryptionSection> {
               }
             });
             if (service.status().hasPendingChange) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Restart the app to apply the new encryption setting.',
-                  ),
-                ),
+              context.showAppSnackBar(
+                'Restart the app to apply the new encryption setting.',
               );
             }
           },
