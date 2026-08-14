@@ -88,25 +88,29 @@ class FolderDiagnosticsScreen extends ConsumerWidget {
             '${Uri.encodeComponent(mailboxPath)}/force-resync',
           ),
           onRemovePhantomRows: () async {
-            final messenger = ScaffoldMessenger.of(context);
+            final messenger = context.appMessenger();
             final repo = ref.read(emailRepositoryProvider);
             final int removed;
             try {
               removed = await repo.sweepOrphanThreads(accountId, mailboxPath);
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Could not remove phantom rows: $e')),
+            } catch (e, stack) {
+              messenger.show(
+                'Could not remove phantom rows: $e',
+                level: AppLogLevel.error,
+                event: 'folder_diagnostics.sweep_failed',
+                accountId: accountId,
+                mailboxPath: mailboxPath,
+                error: e,
+                stack: stack,
               );
               return;
             }
-            messenger.showSnackBar(
-              SnackBar(
-                content: Text(
-                  removed == 0
-                      ? 'No phantom rows to remove'
-                      : 'Removed $removed phantom row(s)',
-                ),
-              ),
+            messenger.show(
+              removed == 0
+                  ? 'No phantom rows to remove'
+                  : 'Removed $removed phantom row(s)',
+              accountId: accountId,
+              mailboxPath: mailboxPath,
             );
             ref.invalidate(folderDiagnosticsProvider(key));
           },

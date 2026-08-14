@@ -72,7 +72,16 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
         _pubKeyQr = qr;
         _step = _Step.showingPubKey;
       });
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.receive.key_generation_failed',
+              'Failed to generate share key pair',
+              screen: 'AccountReceiveScreen',
+              error: e,
+              stack: stack,
+            ),
+      );
       setState(() {
         _errorMessage = e.toString();
         _step = _Step.error;

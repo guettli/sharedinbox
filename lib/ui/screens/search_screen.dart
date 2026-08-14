@@ -136,8 +136,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           _loading = false;
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
       log('Search failed: $e');
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Global search failed',
+              screen: 'SearchScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -155,8 +165,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           _loading = false;
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
       log('Structured search failed: $e');
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Structured search failed',
+              screen: 'SearchScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) setState(() => _loading = false);
     }
   }

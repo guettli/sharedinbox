@@ -163,7 +163,16 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           _tryOk = 'Connected as $effective';
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'account.test_connection_failed',
+              'Connection test failed',
+              screen: 'AddAccountScreen',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _tryTesting = false;
@@ -196,7 +205,16 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           .read(accountRepositoryProvider)
           .addAccount(accountToSave, _passwordCtrl.text);
       if (mounted) context.pop();
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.add_failed',
+              'Failed to add JMAP account',
+              screen: 'AddAccountScreen',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _step = _Step.jmapForm;
@@ -238,7 +256,16 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       // and disappears on probe failure via the observeAccounts stream.
       unawaited(ref.read(manageSieveProbeServiceProvider).probe(accountToSave));
       if (mounted) context.pop();
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.add_failed',
+              'Failed to add IMAP account',
+              screen: 'AddAccountScreen',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _step = _Step.imapForm;

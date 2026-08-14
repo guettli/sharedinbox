@@ -174,7 +174,16 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
           _step = _Step.showEncrypted;
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.send.encrypt_failed',
+              'Failed to encrypt accounts for sharing',
+              screen: 'AccountSendScreen',
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _errorMessage = e.toString();
