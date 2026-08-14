@@ -27,6 +27,14 @@ void main() {
     } catch (_) {}
   });
 
+  // logUncaught fires the insert without awaiting it, so poll until it lands.
+  Future<void> waitForRow() async {
+    for (var i = 0; i < 200; i++) {
+      if ((await db.select(db.appLogs).get()).isNotEmpty) return;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
   test('logUncaught is a no-op when no crashLogger is attached', () {
     crashLogger = null;
     // Must not throw even with nothing wired up (e.g. an early-startup crash
@@ -45,9 +53,8 @@ void main() {
       StackTrace.fromString('frame'),
       screen: 'HomeScreen',
     );
-    // The insert is fire-and-forget; let the microtask/IO settle.
-    await Future<void>.delayed(Duration.zero);
 
+    await waitForRow();
     final rows = await db.select(db.appLogs).get();
     expect(rows, hasLength(1));
     final row = rows.single;
@@ -67,8 +74,8 @@ void main() {
       null,
       level: AppLogLevel.warn,
     );
-    await Future<void>.delayed(Duration.zero);
 
+    await waitForRow();
     final rows = await db.select(db.appLogs).get();
     expect(rows.single.level, 'warn');
   });
