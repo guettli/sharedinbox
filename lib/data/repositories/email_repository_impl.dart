@@ -4724,14 +4724,26 @@ class EmailRepositoryImpl implements EmailRepository {
       ...draft.cc.map((a) => {'email': a.email}),
     ];
 
+    // Fail fast if the server can't submit mail at all, rather than issuing an
+    // Identity/get that would only come back as `unknownMethod`.
+    if (!jmap.supportsSubmission) {
+      throw JmapException('JMAP server does not support message submission');
+    }
+
     // Fetch identities to get the required identityId for EmailSubmission.
-    final identityResponses = await jmap.call([
+    // Identity/get belongs to the submission capability (RFC 8621 §6), so the
+    // request must declare it via withSubmission or a strict server rejects the
+    // call with `unknownMethod`.
+    final identityResponses = await jmap.call(
       [
-        'Identity/get',
-        {'accountId': jmap.accountId, 'ids': null},
-        'i',
+        [
+          'Identity/get',
+          {'accountId': jmap.accountId, 'ids': null},
+          'i',
+        ],
       ],
-    ]);
+      withSubmission: true,
+    );
     final identityResult = _responseArgs(identityResponses, 0, 'Identity/get');
     final identityList = identityResult['list'] as List<dynamic>?;
     if (identityList == null || identityList.isEmpty) {
