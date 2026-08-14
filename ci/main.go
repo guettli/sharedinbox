@@ -595,6 +595,28 @@ func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// CheckAndroidRegistrant verifies that the committed GeneratedPluginRegistrant.java
+// only registers plugins that are still present in pubspec.lock. The release build
+// runs `flutter build apk --no-pub`, so a stale registration (a plugin removed from
+// the deps but left in the generated file) is compiled verbatim and breaks the
+// Deploy workflow at Java compile time — invisible to the fast checks because they
+// never build the release APK (see issues #531 and #539). Running the guard here
+// catches that drift on every PR instead.
+func (m *Ci) CheckAndroidRegistrant(ctx context.Context) (string, error) {
+	src := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{
+			"android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java",
+			"pubspec.lock",
+			"scripts/check_android_registrant.py",
+		},
+	})
+	return m.Base().
+		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
+		WithWorkdir("/src").
+		WithExec([]string{"python3", "scripts/check_android_registrant.py"}).
+		Stdout(ctx)
+}
+
 // Format runs dart format check.
 func (m *Ci) Format(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
@@ -640,6 +662,10 @@ func (m *Ci) CheckFast(ctx context.Context) (string, error) {
 	})
 	eg.Go(func() error {
 		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.CheckAndroidRegistrant(ctx)
 		return err
 	})
 	eg.Go(func() error {
@@ -742,6 +768,10 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	})
 	fastEg.Go(func() error {
 		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	fastEg.Go(func() error {
+		_, err := m.CheckAndroidRegistrant(ctx)
 		return err
 	})
 	fastEg.Go(func() error {
@@ -1684,6 +1714,7 @@ flowchart TD
 
         pubGet --> hygiene["CheckHygiene"]
         pubGet --> layers["CheckLayers"]
+        pubGet --> registrant["CheckAndroidRegistrant\nregistrant vs pubspec.lock"]
         pubGet --> mocks["CheckGenerated\n(own build_runner run)"]
 
         codegen --> fmt["Format"]
@@ -1697,6 +1728,7 @@ flowchart TD
 
         hygiene    --> check{{"✓ Check"}}
         layers     --> check
+        registrant --> check
         fmt        --> check
         analyze    --> check
         mocks      --> check

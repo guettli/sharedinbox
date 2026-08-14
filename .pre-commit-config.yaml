@@ -89,3 +89,9 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 scripts/test_fetch_playstore_apks.py'
         pass_filenames: false
         files: ^scripts/(fetch_playstore_apks|test_fetch_playstore_apks)\.py$
+      - id: check-android-registrant-tests
+        name: android plugin registrant guard unit tests
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 scripts/test_check_android_registrant.py'
+        pass_filenames: false
+        files: ^scripts/(check_android_registrant|test_check_android_registrant)\.py$
