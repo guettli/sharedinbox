@@ -190,5 +190,58 @@ void main() {
         throwsA(isA<JmapException>()),
       );
     });
+
+    // Connects a client that records the `using` array of the last API POST.
+    Future<(JmapClient, List<dynamic> Function())> connectedCapturingUsing({
+      Map<String, dynamic>? sessionBody,
+    }) async {
+      List<dynamic>? captured;
+      final httpClient = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(jsonEncode(sessionBody ?? _sessionBody()), 200);
+        }
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        captured = body['using'] as List<dynamic>;
+        return http.Response(
+          jsonEncode({'sessionState': 'st1', 'methodResponses': []}),
+          200,
+        );
+      });
+      final client = await JmapClient.connect(
+        httpClient: httpClient,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      return (client, () => captured ?? []);
+    }
+
+    test('declares the submission capability when withSubmission is set',
+        () async {
+      final (client, using) = await connectedCapturingUsing();
+      await client.call(
+        [
+          [
+            'Identity/get',
+            {'accountId': _accountId, 'ids': null},
+            'i',
+          ],
+        ],
+        withSubmission: true,
+      );
+      expect(using(), contains('urn:ietf:params:jmap:submission'));
+    });
+
+    test('omits the submission capability by default', () async {
+      final (client, using) = await connectedCapturingUsing();
+      await client.call([
+        [
+          'Mailbox/get',
+          {'accountId': _accountId, 'ids': null},
+          '0',
+        ],
+      ]);
+      expect(using(), isNot(contains('urn:ietf:params:jmap:submission')));
+    });
   });
 }
