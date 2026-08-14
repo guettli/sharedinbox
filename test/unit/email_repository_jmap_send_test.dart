@@ -47,7 +47,7 @@ bool _requiresSubmission(String method) =>
 /// enforces the `using` ↔ capability contract. Returns the mock client and a
 /// getter for the captured request bodies (decoded), in call order.
 ({http.Client client, List<Map<String, dynamic>> Function() requests})
-_strictJmapServer() {
+    _strictJmapServer() {
   final requests = <Map<String, dynamic>>[];
 
   final client = MockClient((req) async {
@@ -79,9 +79,8 @@ _strictJmapServer() {
 
     final body = jsonDecode(req.body) as Map<String, dynamic>;
     requests.add(body);
-    final using = ((body['using'] as List<dynamic>?) ?? const [])
-        .cast<String>()
-        .toSet();
+    final using =
+        ((body['using'] as List<dynamic>?) ?? const []).cast<String>().toSet();
     final methodCalls = (body['methodCalls'] as List<dynamic>).cast<List>();
 
     final methodResponses = <List<dynamic>>[];
@@ -174,12 +173,12 @@ _strictJmapServer() {
 }
 
 EmailDraft _draft() => const EmailDraft(
-  from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
-  to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-  cc: [],
-  subject: 'strict-server test',
-  body: 'hello from the offline regression test',
-);
+      from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+      to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      cc: [],
+      subject: 'strict-server test',
+      body: 'hello from the offline regression test',
+    );
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -193,7 +192,8 @@ void main() {
     return (accounts: accounts, emails: emails);
   }
 
-  test('sendEmail declares the submission capability on Identity/get', () async {
+  test('sendEmail declares the submission capability on Identity/get',
+      () async {
     final server = _strictJmapServer();
     final r = makeRepo(server.client);
     await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -210,8 +210,8 @@ void main() {
         .requests()
         .where(
           (body) => (body['methodCalls'] as List<dynamic>).cast<List>().any(
-            (call) => call[0] == 'Identity/get',
-          ),
+                (call) => call[0] == 'Identity/get',
+              ),
         )
         .toList();
     expect(
@@ -241,8 +241,8 @@ void main() {
           .requests()
           .where(
             (body) => (body['methodCalls'] as List<dynamic>).cast<List>().any(
-              (call) => call[0] == 'EmailSubmission/set',
-            ),
+                  (call) => call[0] == 'EmailSubmission/set',
+                ),
           )
           .toList();
       expect(
@@ -260,7 +260,8 @@ void main() {
     },
   );
 
-  test('strict server rejects an under-declared submission call (guards the '
+  test(
+      'strict server rejects an under-declared submission call (guards the '
       'guard)', () async {
     // Proves the harness would actually catch #535: issuing Identity/get
     // without declaring the submission capability comes back as unknownMethod,
