@@ -19,7 +19,13 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 /// SnackBar, dialog or inline banner) must also call one of the logger
 /// levels below, so the failure is discoverable in the App Log screen and
 /// in bug reports. Fire-and-forget the call with `unawaited(...)` so
-/// logging never blocks the UI response.
+/// logging never blocks the UI response. (SnackBars raised via
+/// `context.showAppSnackBar` already log for you.)
+///
+/// The global, out-of-widget error handlers (`FlutterError.onError`, the
+/// `runZonedGuarded` zone handler and [ErrorBoundary]'s async capture) are
+/// covered separately via `crashLogger`/`logUncaught` (see
+/// `core/services/crash_logger.dart`), so uncaught crashes are logged too.
 class AppLogger {
   AppLogger(this._repo);
 

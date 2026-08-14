@@ -69,7 +69,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     try {
       await repo.getPassword(account.id);
       _hasStoredPassword = true;
-    } catch (_) {}
+    } catch (_) {
+      // No stored password (or keystore miss): not surfaced to the user, so
+      // nothing to log — the form simply prompts for one.
+    }
     if (!mounted) return;
     _account = account;
     _displayNameCtrl.text = account.displayName;
@@ -169,7 +172,17 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
           _tryOk = 'Connected as $effective';
         });
       }
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'account.test_connection_failed',
+              'Connection test failed',
+              screen: 'EditAccountScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _tryTesting = false;
@@ -225,7 +238,17 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         unawaited(ref.read(manageSieveProbeServiceProvider).probe(updated));
       }
       if (mounted) context.pop();
-    } catch (e) {
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.save_failed',
+              'Failed to save account',
+              screen: 'EditAccountScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
       if (mounted) {
         setState(() {
           _saving = false;

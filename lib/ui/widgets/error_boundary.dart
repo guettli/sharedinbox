@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:sharedinbox/core/services/crash_logger.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Wraps [child] so that a build- or paint-time exception in the subtree shows
@@ -151,11 +152,16 @@ abstract final class ErrorBoundaryScope {
   ]) {
     final controller = _ErrorBoundaryScope.of(context);
     if (controller == null) {
+      // No boundary: routes to FlutterError.onError, which logs it (#534).
       FlutterError.reportError(
         FlutterErrorDetails(exception: error, stack: stack),
       );
       return false;
     }
+    // A boundary captures the error itself, so it never reaches
+    // FlutterError.onError — record it here instead so it is still
+    // discoverable in the App Log and bug reports (#534).
+    logUncaught('ui.error_boundary', error.toString(), error, stack);
     controller.capture(error, stack);
     return true;
   }

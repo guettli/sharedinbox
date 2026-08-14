@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/crash_logger.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
@@ -55,8 +57,22 @@ void main({List<Override> overrides = const []}) {
         // ErrorWidget.builder cannot recover from.
         FlutterError.onError = (details) {
           FlutterError.presentError(details);
+          // Every uncaught error funnels through here (framework errors, and
+          // async errors forwarded by the runZonedGuarded handler below via
+          // FlutterError.reportError), so this is the single place to record
+          // them in the App Log for bug reports (#534). Transient network
+          // blips are demoted to `warn` since they are a normal mobile
+          // condition, not a crash.
+          final transient = isTransientNetworkError(details.exception);
+          logUncaught(
+            'app.flutter_error',
+            details.exceptionAsString(),
+            details.exception,
+            details.stack,
+            level: transient ? AppLogLevel.warn : AppLogLevel.error,
+          );
           if (_isWidgetTreeError(details)) return;
-          if (isTransientNetworkError(details.exception)) return;
+          if (transient) return;
           runApp(
             CrashScreen(
               exception: details.exception,
@@ -201,6 +217,9 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // transitions can be recorded. The observer is a global because the
     // router is — the logger is set here, after ProviderScope exists.
     appLogNavigatorObserver.logger = ref.read(appLoggerProvider);
+    // Give the global, out-of-widget error handlers a logger too so uncaught
+    // crashes land in the App Log for bug reports (#534).
+    crashLogger = ref.read(appLoggerProvider);
     // Trim retained log rows once per launch.
     unawaited(ref.read(appLogRepositoryProvider).trim());
     // Start background IMAP sync once — runs for the lifetime of the app.
