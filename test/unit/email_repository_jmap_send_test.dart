@@ -47,7 +47,7 @@ bool _requiresSubmission(String method) =>
 /// enforces the `using` ↔ capability contract. Returns the mock client and a
 /// getter for the captured request bodies (decoded), in call order.
 ({http.Client client, List<Map<String, dynamic>> Function() requests})
-    _strictJmapServer() {
+_strictJmapServer() {
   final requests = <Map<String, dynamic>>[];
 
   final client = MockClient((req) async {
@@ -124,10 +124,7 @@ bool _requiresSubmission(String method) =>
           if (args.containsKey('destroy')) {
             methodResponses.add([
               'Email/set',
-              {
-                'accountId': _accountId,
-                'destroyed': args['destroy'],
-              },
+              {'accountId': _accountId, 'destroyed': args['destroy']},
               callId,
             ]);
           } else {
@@ -177,12 +174,12 @@ bool _requiresSubmission(String method) =>
 }
 
 EmailDraft _draft() => const EmailDraft(
-      from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
-      to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-      cc: [],
-      subject: 'strict-server test',
-      body: 'hello from the offline regression test',
-    );
+  from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+  to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+  cc: [],
+  subject: 'strict-server test',
+  body: 'hello from the offline regression test',
+);
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -212,9 +209,9 @@ void main() {
     final identityRequests = server
         .requests()
         .where(
-          (body) => (body['methodCalls'] as List<dynamic>)
-              .cast<List>()
-              .any((call) => call[0] == 'Identity/get'),
+          (body) => (body['methodCalls'] as List<dynamic>).cast<List>().any(
+            (call) => call[0] == 'Identity/get',
+          ),
         )
         .toList();
     expect(
@@ -231,35 +228,37 @@ void main() {
     }
   });
 
-  test('sendEmail declares the submission capability on EmailSubmission/set',
-      () async {
-    final server = _strictJmapServer();
-    final r = makeRepo(server.client);
-    await r.accounts.addAccount(_jmapAccount, 'pw');
+  test(
+    'sendEmail declares the submission capability on EmailSubmission/set',
+    () async {
+      final server = _strictJmapServer();
+      final r = makeRepo(server.client);
+      await r.accounts.addAccount(_jmapAccount, 'pw');
 
-    await r.emails.sendEmail(_jmapAccount.id, _draft());
+      await r.emails.sendEmail(_jmapAccount.id, _draft());
 
-    final submissionRequests = server
-        .requests()
-        .where(
-          (body) => (body['methodCalls'] as List<dynamic>)
-              .cast<List>()
-              .any((call) => call[0] == 'EmailSubmission/set'),
-        )
-        .toList();
-    expect(
-      submissionRequests,
-      isNotEmpty,
-      reason: 'send path must issue EmailSubmission/set',
-    );
-    for (final body in submissionRequests) {
+      final submissionRequests = server
+          .requests()
+          .where(
+            (body) => (body['methodCalls'] as List<dynamic>).cast<List>().any(
+              (call) => call[0] == 'EmailSubmission/set',
+            ),
+          )
+          .toList();
       expect(
-        (body['using'] as List<dynamic>).cast<String>(),
-        contains(_submissionCapability),
-        reason: 'EmailSubmission/set must declare the submission capability',
+        submissionRequests,
+        isNotEmpty,
+        reason: 'send path must issue EmailSubmission/set',
       );
-    }
-  });
+      for (final body in submissionRequests) {
+        expect(
+          (body['using'] as List<dynamic>).cast<String>(),
+          contains(_submissionCapability),
+          reason: 'EmailSubmission/set must declare the submission capability',
+        );
+      }
+    },
+  );
 
   test('strict server rejects an under-declared submission call (guards the '
       'guard)', () async {
