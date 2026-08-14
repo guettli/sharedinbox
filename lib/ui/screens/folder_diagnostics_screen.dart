@@ -83,6 +83,29 @@ class FolderDiagnosticsScreen extends ConsumerWidget {
             '/accounts/$accountId/mailboxes/'
             '${Uri.encodeComponent(mailboxPath)}/force-resync',
           ),
+          onRemovePhantomRows: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            final repo = ref.read(emailRepositoryProvider);
+            final int removed;
+            try {
+              removed = await repo.sweepOrphanThreads(accountId, mailboxPath);
+            } catch (e) {
+              messenger.showSnackBar(
+                SnackBar(content: Text('Could not remove phantom rows: $e')),
+              );
+              return;
+            }
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  removed == 0
+                      ? 'No phantom rows to remove'
+                      : 'Removed $removed phantom row(s)',
+                ),
+              ),
+            );
+            ref.invalidate(folderDiagnosticsProvider(key));
+          },
         ),
       ),
     );
@@ -95,12 +118,14 @@ class _DiagnosticsBody extends StatelessWidget {
     required this.folderTitle,
     required this.onRefetchCounts,
     required this.onForceResync,
+    required this.onRemovePhantomRows,
   });
 
   final MailboxDiagnostics diagnostics;
   final String folderTitle;
   final VoidCallback onRefetchCounts;
   final VoidCallback onForceResync;
+  final VoidCallback onRemovePhantomRows;
 
   String _cell(int? value) => value?.toString() ?? '—';
 
@@ -220,6 +245,12 @@ class _DiagnosticsBody extends StatelessWidget {
               icon: const Icon(Icons.sync),
               label: const Text('Re-fetch counts'),
             ),
+            if (d.orphanThreadRows > 0)
+              FilledButton.tonalIcon(
+                onPressed: onRemovePhantomRows,
+                icon: const Icon(Icons.cleaning_services_outlined),
+                label: Text('Remove ${d.orphanThreadRows} phantom row(s)'),
+              ),
             OutlinedButton.icon(
               onPressed: onForceResync,
               icon: const Icon(Icons.restart_alt),

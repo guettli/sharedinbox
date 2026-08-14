@@ -3,6 +3,20 @@
   "clones": [
     {
       "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 734,
+      "end_line": 745,
+      "key": "d2705f9c57948bf6"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_check_now_test.dart",
+      "start_line": 143,
+      "end_line": 216,
+      "key": "d2705f9c57948bf6"
+    },
+    {
+      "tool": "jscpd",
       "file": "integration_test/app_e2e_test.dart",
       "start_line": 26,
       "end_line": 38,

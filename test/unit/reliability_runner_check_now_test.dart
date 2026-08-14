@@ -147,6 +147,9 @@ class _FakeEmails implements EmailRepository {
   Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
       MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
 
+  @override
+  Future<int> sweepOrphanThreads(String a, String m) async => 0;
+
   // All remaining methods are unused by ReliabilityRunner.
   @override
   Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>

@@ -399,6 +399,54 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// Deletes thread rows in [mailboxPath] that are backed by no email currently
+  /// in that folder — orphans left when a message is re-threaded on resync
+  /// (#418 / #500) or bulk-removed and [_updateThread] only rebuilt the
+  /// *current* threadId, leaving the previous row behind. `observeThreads`
+  /// renders every thread row for the folder, so these orphans surface as
+  /// phantom conversations backed by no local mail (#523).
+  ///
+  /// [_reconcileSourceThreads] does the same sweep but only for the interactive
+  /// move flows; this runs it over the whole folder at sync time (and on demand
+  /// from the diagnostics screen). It only ever removes rows with **zero**
+  /// backing emails, so it stays consistent with the `emails` table and is a
+  /// no-op on a healthy folder. Returns the number of rows removed.
+  Future<int> _sweepOrphanThreads(String accountId, String mailboxPath) async {
+    final emails = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
+        .get();
+    // Matches how every _updateThread call derives its key: `threadId ?? id`.
+    final validIds = <String>{for (final e in emails) e.threadId ?? e.id};
+
+    // A folder with no emails has no valid thread ids, so every row is an
+    // orphan. `[""]` (a value thread ids never take) makes `id NOT IN (...)`
+    // match every row while avoiding the ambiguous `id NOT IN ()`.
+    final Iterable<String> keepIds = validIds.isEmpty ? const [''] : validIds;
+    final removed = await (_db.delete(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                t.id.isNotIn(keepIds),
+          ))
+        .go();
+    if (removed > 0) {
+      log(
+        'sweep-orphan-threads: mailbox=$mailboxPath removed=$removed orphan '
+        'thread row(s) (emails=${emails.length})',
+      );
+    }
+    return removed;
+  }
+
+  @override
+  Future<int> sweepOrphanThreads(String accountId, String mailboxPath) =>
+      _sweepOrphanThreads(accountId, mailboxPath);
+
   @override
   Future<model.Email?> getEmail(String emailId) async {
     final row = await (_db.select(
@@ -722,6 +770,7 @@ class EmailRepositoryImpl implements EmailRepository {
           'IMAP:FlagReconcile:$mailboxPath',
           DateTime.now().toIso8601String(),
         );
+        await _sweepOrphanThreads(account.id, mailboxPath);
         return model.SyncEmailsResult(
           fetched: allUids.length,
           skipped: 0,
@@ -789,6 +838,7 @@ class EmailRepositoryImpl implements EmailRepository {
           maxUid,
           highestModSeq: serverModSeq,
         );
+        await _sweepOrphanThreads(account.id, mailboxPath);
         return model.SyncEmailsResult(
           fetched: newUids.length,
           skipped: serverUids.length - newUids.length,
@@ -1228,6 +1278,15 @@ class EmailRepositoryImpl implements EmailRepository {
     final localEmailRows = localEmails.length;
     final localThreadRows = localThreads.length;
 
+    // Orphaned thread rows: thread ids no longer backed by any email in this
+    // folder. `observeThreads` renders these as phantom conversations (#523).
+    // Uses the same `threadId ?? id` key derivation as _updateThread.
+    final validThreadIds = <String>{
+      for (final e in localEmails) e.threadId ?? e.id,
+    };
+    final orphanThreadRows =
+        localThreads.where((t) => !validThreadIds.contains(t.id)).length;
+
     final protocol =
         account.type == account_model.AccountType.imap ? 'IMAP' : 'JMAP';
 
@@ -1274,6 +1333,7 @@ class EmailRepositoryImpl implements EmailRepository {
       cachedUnread: mailboxRow?.unreadCount ?? 0,
       localEmailRows: localEmailRows,
       localThreadRows: localThreadRows,
+      orphanThreadRows: orphanThreadRows,
       serverTotal: serverTotal,
       serverUnread: serverUnread,
       serverMessageCount: serverMessageCount,
@@ -1294,6 +1354,8 @@ class EmailRepositoryImpl implements EmailRepository {
           'protocol': protocol,
           'cachedTotal': diagnostics.cachedTotal,
           'localEmailRows': localEmailRows,
+          'localThreadRows': localThreadRows,
+          'orphanThreadRows': orphanThreadRows,
           'serverTotal': serverTotal,
           'serverMessageCount': serverMessageCount,
           'missingLocally': missingLocally.length,
@@ -1815,6 +1877,7 @@ class EmailRepositoryImpl implements EmailRepository {
       'JMAP:Reconcile:$mailboxJmapId',
       DateTime.now().toIso8601String(),
     );
+    await _sweepOrphanThreads(accountId, mailboxJmapId);
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -2063,6 +2126,7 @@ class EmailRepositoryImpl implements EmailRepository {
       mailboxJmapId,
       serverIds,
     );
+    await _sweepOrphanThreads(accountId, mailboxJmapId);
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
   }
 

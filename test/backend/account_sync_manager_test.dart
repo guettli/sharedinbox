@@ -739,6 +739,9 @@ class _FakeEmails implements EmailRepository {
       MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
 
   @override
+  Future<int> sweepOrphanThreads(String a, String m) async => 0;
+
+  @override
   Future<ReliabilityResult> verifySyncReliability(
     String accountId,
     String mailboxPath,

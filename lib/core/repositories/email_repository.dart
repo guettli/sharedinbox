@@ -196,6 +196,11 @@ abstract class EmailRepository {
     String mailboxPath,
   );
 
+  /// Removes orphaned thread rows in [mailboxPath] — thread rows backed by no
+  /// email currently in the folder, which the folder view otherwise shows as
+  /// phantom conversations (#523). Returns the number of rows removed.
+  Future<int> sweepOrphanThreads(String accountId, String mailboxPath);
+
   /// Deletes all locally-cached email rows and pending changes for [accountId],
   /// while preserving EmailBodies so already-downloaded content is not lost.
   /// Also resets sync-state checkpoints so the next sync fetches everything fresh.

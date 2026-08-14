@@ -241,6 +241,8 @@ class _CountingEmails implements EmailRepository {
   Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
       MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
   @override
+  Future<int> sweepOrphanThreads(String a, String m) async => 0;
+  @override
   Future<void> clearForResync(String accountId) async {}
   @override
   Future<void> clearMailboxForResync(
