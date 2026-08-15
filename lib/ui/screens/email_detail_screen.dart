@@ -259,6 +259,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               const PopupMenuItem(value: 'rfc', child: Text('Show Raw Email')),
               const PopupMenuDivider(),
               const PopupMenuItem(
+                value: 'show_logs',
+                child: Text('Show Logs'),
+              ),
+              const PopupMenuItem(
                 value: 'bug_report',
                 child: Text('Report a Bug'),
               ),
@@ -284,6 +288,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 unawaited(_showStructure(context, body));
               } else if (value == 'rfc') {
                 unawaited(_showRaw(context, header));
+              } else if (value == 'show_logs') {
+                unawaited(
+                  context.push('/accounts/app-log?emailId=${widget.emailId}'),
+                );
               } else if (value == 'bug_report') {
                 unawaited(
                   context.push('/bug-report?emailId=${widget.emailId}'),

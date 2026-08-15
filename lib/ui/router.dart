@@ -100,6 +100,7 @@ final router = GoRouter(
                   state.uri.queryParameters['syncLogId'] ?? '',
                 ),
                 initialAccountId: state.uri.queryParameters['accountId'],
+                initialEmailId: state.uri.queryParameters['emailId'],
               ),
             ),
             GoRoute(

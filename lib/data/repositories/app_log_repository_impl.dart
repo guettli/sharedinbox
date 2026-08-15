@@ -62,6 +62,10 @@ class AppLogRepositoryImpl implements AppLogRepository {
     if (syncLogId != null) {
       query.where((t) => t.syncLogId.equals(syncLogId));
     }
+    final emailId = filter.emailId;
+    if (emailId != null) {
+      query.where((t) => t.emailId.equals(emailId));
+    }
     final search = filter.search?.trim();
     if (search != null && search.isNotEmpty) {
       final pattern = '%${search.replaceAll('%', r'\%')}%';

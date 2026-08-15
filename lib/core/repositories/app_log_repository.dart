@@ -69,6 +69,7 @@ class AppLogFilter {
     },
     this.accountId,
     this.syncLogId,
+    this.emailId,
     this.search,
     this.limit = 500,
   });
@@ -76,6 +77,7 @@ class AppLogFilter {
   final Set<AppLogLevel> levels;
   final String? accountId;
   final int? syncLogId;
+  final String? emailId;
   final String? search;
   final int limit;
 
@@ -83,16 +85,19 @@ class AppLogFilter {
     Set<AppLogLevel>? levels,
     String? accountId,
     int? syncLogId,
+    String? emailId,
     String? search,
     int? limit,
     bool clearAccountId = false,
     bool clearSyncLogId = false,
+    bool clearEmailId = false,
     bool clearSearch = false,
   }) {
     return AppLogFilter(
       levels: levels ?? this.levels,
       accountId: clearAccountId ? null : (accountId ?? this.accountId),
       syncLogId: clearSyncLogId ? null : (syncLogId ?? this.syncLogId),
+      emailId: clearEmailId ? null : (emailId ?? this.emailId),
       search: clearSearch ? null : (search ?? this.search),
       limit: limit ?? this.limit,
     );
@@ -104,6 +109,7 @@ class AppLogFilter {
     if (other is! AppLogFilter) return false;
     if (other.accountId != accountId) return false;
     if (other.syncLogId != syncLogId) return false;
+    if (other.emailId != emailId) return false;
     if (other.search != search) return false;
     if (other.limit != limit) return false;
     if (other.levels.length != levels.length) return false;
@@ -118,6 +124,7 @@ class AppLogFilter {
         Object.hashAllUnordered(levels),
         accountId,
         syncLogId,
+        emailId,
         search,
         limit,
       );

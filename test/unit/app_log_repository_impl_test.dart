@@ -145,6 +145,48 @@ void main() {
     expect(entries.map((e) => e.event).toList(), ['a']);
   });
 
+  test('watchEntries filters by emailId', () async {
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'email-1',
+            accountId: 'acc1',
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2026),
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'email-2',
+            accountId: 'acc1',
+            mailboxPath: 'INBOX',
+            uid: 2,
+            receivedAt: DateTime(2026),
+          ),
+        );
+    await repo.insert(
+      level: AppLogLevel.info,
+      event: 'a',
+      message: '',
+      emailId: 'email-1',
+    );
+    await repo.insert(
+      level: AppLogLevel.info,
+      event: 'b',
+      message: '',
+      emailId: 'email-2',
+    );
+    await repo.insert(
+      level: AppLogLevel.info,
+      event: 'c',
+      message: '',
+    );
+
+    final entries =
+        await repo.watchEntries(const AppLogFilter(emailId: 'email-1')).first;
+    expect(entries.map((e) => e.event).toList(), ['a']);
+  });
+
   test('watchEntries free-text search matches event and message', () async {
     await repo.insert(
       level: AppLogLevel.info,
