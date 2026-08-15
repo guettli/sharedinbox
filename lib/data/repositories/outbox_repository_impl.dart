@@ -30,6 +30,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
       'cc': draft.cc.map((a) => a.toJson()).toList(),
       'subject': draft.subject,
       'body': draft.body,
+      if (draft.messageId != null) 'messageId': draft.messageId,
     });
     final attachmentsJson = jsonEncode(draft.attachmentFilePaths);
     return _db.into(_db.outbox).insert(
@@ -176,6 +177,7 @@ model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
     subject: env['subject'] as String? ?? '',
     body: env['body'] as String? ?? '',
     attachmentFilePaths: atts.cast<String>(),
+    messageId: env['messageId'] as String?,
   );
 }
 
@@ -207,5 +209,6 @@ imap.MessageBuilder _buildMime(model.EmailDraft draft) {
     ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
     ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
     ..subject = draft.subject
+    ..messageId = draft.messageId
     ..text = draft.body;
 }

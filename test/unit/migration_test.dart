@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 51);
+      expect(db.schemaVersion, 52);
       await db.close();
     });
 
@@ -109,6 +109,9 @@ void main() {
 
       // v23: list-unsubscribe header column.
       expect(emailColumns, contains('list_unsubscribe_header'));
+
+      // v52: local self-sent "virtual" message marker.
+      expect(emailColumns, contains('is_local'));
 
       // v8: mailboxes role column.
       final mailboxColumns = await _tableColumns(db, 'mailboxes');

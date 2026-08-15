@@ -23,6 +23,10 @@ class Email {
   final String? snoozedFromMailboxPath;
   // RFC 2369 List-Unsubscribe header value, e.g. "<mailto:...>, <https://...>".
   final String? listUnsubscribeHeader;
+  // A local "virtual" copy of a message that was just sent to one of the user's
+  // own accounts. It appears in the inbox immediately for note-taking and is
+  // dissolved into the real message once it arrives via sync (see #545).
+  final bool isLocal;
 
   const Email({
     required this.id,
@@ -46,6 +50,7 @@ class Email {
     this.snoozedUntil,
     this.snoozedFromMailboxPath,
     this.listUnsubscribeHeader,
+    this.isLocal = false,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -81,6 +86,7 @@ class Email {
           : null,
       snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
       listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
+      isLocal: (json['isLocal'] as bool?) ?? false,
     );
   }
 
@@ -107,6 +113,7 @@ class Email {
       'snoozedUntil': snoozedUntil?.toIso8601String(),
       'snoozedFromMailboxPath': snoozedFromMailboxPath,
       'listUnsubscribeHeader': listUnsubscribeHeader,
+      'isLocal': isLocal,
     };
   }
 
@@ -132,6 +139,7 @@ class Email {
     DateTime? snoozedUntil,
     String? snoozedFromMailboxPath,
     String? listUnsubscribeHeader,
+    bool? isLocal,
   }) {
     return Email(
       id: id ?? this.id,
@@ -157,6 +165,7 @@ class Email {
           snoozedFromMailboxPath ?? this.snoozedFromMailboxPath,
       listUnsubscribeHeader:
           listUnsubscribeHeader ?? this.listUnsubscribeHeader,
+      isLocal: isLocal ?? this.isLocal,
     );
   }
 }
@@ -334,6 +343,12 @@ class EmailDraft {
   /// Local file-system paths of files to attach when sending.
   final List<String> attachmentFilePaths;
 
+  /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
+  /// message. When null, the mail library generates one at send time. Set
+  /// explicitly for self-sends so the immediately-created local message and
+  /// the real message that arrives later share the same id (see #545).
+  final String? messageId;
+
   const EmailDraft({
     required this.from,
     required this.to,
@@ -341,7 +356,18 @@ class EmailDraft {
     required this.subject,
     required this.body,
     this.attachmentFilePaths = const [],
+    this.messageId,
   });
+
+  EmailDraft copyWith({String? messageId}) => EmailDraft(
+        from: from,
+        to: to,
+        cc: cc,
+        subject: subject,
+        body: body,
+        attachmentFilePaths: attachmentFilePaths,
+        messageId: messageId ?? this.messageId,
+      );
 }
 
 class SyncEmailsResult {

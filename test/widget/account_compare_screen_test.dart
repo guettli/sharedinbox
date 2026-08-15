@@ -30,6 +30,7 @@ Email _row({
       isFlagged: false,
       hasAttachment: false,
       messageId: messageId,
+      isLocal: false,
     );
 
 AccountComparisonResult _resultWith(List<EmailDiff> emails) =>
