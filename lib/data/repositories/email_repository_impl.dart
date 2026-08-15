@@ -489,6 +489,13 @@ class EmailRepositoryImpl implements EmailRepository {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingle();
+    // Local self-sent "virtual" messages have no server copy to fetch — always
+    // serve the cached body we wrote when the message was composed (#545).
+    if (emailRow.isLocal) {
+      return cached != null
+          ? _bodyRowToModel(cached)
+          : const model.EmailBody(emailId: '', attachments: []);
+    }
     final account = (await _accounts.getAccount(emailRow.accountId))!;
     final password = await _accounts.getPassword(account.id);
 
@@ -998,6 +1005,9 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     var bytes = 0;
     final affectedThreads = <String>{};
+    // (realEmailId, messageId) of each row we just wrote — checked afterwards
+    // for a local self-sent "virtual" counterpart to dissolve (#545).
+    final dissolveCandidates = <(String, String?)>[];
     await _db.transaction(() async {
       for (final msg in fetch.messages) {
         final envelope = msg.envelope;
@@ -1085,12 +1095,34 @@ class EmailRepositoryImpl implements EmailRepository {
                 listUnsubscribeHeader: Value(listUnsubscribe),
               ),
             );
+        if (msgId != null) dissolveCandidates.add((emailId, msgId));
       }
     });
     for (final tid in affectedThreads) {
       await _updateThread(account.id, mailboxPath, tid);
     }
+    if (dissolveCandidates.isNotEmpty && await _hasLocalMessages(account.id)) {
+      for (final (emailId, msgId) in dissolveCandidates) {
+        await _maybeDissolveLocalMessage(
+          account.id,
+          mailboxPath,
+          emailId,
+          msgId,
+        );
+      }
+    }
     return bytes;
+  }
+
+  /// Whether [accountId] has any local self-sent "virtual" rows awaiting a real
+  /// counterpart (#545). A one-shot guard so sync's per-message dissolve scan is
+  /// skipped entirely for the common case of no pending self-sends.
+  Future<bool> _hasLocalMessages(String accountId) async {
+    final row = await (_db.select(_db.emails)
+          ..where((t) => t.accountId.equals(accountId) & t.isLocal.equals(true))
+          ..limit(1))
+        .getSingleOrNull();
+    return row != null;
   }
 
   // UIDs in [mailboxPath] that have a pending local delete or move queued.
@@ -1214,6 +1246,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final serverUidSet = serverUids.toSet();
     final affectedThreads = <String>{};
     for (final row in localRows) {
+      // Local self-sent "virtual" rows have no server UID and must survive
+      // until the real message arrives and dissolves them (#545).
+      if (row.isLocal) continue;
       if (!serverUidSet.contains(row.uid)) {
         if (inFlightSet.contains(row.id)) continue;
         affectedThreads.add(row.threadId ?? row.id);
@@ -2046,6 +2081,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final affectedThreads = <String>{};
     var removed = 0;
     for (final row in localRows) {
+      // Local self-sent "virtual" rows have no server counterpart and must
+      // survive until the real message arrives and dissolves them (#545).
+      if (row.isLocal) continue;
       final jmapId = row.id.substring('$accountId:'.length);
       if (serverIds.contains(jmapId)) continue;
       if (inFlightSet.contains(row.id)) continue;
@@ -2256,6 +2294,9 @@ class EmailRepositoryImpl implements EmailRepository {
   }) async {
     var bytes = 0;
     final affectedByMailbox = <String, Set<String>>{};
+    // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
+    // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
+    final dissolveCandidates = <(String, String, String?)>[];
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
@@ -2394,11 +2435,22 @@ class EmailRepositoryImpl implements EmailRepository {
               ),
             );
       }
+      dissolveCandidates.add((mailboxPath, dbId, jmapMessageId));
     }
 
     for (final mailboxPath in affectedByMailbox.keys) {
       for (final tid in affectedByMailbox[mailboxPath]!) {
         await _updateThread(accountId, mailboxPath, tid);
+      }
+    }
+    if (dissolveCandidates.isNotEmpty && await _hasLocalMessages(accountId)) {
+      for (final (mailboxPath, emailId, msgId) in dissolveCandidates) {
+        await _maybeDissolveLocalMessage(
+          accountId,
+          mailboxPath,
+          emailId,
+          msgId,
+        );
       }
     }
     return bytes;
@@ -3139,6 +3191,11 @@ class EmailRepositoryImpl implements EmailRepository {
     String changeType,
     String payload,
   ) async {
+    // Local self-sent "virtual" messages have no server counterpart yet, so an
+    // outbound mutation would be rejected (`notFound`) and evicted. The state
+    // is instead applied locally and carried over to the real message when it
+    // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
+    if (await _isLocalEmail(resourceId)) return;
     await _db.into(_db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: accountId,
@@ -3150,6 +3207,16 @@ class EmailRepositoryImpl implements EmailRepository {
           ),
         );
     _changeCtrl.add(accountId);
+  }
+
+  /// Whether [emailId] refers to a local self-sent "virtual" row (#545).
+  Future<bool> _isLocalEmail(String emailId) async {
+    final row = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.isLocal])
+          ..where(_db.emails.id.equals(emailId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.read(_db.emails.isLocal) ?? false;
   }
 
   @override
@@ -3361,6 +3428,99 @@ class EmailRepositoryImpl implements EmailRepository {
           )
           ..limit(1))
         .getSingleOrNull();
+  }
+
+  /// Dissolves a local self-sent "virtual" message once its real counterpart
+  /// [realEmailId] arrives in [arrivalMailboxPath] via sync: transfers the
+  /// star, read state and folder the user set on the virtual copy onto the
+  /// real message, then removes the virtual row. Notes need no migration —
+  /// they are keyed by Message-ID, which both rows share. No-op when there is
+  /// no matching local row, so it is safe to call for every synced message
+  /// and safe to replay. See #545.
+  @visibleForTesting
+  Future<void> maybeDissolveLocalMessageForTest(
+    String accountId,
+    String arrivalMailboxPath,
+    String realEmailId,
+    String? messageId,
+  ) =>
+      _maybeDissolveLocalMessage(
+        accountId,
+        arrivalMailboxPath,
+        realEmailId,
+        messageId,
+      );
+
+  Future<void> _maybeDissolveLocalMessage(
+    String accountId,
+    String arrivalMailboxPath,
+    String realEmailId,
+    String? messageId,
+  ) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return;
+
+    // Never dissolve against the Sent copy we append after sending — the
+    // virtual message lives in the inbox and should merge with the inbox
+    // arrival, which carries the user's intended folder.
+    if (await _mailboxRole(accountId, arrivalMailboxPath) == 'sent') return;
+
+    final local = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.isLocal.equals(true) &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    if (local == null || local.id == realEmailId) return;
+
+    final targetMailbox = local.mailboxPath;
+    final wantFlagged = local.isFlagged;
+    final wantSeen = local.isSeen;
+    final localThreadId = local.threadId ?? local.id;
+
+    // Remove the virtual row first so thread aggregates count only the real
+    // message from here on.
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(local.id))).go();
+    await (_db.delete(_db.emailBodies)
+          ..where((t) => t.emailId.equals(local.id)))
+        .go();
+    await _updateThread(accountId, local.mailboxPath, localThreadId);
+
+    final real = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(realEmailId)))
+        .getSingleOrNull();
+    if (real == null) return;
+
+    // Carry the user's star / read state onto the real message. setFlag also
+    // enqueues the matching server mutation so the two converge.
+    final seenArg = wantSeen != real.isSeen ? wantSeen : null;
+    final flaggedArg = wantFlagged != real.isFlagged ? wantFlagged : null;
+    if (seenArg != null || flaggedArg != null) {
+      await setFlag(realEmailId, seen: seenArg, flagged: flaggedArg);
+    }
+
+    // Carry the folder the user filed the note into (e.g. Trash) onto the real
+    // message. moveEmail enqueues the server move and refreshes threads.
+    if (targetMailbox != real.mailboxPath) {
+      await moveEmail(realEmailId, targetMailbox);
+    }
+  }
+
+  /// The RFC 8621 / RFC 6154 role of the mailbox at [path] on [accountId], or
+  /// null for a role-less custom folder.
+  Future<String?> _mailboxRole(String accountId, String path) async {
+    final row = await (_db.selectOnly(_db.mailboxes)
+          ..addColumns([_db.mailboxes.role])
+          ..where(
+            _db.mailboxes.accountId.equals(accountId) &
+                _db.mailboxes.path.equals(path),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.read(_db.mailboxes.role);
   }
 
   /// Mirrors a move (Archive / Spam / plain move) onto the matching message in
@@ -4386,9 +4546,102 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
-  Future<int> enqueueSend(String accountId, model.EmailDraft draft) {
-    return _outbox.enqueue(accountId, draft);
+  Future<int> enqueueSend(String accountId, model.EmailDraft draft) async {
+    // Stamp a deterministic Message-ID so a self-send's immediately-created
+    // local message and the real message that arrives later share the same id
+    // (#545). enough_mail would otherwise generate a random one at send time.
+    final host = draft.from.email.contains('@')
+        ? draft.from.email.split('@').last
+        : 'localhost';
+    final stampedDraft = draft.messageId != null
+        ? draft
+        : draft.copyWith(messageId: imap.MessageBuilder.createMessageId(host));
+    final rowId = await _outbox.enqueue(accountId, stampedDraft);
+    await _createLocalSelfMessages(accountId, stampedDraft);
+    return rowId;
   }
+
+  /// Marker inserted into a local (virtual) email row's `id` so it never
+  /// collides with a real server row id (`accountId:mailboxPath:uid` for IMAP
+  /// or `accountId:jmapId` for JMAP).
+  static const _localIdMarker = '__local__';
+
+  /// For every configured account whose address is among [draft]'s recipients,
+  /// insert a local "virtual" copy of the message into that account's inbox so
+  /// it shows up immediately for note-taking (#545). Dissolved into the real
+  /// message by [_maybeDissolveLocalMessage] once it arrives via sync.
+  Future<void> _createLocalSelfMessages(
+    String accountId,
+    model.EmailDraft draft,
+  ) async {
+    final mid = normaliseMessageId(draft.messageId);
+    if (mid == null) return;
+    final recipients = <String>{
+      for (final a in draft.to) a.email.toLowerCase().trim(),
+      for (final a in draft.cc) a.email.toLowerCase().trim(),
+    };
+    if (recipients.isEmpty) return;
+
+    final accounts = await _accounts.observeAccounts().first;
+    for (final account in accounts) {
+      if (account.email.isEmpty) continue;
+      if (!recipients.contains(account.email.toLowerCase().trim())) continue;
+
+      // The inbox is where a mail-to-self lands; the local copy mirrors it.
+      final inbox = await (_db.select(_db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals(account.id) & t.role.equals('inbox'),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (inbox == null) continue;
+
+      final now = DateTime.now();
+      final emailId = '${account.id}:$_localIdMarker:$mid';
+      final threadId =
+          _computeThreadId(messageId: mid, inReplyTo: null, references: null) ??
+              emailId;
+      final body = draft.body;
+      final preview = body.length > 200 ? body.substring(0, 200) : body;
+
+      await _db.into(_db.emails).insertOnConflictUpdate(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: account.id,
+              mailboxPath: inbox.path,
+              uid: 0,
+              subject: Value(draft.subject),
+              sentAt: Value(now),
+              receivedAt: now,
+              fromJson: Value(_encodeModelAddresses([draft.from])),
+              toAddresses: Value(_encodeModelAddresses(draft.to)),
+              ccJson: Value(_encodeModelAddresses(draft.cc)),
+              preview: Value(preview),
+              // Self-sent: you wrote it, so don't nag with an unread badge.
+              isSeen: const Value(true),
+              isFlagged: const Value(false),
+              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+              threadId: Value(threadId),
+              messageId: Value(mid),
+              isLocal: const Value(true),
+            ),
+          );
+      await _db.into(_db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: Value(body),
+              cachedAt: Value(now),
+              bodySize: Value(_bodySize(body, null)),
+            ),
+          );
+      await _updateThread(account.id, inbox.path, threadId);
+    }
+  }
+
+  String _encodeModelAddresses(List<model.EmailAddress> addresses) =>
+      jsonEncode(
+        addresses.map((a) => {'name': a.name, 'email': a.email}).toList(),
+      );
 
   @override
   Future<int> flushOutbox(String accountId, String password) async {
@@ -4543,6 +4796,7 @@ class EmailRepositoryImpl implements EmailRepository {
       ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
       ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
       ..subject = draft.subject
+      ..messageId = draft.messageId
       ..text = draft.body;
     for (final filePath in draft.attachmentFilePaths) {
       final file = File(filePath);
@@ -4703,6 +4957,9 @@ class EmailRepositoryImpl implements EmailRepository {
       if (draft.cc.isNotEmpty)
         'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
       'subject': draft.subject,
+      // JMAP messageId is an array of bracket-less ids (RFC 8621 §4.1.2.3).
+      if (draft.messageId != null)
+        'messageId': [normaliseMessageId(draft.messageId)],
       'bodyValues': {
         bodyPartId: {
           'value': draft.body,
@@ -5582,6 +5839,7 @@ class EmailRepositoryImpl implements EmailRepository {
       snoozedUntil: row.snoozedUntil,
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
       listUnsubscribeHeader: row.listUnsubscribeHeader,
+      isLocal: row.isLocal,
     );
   }
 

@@ -111,6 +111,13 @@ class Emails extends Table {
   // Added in schema v23: RFC 2369 List-Unsubscribe header value.
   TextColumn get listUnsubscribeHeader => text().nullable()();
 
+  // Added in schema v52: a local "virtual" copy of a self-sent message, shown
+  // in the inbox immediately for note-taking and dissolved into the real
+  // message once it arrives via sync (#545). Local rows have uid 0 and no
+  // server counterpart, so sync's deletion reconciliation must skip them and
+  // outbound mutations must not be queued against them.
+  BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -1138,6 +1145,11 @@ class AppDatabase extends _$AppDatabase {
                 SELECT rowid, text_body FROM email_bodies
               ''');
             }
+          }
+          if (from < 52 && await _tableExists(this, 'emails')) {
+            // Local self-sent "virtual" messages (#545). Marks rows that have
+            // no server counterpart yet so sync doesn't prune them.
+            await m.addColumn(emails, emails.isLocal);
           }
           if (from >= 19 &&
               from < 51 &&

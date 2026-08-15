@@ -286,6 +286,27 @@ server round-trip; if it had already been flushed, a compensating move is queued
 
 ---
 
+## 8a. Local self-sent "virtual" messages
+
+A mail addressed to one of the user's own accounts appears in that account's inbox
+**immediately** so it can be starred, noted or filed while the real message is still in
+flight (#545). `enqueueSend` stamps a deterministic RFC 5322 `Message-ID`, queues the
+send as usual, and additionally writes a row to `emails` with `is_local = 1`, `uid = 0`
+and that Message-ID.
+
+- **Not pruned**: local rows have no server UID, so both deletion-reconciliation passes
+  (`_reconcileDeletedImap`, `_pruneJmapMailboxToServerIds`) skip `is_local` rows.
+- **No outbound mutations**: `_enqueueChange` is a no-op for a local row — there is no
+  server message to flag/move/delete yet, so the state stays purely local.
+- **Dissolve on arrival**: when the real message is synced in, `_maybeDissolveLocalMessage`
+  matches it by Message-ID, transfers the star / read-state / folder the user set on the
+  virtual copy (queuing the equivalent server mutations so both converge), then deletes
+  the virtual row. Notes need no migration — they are keyed by Message-ID, which both
+  rows share. The Sent copy we append after sending is left alone (matched by mailbox
+  `role == 'sent'`); only the inbox arrival dissolves the virtual message.
+
+---
+
 ## 9. Fuzz testing the sync engine
 
 `scripts/sync_reliability.sh` runs the IMAP/JMAP sync engine against an isolated
