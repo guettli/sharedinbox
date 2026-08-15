@@ -25,6 +25,17 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 class AccountSendScreen extends ConsumerStatefulWidget {
   const AccountSendScreen({super.key});
 
+  /// Test seam: when non-null, replaces the [MobileScanner] widget so the
+  /// camera error path can be exercised on hosts without a camera. Receives the
+  /// scan callback and the error builder used when the camera fails to start.
+  /// Null in production, where the real scanner is used.
+  @visibleForTesting
+  static Widget Function(
+    BuildContext context,
+    void Function(String raw) onDetect,
+    Widget Function(BuildContext, MobileScannerException) errorBuilder,
+  )? debugScannerBuilder;
+
   @override
   ConsumerState<AccountSendScreen> createState() => _AccountSendScreenState();
 }
@@ -214,22 +225,29 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   }
 
   Widget _buildScanStep(BuildContext context) {
-    if (!_cameraScanSupported() || _scannerFailed) {
+    final debugBuilder = AccountSendScreen.debugScannerBuilder;
+    if (debugBuilder == null && (!_cameraScanSupported() || _scannerFailed)) {
       return _buildTextFallbackView(context);
     }
-    if (_scannerController == null) {
+    if (debugBuilder == null && _scannerController == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
+    void onDetect(String raw) => unawaited(_onPubKeyScanned(raw));
+
     return Stack(
       children: [
-        MobileScanner(
-          controller: _scannerController!,
-          onDetect: (capture) {
-            final raw = capture.barcodes.firstOrNull?.rawValue;
-            if (raw != null) unawaited(_onPubKeyScanned(raw));
-          },
-        ),
+        if (debugBuilder != null)
+          debugBuilder(context, onDetect, _scannerErrorFallback)
+        else
+          MobileScanner(
+            controller: _scannerController!,
+            errorBuilder: _scannerErrorFallback,
+            onDetect: (capture) {
+              final raw = capture.barcodes.firstOrNull?.rawValue;
+              if (raw != null) onDetect(raw);
+            },
+          ),
         Positioned(
           top: 0,
           left: 0,
@@ -249,6 +267,27 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         ),
       ],
     );
+  }
+
+  // Called by MobileScanner when the camera fails to start (e.g. a native
+  // NullPointerException on some Android builds, issue #542). Logs once and
+  // drops to the text-entry fallback so the transfer can still be completed by
+  // pasting the code, instead of leaving the user on a dead-end error screen.
+  Widget _scannerErrorFallback(BuildContext context, MobileScannerException e) {
+    if (!_scannerFailed) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'account.send.scanner_failed',
+              'Camera scanner failed to start; falling back to manual paste',
+              screen: 'AccountSendScreen',
+              error: e,
+            ),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _scannerFailed = true);
+      });
+    }
+    return _buildTextFallbackView(context);
   }
 
   Widget _buildTextFallbackView(BuildContext context) {

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
+import 'package:sharedinbox/ui/screens/account_send_screen.dart';
 
 import 'helpers.dart';
 
@@ -126,6 +129,37 @@ void main() {
         expect(find.textContaining('Import failed:'), findsWidgets);
       },
     );
+
+    testWidgets(
+      'step 2 — camera failure falls back to manual paste (issue #542)',
+      (tester) async {
+        // Simulate the native camera-start failure that leaves the scanner in
+        // an error state (the mobile_scanner default UI would otherwise be a
+        // dead end). The injected builder immediately invokes the error path.
+        addTearDown(() => AccountReceiveScreen.debugScannerBuilder = null);
+        AccountReceiveScreen.debugScannerBuilder =
+            (context, _, errorBuilder) => errorBuilder(
+                  context,
+                  const MobileScannerException(
+                    errorCode: MobileScannerErrorCode.genericError,
+                  ),
+                );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+
+        // Instead of a dead-end error screen, the text-entry fallback appears.
+        expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
+      },
+    );
   });
 
   group('AccountSendScreen', () {
@@ -243,5 +277,43 @@ void main() {
         expect(find.byKey(const Key('copyEncryptedButton')), findsOneWidget);
       }
     });
+
+    testWidgets(
+      'camera failure falls back to manual paste (issue #542)',
+      (tester) async {
+        // Reproduces the native camera-start failure from the screenshot: the
+        // mobile_scanner default error UI is a dead end, so the screen must
+        // drop to the text-entry fallback instead.
+        addTearDown(() => AccountSendScreen.debugScannerBuilder = null);
+        AccountSendScreen.debugScannerBuilder =
+            (context, _, errorBuilder) => errorBuilder(
+                  context,
+                  const MobileScannerException(
+                    errorCode: MobileScannerErrorCode.genericError,
+                  ),
+                );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/send',
+            overrides: baseOverrides(
+              accounts: [
+                const Account(
+                  id: 'acc-1',
+                  displayName: 'Alice',
+                  email: 'alice@example.com',
+                  imapHost: 'imap.example.com',
+                  smtpHost: 'smtp.example.com',
+                ),
+              ],
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The paste field is shown rather than the dead-end scanner error.
+        expect(find.byKey(const Key('pubKeyInputField')), findsOneWidget);
+      },
+    );
   });
 }
