@@ -17,6 +17,12 @@ import 'db_test_helper.dart';
 // user's own accounts appears in the inbox immediately for note-taking, and is
 // dissolved into the real message once it arrives via sync.
 
+typedef _Repos = ({
+  AppDatabase db,
+  AccountRepositoryImpl accounts,
+  EmailRepositoryImpl emails,
+});
+
 const _account = Account(
   id: 'acc-1',
   displayName: 'Alice',
@@ -31,8 +37,7 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
 Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
-({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-    _makeRepos() {
+_Repos _makeRepos() {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
   final emails = EmailRepositoryImpl(
@@ -44,11 +49,16 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
   return (db: db, accounts: accounts, emails: emails);
 }
 
-Future<void> _seedMailbox(
-  AppDatabase db,
-  String path,
-  String role,
-) =>
+/// Repos with the account registered and an INBOX mailbox seeded — the minimum
+/// needed for a self-send to land somewhere.
+Future<_Repos> _reposWithInbox() async {
+  final r = _makeRepos();
+  await r.accounts.addAccount(_account, 'pw');
+  await _seedMailbox(r.db, 'INBOX', 'inbox');
+  return r;
+}
+
+Future<void> _seedMailbox(AppDatabase db, String path, String role) =>
     db.into(db.mailboxes).insert(
           MailboxesCompanion.insert(
             id: 'acc-1:$path',
@@ -67,16 +77,26 @@ EmailDraft _draftTo(String recipient, {String subject = 'note'}) => EmailDraft(
       body: 'remember milk',
     );
 
-/// Inserts a row that mimics what the sync engine writes when the real message
-/// arrives, sharing [messageId] with the virtual copy.
-Future<String> _insertRealArrival(
-  AppDatabase db,
+Future<List<Email>> _inbox(_Repos r) =>
+    r.emails.observeEmails('acc-1', 'INBOX').first;
+
+/// Sends a note to self and returns the virtual inbox copy it creates.
+Future<Email> _enqueueSelfNote(_Repos r) async {
+  await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
+  return (await _inbox(r)).single;
+}
+
+/// Inserts a row mimicking what the sync engine writes when the real message
+/// arrives (sharing [messageId] with the virtual copy) and dissolves it.
+/// Returns the real row's id.
+Future<String> _arriveAndDissolve(
+  _Repos r,
   String messageId, {
   String mailboxPath = 'INBOX',
   int uid = 42,
 }) async {
   final id = 'acc-1:$mailboxPath:$uid';
-  await db.into(db.emails).insert(
+  await r.db.into(r.db.emails).insert(
         EmailsCompanion.insert(
           id: id,
           accountId: 'acc-1',
@@ -89,7 +109,18 @@ Future<String> _insertRealArrival(
           isSeen: const Value(false),
         ),
       );
+  await r.emails.maybeDissolveLocalMessageForTest(
+    'acc-1',
+    mailboxPath,
+    id,
+    messageId,
+  );
   return id;
+}
+
+Future<List<String>> _pendingChangeTypes(_Repos r) async {
+  final changes = await r.db.select(r.db.pendingChanges).get();
+  return changes.map((c) => c.changeType).toList();
 }
 
 void main() {
@@ -97,13 +128,11 @@ void main() {
 
   group('enqueueSend self-detection', () {
     test('creates a virtual inbox message for a mail to self', () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
 
       await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
 
-      final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
+      final inbox = await _inbox(r);
       expect(inbox, hasLength(1));
       final virtual = inbox.single;
       expect(virtual.isLocal, isTrue);
@@ -128,151 +157,101 @@ void main() {
 
     test('does not create a virtual message for a mail to someone else',
         () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
 
       await r.emails.enqueueSend('acc-1', _draftTo('bob@other.example'));
 
-      final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(inbox, isEmpty);
+      expect(await _inbox(r), isEmpty);
       expect(await r.db.select(r.db.outbox).get(), hasLength(1));
     });
 
     test('address match is case-insensitive', () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
 
       await r.emails.enqueueSend('acc-1', _draftTo('Alice@Example.com'));
 
-      final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(inbox, hasLength(1));
+      expect(await _inbox(r), hasLength(1));
     });
   });
 
   group('mutations on the virtual message', () {
     test('starring a virtual message does not queue a server change', () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
-      await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
-      final virtual =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+      final r = await _reposWithInbox();
+      final virtual = await _enqueueSelfNote(r);
 
       await r.emails.setFlag(virtual.id, flagged: true);
 
-      final updated =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
-      expect(updated.isFlagged, isTrue);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect((await _inbox(r)).single.isFlagged, isTrue);
+      expect(await _pendingChangeTypes(r), isEmpty);
     });
 
     test('trashing a virtual message does not queue a server change', () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
       await _seedMailbox(r.db, 'Trash', 'trash');
-      await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
-      final virtual =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+      final virtual = await _enqueueSelfNote(r);
 
       await r.emails.deleteEmail(virtual.id);
 
-      expect(await r.emails.observeEmails('acc-1', 'INBOX').first, isEmpty);
+      expect(await _inbox(r), isEmpty);
       final trash = await r.emails.observeEmails('acc-1', 'Trash').first;
       expect(trash, hasLength(1));
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await _pendingChangeTypes(r), isEmpty);
     });
   });
 
   group('dissolving on real arrival', () {
     test('transfers the star to the real message and removes the virtual row',
         () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
-      await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
-      final virtual =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+      final r = await _reposWithInbox();
+      final virtual = await _enqueueSelfNote(r);
       await r.emails.setFlag(virtual.id, flagged: true);
 
-      final realId = await _insertRealArrival(r.db, virtual.messageId!);
-      await r.emails.maybeDissolveLocalMessageForTest(
-        'acc-1',
-        'INBOX',
-        realId,
-        virtual.messageId,
-      );
+      final realId = await _arriveAndDissolve(r, virtual.messageId!);
 
-      final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
+      final inbox = await _inbox(r);
       expect(inbox, hasLength(1));
       expect(inbox.single.id, realId);
       expect(inbox.single.isLocal, isFalse);
       expect(inbox.single.isFlagged, isTrue, reason: 'star carried over');
 
       // The star is now pushed to the server for the real message.
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.map((c) => c.changeType), contains('flag_flagged'));
+      expect(await _pendingChangeTypes(r), contains('flag_flagged'));
     });
 
     test('moves the real message to the folder the virtual was filed into',
         () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
       await _seedMailbox(r.db, 'Trash', 'trash');
-      await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
-      final virtual =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+      final virtual = await _enqueueSelfNote(r);
       // User trashes the note before the real mail arrives.
       await r.emails.deleteEmail(virtual.id);
 
-      final realId = await _insertRealArrival(r.db, virtual.messageId!);
-      await r.emails.maybeDissolveLocalMessageForTest(
-        'acc-1',
-        'INBOX',
-        realId,
-        virtual.messageId,
-      );
+      final realId = await _arriveAndDissolve(r, virtual.messageId!);
 
-      expect(await r.emails.observeEmails('acc-1', 'INBOX').first, isEmpty);
+      expect(await _inbox(r), isEmpty);
       final trash = await r.emails.observeEmails('acc-1', 'Trash').first;
       expect(trash, hasLength(1));
       expect(trash.single.id, realId);
 
       // The move to Trash is queued for the server too.
-      final changes = await r.db.select(r.db.pendingChanges).get();
-      expect(changes.map((c) => c.changeType), contains('move'));
+      expect(await _pendingChangeTypes(r), contains('move'));
     });
 
     test('leaves the virtual message untouched for the Sent copy', () async {
-      final r = _makeRepos();
-      await r.accounts.addAccount(_account, 'pw');
-      await _seedMailbox(r.db, 'INBOX', 'inbox');
+      final r = await _reposWithInbox();
       await _seedMailbox(r.db, 'Sent', 'sent');
-      await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
-      final virtual =
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+      final virtual = await _enqueueSelfNote(r);
 
-      final sentId = await _insertRealArrival(
-        r.db,
+      await _arriveAndDissolve(
+        r,
         virtual.messageId!,
         mailboxPath: 'Sent',
         uid: 7,
       );
-      await r.emails.maybeDissolveLocalMessageForTest(
-        'acc-1',
-        'Sent',
-        sentId,
-        virtual.messageId,
-      );
 
       // The virtual inbox copy survives; only the inbox arrival dissolves it.
-      final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(inbox, hasLength(1));
-      final sent = await r.emails.observeEmails('acc-1', 'Sent').first;
-      expect(sent, hasLength(1));
+      expect(await _inbox(r), hasLength(1));
+      expect(await r.emails.observeEmails('acc-1', 'Sent').first, hasLength(1));
     });
   });
 }
