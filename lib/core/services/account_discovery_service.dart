@@ -13,11 +13,33 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
 
   final http.Client _client;
 
+  /// Well-known IMAP/SMTP settings for providers that require no lookup.
+  ///
+  /// Gmail publishes Thunderbird autoconfig, but hard-coding its servers lets
+  /// the user add a Gmail account by typing only their email address — no
+  /// server name, and no dependency on a network round-trip during setup.
+  /// Both `gmail.com` and the legacy `googlemail.com` alias map to the same
+  /// servers.
+  static final Map<String, ImapSmtpDiscovery> _knownProviders = {
+    for (final domain in const ['gmail.com', 'googlemail.com'])
+      domain: ImapSmtpDiscovery(
+        imapHost: 'imap.gmail.com',
+        imapPort: 993,
+        imapSsl: true,
+        smtpHost: 'smtp.gmail.com',
+        smtpPort: 465,
+        smtpSsl: true,
+      ),
+  };
+
   @override
   Future<DiscoveryResult> discover(String email) async {
     final atIdx = email.indexOf('@');
     if (atIdx < 0) return UnknownDiscovery();
     final domain = email.substring(atIdx + 1).toLowerCase();
+
+    final known = _knownProviders[domain];
+    if (known != null) return known;
 
     final jmap = await _tryJmap(domain);
     if (jmap != null) return jmap;

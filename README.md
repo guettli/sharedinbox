@@ -48,6 +48,11 @@ Run the app, tap **+**, and enter your IMAP/SMTP server details. The app syncs y
 background using IMAP IDLE and works offline — the network is only needed during initial sync and
 when sending mail.
 
+For well-known providers you only need to type your email address — the servers are filled in
+automatically. **Gmail** users see this: enter your `@gmail.com` (or `@googlemail.com`) address and
+authenticate with a Google [App Password](GMAIL.md). See [GMAIL.md](GMAIL.md) for details and the
+plan for one-tap Google sign-in.
+
 ### Troubleshooting
 
 **"TLS handshake aborted" when opening Remote email filters (ManageSieve, port 4190)**
