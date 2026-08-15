@@ -58,21 +58,7 @@ Future<void> _tapDeleteAction(WidgetTester tester, String folder) async {
 void main() {
   group('MailboxListScreen', () {
     testWidgets('shows mailbox name', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [kTestMailbox]);
 
       expect(find.text('INBOX'), findsWidgets);
     });
@@ -80,21 +66,7 @@ void main() {
     testWidgets('shows "unread / total" label when totalCount > 0', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [kTestMailbox]);
 
       // kTestMailbox has unreadCount = 3, totalCount = 10.
       expect(find.text('3 / 10', findRichText: true), findsOneWidget);
@@ -119,7 +91,8 @@ void main() {
       expect(find.byIcon(Icons.folder), findsNothing);
     });
 
-    testWidgets('shows the generic folder icon and no role label for a '
+    testWidgets(
+        'shows the generic folder icon and no role label for a '
         'user-created mailbox', (tester) async {
       const custom = Mailbox(
         id: 'acc-1:Work',
@@ -140,21 +113,7 @@ void main() {
     testWidgets('tapping a mailbox tile navigates to its email list', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [kTestMailbox]);
 
       await tester.tap(find.text('INBOX').first);
       await tester.pumpAndSettle();
@@ -173,21 +132,7 @@ void main() {
           unreadCount: 0,
           totalCount: 5,
         );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/mailboxes',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository([mailbox]),
-              ),
-              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
+        await _pumpMailboxList(tester, [mailbox]);
 
         expect(find.text('Sent'), findsOneWidget);
         expect(find.byType(Badge), findsNothing);
@@ -198,21 +143,7 @@ void main() {
     testWidgets('long-press on a mailbox opens the folder actions sheet', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [kTestMailbox]);
 
       await tester.longPress(find.text('INBOX').first);
       await tester.pumpAndSettle();
@@ -375,21 +306,7 @@ void main() {
         unreadCount: 0,
         totalCount: 0,
       );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([emptyMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpMailboxList(tester, [emptyMailbox]);
 
       expect(find.text('Empty'), findsOneWidget);
       // An empty folder shows "0" (not a blank), so it is distinct from a
