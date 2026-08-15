@@ -20,6 +20,7 @@ class AppLogScreen extends ConsumerStatefulWidget {
     super.key,
     this.initialSyncLogId,
     this.initialAccountId,
+    this.initialEmailId,
   });
 
   /// When set, the screen opens pre-filtered to this sync cycle.
@@ -27,6 +28,10 @@ class AppLogScreen extends ConsumerStatefulWidget {
 
   /// When set, the screen opens pre-filtered to this account.
   final String? initialAccountId;
+
+  /// When set, the screen opens pre-filtered to a single message — used by the
+  /// "Show Logs" action on the email detail screen.
+  final String? initialEmailId;
 
   @override
   ConsumerState<AppLogScreen> createState() => _AppLogScreenState();
@@ -42,6 +47,7 @@ class _AppLogScreenState extends ConsumerState<AppLogScreen> {
     _filter = AppLogFilter(
       syncLogId: widget.initialSyncLogId,
       accountId: widget.initialAccountId,
+      emailId: widget.initialEmailId,
     );
   }
 
@@ -186,6 +192,12 @@ class _FilterBar extends StatelessWidget {
                   label: Text('sync #${filter.syncLogId}'),
                   onDeleted: () =>
                       onChanged(filter.copyWith(clearSyncLogId: true)),
+                ),
+              if (filter.emailId != null)
+                InputChip(
+                  label: Text('email=${filter.emailId}'),
+                  onDeleted: () =>
+                      onChanged(filter.copyWith(clearEmailId: true)),
                 ),
             ],
           ),

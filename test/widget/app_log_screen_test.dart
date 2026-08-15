@@ -56,6 +56,9 @@ class _MemRepo extends NoOpAppLogRepository {
       if (filter.syncLogId != null && r.syncLogId != filter.syncLogId) {
         return false;
       }
+      if (filter.emailId != null && r.emailId != filter.emailId) {
+        return false;
+      }
       final s = filter.search?.trim();
       if (s != null && s.isNotEmpty) {
         final needle = s.toLowerCase();
@@ -172,6 +175,45 @@ void main() {
     expect(find.textContaining('sync #7'), findsOneWidget);
     expect(find.textContaining('other'), findsOneWidget);
     expect(find.textContaining('unrelated'), findsNothing);
+  });
+
+  testWidgets('AppLogScreen pre-filters by emailId when supplied',
+      (tester) async {
+    final repo = _MemRepo([
+      AppLogEntry(
+        id: 1,
+        createdAt: DateTime(2024, 1, 1, 10),
+        level: AppLogLevel.info,
+        event: 'for-this-message',
+        message: '',
+        emailId: 'acc-1:42',
+      ),
+      AppLogEntry(
+        id: 2,
+        createdAt: DateTime(2024, 1, 1, 11),
+        level: AppLogLevel.info,
+        event: 'for-another-message',
+        message: '',
+        emailId: 'acc-1:99',
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appLogRepositoryProvider.overrideWithValue(repo),
+          allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
+        ],
+        child: const MaterialApp(
+          home: AppLogScreen(initialEmailId: 'acc-1:42'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('email=acc-1:42'), findsOneWidget);
+    expect(find.textContaining('for-this-message'), findsOneWidget);
+    expect(find.textContaining('for-another-message'), findsNothing);
   });
 
   group('email hyperlink', () {
