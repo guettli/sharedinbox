@@ -157,6 +157,7 @@ class MailboxListScreen extends ConsumerWidget {
                         ref,
                         accountId,
                         mb,
+                        mailboxes,
                       ),
                     );
                   },
@@ -193,6 +194,7 @@ Future<void> _showFolderActions(
   WidgetRef ref,
   String accountId,
   Mailbox mailbox,
+  List<Mailbox> mailboxes,
 ) async {
   final action = await showModalBottomSheet<_FolderAction>(
     context: context,
@@ -251,7 +253,7 @@ Future<void> _showFolderActions(
         '${Uri.encodeComponent(mailbox.path)}/diagnostics',
       );
     case _FolderAction.delete:
-      await _promptDelete(context, ref, repo, accountId, mailbox);
+      await _promptDelete(context, ref, repo, accountId, mailbox, mailboxes);
   }
 }
 
@@ -347,15 +349,43 @@ Future<void> _promptDelete(
   MailboxRepository repo,
   String accountId,
   Mailbox mailbox,
+  List<Mailbox> mailboxes,
 ) async {
+  // Folders that still contain subfolders cannot be deleted — the user has to
+  // delete the subfolders first.
+  final hasSubfolders = mailboxes.any(
+    (m) => m.displayPath.startsWith('${mailbox.displayPath}/'),
+  );
+  if (hasSubfolders) {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete subfolders first'),
+        content: Text(
+          '"${mailbox.displayPath}" contains subfolders. Delete the '
+          'subfolders first, then delete this folder.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+  final count = mailbox.totalCount;
+  final content = count == 0
+      ? 'Delete the empty folder "${mailbox.displayPath}"? '
+          'This cannot be undone.'
+      : 'Delete "${mailbox.displayPath}"? It contains '
+          '$count ${count == 1 ? 'mail' : 'mails'}. This cannot be undone.';
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Delete folder?'),
-      content: Text(
-        'Delete "${mailbox.displayPath}" and everything it contains? '
-        'This cannot be undone.',
-      ),
+      content: Text(content),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
