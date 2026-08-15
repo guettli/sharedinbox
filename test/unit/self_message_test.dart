@@ -58,6 +58,13 @@ Future<_Repos> _reposWithInbox() async {
   return r;
 }
 
+/// Repos with INBOX and a Trash mailbox — the setup for trash-related tests.
+Future<_Repos> _reposWithTrash() async {
+  final r = await _reposWithInbox();
+  await _seedMailbox(r.db, 'Trash', 'trash');
+  return r;
+}
+
 Future<void> _seedMailbox(AppDatabase db, String path, String role) =>
     db.into(db.mailboxes).insert(
           MailboxesCompanion.insert(
@@ -84,6 +91,22 @@ Future<List<Email>> _inbox(_Repos r) =>
 Future<Email> _enqueueSelfNote(_Repos r) async {
   await r.emails.enqueueSend('acc-1', _draftTo('alice@example.com'));
   return (await _inbox(r)).single;
+}
+
+/// Sends a note to self and trashes the virtual copy, returning it.
+Future<Email> _enqueueAndTrashSelfNote(_Repos r) async {
+  final virtual = await _enqueueSelfNote(r);
+  await r.emails.deleteEmail(virtual.id);
+  return virtual;
+}
+
+/// Asserts the inbox is now empty and the message lives in Trash instead,
+/// returning the Trash contents.
+Future<List<Email>> _expectMovedToTrash(_Repos r) async {
+  expect(await _inbox(r), isEmpty);
+  final trash = await r.emails.observeEmails('acc-1', 'Trash').first;
+  expect(trash, hasLength(1));
+  return trash;
 }
 
 /// Inserts a row mimicking what the sync engine writes when the real message
@@ -186,15 +209,11 @@ void main() {
     });
 
     test('trashing a virtual message does not queue a server change', () async {
-      final r = await _reposWithInbox();
-      await _seedMailbox(r.db, 'Trash', 'trash');
-      final virtual = await _enqueueSelfNote(r);
+      final r = await _reposWithTrash();
 
-      await r.emails.deleteEmail(virtual.id);
+      await _enqueueAndTrashSelfNote(r);
 
-      expect(await _inbox(r), isEmpty);
-      final trash = await r.emails.observeEmails('acc-1', 'Trash').first;
-      expect(trash, hasLength(1));
+      await _expectMovedToTrash(r);
       expect(await _pendingChangeTypes(r), isEmpty);
     });
   });
@@ -220,17 +239,13 @@ void main() {
 
     test('moves the real message to the folder the virtual was filed into',
         () async {
-      final r = await _reposWithInbox();
-      await _seedMailbox(r.db, 'Trash', 'trash');
-      final virtual = await _enqueueSelfNote(r);
+      final r = await _reposWithTrash();
       // User trashes the note before the real mail arrives.
-      await r.emails.deleteEmail(virtual.id);
+      final virtual = await _enqueueAndTrashSelfNote(r);
 
       final realId = await _arriveAndDissolve(r, virtual.messageId!);
 
-      expect(await _inbox(r), isEmpty);
-      final trash = await r.emails.observeEmails('acc-1', 'Trash').first;
-      expect(trash, hasLength(1));
+      final trash = await _expectMovedToTrash(r);
       expect(trash.single.id, realId);
 
       // The move to Trash is queued for the server too.
