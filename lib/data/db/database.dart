@@ -743,8 +743,8 @@ class AppDatabase extends _$AppDatabase {
           if (from < 17) {
             await m.createTable(threads);
             // Populate threads from existing emails.
-            final allRows = await select(emails).get();
-            final groups = <String, List<Email>>{};
+            final allRows = await _migrationEmailRows();
+            final groups = <String, List<_MigrationEmail>>{};
             for (final row in allRows) {
               final key =
                   '${row.accountId}:${row.mailboxPath}:${row.threadId ?? row.id}';
@@ -973,11 +973,9 @@ class AppDatabase extends _$AppDatabase {
                   ..where((t) => t.accountType.equals('imap')))
                 .get();
             for (final acct in imapAccounts) {
-              final emailRows = await (select(emails)
-                    ..where((t) => t.accountId.equals(acct.id)))
-                  .get();
+              final emailRows = await _migrationEmailRows(acct.id);
 
-              final groups = <String, List<Email>>{};
+              final groups = <String, List<_MigrationEmail>>{};
               for (final row in emailRows) {
                 final key = '${row.mailboxPath}:${row.threadId ?? row.id}';
                 groups.putIfAbsent(key, () => []).add(row);
@@ -1181,7 +1179,53 @@ class AppDatabase extends _$AppDatabase {
     final rows = await select(installedVersions).get();
     return {for (final r in rows) r.gitHash: r.installedAt};
   }
+
+  /// Reads the subset of `emails` columns the historical thread-rebuild
+  /// migrations (v17, v41) need, via raw SQL. These steps must NOT map the
+  /// full generated `Email` data class: it gains new required fields over time
+  /// (e.g. `is_local` at v52) that the on-disk schema at that migration step
+  /// does not have yet, which would fail with a null-check error (#545).
+  Future<List<_MigrationEmail>> _migrationEmailRows([String? accountId]) async {
+    final rows = await customSelect(
+      'SELECT id, account_id, mailbox_path, thread_id, sent_at, received_at, '
+      'from_json, subject, preview, is_seen, is_flagged FROM emails'
+      '${accountId == null ? '' : ' WHERE account_id = ?'}',
+      variables: accountId == null ? const [] : [Variable<String>(accountId)],
+    ).get();
+    return [
+      for (final r in rows)
+        (
+          id: r.read<String>('id'),
+          accountId: r.read<String>('account_id'),
+          mailboxPath: r.read<String>('mailbox_path'),
+          threadId: r.readNullable<String>('thread_id'),
+          sentAt: r.readNullable<DateTime>('sent_at'),
+          receivedAt: r.read<DateTime>('received_at'),
+          fromJson: r.read<String>('from_json'),
+          subject: r.readNullable<String>('subject'),
+          preview: r.readNullable<String>('preview'),
+          isSeen: r.read<bool>('is_seen'),
+          isFlagged: r.read<bool>('is_flagged'),
+        ),
+    ];
+  }
 }
+
+/// A minimal projection of `emails` used by the pre-#545 thread-rebuild
+/// migrations — see [AppDatabase._migrationEmailRows].
+typedef _MigrationEmail = ({
+  String id,
+  String accountId,
+  String mailboxPath,
+  String? threadId,
+  DateTime? sentAt,
+  DateTime receivedAt,
+  String fromJson,
+  String? subject,
+  String? preview,
+  bool isSeen,
+  bool isFlagged,
+});
 
 /// True when [name] exists as a table in [db]. Used by migrations that need
 /// to survive incomplete legacy test snapshots where not every table has
