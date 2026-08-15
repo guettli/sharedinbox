@@ -127,6 +127,8 @@ const _excluded = <String, String>{
   'lib/ui/widgets/email_tile.dart': 'Widget-only list tile',
   'lib/ui/widgets/filter_builder.dart':
       'Widget-only interactive FilterGroup editor',
+  'lib/ui/widgets/qr_scanner_view.dart':
+      'Wraps mobile_scanner camera plugin — no camera backend on Linux',
   'lib/ui/widgets/secure_email_webview.dart':
       'Wraps webview_flutter plugin — no headless webview backend on Linux',
   'lib/ui/widgets/snooze_picker.dart':

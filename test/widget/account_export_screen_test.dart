@@ -1,9 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 import 'helpers.dart';
+
+/// Injects a [QrScannerView] stand-in that immediately drives the camera error
+/// path, reproducing the native scanner failure from issue #542.
+void _injectFailingScanner() {
+  addTearDown(() => QrScannerView.debugScannerBuilder = null);
+  QrScannerView.debugScannerBuilder =
+      (context, _, errorBuilder) => errorBuilder(
+            context,
+            const MobileScannerException(
+              errorCode: MobileScannerErrorCode.genericError,
+            ),
+          );
+}
+
+/// Pumps the receive screen and advances to its step-2 scanner view.
+Future<void> _openReceiveScanStep(WidgetTester tester) async {
+  await tester.pumpWidget(
+    buildApp(initialLocation: '/accounts/receive', overrides: baseOverrides()),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   group('AccountReceiveScreen', () {
@@ -38,16 +63,7 @@ void main() {
     testWidgets(
       'step 2 button shows text-input fallback on platforms without camera',
       (tester) async {
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/receive',
-            overrides: baseOverrides(),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
-        await tester.pumpAndSettle();
+        await _openReceiveScanStep(tester);
 
         // On Linux (desktop, no camera) the text fallback field must appear.
         expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
@@ -124,6 +140,18 @@ void main() {
         // Screen returns to the pub-key step with an error message visible.
         expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
         expect(find.textContaining('Import failed:'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'step 2 — camera failure falls back to manual paste (issue #542)',
+      (tester) async {
+        // The mobile_scanner default UI would otherwise be a dead end here.
+        _injectFailingScanner();
+        await _openReceiveScanStep(tester);
+
+        // Instead of a dead-end error screen, the text-entry fallback appears.
+        expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
       },
     );
   });
@@ -243,5 +271,36 @@ void main() {
         expect(find.byKey(const Key('copyEncryptedButton')), findsOneWidget);
       }
     });
+
+    testWidgets(
+      'camera failure falls back to manual paste (issue #542)',
+      (tester) async {
+        // Reproduces the native camera-start failure from the screenshot: the
+        // mobile_scanner default error UI is a dead end, so the screen must
+        // drop to the text-entry fallback instead.
+        _injectFailingScanner();
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/send',
+            overrides: baseOverrides(
+              accounts: [
+                const Account(
+                  id: 'acc-1',
+                  displayName: 'Alice',
+                  email: 'alice@example.com',
+                  imapHost: 'imap.example.com',
+                  smtpHost: 'smtp.example.com',
+                ),
+              ],
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The paste field is shown rather than the dead-end scanner error.
+        expect(find.byKey(const Key('pubKeyInputField')), findsOneWidget);
+      },
+    );
   });
 }
