@@ -3,10 +3,32 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
-import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
-import 'package:sharedinbox/ui/screens/account_send_screen.dart';
+import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 import 'helpers.dart';
+
+/// Injects a [QrScannerView] stand-in that immediately drives the camera error
+/// path, reproducing the native scanner failure from issue #542.
+void _injectFailingScanner() {
+  addTearDown(() => QrScannerView.debugScannerBuilder = null);
+  QrScannerView.debugScannerBuilder =
+      (context, _, errorBuilder) => errorBuilder(
+            context,
+            const MobileScannerException(
+              errorCode: MobileScannerErrorCode.genericError,
+            ),
+          );
+}
+
+/// Pumps the receive screen and advances to its step-2 scanner view.
+Future<void> _openReceiveScanStep(WidgetTester tester) async {
+  await tester.pumpWidget(
+    buildApp(initialLocation: '/accounts/receive', overrides: baseOverrides()),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   group('AccountReceiveScreen', () {
@@ -41,16 +63,7 @@ void main() {
     testWidgets(
       'step 2 button shows text-input fallback on platforms without camera',
       (tester) async {
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/receive',
-            overrides: baseOverrides(),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
-        await tester.pumpAndSettle();
+        await _openReceiveScanStep(tester);
 
         // On Linux (desktop, no camera) the text fallback field must appear.
         expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
@@ -133,28 +146,9 @@ void main() {
     testWidgets(
       'step 2 — camera failure falls back to manual paste (issue #542)',
       (tester) async {
-        // Simulate the native camera-start failure that leaves the scanner in
-        // an error state (the mobile_scanner default UI would otherwise be a
-        // dead end). The injected builder immediately invokes the error path.
-        addTearDown(() => AccountReceiveScreen.debugScannerBuilder = null);
-        AccountReceiveScreen.debugScannerBuilder =
-            (context, _, errorBuilder) => errorBuilder(
-                  context,
-                  const MobileScannerException(
-                    errorCode: MobileScannerErrorCode.genericError,
-                  ),
-                );
-
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/receive',
-            overrides: baseOverrides(),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
-        await tester.pumpAndSettle();
+        // The mobile_scanner default UI would otherwise be a dead end here.
+        _injectFailingScanner();
+        await _openReceiveScanStep(tester);
 
         // Instead of a dead-end error screen, the text-entry fallback appears.
         expect(find.byKey(const Key('encryptedCodeField')), findsOneWidget);
@@ -284,14 +278,7 @@ void main() {
         // Reproduces the native camera-start failure from the screenshot: the
         // mobile_scanner default error UI is a dead end, so the screen must
         // drop to the text-entry fallback instead.
-        addTearDown(() => AccountSendScreen.debugScannerBuilder = null);
-        AccountSendScreen.debugScannerBuilder =
-            (context, _, errorBuilder) => errorBuilder(
-                  context,
-                  const MobileScannerException(
-                    errorCode: MobileScannerErrorCode.genericError,
-                  ),
-                );
+        _injectFailingScanner();
 
         await tester.pumpWidget(
           buildApp(

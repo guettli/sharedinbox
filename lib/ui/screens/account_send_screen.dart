@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -13,6 +11,7 @@ import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 /// Sending side of the secure account-sharing flow.
 ///
@@ -24,17 +23,6 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 /// Step 3 – shows the encrypted-accounts QR code for the receiver to scan.
 class AccountSendScreen extends ConsumerStatefulWidget {
   const AccountSendScreen({super.key});
-
-  /// Test seam: when non-null, replaces the [MobileScanner] widget so the
-  /// camera error path can be exercised on hosts without a camera. Receives the
-  /// scan callback and the error builder used when the camera fails to start.
-  /// Null in production, where the real scanner is used.
-  @visibleForTesting
-  static Widget Function(
-    BuildContext context,
-    void Function(String raw) onDetect,
-    Widget Function(BuildContext, MobileScannerException) errorBuilder,
-  )? debugScannerBuilder;
 
   @override
   ConsumerState<AccountSendScreen> createState() => _AccountSendScreenState();
@@ -56,62 +44,12 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   // Set after encryption (step 3).
   String? _encryptedQr;
   String? _errorMessage;
-  bool _scannerActive = true;
-
-  MobileScannerController? _scannerController;
-  // True when the scanner plugin fails to initialise at runtime (e.g.
-  // MissingPluginException on some Android builds).
-  bool _scannerFailed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (_cameraScanSupported()) {
-      unawaited(_initScanner());
-    }
-  }
-
-  // Pre-flight: probe the scanner's permission-state method to verify the
-  // plugin is registered.  MissingPluginException is thrown on Android builds
-  // where the plugin is not linked (issue #204).  All other exceptions mean
-  // the plugin exists but something else failed — the MobileScanner widget
-  // will surface those via its own error builder.
-  Future<void> _initScanner() async {
-    bool available = false;
-    try {
-      await const MethodChannel(
-        'dev.steenbakker.mobile_scanner/scanner/method',
-      ).invokeMethod<int>('state');
-      available = true;
-    } on MissingPluginException {
-      // Plugin not registered on this device; text fallback will be shown.
-    } catch (_) {
-      // Plugin registered but state check failed; let the scanner widget
-      // handle it via its errorBuilder.
-      available = true;
-    }
-    if (!mounted) return;
-    if (available) {
-      setState(() => _scannerController = MobileScannerController());
-    } else {
-      setState(() => _scannerFailed = true);
-    }
-  }
-
-  @override
-  void dispose() {
-    final ctrl = _scannerController;
-    if (ctrl != null) unawaited(ctrl.dispose());
-    super.dispose();
-  }
 
   // ── Step 1: scan pubkey QR ──────────────────────────────────────────────────
 
-  Future<void> _onPubKeyScanned(String rawValue) async {
-    if (!_scannerActive) return;
-    _scannerActive = false;
-    await _scannerController?.stop();
-
+  // Returns true once a valid public-key QR advances the flow; false on an
+  // invalid code so [QrScannerView] keeps scanning for a retry.
+  Future<bool> _onPubKeyScanned(String rawValue) async {
     final parsed = ShareEncryptionService.parsePublicKeyQr(rawValue);
     if (parsed == null) {
       if (mounted) {
@@ -120,25 +58,22 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
           'Ask the receiver to show step 1 of "Receive accounts".',
           level: AppLogLevel.warn,
         );
-        // Allow retry.
-        setState(() => _scannerActive = true);
-        await _scannerController?.start();
       }
-      return;
+      return false;
     }
 
     // Load all available accounts.
     final accounts =
         await ref.read(accountRepositoryProvider).observeAccounts().first;
 
-    if (!mounted) return;
+    if (!mounted) return true;
 
     if (accounts.isEmpty) {
       setState(() {
         _errorMessage = 'No accounts to send.';
         _step = _Step.error;
       });
-      return;
+      return true;
     }
 
     setState(() {
@@ -157,6 +92,7 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
         _step = _Step.selectAccounts;
       });
     }
+    return true;
   }
 
   // ── Step 2: account selection ───────────────────────────────────────────────
@@ -225,69 +161,29 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
   }
 
   Widget _buildScanStep(BuildContext context) {
-    final debugBuilder = AccountSendScreen.debugScannerBuilder;
-    if (debugBuilder == null && (!_cameraScanSupported() || _scannerFailed)) {
-      return _buildTextFallbackView(context);
-    }
-    if (debugBuilder == null && _scannerController == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    void onDetect(String raw) => unawaited(_onPubKeyScanned(raw));
-
-    return Stack(
-      children: [
-        if (debugBuilder != null)
-          debugBuilder(context, onDetect, _scannerErrorFallback)
-        else
-          MobileScanner(
-            controller: _scannerController!,
-            errorBuilder: _scannerErrorFallback,
-            onDetect: (capture) {
-              final raw = capture.barcodes.firstOrNull?.rawValue;
-              if (raw != null) onDetect(raw);
-            },
+    return QrScannerView(
+      onDetect: _onPubKeyScanned,
+      fallbackBuilder: _buildTextFallbackView,
+      logEvent: 'account.send.scanner_failed',
+      screen: 'AccountSendScreen',
+      overlayBuilder: (context) => Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: Container(
+          color: Colors.black54,
+          padding: const EdgeInsets.symmetric(
+            vertical: AppSpacing.md,
+            horizontal: AppSpacing.lg,
           ),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: Container(
-            color: Colors.black54,
-            padding: const EdgeInsets.symmetric(
-              vertical: AppSpacing.md,
-              horizontal: AppSpacing.lg,
-            ),
-            child: const Text(
-              'Point the camera at the public-key QR code shown by the receiver',
-              style: TextStyle(color: Colors.white),
-              textAlign: TextAlign.center,
-            ),
+          child: const Text(
+            'Point the camera at the public-key QR code shown by the receiver',
+            style: TextStyle(color: Colors.white),
+            textAlign: TextAlign.center,
           ),
         ),
-      ],
+      ),
     );
-  }
-
-  // Called by MobileScanner when the camera fails to start (e.g. a native
-  // NullPointerException on some Android builds, issue #542). Logs once and
-  // drops to the text-entry fallback so the transfer can still be completed by
-  // pasting the code, instead of leaving the user on a dead-end error screen.
-  Widget _scannerErrorFallback(BuildContext context, MobileScannerException e) {
-    if (!_scannerFailed) {
-      unawaited(
-        ref.read(appLoggerProvider).error(
-              'account.send.scanner_failed',
-              'Camera scanner failed to start; falling back to manual paste',
-              screen: 'AccountSendScreen',
-              error: e,
-            ),
-      );
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _scannerFailed = true);
-      });
-    }
-    return _buildTextFallbackView(context);
   }
 
   Widget _buildTextFallbackView(BuildContext context) {
@@ -424,9 +320,3 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
     );
   }
 }
-
-bool _cameraScanSupported() =>
-    Platform.isAndroid ||
-    Platform.isIOS ||
-    Platform.isMacOS ||
-    Platform.isWindows;
