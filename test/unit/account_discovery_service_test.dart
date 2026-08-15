@@ -38,6 +38,28 @@ void main() {
       expect(result, isA<UnknownDiscovery>());
     });
 
+    test('returns known Gmail servers without any network lookup', () async {
+      // Empty responses map => any HTTP call would 404. The Gmail short-circuit
+      // must return settings purely from the domain.
+      final svc = _service({});
+      final result = await svc.discover('user@gmail.com');
+      expect(result, isA<ImapSmtpDiscovery>());
+      final imap = result as ImapSmtpDiscovery;
+      expect(imap.imapHost, 'imap.gmail.com');
+      expect(imap.imapPort, 993);
+      expect(imap.imapSsl, isTrue);
+      expect(imap.smtpHost, 'smtp.gmail.com');
+      expect(imap.smtpPort, 465);
+      expect(imap.smtpSsl, isTrue);
+    });
+
+    test('treats the googlemail.com alias as Gmail', () async {
+      final svc = _service({});
+      final result = await svc.discover('User@GoogleMail.com');
+      expect(result, isA<ImapSmtpDiscovery>());
+      expect((result as ImapSmtpDiscovery).imapHost, 'imap.gmail.com');
+    });
+
     test(
       'returns JmapDiscovery with session URL when well-known/jmap returns 200',
       () async {
