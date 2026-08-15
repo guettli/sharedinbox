@@ -265,6 +265,95 @@ void main() {
     );
 
     testWidgets(
+      'delete confirmation shows the number of mails the folder contains',
+      (tester) async {
+        const folder = Mailbox(
+          id: 'acc-1:Archive',
+          accountId: 'acc-1',
+          path: 'Archive',
+          name: 'Archive',
+          displayPath: 'Archive',
+          unreadCount: 0,
+          totalCount: 3,
+        );
+        await _pumpMailboxList(tester, [folder]);
+
+        await tester.longPress(find.text('Archive').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Delete folder?'), findsOneWidget);
+        expect(
+          find.textContaining('It contains 3 mails'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'delete confirmation calls out an empty folder',
+      (tester) async {
+        const folder = Mailbox(
+          id: 'acc-1:Archive',
+          accountId: 'acc-1',
+          path: 'Archive',
+          name: 'Archive',
+          displayPath: 'Archive',
+          unreadCount: 0,
+          totalCount: 0,
+        );
+        await _pumpMailboxList(tester, [folder]);
+
+        await tester.longPress(find.text('Archive').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Delete the empty folder'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'deleting a folder with subfolders is blocked',
+      (tester) async {
+        final repo = FakeMailboxRepository([
+          _folder('Archive'),
+          _folder('Archive/2026'),
+        ]);
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(repo),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('Archive').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Delete subfolders first'), findsOneWidget);
+        expect(find.text('Delete folder?'), findsNothing);
+
+        await tester.tap(find.text('OK'));
+        await tester.pumpAndSettle();
+
+        expect(repo.deleteCalls, isEmpty);
+      },
+    );
+
+    testWidgets(
       'choosing Rename → submitting calls repo.renameMailbox',
       (tester) async {
         final repo = FakeMailboxRepository([kTestMailbox]);
