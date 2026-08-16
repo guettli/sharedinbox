@@ -209,9 +209,85 @@ void main() {
       await tester.tap(find.byIcon(Icons.clear));
       await tester.pumpAndSettle();
 
-      // Results are gone; the recent-search chip for the prior query appears.
+      // Results are gone. The term was only typed (never submitted), so it is
+      // not in history and the empty placeholder is shown instead of a chip.
       expect(find.text('Found email'), findsNothing);
-      expect(find.text('found'), findsOneWidget);
+      expect(find.text('found'), findsNothing);
+      expect(find.text('Type 3+ characters to search'), findsOneWidget);
+    });
+
+    testWidgets('live-search typing does not add the term to history', (
+      tester,
+    ) async {
+      // Regression for #560: typing "foob" on the way to "foobar" pauses long
+      // enough to fire the live search, but the partial term must not be saved.
+      final history = FakeSearchHistoryRepository();
+      final email = testEmail(subject: 'Foobar mail');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(searchResults: [email]),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(history),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Partial term: pause past the 300ms debounce so the live search runs.
+      await tester.enterText(find.byType(TextField), 'foob');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(find.text('Foobar mail'), findsOneWidget);
+
+      // Continue typing the real term; it also runs as a live search.
+      await tester.enterText(find.byType(TextField), 'foobar');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      // Nothing was submitted, so history stays empty — neither the partial
+      // nor the full term was persisted.
+      expect(await history.getRecentSearches(), isEmpty);
+    });
+
+    testWidgets('submitting the field adds the term to history', (
+      tester,
+    ) async {
+      final history = FakeSearchHistoryRepository();
+      final email = testEmail(subject: 'Foobar mail');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(searchResults: [email]),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(history),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'foobar');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Foobar mail'), findsOneWidget);
+      expect(await history.getRecentSearches(), ['foobar']);
     });
   });
 
