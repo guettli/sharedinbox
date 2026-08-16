@@ -7,7 +7,6 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
-import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_actions.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -201,7 +200,11 @@ class _AccountTile extends ConsumerWidget {
               if (h.lastError != null) {
                 return _SyncHealthErrorRow(error: h.lastError!);
               }
-              return _SyncHealthResultRow(health: h);
+              return _SyncHealthResultRow(
+                isHealthy: h.isHealthy,
+                lastVerifiedAt: h.lastVerifiedAt,
+                discrepancySummary: h.discrepancySummary,
+              );
             },
             loading: () => isVerifying
                 ? const _SyncHealthVerifyingRow()
@@ -278,17 +281,22 @@ class _SyncHealthErrorRow extends StatelessWidget {
 /// discrepancy metric then gets its own line below instead of being crammed
 /// into a single overflowing sentence.
 class _SyncHealthResultRow extends StatelessWidget {
-  const _SyncHealthResultRow({required this.health});
+  const _SyncHealthResultRow({
+    required this.isHealthy,
+    required this.lastVerifiedAt,
+    required this.discrepancySummary,
+  });
 
-  final SyncHealthRow health;
+  final bool isHealthy;
+  final DateTime lastVerifiedAt;
+  final String? discrepancySummary;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final date = health.lastVerifiedAt.toLocal().toString().split('.')[0];
-    final details = health.isHealthy
-        ? const <String>[]
-        : _discrepancyLines(health.discrepancySummary);
+    final date = lastVerifiedAt.toLocal().toString().split('.')[0];
+    final details =
+        isHealthy ? const <String>[] : _discrepancyLines(discrepancySummary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -296,14 +304,14 @@ class _SyncHealthResultRow extends StatelessWidget {
           children: [
             const Text('Sync health: '),
             Icon(
-              health.isHealthy ? Icons.verified : Icons.warning_amber,
+              isHealthy ? Icons.verified : Icons.warning_amber,
               size: AppIconSize.sm,
-              color: health.isHealthy ? Colors.green : Colors.orange,
+              color: isHealthy ? Colors.green : Colors.orange,
             ),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
               child: Text(
-                health.isHealthy ? 'Healthy' : 'Discrepancies found',
+                isHealthy ? 'Healthy' : 'Discrepancies found',
               ),
             ),
             Text(
