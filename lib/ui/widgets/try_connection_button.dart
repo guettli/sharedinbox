@@ -30,17 +30,21 @@ class TryConnectionButton extends StatelessWidget {
         if (okMessage != null)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
-            child: Text(
-              okMessage!,
-              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            child: _ResultRow(
+              icon: Icons.check_circle,
+              color: Colors.green.shade600,
+              message: okMessage!,
+              semanticLabel: 'Connection succeeded',
             ),
           ),
         if (errorMessage != null)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
-            child: Text(
-              errorMessage!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            child: _ResultRow(
+              icon: Icons.error,
+              color: Theme.of(context).colorScheme.error,
+              message: errorMessage!,
+              semanticLabel: 'Connection failed',
             ),
           ),
         const SizedBox(height: AppSpacing.md),
@@ -54,6 +58,36 @@ class TryConnectionButton extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Try connection'),
+        ),
+      ],
+    );
+  }
+}
+
+/// A status icon next to a coloured message, used to make connection
+/// success and failure easy to tell apart at a glance.
+class _ResultRow extends StatelessWidget {
+  const _ResultRow({
+    required this.icon,
+    required this.color,
+    required this.message,
+    required this.semanticLabel,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String message;
+  final String semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: color, size: 20, semanticLabel: semanticLabel),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Text(message, style: TextStyle(color: color)),
         ),
       ],
     );
