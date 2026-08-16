@@ -324,8 +324,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final localPos = tester.getTopLeft(find.text('missing locally: 3')).dy;
-      final serverPos =
-          tester.getTopLeft(find.text('missing on server: 2')).dy;
+      final serverPos = tester.getTopLeft(find.text('missing on server: 2')).dy;
       final flagPos = tester.getTopLeft(find.text('flag mismatches: 1')).dy;
       expect(serverPos, greaterThan(localPos));
       expect(flagPos, greaterThan(serverPos));
