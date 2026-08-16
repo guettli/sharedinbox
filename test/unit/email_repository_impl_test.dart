@@ -4937,8 +4937,11 @@ void main() {
       int apiStatus = 200,
       Map<String, dynamic>? emailSetResult,
       Map<String, dynamic>? submissionResult,
+      List<Map<String, dynamic>>? identities,
+      List<String>? capturedBodies,
     }) {
       return MockClient((req) async {
+        capturedBodies?.add(req.body);
         if (req.url.path.contains('well-known')) {
           return http.Response(
             jsonEncode({
@@ -4959,7 +4962,8 @@ void main() {
             sessionStatus,
           );
         }
-        // First API call is Identity/get; respond with a single identity.
+        // First API call is Identity/get; respond with the configured
+        // identities (a single alice@example.com identity by default).
         if (req.body.contains('Identity/get')) {
           return http.Response(
             jsonEncode({
@@ -4970,9 +4974,10 @@ void main() {
                   {
                     'accountId': 'acct1',
                     'state': 'id1',
-                    'list': [
-                      {'id': 'identity1', 'email': 'alice@example.com'},
-                    ],
+                    'list': identities ??
+                        [
+                          {'id': 'identity1', 'email': 'alice@example.com'},
+                        ],
                   },
                   'i',
                 ],
@@ -5199,8 +5204,14 @@ void main() {
     test(
       'forbiddenFrom error includes envelope and identity addresses',
       () async {
+        // The sender matches an identity (so identity selection succeeds), but
+        // the server still rejects the submission — e.g. a policy that forbids
+        // this address. The error must still name the envelope/identity address.
         final r = _makeRepos(
           httpClient: mockSend(
+            identities: [
+              {'id': 'identity1', 'email': 'other@example.com'},
+            ],
             submissionResult: {
               'accountId': 'acct1',
               'notCreated': {
@@ -5233,10 +5244,118 @@ void main() {
               allOf(
                 contains('forbiddenFrom'),
                 contains('other@example.com'),
-                contains('alice@example.com'),
               ),
             ),
           ),
+        );
+      },
+    );
+
+    // Extracts the EmailSubmission/set create args from a captured request
+    // body, or null if the body carried no such call.
+    Map<String, dynamic>? submissionCreate(String body) {
+      // The session (.well-known) probe is a GET with an empty body; skip
+      // anything that isn't a JSON method-call envelope.
+      if (!body.trimLeft().startsWith('{')) return null;
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final calls = decoded['methodCalls'] as List<dynamic>?;
+      if (calls == null) return null;
+      for (final call in calls.cast<List<dynamic>>()) {
+        if (call[0] == 'EmailSubmission/set') {
+          final args = call[1] as Map<String, dynamic>;
+          return args['create'] as Map<String, dynamic>?;
+        }
+      }
+      return null;
+    }
+
+    test(
+      'submits with the identity matching From, not the first one',
+      () async {
+        final bodies = <String>[];
+        final r = _makeRepos(
+          httpClient: mockSend(
+            capturedBodies: bodies,
+            // Aliased mailbox: the matching identity is not listed first (#564).
+            identities: [
+              {'id': 'idOther', 'email': 'other@example.com'},
+              {'id': 'idMatch', 'email': 'alice@example.com'},
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await r.emails.sendEmail('jmap-1', draft);
+
+        final create =
+            bodies.map(submissionCreate).firstWhere((c) => c != null);
+        final sub = create!['sub1'] as Map<String, dynamic>;
+        expect(sub['identityId'], 'idMatch');
+      },
+    );
+
+    test('matches the identity case-insensitively', () async {
+      final bodies = <String>[];
+      final r = _makeRepos(
+        httpClient: mockSend(
+          capturedBodies: bodies,
+          identities: [
+            {'id': 'idMatch', 'email': 'alice@example.com'},
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+
+      const mixedCaseDraft = EmailDraft(
+        from: EmailAddress(name: 'Alice', email: 'Alice@Example.com'),
+        to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+        cc: [],
+        subject: 'Hello',
+        body: 'World',
+      );
+
+      await r.emails.sendEmail('jmap-1', mixedCaseDraft);
+
+      final create = bodies.map(submissionCreate).firstWhere((c) => c != null);
+      final sub = create!['sub1'] as Map<String, dynamic>;
+      expect(sub['identityId'], 'idMatch');
+    });
+
+    test(
+      'throws naming the available identities when none matches From',
+      () async {
+        final bodies = <String>[];
+        final r = _makeRepos(
+          httpClient: mockSend(
+            capturedBodies: bodies,
+            identities: [
+              {'id': 'idOther', 'email': 'other@example.com'},
+              {'id': 'idThird', 'email': 'third@example.com'},
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+
+        await expectLater(
+          r.emails.sendEmail('jmap-1', draft),
+          throwsA(
+            isA<JmapException>().having(
+              (e) => e.toString(),
+              'message',
+              allOf(
+                contains('alice@example.com'),
+                contains('other@example.com'),
+                contains('third@example.com'),
+              ),
+            ),
+          ),
+        );
+
+        // No Email/set or EmailSubmission/set is issued: the mismatch is caught
+        // before anything lands in Sent, so there is nothing to roll back.
+        expect(
+          bodies.any((b) => b.contains('Email/set')),
+          isFalse,
         );
       },
     );
