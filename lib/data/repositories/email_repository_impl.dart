@@ -4783,6 +4783,7 @@ class EmailRepositoryImpl implements EmailRepository {
     return m.contains('forbidden') ||
         m.contains('invalidemail') ||
         m.contains('noidentity') ||
+        m.contains('no jmap identity') ||
         m.contains('cannotsend');
   }
 
@@ -5006,7 +5007,23 @@ class EmailRepositoryImpl implements EmailRepository {
     if (identityList == null || identityList.isEmpty) {
       throw JmapException('No identities found for JMAP account');
     }
-    final identity = identityList.first as Map<String, dynamic>;
+    // Pick the identity whose address matches the draft's From, not whatever
+    // Identity/get happens to list first: a mailbox with aliases returns one
+    // identity per address, and a server that enforces RFC 8621 §7.5 rejects
+    // the submission with `forbiddenFrom` when the envelope mailFrom is not an
+    // address the chosen identity may send from (see #564).
+    final wantFrom = draft.from.email.toLowerCase();
+    final identities = identityList.cast<Map<String, dynamic>>();
+    final identity = identities.firstWhere(
+      (i) => (i['email'] as String?)?.toLowerCase() == wantFrom,
+      // Don't silently guess: an identity that can't send as the From address
+      // would just fail with forbiddenFrom, so surface the mismatch instead.
+      orElse: () => throw JmapException(
+        'No JMAP identity matches sender ${draft.from.email}; '
+        'available identities: '
+        '${identities.map((i) => i['email'] ?? '?').join(', ')}',
+      ),
+    );
     final identityId = identity['id'] as String;
     final identityEmail = identity['email'] as String?;
 
