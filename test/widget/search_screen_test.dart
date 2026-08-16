@@ -36,6 +36,22 @@ Future<void> pumpSearchScreen(
   await tester.pumpAndSettle();
 }
 
+/// Pumps [SearchScreen] with an empty history and a single "Foobar mail"
+/// search result, returning the history so #560 tests can assert on it.
+Future<FakeSearchHistoryRepository> pumpSearchWithFoobarResult(
+  WidgetTester tester,
+) async {
+  final history = FakeSearchHistoryRepository();
+  await pumpSearchScreen(
+    tester,
+    history: history,
+    emails: FakeEmailRepository(
+      searchResults: [testEmail(subject: 'Foobar mail')],
+    ),
+  );
+  return history;
+}
+
 void main() {
   group('SearchScreen', () {
     testWidgets('shows placeholder hint text when empty', (tester) async {
@@ -247,14 +263,7 @@ void main() {
     ) async {
       // Regression for #560: typing "foob" on the way to "foobar" pauses long
       // enough to fire the live search, but the partial term must not be saved.
-      final history = FakeSearchHistoryRepository();
-      await pumpSearchScreen(
-        tester,
-        history: history,
-        emails: FakeEmailRepository(
-          searchResults: [testEmail(subject: 'Foobar mail')],
-        ),
-      );
+      final history = await pumpSearchWithFoobarResult(tester);
 
       // Partial term: pause past the 300ms debounce so the live search runs.
       await tester.enterText(find.byType(TextField), 'foob');
@@ -275,14 +284,7 @@ void main() {
     testWidgets('submitting the field adds the term to history', (
       tester,
     ) async {
-      final history = FakeSearchHistoryRepository();
-      await pumpSearchScreen(
-        tester,
-        history: history,
-        emails: FakeEmailRepository(
-          searchResults: [testEmail(subject: 'Foobar mail')],
-        ),
-      );
+      final history = await pumpSearchWithFoobarResult(tester);
 
       await tester.enterText(find.byType(TextField), 'foobar');
       await tester.testTextInput.receiveAction(TextInputAction.search);
