@@ -10,6 +10,32 @@ import 'package:sharedinbox/ui/screens/search_screen.dart';
 
 import 'helpers.dart';
 
+/// Pumps [SearchScreen] at the account-scoped search route with the standard
+/// fakes, letting a test supply just the history and (optionally) email
+/// repositories.
+Future<void> pumpSearchScreen(
+  WidgetTester tester, {
+  required FakeSearchHistoryRepository history,
+  FakeEmailRepository? emails,
+}) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/search',
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+        emailRepositoryProvider.overrideWithValue(
+          emails ?? FakeEmailRepository(),
+        ),
+        searchHistoryRepositoryProvider.overrideWithValue(history),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('SearchScreen', () {
     testWidgets('shows placeholder hint text when empty', (tester) async {
@@ -222,25 +248,13 @@ void main() {
       // Regression for #560: typing "foob" on the way to "foobar" pauses long
       // enough to fire the live search, but the partial term must not be saved.
       final history = FakeSearchHistoryRepository();
-      final email = testEmail(subject: 'Foobar mail');
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(searchResults: [email]),
-            ),
-            searchHistoryRepositoryProvider.overrideWithValue(history),
-          ],
+      await pumpSearchScreen(
+        tester,
+        history: history,
+        emails: FakeEmailRepository(
+          searchResults: [testEmail(subject: 'Foobar mail')],
         ),
       );
-      await tester.pumpAndSettle();
 
       // Partial term: pause past the 300ms debounce so the live search runs.
       await tester.enterText(find.byType(TextField), 'foob');
@@ -262,25 +276,13 @@ void main() {
       tester,
     ) async {
       final history = FakeSearchHistoryRepository();
-      final email = testEmail(subject: 'Foobar mail');
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(searchResults: [email]),
-            ),
-            searchHistoryRepositoryProvider.overrideWithValue(history),
-          ],
+      await pumpSearchScreen(
+        tester,
+        history: history,
+        emails: FakeEmailRepository(
+          searchResults: [testEmail(subject: 'Foobar mail')],
         ),
       );
-      await tester.pumpAndSettle();
 
       await tester.enterText(find.byType(TextField), 'foobar');
       await tester.testTextInput.receiveAction(TextInputAction.search);
