@@ -14,7 +14,8 @@ void main() {
   ).readAsStringSync();
 
   for (final theme in ['LaunchTheme', 'NormalTheme']) {
-    test('$theme disables WebView force-dark so light emails stay readable', () {
+    test('$theme disables WebView force-dark so light emails stay readable',
+        () {
       final match = RegExp(
         'name="$theme".*?</style>',
         dotAll: true,
