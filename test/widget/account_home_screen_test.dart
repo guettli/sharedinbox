@@ -56,21 +56,17 @@ void main() {
       expect(find.text('No emails'), findsOneWidget);
     });
 
-    testWidgets(
-      'tapping Inbox with no synced inbox warns and opens Folders',
-      (tester) async {
-        await _pumpAccountHome(tester, const []);
+    testWidgets('tapping Inbox with no synced inbox warns and opens Folders', (
+      tester,
+    ) async {
+      await _pumpAccountHome(tester, const []);
 
-        await tester.tap(find.widgetWithText(ListTile, 'Inbox'));
-        await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ListTile, 'Inbox'));
+      await tester.pumpAndSettle();
 
-        expect(
-          find.textContaining('No inbox found yet'),
-          findsOneWidget,
-        );
-        // Fell back to the folder list screen.
-        expect(find.text('Folders'), findsWidgets);
-      },
-    );
+      expect(find.textContaining('No inbox found yet'), findsOneWidget);
+      // Fell back to the folder list screen.
+      expect(find.text('Folders'), findsWidgets);
+    });
   });
 }

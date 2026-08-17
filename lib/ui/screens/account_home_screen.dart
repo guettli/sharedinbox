@@ -202,8 +202,7 @@ class _AccountHomeBody extends ConsumerWidget {
       return;
     }
     context.push(
-      '/accounts/${account.id}/mailboxes/'
-      '${Uri.encodeComponent(inbox.path)}/emails',
+      '/accounts/${account.id}/mailboxes/${Uri.encodeComponent(inbox.path)}/emails',
     );
   }
 }
