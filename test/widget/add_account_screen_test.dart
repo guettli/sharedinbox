@@ -1,9 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/discovery_result.dart';
 
 import 'helpers.dart';
+
+/// Drives the add-account flow up to a filled-in JMAP form: enters the email,
+/// advances past discovery, and fills the display name + password.
+Future<void> _fillJmapForm(
+  WidgetTester tester, {
+  required List<Override> overrides,
+}) async {
+  await tester.pumpWidget(
+    buildApp(initialLocation: '/accounts/add', overrides: overrides),
+  );
+  await tester.pumpAndSettle();
+
+  await tester.enterText(
+    find.byKey(const Key('emailField')),
+    'user@example.com',
+  );
+  await tester.tap(find.text('Continue'));
+  await tester.pumpAndSettle();
+
+  await tester.enterText(
+    find.widgetWithText(TextFormField, 'Display name'),
+    'Alice',
+  );
+  await tester.enterText(
+    find.widgetWithText(TextFormField, 'Password'),
+    'secret',
+  );
+}
 
 void main() {
   group('AddAccountScreen', () {
@@ -249,6 +278,28 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Connection failed'), findsOneWidget);
+    });
+
+    testWidgets('JMAP try connection surfaces identity warning',
+        (tester) async {
+      await _fillJmapForm(
+        tester,
+        overrides: baseOverrides(
+          discovery: JmapDiscovery(
+            sessionUrl: 'https://mail.example.com/jmap',
+          ),
+          connectionIdentityWarning:
+              'No send identity on the server matches user@example.com.',
+        ),
+      );
+
+      await tester.tap(find.text('Try connection'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('No send identity on the server matches'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('successful IMAP save pops back to accounts list', (

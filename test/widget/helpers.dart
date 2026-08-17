@@ -635,13 +635,22 @@ class FakeDiscoveryService implements AccountDiscoveryService {
 }
 
 class FakeConnectionTestService implements ConnectionTestService {
-  FakeConnectionTestService({Exception? error}) : _error = error;
+  FakeConnectionTestService({Exception? error, String? identityWarning})
+      : _error = error,
+        _identityWarning = identityWarning;
   final Exception? _error;
+  final String? _identityWarning;
 
   @override
-  Future<String> testConnection(Account account, String password) async {
+  Future<ConnectionTestResult> testConnection(
+    Account account,
+    String password,
+  ) async {
     if (_error != null) throw _error;
-    return account.username.isNotEmpty ? account.username : account.email;
+    return ConnectionTestResult(
+      username: account.username.isNotEmpty ? account.username : account.email,
+      identityWarning: _identityWarning,
+    );
   }
 }
 
@@ -866,6 +875,7 @@ List<Override> baseOverrides({
   List<Mailbox>? mailboxes,
   DiscoveryResult? discovery,
   Exception? connectionError,
+  String? connectionIdentityWarning,
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
@@ -887,7 +897,10 @@ List<Override> baseOverrides({
         FakeDiscoveryService(discovery ?? UnknownDiscovery()),
       ),
       connectionTestServiceProvider.overrideWithValue(
-        FakeConnectionTestService(error: connectionError),
+        FakeConnectionTestService(
+          error: connectionError,
+          identityWarning: connectionIdentityWarning,
+        ),
       ),
       shareKeyRepositoryProvider.overrideWithValue(
         shareKeyRepository ?? FakeShareKeyRepository(),
