@@ -272,6 +272,19 @@ class AccountSyncManager {
     return ctrl.stream;
   }
 
+  /// Flushes queued local mutations to the server before a force re-sync wipes
+  /// the local cache. Best-effort: a failure (typically offline) leaves the
+  /// changes queued — `clearForResync` preserves them — so they retry on the
+  /// next successful sync instead of being lost (#558).
+  Future<void> _flushBeforeResync(String accountId) async {
+    try {
+      final password = await _accounts.getPassword(accountId);
+      await _emails.flushPendingChanges(accountId, password);
+    } catch (e, st) {
+      log('forceResync: flushPendingChanges failed', error: e, stackTrace: st);
+    }
+  }
+
   Future<void> _runForceResync(
     String accountId,
     StreamController<ForceResyncProgress> ctrl,
@@ -292,6 +305,11 @@ class AccountSyncManager {
 
       emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
 
+      // Push any un-pushed local mutations (e.g. a just-starred mail) to the
+      // server before wiping the cache — otherwise the re-fetch below would
+      // overwrite the optimistic local state with stale server truth and the
+      // change would be lost (#558).
+      await _flushBeforeResync(accountId);
       await _emails.clearForResync(accountId);
       await _mailboxes.clearForResync(accountId);
 
@@ -462,6 +480,8 @@ class AccountSyncManager {
       final mailbox = matches.first;
 
       emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
+      // Push un-pushed local mutations before wiping the cache (see #558).
+      await _flushBeforeResync(accountId);
       await _emails.clearMailboxForResync(accountId, mailboxPath);
 
       emit(
