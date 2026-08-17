@@ -31,6 +31,12 @@ Future<ManageSieveClient> _defaultManageSieveConnect({
 }) =>
     ManageSieveClient.connect(host: host, port: port, useTls: useTls);
 
+abstract class ConnectionTestService {
+  /// Verifies credentials and returns the effective username used plus any
+  /// non-fatal warning. Throws a descriptive [Exception] on failure.
+  Future<ConnectionTestResult> testConnection(Account account, String password);
+}
+
 /// Outcome of a successful connection test.
 ///
 /// [username] is the effective username that authenticated. [identityWarning]
@@ -41,12 +47,6 @@ class ConnectionTestResult {
 
   final String username;
   final String? identityWarning;
-}
-
-abstract class ConnectionTestService {
-  /// Verifies credentials and returns the effective username used plus any
-  /// non-fatal warning. Throws a descriptive [Exception] on failure.
-  Future<ConnectionTestResult> testConnection(Account account, String password);
 }
 
 class ConnectionTestServiceImpl implements ConnectionTestService {
