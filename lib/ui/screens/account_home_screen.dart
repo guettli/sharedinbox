@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -198,11 +200,13 @@ class _AccountHomeBody extends ConsumerWidget {
           content: Text('No inbox found yet — try syncing this account'),
         ),
       );
-      context.push('/accounts/${account.id}/mailboxes');
+      unawaited(context.push('/accounts/${account.id}/mailboxes'));
       return;
     }
-    context.push(
-      '/accounts/${account.id}/mailboxes/${Uri.encodeComponent(inbox.path)}/emails',
+    unawaited(
+      context.push(
+        '/accounts/${account.id}/mailboxes/${Uri.encodeComponent(inbox.path)}/emails',
+      ),
     );
   }
 }
