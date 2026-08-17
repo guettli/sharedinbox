@@ -287,7 +287,8 @@ void main() {
     test('no warning when an identity matches the account email', () async {
       final svc = _makeJmapIdentityService(
         sessionJson: _jmapSubmissionSessionJson,
-        identityBody: _identityResponse(['other@example.com', 'alice@example.com']),
+        identityBody:
+            _identityResponse(['other@example.com', 'alice@example.com']),
       );
       final result = await svc.testConnection(_jmapAccount, 'pw');
       expect(result.username, 'alice@example.com');
@@ -297,7 +298,8 @@ void main() {
     test('warns when no identity matches the account address', () async {
       final svc = _makeJmapIdentityService(
         sessionJson: _jmapSubmissionSessionJson,
-        identityBody: _identityResponse(['bob@example.com', 'carol@example.com']),
+        identityBody:
+            _identityResponse(['bob@example.com', 'carol@example.com']),
       );
       final result = await svc.testConnection(_jmapAccount, 'pw');
       expect(result.identityWarning, isNotNull);

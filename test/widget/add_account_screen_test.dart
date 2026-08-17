@@ -280,7 +280,8 @@ void main() {
       expect(find.textContaining('Connection failed'), findsOneWidget);
     });
 
-    testWidgets('JMAP try connection surfaces identity warning', (tester) async {
+    testWidgets('JMAP try connection surfaces identity warning',
+        (tester) async {
       await _fillJmapForm(
         tester,
         overrides: baseOverrides(

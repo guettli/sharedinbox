@@ -278,7 +278,8 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
 
       final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
       final responses = decoded['methodResponses'] as List<dynamic>;
-      final args = (responses.first as List<dynamic>)[1] as Map<String, dynamic>;
+      final args =
+          (responses.first as List<dynamic>)[1] as Map<String, dynamic>;
       final list = args['list'] as List<dynamic>?;
       if (list == null || list.isEmpty) return null;
 
