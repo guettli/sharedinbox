@@ -249,8 +249,7 @@ void main() {
   // refresh (_refreshFlagsImap) right after the dissolve carries the star
   // over — and that refresh used to overwrite the just-transferred star back
   // to server truth (unflagged).
-  test('self-message: starred local copy keeps its star after the '
-      'delivering sync (#565)', () async {
+  test('self-message star survives the delivering sync (#565)', () async {
     final r = makeRepo();
     await r.accounts.addAccount(account, user.password);
 
