@@ -181,6 +181,44 @@ void main() {
       expect(find.text('report.pdf'), findsOneWidget);
     });
 
+    testWidgets(
+      'shows a partial-decode notice with a raw-source link and keeps the '
+      'action bar (#579)',
+      (tester) async {
+        // A body that only partially decoded (malformed MIME) — the screen
+        // must still open, show a notice + "View raw source", and keep its
+        // actions usable rather than dying with a raw RangeError.
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'partial text that did decode',
+          attachments: [],
+          decodeFailed: true,
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('This message could not be fully displayed.'),
+          findsOneWidget,
+        );
+        expect(
+            find.widgetWithText(TextButton, 'View raw source'), findsOneWidget);
+        // Whatever decoded is still shown …
+        expect(find.text('partial text that did decode'), findsOneWidget);
+        // … and the action bar is intact (e.g. the Archive button).
+        expect(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Archive'),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('Reply All button is not present in app bar', (tester) async {
       await tester.pumpWidget(
         buildApp(

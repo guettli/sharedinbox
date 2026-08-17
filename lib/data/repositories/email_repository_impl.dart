@@ -517,40 +517,86 @@ class EmailRepositoryImpl implements EmailRepository {
           'IMAP server returned no message for UID ${emailRow.uid}.',
         );
       }
-      final textBody = msg.decodeTextPlainPart();
-      final rawHtml = msg.decodeTextHtmlPart();
-      final htmlBody =
-          rawHtml == null ? null : injectInlineImages(rawHtml, msg);
-      final contentInfos = msg.findContentInfo();
+      // Decoding a malformed MIME message can make enough_mail throw — e.g. a
+      // `RangeError (end)` on an off-by-a-few-bytes part boundary (#579), the
+      // same class of bug already guarded against on the prefetch path (#232).
+      // Decode each piece defensively so one bad part can't blank the whole
+      // message: salvage what we can, flag the body as partial, and log so the
+      // failure is discoverable in the per-message "Show Logs" view.
+      var decodeFailed = false;
+      Object? decodeError;
+      StackTrace? decodeStack;
+      T? tryDecode<T>(T Function() decode) {
+        try {
+          return decode();
+        } catch (e, stack) {
+          decodeFailed = true;
+          decodeError ??= e;
+          decodeStack ??= stack;
+          return null;
+        }
+      }
 
-      final attachmentsJson = jsonEncode(
-        contentInfos
-            .map(
-              (a) => {
-                'filename': a.fileName ?? '',
-                'contentType': a.contentType?.mediaType.text ?? '',
-                // ContentInfo.fetchId is empty for parts that aren't addressable
-                // (e.g. a non-multipart message whose top-level part is itself
-                // marked as an attachment). MimeMessage.getPart() throws on an
-                // empty fetchId, so guard before calling it.
-                'size': a.size ??
-                    (a.fetchId.isNotEmpty
-                        ? msg.getPart(a.fetchId)?.decodeContentBinary()?.length
-                        : null) ??
-                    0,
-                'fetchPartId': a.fetchId,
-              },
-            )
-            .toList(),
-      );
+      final textBody = tryDecode(msg.decodeTextPlainPart);
+      final rawHtml = tryDecode(msg.decodeTextHtmlPart);
+      final htmlBody = rawHtml == null
+          ? null
+          : tryDecode(() => injectInlineImages(rawHtml, msg));
+      final contentInfos =
+          tryDecode(msg.findContentInfo) ?? const <imap.ContentInfo>[];
 
-      final headersJson = jsonEncode(
-        (msg.headers ?? [])
-            .map((h) => {'name': h.name, 'value': h.value})
-            .toList(),
-      );
+      final attachmentsJson = tryDecode(
+            () => jsonEncode(
+              contentInfos
+                  .map(
+                    (a) => {
+                      'filename': a.fileName ?? '',
+                      'contentType': a.contentType?.mediaType.text ?? '',
+                      // ContentInfo.fetchId is empty for parts that aren't
+                      // addressable (e.g. a non-multipart message whose
+                      // top-level part is itself marked as an attachment).
+                      // MimeMessage.getPart() throws on an empty fetchId, so
+                      // guard before calling it.
+                      'size': a.size ??
+                          (a.fetchId.isNotEmpty
+                              ? msg
+                                  .getPart(a.fetchId)
+                                  ?.decodeContentBinary()
+                                  ?.length
+                              : null) ??
+                          0,
+                      'fetchPartId': a.fetchId,
+                    },
+                  )
+                  .toList(),
+            ),
+          ) ??
+          '[]';
 
-      final mimeTreeJson = _buildMimeTreeJson(msg);
+      final headersJson = tryDecode(
+            () => jsonEncode(
+              (msg.headers ?? [])
+                  .map((h) => {'name': h.name, 'value': h.value})
+                  .toList(),
+            ),
+          ) ??
+          '[]';
+
+      final mimeTreeJson = tryDecode(() => _buildMimeTreeJson(msg));
+
+      if (decodeFailed) {
+        unawaited(
+          _appLogger?.error(
+            'email.body.decode_failed',
+            'Could not fully decode message body — showing what was salvaged',
+            accountId: emailRow.accountId,
+            mailboxPath: emailRow.mailboxPath,
+            emailId: emailId,
+            error: decodeError,
+            stack: decodeStack,
+          ),
+        );
+      }
 
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
@@ -587,6 +633,7 @@ class EmailRepositoryImpl implements EmailRepository {
         attachments: _parseAttachments(attachmentsJson),
         headers: _parseHeaders(headersJson),
         mimeTree: _parseMimeTree(mimeTreeJson),
+        decodeFailed: decodeFailed,
       );
     } finally {
       await client.logout();
@@ -637,21 +684,61 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailData =
         (result['list'] as List<dynamic>).first as Map<String, dynamic>;
 
-    final (textBody, htmlBody, attachmentsJson) = _parseJmapBody(emailData);
+    // Decode each piece defensively so a single malformed part can't blank the
+    // whole message, mirroring the IMAP path (#579).
+    var decodeFailed = false;
+    Object? decodeError;
+    StackTrace? decodeStack;
+    T? tryDecode<T>(T Function() decode) {
+      try {
+        return decode();
+      } catch (e, stack) {
+        decodeFailed = true;
+        decodeError ??= e;
+        decodeStack ??= stack;
+        return null;
+      }
+    }
 
-    final rawHeaders = emailData['headers'] as List<dynamic>? ?? [];
-    final headersJson = jsonEncode(
-      rawHeaders.map((h) {
-        final map = h as Map<String, dynamic>;
-        return {'name': map['name'] ?? '', 'value': map['value'] ?? ''};
-      }).toList(),
-    );
+    final (textBody, htmlBody, attachmentsJson) =
+        tryDecode(() => _parseJmapBody(emailData)) ?? (null, null, '[]');
 
-    final rawBodyStructure =
-        emailData['bodyStructure'] as Map<String, dynamic>?;
-    final mimeTreeJson = rawBodyStructure != null
-        ? jsonEncode(_jmapBodyStructureToJson(rawBodyStructure))
-        : null;
+    final headersJson = tryDecode(
+          () {
+            final rawHeaders = emailData['headers'] as List<dynamic>? ?? [];
+            return jsonEncode(
+              rawHeaders.map((h) {
+                final map = h as Map<String, dynamic>;
+                return {
+                  'name': map['name'] ?? '',
+                  'value': map['value'] ?? '',
+                };
+              }).toList(),
+            );
+          },
+        ) ??
+        '[]';
+
+    final mimeTreeJson = tryDecode(() {
+      final rawBodyStructure =
+          emailData['bodyStructure'] as Map<String, dynamic>?;
+      return rawBodyStructure != null
+          ? jsonEncode(_jmapBodyStructureToJson(rawBodyStructure))
+          : null;
+    });
+
+    if (decodeFailed) {
+      unawaited(
+        _appLogger?.error(
+          'email.body.decode_failed',
+          'Could not fully decode message body — showing what was salvaged',
+          accountId: account.id,
+          emailId: emailId,
+          error: decodeError,
+          stack: decodeStack,
+        ),
+      );
+    }
 
     await _db.into(_db.emailBodies).insertOnConflictUpdate(
           EmailBodiesCompanion.insert(
@@ -673,6 +760,7 @@ class EmailRepositoryImpl implements EmailRepository {
       attachments: _parseAttachments(attachmentsJson),
       headers: _parseHeaders(headersJson),
       mimeTree: _parseMimeTree(mimeTreeJson),
+      decodeFailed: decodeFailed,
     );
   }
 
@@ -2529,7 +2617,8 @@ class EmailRepositoryImpl implements EmailRepository {
   /// deleted instead — the change is permanently abandoned.
   Future<void> _recordChangeError(PendingChangeRow row, Object error) async {
     final next = row.attempts + 1;
-    if (next >= _maxChangeAttempts) {
+    final dropped = next >= _maxChangeAttempts;
+    if (dropped) {
       await (_db.delete(
         _db.pendingChanges,
       )..where((t) => t.id.equals(row.id)))
@@ -2544,6 +2633,60 @@ class EmailRepositoryImpl implements EmailRepository {
           lastError: Value(error.toString()),
         ),
       );
+    }
+
+    // Mirror the failure into the App Log so a failed delete/move/flag is
+    // discoverable in the per-message "Show Logs" view and in bug reports —
+    // previously it was only written to `pending_changes.lastError` and stayed
+    // silent (#579), unlike the outbox path (see [_outboxLogObserver]).
+    final data = <String, Object?>{
+      'changeType': row.changeType,
+      'attempts': next,
+      'maxAttempts': _maxChangeAttempts,
+    };
+    if (dropped) {
+      unawaited(
+        _appLogger?.error(
+          'pending_change.failed',
+          'Giving up on ${_describeChange(row)} after $next attempts',
+          accountId: row.accountId,
+          emailId: row.resourceId,
+          data: data,
+          error: error,
+        ),
+      );
+    } else {
+      unawaited(
+        _appLogger?.warn(
+          'pending_change.retry',
+          'Could not apply ${_describeChange(row)} — will retry '
+              '(attempt $next of $_maxChangeAttempts)',
+          accountId: row.accountId,
+          emailId: row.resourceId,
+          data: data,
+          error: error,
+        ),
+      );
+    }
+  }
+
+  /// Short human-readable label for a queued change, used in App Log messages.
+  String _describeChange(PendingChangeRow row) {
+    switch (row.changeType) {
+      case 'move':
+        return 'move';
+      case 'delete':
+        return 'delete';
+      case 'flag_seen':
+        return 'read/unread change';
+      case 'flag_flagged':
+        return 'flag change';
+      case 'snooze':
+        return 'snooze';
+      case 'unsnooze':
+        return 'unsnooze';
+      default:
+        return '"${row.changeType}" change';
     }
   }
 
@@ -4059,6 +4202,16 @@ class EmailRepositoryImpl implements EmailRepository {
         )..where((t) => t.id.equals(row.id)))
             .go();
         log('JMAP permanent error for change ${row.id}: $e');
+        unawaited(
+          _appLogger?.error(
+            'pending_change.rejected',
+            'Server rejected ${_describeChange(row)} — dropping it',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+            error: e,
+          ),
+        );
       } catch (e) {
         await _recordChangeError(row, e);
       }
@@ -4105,6 +4258,16 @@ class EmailRepositoryImpl implements EmailRepository {
                 .go();
             applied++;
             log('IMAP change ${row.id} skipped: message already gone ($e)');
+            unawaited(
+              _appLogger?.info(
+                'pending_change.skipped_gone',
+                'Skipped ${_describeChange(row)} — message already gone on '
+                    'the server',
+                accountId: account.id,
+                emailId: row.resourceId,
+                data: {'changeType': row.changeType},
+              ),
+            );
           } else {
             await _recordChangeError(row, e);
           }
