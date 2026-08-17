@@ -292,7 +292,8 @@ void main() {
     // virtual copy into the real one.
     await r.emails.flushOutbox('test', user.password);
 
-    Email? synced;
+    var arrived = false;
+    var stillStarred = false;
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (DateTime.now().isBefore(deadline)) {
       await r.emails.syncEmails('test', 'INBOX');
@@ -300,14 +301,15 @@ void main() {
           .where((e) => e.subject == subject && !e.isLocal)
           .toList();
       if (match.isNotEmpty) {
-        synced = match.single;
+        arrived = true;
+        stillStarred = match.single.isFlagged;
         break;
       }
     }
 
-    expect(synced, isNotNull, reason: 'real message should arrive via sync');
+    expect(arrived, isTrue, reason: 'real message should arrive via sync');
     expect(
-      synced!.isFlagged,
+      stillStarred,
       isTrue,
       reason: 'the star set on the local copy must carry over to the real '
           'message and survive the CONDSTORE flag refresh (#565)',
