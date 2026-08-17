@@ -25,9 +25,29 @@ jobs:
       linux: ${{ steps.diff.outputs.linux }}
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
+      # Check out with plain git instead of actions/checkout.
+      #
+      # On the self-hosted ARC runners every `uses:` step is fetched from
+      # codeload.github.com during "Set up job", and that download periodically
+      # gets throttled with HTTP 429 (Too Many Requests) from the runners'
+      # shared egress IP -- failing the job before any real work runs (see #574,
+      # and #573/#576 for the same fix applied to website.yml and ci.yml). A
+      # plain `git` checkout talks to github.com's git endpoint, which is not
+      # subject to the codeload throttle. actions/checkout is the only
+      # codeload-hosted action this workflow used, so replacing it removes the
+      # dependency entirely. There are no submodules, and detecting changed
+      # files only needs the working tree, so a shallow fetch of the triggering
+      # commit is enough.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -82,9 +102,20 @@ jobs:
     if: needs.check-changes.outputs.android == 'true'
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 100
+      # Plain git checkout to dodge the codeload.github.com 429 throttle on the
+      # ARC runners (see the check-changes job above and #574). Deploy jobs keep
+      # ~100 commits of history (build-number/versioning logic walks recent
+      # commits), so fetch --depth=100 rather than depth 1.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=100 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -143,9 +174,20 @@ jobs:
       && needs.check-changes.outputs.android == 'true'
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 100
+      # Plain git checkout to dodge the codeload.github.com 429 throttle on the
+      # ARC runners (see the check-changes job above and #574). Deploy jobs keep
+      # ~100 commits of history (build-number/versioning logic walks recent
+      # commits), so fetch --depth=100 rather than depth 1.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=100 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -181,9 +223,20 @@ jobs:
     if: needs.check-changes.outputs.linux == 'true'
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 100
+      # Plain git checkout to dodge the codeload.github.com 429 throttle on the
+      # ARC runners (see the check-changes job above and #574). Deploy jobs keep
+      # ~100 commits of history (build-number/versioning logic walks recent
+      # commits), so fetch --depth=100 rather than depth 1.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=100 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
@@ -226,7 +279,20 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v5
+      # Plain git checkout to dodge the codeload.github.com 429 throttle on the
+      # ARC runners (see the check-changes job above and #574). Only the working
+      # tree is needed here, so a shallow fetch of the triggering commit is
+      # enough.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
