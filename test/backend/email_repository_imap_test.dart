@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
@@ -240,6 +241,75 @@ void main() {
       isTrue,
       reason: 'reconcile must catch the flag change even when CONDSTORE '
           'reports no MODSEQ advance',
+    );
+  });
+
+  // #565: a mail-to-self shows a local copy immediately; starring it must
+  // survive the very sync that delivers the real message. The delivery
+  // advances HIGHESTMODSEQ, so the incremental sync runs the CONDSTORE flag
+  // refresh (_refreshFlagsImap) right after the dissolve carries the star
+  // over — and that refresh used to overwrite the just-transferred star back
+  // to server truth (unflagged).
+  test('self-message: starred local copy keeps its star after the '
+      'delivering sync (#565)', () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    // The local copy is written into the mailbox tagged with role 'inbox', so
+    // the mailbox cache must exist before enqueueSend runs.
+    final mailboxes = MailboxRepositoryImpl(
+      r.db,
+      r.accounts,
+      imapConnect: testImapConnect,
+    );
+    await mailboxes.syncMailboxes('test');
+
+    // Establish the INBOX checkpoint (and modseq) before the self-mail is
+    // delivered, so the delivery is what advances HIGHESTMODSEQ.
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final subject = 'self-star-${DateTime.now().millisecondsSinceEpoch}';
+    final outboxId = await r.emails.enqueueSend(
+      'test',
+      EmailDraft(
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(name: user.email, email: user.email)],
+        cc: const [],
+        subject: subject,
+        body: 'note to self',
+      ),
+    );
+    expect(outboxId, isNonZero);
+
+    // The virtual copy appears in the inbox immediately; star it.
+    final local = (await r.emails.observeEmails('test', 'INBOX').first)
+        .firstWhere((e) => e.subject == subject);
+    expect(local.isLocal, isTrue, reason: 'mail-to-self shows a local copy');
+    await r.emails.setFlag(local.id, flagged: true);
+
+    // Actually send it, then sync until the delivered message dissolves the
+    // virtual copy into the real one.
+    await r.emails.flushOutbox('test', user.password);
+
+    Email? synced;
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      await r.emails.syncEmails('test', 'INBOX');
+      final match = (await r.emails.observeEmails('test', 'INBOX').first)
+          .where((e) => e.subject == subject && !e.isLocal)
+          .toList();
+      if (match.isNotEmpty) {
+        synced = match.single;
+        break;
+      }
+    }
+
+    expect(synced, isNotNull, reason: 'real message should arrive via sync');
+    expect(
+      synced!.isFlagged,
+      isTrue,
+      reason: 'the star set on the local copy must carry over to the real '
+          'message and survive the CONDSTORE flag refresh (#565)',
     );
   });
 
