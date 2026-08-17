@@ -125,6 +125,49 @@ void main() {
     expect(snapshots.last.totalFetched, 0);
   });
 
+  test('forceResync flushes pending changes before clearing the cache (#558)',
+      () async {
+    final rig = makeRig();
+    when(rig.emails.syncEmails(_accountId, _inbox.path)).thenAnswer(
+      (_) async => const SyncEmailsResult(
+        fetched: 0,
+        skipped: 0,
+        bytesTransferred: 0,
+      ),
+    );
+
+    await rig.manager.forceResync(_accountId).toList();
+
+    // The star fix (#558): an un-pushed \Flagged change must reach the server
+    // before the local cache is wiped and re-fetched, otherwise the resync
+    // overwrites it with stale server truth. So flushPendingChanges has to run
+    // strictly before clearForResync.
+    verifyInOrder([
+      rig.emails.flushPendingChanges(_accountId, 'pw'),
+      rig.emails.clearForResync(_accountId),
+    ]);
+  });
+
+  test(
+      'forceResyncMailbox flushes pending changes before clearing the folder '
+      '(#558)', () async {
+    final rig = makeRig();
+    when(rig.emails.syncEmails(_accountId, _inbox.path)).thenAnswer(
+      (_) async => const SyncEmailsResult(
+        fetched: 0,
+        skipped: 0,
+        bytesTransferred: 0,
+      ),
+    );
+
+    await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
+
+    verifyInOrder([
+      rig.emails.flushPendingChanges(_accountId, 'pw'),
+      rig.emails.clearMailboxForResync(_accountId, _inbox.path),
+    ]);
+  });
+
   test('forceResync surfaces per-mailbox errors in the terminal snapshot',
       () async {
     final rig = makeRig();
