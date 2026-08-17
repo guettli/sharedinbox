@@ -82,6 +82,13 @@ const _inbox = Mailbox(
   return (accounts: a, mailboxes: m, emails: e, manager: mgr);
 }
 
+/// Stubs the INBOX email sync to return "nothing new" so a resync run reaches
+/// its terminal snapshot without touching a real server.
+void _stubEmptySync(MockEmailRepository emails) {
+  when(emails.syncEmails(_accountId, _inbox.path))
+      .thenAnswer((_) async => SyncEmailsResult.zero);
+}
+
 void main() {
   test('forceResync reconciles divergence and preserves cached bodies',
       () async {
@@ -123,6 +130,37 @@ void main() {
     expect(snapshots.last.totalMailboxes, 1);
     expect(snapshots.last.totalSkipped, 2);
     expect(snapshots.last.totalFetched, 0);
+  });
+
+  test('forceResync flushes pending changes before clearing the cache (#558)',
+      () async {
+    final rig = makeRig();
+    _stubEmptySync(rig.emails);
+
+    await rig.manager.forceResync(_accountId).toList();
+
+    // The star fix (#558): an un-pushed \Flagged change must reach the server
+    // before the local cache is wiped and re-fetched, otherwise the resync
+    // overwrites it with stale server truth. So flushPendingChanges has to run
+    // strictly before clearForResync.
+    verifyInOrder([
+      rig.emails.flushPendingChanges(_accountId, 'pw'),
+      rig.emails.clearForResync(_accountId),
+    ]);
+  });
+
+  test(
+      'forceResyncMailbox flushes pending changes before clearing the folder '
+      '(#558)', () async {
+    final rig = makeRig();
+    _stubEmptySync(rig.emails);
+
+    await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
+
+    verifyInOrder([
+      rig.emails.flushPendingChanges(_accountId, 'pw'),
+      rig.emails.clearMailboxForResync(_accountId, _inbox.path),
+    ]);
   });
 
   test('forceResync surfaces per-mailbox errors in the terminal snapshot',

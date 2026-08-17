@@ -419,10 +419,13 @@ void main() {
             ..where((t) => t.resourceType.equals('IMAP:INBOX')))
           .get();
       expect(inboxState, isEmpty);
+      // …but an un-pushed pending change survives the wipe (#558): dropping it
+      // would let the re-fetch overwrite the local flag with stale server truth
+      // (e.g. losing a just-set star). It is flushed/retried on the next sync.
       final inboxPending = await (r.db.select(r.db.pendingChanges)
             ..where((t) => t.resourceId.equals('acc-1:1')))
           .get();
-      expect(inboxPending, isEmpty);
+      expect(inboxPending, hasLength(1));
 
       // …while Archive is untouched.
       expect(

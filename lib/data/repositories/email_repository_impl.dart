@@ -6165,10 +6165,14 @@ class EmailRepositoryImpl implements EmailRepository {
           _db.emails,
         )..where((t) => t.accountId.equals(accountId)))
             .go();
-        await (_db.delete(
-          _db.pendingChanges,
-        )..where((t) => t.accountId.equals(accountId)))
-            .go();
+        // NB: pending_changes are deliberately NOT deleted here. A queued
+        // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
+        // the server yet) is un-pushed user intent — dropping it would let the
+        // subsequent full re-fetch overwrite the local state with stale server
+        // truth, losing the star (#558). The caller flushes pending changes
+        // before clearing; anything still queued (offline) survives and is
+        // retried on the next sync, its payload carrying the uid/id needed to
+        // apply it even though the email row was deleted.
         await (_db.delete(
           _db.syncStates,
         )..where((t) => t.accountId.equals(accountId)))
@@ -6190,24 +6194,14 @@ class EmailRepositoryImpl implements EmailRepository {
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
-        // Clear pending changes that target emails in this mailbox first —
-        // they are keyed by resourceId, so this must run before the emails
-        // themselves are deleted.
-        final mailboxEmailIds = _db.selectOnly(_db.emails)
-          ..addColumns([_db.emails.id])
-          ..where(
-            _db.emails.accountId.equals(accountId) &
-                _db.emails.mailboxPath.equals(mailboxPath),
-          );
-        await (_db.delete(_db.pendingChanges)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.resourceType.equals('Email') &
-                    t.resourceId.isInQuery(mailboxEmailIds),
-              ))
-            .go();
-
+        // NB: pending_changes are deliberately NOT deleted here. A queued
+        // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
+        // the server yet) is un-pushed user intent — dropping it would let the
+        // subsequent full re-fetch overwrite the local state with stale server
+        // truth, losing the star (#558). The caller flushes pending changes
+        // before clearing; anything still queued (offline) survives and is
+        // retried on the next sync, its payload carrying the uid/id needed to
+        // apply it even though the email row was deleted.
         await (_db.delete(_db.emails)
               ..where(
                 (t) =>
