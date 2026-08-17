@@ -154,13 +154,15 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     });
     try {
       final account = buildAccount();
-      final effective = await ref
+      final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
       if (mounted) {
         setState(() {
           _tryTesting = false;
-          _tryOk = 'Connected as $effective';
+          _tryOk = result.identityWarning != null
+              ? 'Connected as ${result.username}\n⚠ ${result.identityWarning}'
+              : 'Connected as ${result.username}';
         });
       }
     } catch (e, stack) {
@@ -190,14 +192,24 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     });
     try {
       final account = _buildJmapAccount();
-      final effective = await ref
+      final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
+      if (result.identityWarning != null) {
+        unawaited(
+          ref.read(appLoggerProvider).warn(
+                'account.identity_warning',
+                result.identityWarning!,
+                screen: 'AddAccountScreen',
+              ),
+        );
+      }
       final accountToSave = Account(
         id: account.id,
         displayName: account.displayName,
         email: account.email,
-        username: account.username.isNotEmpty ? account.username : effective,
+        username:
+            account.username.isNotEmpty ? account.username : result.username,
         type: account.type,
         jmapUrl: account.jmapUrl,
       );
@@ -232,14 +244,15 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     });
     try {
       final account = _buildImapAccount();
-      final effective = await ref
+      final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
       final accountToSave = Account(
         id: account.id,
         displayName: account.displayName,
         email: account.email,
-        username: account.username.isNotEmpty ? account.username : effective,
+        username:
+            account.username.isNotEmpty ? account.username : result.username,
         imapHost: account.imapHost,
         imapPort: account.imapPort,
         smtpHost: account.smtpHost,

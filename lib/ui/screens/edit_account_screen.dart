@@ -163,13 +163,15 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       _tryErr = null;
     });
     try {
-      final effective = await ref
+      final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(_buildUpdated(), password);
       if (mounted) {
         setState(() {
           _tryTesting = false;
-          _tryOk = 'Connected as $effective';
+          _tryOk = result.identityWarning != null
+              ? 'Connected as ${result.username}\n⚠ ${result.identityWarning}'
+              : 'Connected as ${result.username}';
         });
       }
     } catch (e, stack) {
@@ -204,16 +206,26 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     try {
       Account updated = _buildUpdated();
       if (password != null) {
-        final effective = await ref
+        final result = await ref
             .read(connectionTestServiceProvider)
             .testConnection(updated, password);
+        if (result.identityWarning != null) {
+          unawaited(
+            ref.read(appLoggerProvider).warn(
+                  'account.identity_warning',
+                  result.identityWarning!,
+                  screen: 'EditAccountScreen',
+                  accountId: widget.accountId,
+                ),
+          );
+        }
         // Persist the discovered effective username when none was explicit.
         if (updated.username.isEmpty) {
           updated = Account(
             id: updated.id,
             displayName: updated.displayName,
             email: updated.email,
-            username: effective,
+            username: result.username,
             type: updated.type,
             imapHost: updated.imapHost,
             imapPort: updated.imapPort,

@@ -251,6 +251,45 @@ void main() {
       expect(find.textContaining('Connection failed'), findsOneWidget);
     });
 
+    testWidgets('JMAP try connection surfaces identity warning', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/add',
+          overrides: baseOverrides(
+            discovery: JmapDiscovery(
+              sessionUrl: 'https://mail.example.com/jmap',
+            ),
+            connectionIdentityWarning:
+                'No send identity on the server matches user@example.com.',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('emailField')),
+        'user@example.com',
+      );
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Display name'),
+        'Alice',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Password'),
+        'secret',
+      );
+      await tester.tap(find.text('Try connection'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('No send identity on the server matches'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('successful IMAP save pops back to accounts list', (
       tester,
     ) async {
