@@ -20,9 +20,28 @@ jobs:
     if: github.server_url == 'https://github.com'
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
+      # Check out with plain git instead of actions/checkout.
+      #
+      # On the self-hosted ARC runners the ONLY thing this workflow pulled from
+      # codeload.github.com was the checkout action tarball, and that download
+      # periodically gets throttled with HTTP 429 (Too Many Requests) from the
+      # runners' shared egress IP -- failing the job in "Set up job" before any
+      # real work runs (see #573). A plain `git` checkout talks to github.com's
+      # git endpoint, which is not subject to that codeload throttle, so it
+      # removes the last codeload dependency from this workflow. There are no
+      # submodules (PaperMod is vendored), and the build only needs
+      # `git rev-parse --short HEAD`, so a shallow fetch of the triggering
+      # commit is enough.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       - name: Setup Dagger Remote Engine
         env:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
