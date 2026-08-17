@@ -1,5 +1,4 @@
 import 'package:drift/drift.dart' hide isNull, isNotNull;
-import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -14,18 +13,17 @@ import 'db_test_helper.dart';
 // to the server must survive a force re-sync. The bug was that clearForResync /
 // clearMailboxForResync deleted the queued `flag_flagged` pending change before
 // it reached the server, so the following full re-fetch overwrote the local
-// star with stale server truth and it vanished.
+// star with stale server truth and it vanished. setFlag never touches the
+// network here (it enqueues + writes optimistically), so no client stub is
+// needed.
 
 const _account = Account(
   id: 'acc-1',
   displayName: 'Alice',
   email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://jmap.example.com/session',
 );
-
-Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
-    Future.error(UnsupportedError('IMAP unavailable in unit tests'));
 
 typedef _Repos = ({
   AppDatabase db,
@@ -36,11 +34,7 @@ typedef _Repos = ({
 Future<_Repos> _makeRepos() async {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-  final emails = EmailRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: _noImapConnect,
-  );
+  final emails = EmailRepositoryImpl(db, accounts);
   await accounts.addAccount(_account, 'pw');
   await db.into(db.mailboxes).insert(
         MailboxesCompanion.insert(

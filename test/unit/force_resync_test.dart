@@ -82,6 +82,13 @@ const _inbox = Mailbox(
   return (accounts: a, mailboxes: m, emails: e, manager: mgr);
 }
 
+/// Stubs the INBOX email sync to return "nothing new" so a resync run reaches
+/// its terminal snapshot without touching a real server.
+void _stubEmptySync(MockEmailRepository emails) {
+  when(emails.syncEmails(_accountId, _inbox.path))
+      .thenAnswer((_) async => SyncEmailsResult.zero);
+}
+
 void main() {
   test('forceResync reconciles divergence and preserves cached bodies',
       () async {
@@ -128,13 +135,7 @@ void main() {
   test('forceResync flushes pending changes before clearing the cache (#558)',
       () async {
     final rig = makeRig();
-    when(rig.emails.syncEmails(_accountId, _inbox.path)).thenAnswer(
-      (_) async => const SyncEmailsResult(
-        fetched: 0,
-        skipped: 0,
-        bytesTransferred: 0,
-      ),
-    );
+    _stubEmptySync(rig.emails);
 
     await rig.manager.forceResync(_accountId).toList();
 
@@ -152,13 +153,7 @@ void main() {
       'forceResyncMailbox flushes pending changes before clearing the folder '
       '(#558)', () async {
     final rig = makeRig();
-    when(rig.emails.syncEmails(_accountId, _inbox.path)).thenAnswer(
-      (_) async => const SyncEmailsResult(
-        fetched: 0,
-        skipped: 0,
-        bytesTransferred: 0,
-      ),
-    );
+    _stubEmptySync(rig.emails);
 
     await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
 
