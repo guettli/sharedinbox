@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
@@ -2254,6 +2255,281 @@ void main() {
         expect(await r.emails.getEmail('acc-1:5'), isNull);
       },
     );
+  });
+
+  // Every per-message mutation must leave a message-scoped app_logs row so the
+  // "Show Logs" action (which filters by emailId) can surface it — the gap
+  // reported in #562 (deleting a mail left no log for the move-to-Trash).
+  group('per-message action logging (#562)', () {
+    // Builds repos whose EmailRepositoryImpl logs into the same test database,
+    // returning the AppLogRepositoryImpl so tests can read back the rows via
+    // the exact `AppLogFilter(emailId:)` query that "Show Logs" uses.
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      EmailRepositoryImpl emails,
+      AppLogRepositoryImpl logs,
+    }) makeLoggedRepos({
+      Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
+    }) {
+      final db = openTestDatabase();
+      final storage = MapSecureStorage();
+      final accounts = AccountRepositoryImpl(db, storage);
+      final logs = AppLogRepositoryImpl(db);
+      final emails = EmailRepositoryImpl(
+        db,
+        accounts,
+        imapConnect: imapConnect ?? _noImapConnect,
+        smtpConnect: _noSmtpConnect,
+        appLogger: AppLogger(logs),
+      );
+      return (db: db, accounts: accounts, emails: emails, logs: logs);
+    }
+
+    // Returns the message-scoped log rows for [emailId], newest first — exactly
+    // what the "Show Logs" screen streams. Logging is fire-and-forget, so pump
+    // the microtask queue first to let the insert settle.
+    Future<List<AppLogEntry>> logsFor(
+      AppLogRepositoryImpl logs,
+      String emailId,
+    ) async {
+      await pumpEventQueue();
+      return logs.watchEntries(AppLogFilter(emailId: emailId)).first;
+    }
+
+    test('moveEmail records an email.move entry for the moved mail', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              subject: const Value('Hello'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.moveEmail('acc-1:5', 'Archive');
+
+      final entries = await logsFor(r.logs, 'acc-1:5');
+      expect(entries, hasLength(1));
+      expect(entries.single.event, 'email.move');
+      expect(entries.single.message, contains('INBOX'));
+      expect(entries.single.message, contains('Archive'));
+      final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
+      expect(data['src'], 'INBOX');
+      expect(data['dest'], 'Archive');
+    });
+
+    test('moveEmail logs on JMAP accounts too', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'inbox-mbx',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.moveEmail('jmap-1:e1', 'archive-mbx');
+
+      final entries = await logsFor(r.logs, 'jmap-1:e1');
+      expect(entries.single.event, 'email.move');
+      final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
+      expect(data['protocol'], 'jmap');
+    });
+
+    test('deleteEmail records email.trash when a Trash folder exists',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await r.emails.deleteEmail('acc-1:5');
+      expect(dest, 'Trash');
+
+      // The mail still exists (soft delete) and its log is reachable — this is
+      // the exact "delete then Show Logs in Trash" flow from the issue.
+      final entries = await logsFor(r.logs, 'acc-1:5');
+      expect(entries.single.event, 'email.trash');
+      final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
+      expect(data['dest'], 'Trash');
+    });
+
+    test('deleteEmail records email.delete on a hard delete', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      // No Trash folder → hard delete; the row is removed but the deletion is
+      // still recorded in the global App Log.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              subject: const Value('Bye'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await r.emails.deleteEmail('acc-1:5');
+      expect(dest, isNull);
+      expect(await r.emails.getEmail('acc-1:5'), isNull);
+
+      await pumpEventQueue();
+      final all = await r.db.select(r.db.appLogs).get();
+      final deleteRows = all.where((e) => e.event == 'email.delete').toList();
+      expect(deleteRows, hasLength(1));
+      expect(deleteRows.single.emailId, 'acc-1:5');
+      final data =
+          jsonDecode(deleteRows.single.dataJson!) as Map<String, dynamic>;
+      expect(data['permanent'], true);
+    });
+
+    test('snoozeEmail records an email.snooze entry', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.snoozeEmail('acc-1:5', DateTime(2026, 5, 10, 15));
+
+      final entries = await logsFor(r.logs, 'acc-1:5');
+      expect(entries.single.event, 'email.snooze');
+      final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
+      expect(data['until'], contains('2026-05-10T15:00:00.000'));
+    });
+
+    test('setFlag records an email.flag entry with the changed flags',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.setFlag('acc-1:5', seen: true, flagged: true);
+
+      final entries = await logsFor(r.logs, 'acc-1:5');
+      expect(entries.single.event, 'email.flag');
+      final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
+      expect(data['seen'], true);
+      expect(data['flagged'], true);
+    });
+
+    test('markAllAsRead records an email.mark_read entry per message',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      for (final uid in [1, 2]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                isSeen: const Value(false),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      await r.emails.markAllAsRead('acc-1', 'INBOX');
+
+      // Each mail's own "Show Logs" view shows its read entry.
+      final first = await logsFor(r.logs, 'acc-1:1');
+      final second = await logsFor(r.logs, 'acc-1:2');
+      expect(first.single.event, 'email.mark_read');
+      expect(second.single.event, 'email.mark_read');
+    });
+
+    test('an IMAP move flush re-keys the log so it follows the message',
+        () async {
+      // On IMAP a move is delete+copy: the local id changes from the source
+      // (mailbox, UID) to the destination's. The per-message log must follow,
+      // or "Show Logs" would come up empty in Trash after the next sync (#562).
+      final spy = SnoozeSpyImapClient(
+        copyUidValidity: 1,
+        copyUidSourceToTarget: const {5: 42},
+      );
+      final r = makeLoggedRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+
+      const oldId = 'acc-1:INBOX:5';
+      const newId = 'acc-1:Archive:42';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: oldId,
+              accountId: 'acc-1',
+              mailboxPath: 'Archive', // optimistically moved
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: oldId,
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 5,
+                'mailboxPath': 'INBOX',
+                'dest': 'Archive',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+      // A per-message log recorded against the pre-flush id.
+      await r.logs.insert(
+        level: AppLogLevel.info,
+        event: 'email.move',
+        message: 'Moved "x" from INBOX to Archive',
+        emailId: oldId,
+      );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // The row is gone under the old id but reachable under the new one.
+      expect(await logsFor(r.logs, oldId), isEmpty);
+      final moved = await logsFor(r.logs, newId);
+      expect(moved.single.event, 'email.move');
+    });
   });
 
   group('IMAP flushPendingChanges', () {
