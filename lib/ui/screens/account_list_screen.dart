@@ -200,28 +200,10 @@ class _AccountTile extends ConsumerWidget {
               if (h.lastError != null) {
                 return _SyncHealthErrorRow(error: h.lastError!);
               }
-              final date = h.lastVerifiedAt.toLocal().toString().split('.')[0];
-              return Row(
-                children: [
-                  const Text('Sync health: '),
-                  Icon(
-                    h.isHealthy ? Icons.verified : Icons.warning_amber,
-                    size: AppIconSize.sm,
-                    color: h.isHealthy ? Colors.green : Colors.orange,
-                  ),
-                  const SizedBox(width: AppSpacing.xs),
-                  Expanded(
-                    child: Text(
-                      h.isHealthy
-                          ? 'Healthy'
-                          : _formatDiscrepancies(h.discrepancySummary),
-                    ),
-                  ),
-                  Text(
-                    ' ($date)',
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
+              return _SyncHealthResultRow(
+                isHealthy: h.isHealthy,
+                lastVerifiedAt: h.lastVerifiedAt,
+                discrepancySummary: h.discrepancySummary,
               );
             },
             loading: () => isVerifying
@@ -293,8 +275,71 @@ class _SyncHealthErrorRow extends StatelessWidget {
   }
 }
 
-String _formatDiscrepancies(String? summary) {
-  if (summary == null) return 'Discrepancies found';
+/// Shown when a verification finished, for both healthy and unhealthy
+/// accounts. A short header line ("Sync health: Healthy/Discrepancies found"
+/// plus the verified date) keeps the status readable at phone widths; each
+/// discrepancy metric then gets its own line below instead of being crammed
+/// into a single overflowing sentence.
+class _SyncHealthResultRow extends StatelessWidget {
+  const _SyncHealthResultRow({
+    required this.isHealthy,
+    required this.lastVerifiedAt,
+    required this.discrepancySummary,
+  });
+
+  final bool isHealthy;
+  final DateTime lastVerifiedAt;
+  final String? discrepancySummary;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final date = lastVerifiedAt.toLocal().toString().split('.')[0];
+    final details =
+        isHealthy ? const <String>[] : _discrepancyLines(discrepancySummary);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Sync health: '),
+            Icon(
+              isHealthy ? Icons.verified : Icons.warning_amber,
+              size: AppIconSize.sm,
+              color: isHealthy ? Colors.green : Colors.orange,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(
+                isHealthy ? 'Healthy' : 'Discrepancies found',
+              ),
+            ),
+            Text(
+              '($date)',
+              style: theme.textTheme.labelSmall,
+            ),
+          ],
+        ),
+        for (final line in details)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpacing.xs),
+            child: Text(
+              line,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.error),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Parses the stored discrepancy summary into one human-readable line per
+/// non-zero metric (e.g. "missing locally: 3"). Returns an empty list when the
+/// summary is absent, unparseable, or reports no discrepancies, in which case
+/// the caller shows just "Discrepancies found".
+List<String> _discrepancyLines(String? summary) {
+  if (summary == null) return const [];
   try {
     final decoded = jsonDecode(summary) as Map<String, dynamic>;
     var missingLocally = 0;
@@ -306,14 +351,13 @@ String _formatDiscrepancies(String? summary) {
       missingOnServer += (m['missingOnServer'] as int? ?? 0);
       flagMismatches += (m['flagMismatches'] as int? ?? 0);
     }
-    final parts = <String>[];
-    if (missingLocally > 0) parts.add('missing locally: $missingLocally');
-    if (missingOnServer > 0) parts.add('missing on server: $missingOnServer');
-    if (flagMismatches > 0) parts.add('flag mismatches: $flagMismatches');
-    if (parts.isEmpty) return 'Discrepancies found';
-    return 'Discrepancies found (${parts.join(', ')})';
+    final lines = <String>[];
+    if (missingLocally > 0) lines.add('missing locally: $missingLocally');
+    if (missingOnServer > 0) lines.add('missing on server: $missingOnServer');
+    if (flagMismatches > 0) lines.add('flag mismatches: $flagMismatches');
+    return lines;
   } catch (_) {
-    return 'Discrepancies found';
+    return const [];
   }
 }
 

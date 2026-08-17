@@ -292,8 +292,42 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('missing locally: 3'), findsOneWidget);
-      expect(find.textContaining('flag mismatches: 1'), findsOneWidget);
+      expect(find.text('Discrepancies found'), findsOneWidget);
+      expect(find.text('missing locally: 3'), findsOneWidget);
+      expect(find.text('flag mismatches: 1'), findsOneWidget);
+      // Zero-valued metrics are not listed.
+      expect(find.textContaining('missing on server'), findsNothing);
+    });
+
+    testWidgets(
+      'shows plain "Discrepancies found" when the summary is unparseable',
+      (tester) async {
+        await _pumpAccountList(
+          tester,
+          syncHealth:
+              healthRow(isHealthy: false, discrepancySummary: 'not-json'),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Discrepancies found'), findsOneWidget);
+        expect(find.textContaining('missing locally'), findsNothing);
+      },
+    );
+
+    testWidgets('each discrepancy metric is on its own line', (tester) async {
+      const summary =
+          '{"INBOX":{"missingLocally":3,"missingOnServer":2,"flagMismatches":1}}';
+      await _pumpAccountList(
+        tester,
+        syncHealth: healthRow(isHealthy: false, discrepancySummary: summary),
+      );
+      await tester.pumpAndSettle();
+
+      final localPos = tester.getTopLeft(find.text('missing locally: 3')).dy;
+      final serverPos = tester.getTopLeft(find.text('missing on server: 2')).dy;
+      final flagPos = tester.getTopLeft(find.text('flag mismatches: 1')).dy;
+      expect(serverPos, greaterThan(localPos));
+      expect(flagPos, greaterThan(serverPos));
     });
 
     testWidgets('shows labeled pending-changes row when changes are queued', (
