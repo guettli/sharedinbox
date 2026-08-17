@@ -29,6 +29,37 @@ const _jmapSessionJson = '{'
     '"apiUrl":"https://example.com/jmap/","downloadUrl":"","uploadUrl":"","state":"0"'
     '}';
 
+// Session that advertises the submission capability plus a primary mail
+// account, so the identity probe runs.
+const _jmapSubmissionSessionJson = '{'
+    '"capabilities":{"urn:ietf:params:jmap:core":{},'
+    '"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:submission":{}},'
+    '"accounts":{"acc":{}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc"},'
+    '"username":"alice@example.com","apiUrl":"https://example.com/jmap/",'
+    '"downloadUrl":"","uploadUrl":"","state":"0"'
+    '}';
+
+String _identityResponse(List<String> emails) {
+  final list = emails.map((e) => '{"id":"i-$e","email":"$e"}').join(',');
+  return '{"methodResponses":[["Identity/get",{"list":[$list]},"0"]]}';
+}
+
+/// Builds a service whose HTTP client returns the session on GET and the given
+/// [identityBody] on the POST that fetches identities.
+ConnectionTestServiceImpl _makeJmapIdentityService({
+  required String sessionJson,
+  String? identityBody,
+  int identityStatus = 200,
+}) {
+  final mockHttp = MockClient((request) async {
+    if (request.method == 'POST') {
+      return http.Response(identityBody ?? '', identityStatus);
+    }
+    return http.Response(sessionJson, 200);
+  });
+  return ConnectionTestServiceImpl(mockHttp);
+}
+
 ConnectionTestServiceImpl _makeService({
   required int httpStatus,
   FakeImapClient? fakeImap,
@@ -61,13 +92,13 @@ void main() {
       );
       final svc = _makeService(httpStatus: 200);
       final result = await svc.testConnection(account, 'pw');
-      expect(result, 'myuser');
+      expect(result.username, 'myuser');
     });
 
     test('returns email when no username and email succeeds', () async {
       final svc = _makeService(httpStatus: 200);
       final result = await svc.testConnection(_imapAccount, 'pw');
-      expect(result, 'alice@example.com');
+      expect(result.username, 'alice@example.com');
     });
 
     test('falls back to localPart when email login fails', () async {
@@ -85,7 +116,7 @@ void main() {
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
       final result = await svc.testConnection(_imapAccount, 'pw');
-      expect(result, 'alice');
+      expect(result.username, 'alice');
       expect(callCount, 2);
     });
 
@@ -160,7 +191,7 @@ void main() {
     test('returns email username on HTTP 200', () async {
       final svc = _makeService(httpStatus: 200);
       final result = await svc.testConnection(_jmapAccount, 'pw');
-      expect(result, 'alice@example.com');
+      expect(result.username, 'alice@example.com');
     });
 
     test('throws on 401 authentication failed', () async {
@@ -203,7 +234,7 @@ void main() {
         }),
       );
       final result = await svc.testConnection(_jmapAccount, 'pw');
-      expect(result, 'alice');
+      expect(result.username, 'alice');
       expect(callCount, 2);
     });
 
@@ -247,8 +278,84 @@ void main() {
         }),
       );
       final result = await svc.testConnection(account, 'pw');
-      expect(result, 'mylogin');
+      expect(result.username, 'mylogin');
       expect(requestCount, 1);
+    });
+  });
+
+  group('ConnectionTestServiceImpl JMAP identity', () {
+    test('no warning when an identity matches the account email', () async {
+      final svc = _makeJmapIdentityService(
+        sessionJson: _jmapSubmissionSessionJson,
+        identityBody:
+            _identityResponse(['other@example.com', 'alice@example.com']),
+      );
+      final result = await svc.testConnection(_jmapAccount, 'pw');
+      expect(result.username, 'alice@example.com');
+      expect(result.identityWarning, isNull);
+    });
+
+    test('warns when no identity matches the account address', () async {
+      final svc = _makeJmapIdentityService(
+        sessionJson: _jmapSubmissionSessionJson,
+        identityBody:
+            _identityResponse(['bob@example.com', 'carol@example.com']),
+      );
+      final result = await svc.testConnection(_jmapAccount, 'pw');
+      expect(result.identityWarning, isNotNull);
+      expect(result.identityWarning, contains('alice@example.com'));
+      expect(result.identityWarning, contains('bob@example.com'));
+      expect(result.identityWarning, contains('carol@example.com'));
+    });
+
+    test('match is case-insensitive', () async {
+      const mixedCaseAccount = Account(
+        id: 'acc-2',
+        displayName: 'Alice',
+        email: 'Alice@Example.com',
+        type: AccountType.jmap,
+        jmapUrl: 'https://example.com/jmap/session',
+      );
+      final svc = _makeJmapIdentityService(
+        sessionJson: _jmapSubmissionSessionJson,
+        identityBody: _identityResponse(['alice@example.com']),
+      );
+      final result = await svc.testConnection(mixedCaseAccount, 'pw');
+      expect(result.identityWarning, isNull);
+    });
+
+    test('matches against the configured username too', () async {
+      const usernameAccount = Account(
+        id: 'acc-2',
+        displayName: 'Alice',
+        email: 'alias@example.com',
+        username: 'alice@example.com',
+        type: AccountType.jmap,
+        jmapUrl: 'https://example.com/jmap/session',
+      );
+      final svc = _makeJmapIdentityService(
+        sessionJson: _jmapSubmissionSessionJson,
+        identityBody: _identityResponse(['alice@example.com']),
+      );
+      final result = await svc.testConnection(usernameAccount, 'pw');
+      expect(result.identityWarning, isNull);
+    });
+
+    test('warns when the server lacks the submission capability', () async {
+      // _jmapSessionJson has core+mail but no submission capability.
+      final svc = _makeJmapIdentityService(sessionJson: _jmapSessionJson);
+      final result = await svc.testConnection(_jmapAccount, 'pw');
+      expect(result.identityWarning, isNotNull);
+      expect(result.identityWarning, contains('does not support sending'));
+    });
+
+    test('no warning when the Identity/get probe fails', () async {
+      final svc = _makeJmapIdentityService(
+        sessionJson: _jmapSubmissionSessionJson,
+        identityStatus: 500,
+      );
+      final result = await svc.testConnection(_jmapAccount, 'pw');
+      expect(result.identityWarning, isNull);
     });
   });
 }

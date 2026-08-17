@@ -474,6 +474,13 @@
       "tool": "jscpd",
       "file": "lib/ui/screens/add_account_screen.dart",
       "start_line": 159,
+      "end_line": 173,
+      "key": "7e94119d89f10d11"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/add_account_screen.dart",
+      "start_line": 159,
       "end_line": 176,
       "key": "ea8a12934c260505"
     },
@@ -518,6 +525,13 @@
       "start_line": 168,
       "end_line": 180,
       "key": "a0d094aa1f773262"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/edit_account_screen.dart",
+      "start_line": 168,
+      "end_line": 182,
+      "key": "7e94119d89f10d11"
     },
     {
       "tool": "jscpd",

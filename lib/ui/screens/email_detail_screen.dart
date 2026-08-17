@@ -307,7 +307,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         next: nextItem,
         child: detail.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error: $e')),
+          error: (e, _) => _buildLoadError(context, e),
           data: (d) {
             final trusted = ref.watch(trustedImageSendersProvider).value ??
                 const <String>[];
@@ -365,6 +365,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         if (header != null) ...[_buildHeader(ctx, header), const Divider()],
+        if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
         if (hasHtml) ...[
           if (!effectiveLoadImages)
             Align(
@@ -453,6 +454,110 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
         ],
       ],
+    );
+  }
+
+  /// Friendly fallback shown when the message can't be loaded at all (network,
+  /// DB, …). A malformed body no longer lands here — it's decoded best-effort
+  /// and shows the [_buildDecodeFailedNotice] banner instead (#579). The
+  /// underlying error is logged in [EmailDetailNotifier.build] so it's still
+  /// discoverable in the App Log; here we only offer a retry and raw view.
+  Widget _buildLoadError(BuildContext ctx, Object error) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: AppIconSize.lg,
+              color: Theme.of(ctx).colorScheme.error,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'This message could not be opened.',
+              style: Theme.of(ctx).textTheme.titleSmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              '$error',
+              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.outline,
+                  ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Wrap(
+              spacing: AppSpacing.sm,
+              alignment: WrapAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.refresh, size: AppIconSize.sm),
+                  label: const Text('Retry'),
+                  onPressed: () =>
+                      ref.invalidate(emailDetailProvider(widget.emailId)),
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.code, size: AppIconSize.sm),
+                  label: const Text('View raw source'),
+                  onPressed: () => unawaited(_showRaw(ctx, null)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Inline banner shown when the message body could only be decoded in part
+  /// (a malformed MIME message that made the mail parser throw — #579). Offers
+  /// a jump to the raw source so the user can still read the original.
+  Widget _buildDecodeFailedNotice(BuildContext ctx, Email? header) {
+    final scheme = Theme.of(ctx).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.xs),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_outlined,
+            size: AppIconSize.sm,
+            color: scheme.onErrorContainer,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This message could not be fully displayed.',
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => unawaited(_showRaw(ctx, header)),
+                  child: const Text('View raw source'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

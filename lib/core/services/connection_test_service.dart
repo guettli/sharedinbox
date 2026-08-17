@@ -32,9 +32,21 @@ Future<ManageSieveClient> _defaultManageSieveConnect({
     ManageSieveClient.connect(host: host, port: port, useTls: useTls);
 
 abstract class ConnectionTestService {
-  /// Verifies credentials and returns the effective username used.
-  /// Throws a descriptive [Exception] on failure.
-  Future<String> testConnection(Account account, String password);
+  /// Verifies credentials and returns the effective username used plus any
+  /// non-fatal warning. Throws a descriptive [Exception] on failure.
+  Future<ConnectionTestResult> testConnection(Account account, String password);
+}
+
+/// Outcome of a successful connection test.
+///
+/// [username] is the effective username that authenticated. [identityWarning]
+/// is a non-fatal, human-readable warning (e.g. no JMAP send identity matches
+/// the account address) or null when there is nothing to warn about.
+class ConnectionTestResult {
+  const ConnectionTestResult({required this.username, this.identityWarning});
+
+  final String username;
+  final String? identityWarning;
 }
 
 class ConnectionTestServiceImpl implements ConnectionTestService {
@@ -53,7 +65,10 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
   final ManageSieveConnectForTestFn _manageSieveConnect;
 
   @override
-  Future<String> testConnection(Account account, String password) async {
+  Future<ConnectionTestResult> testConnection(
+    Account account,
+    String password,
+  ) async {
     switch (account.type) {
       case AccountType.imap:
         final username = await _testImap(account, password);
@@ -65,7 +80,7 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
         if (account.manageSieveHost.trim().isNotEmpty) {
           await _testManageSieve(account, username, password);
         }
-        return username;
+        return ConnectionTestResult(username: username);
       case AccountType.jmap:
         return _testJmap(account, password);
     }
@@ -151,7 +166,10 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     }
   }
 
-  Future<String> _testJmap(Account account, String password) async {
+  Future<ConnectionTestResult> _testJmap(
+    Account account,
+    String password,
+  ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
       throw Exception('No JMAP URL configured for this account');
@@ -191,11 +209,118 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
             'Not a JMAP server — missing core capability at $jmapUrl',
           );
         }
-        return username;
+        final identityWarning = await _checkJmapIdentity(
+          account,
+          session,
+          sessionUri,
+          credentials,
+        );
+        return ConnectionTestResult(
+          username: username,
+          identityWarning: identityWarning,
+        );
       } catch (e) {
         lastError = e;
       }
     }
     throw lastError!;
+  }
+
+  /// Best-effort check that the server offers a send [Identity] whose address
+  /// matches the account. Returns a human-readable warning, or null when the
+  /// account can send from its own address.
+  ///
+  /// Any failure of the probe itself (network, unexpected shape) is swallowed
+  /// and treated as "no warning" — it must never fail an otherwise-good
+  /// connection test.
+  Future<String?> _checkJmapIdentity(
+    Account account,
+    Map<String, dynamic> session,
+    Uri sessionUri,
+    String credentials,
+  ) async {
+    const submissionCapability = 'urn:ietf:params:jmap:submission';
+    final caps = session['capabilities'];
+    if (caps is! Map || !caps.containsKey(submissionCapability)) {
+      // The server can't submit mail at all, so this account can only receive.
+      return 'The server does not support sending mail '
+          '(no JMAP submission capability), so this account can only '
+          'receive mail.';
+    }
+
+    try {
+      final apiUrl = session['apiUrl'] as String?;
+      if (apiUrl == null || apiUrl.isEmpty) return null;
+      final apiUri = sessionUri.resolve(apiUrl);
+      final accountId = _jmapAccountId(session);
+      if (accountId == null) return null;
+
+      final resp = await _httpClient
+          .post(
+            apiUri,
+            headers: {
+              'Authorization': 'Basic $credentials',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'using': ['urn:ietf:params:jmap:core', submissionCapability],
+              'methodCalls': [
+                [
+                  'Identity/get',
+                  {'accountId': accountId, 'ids': null},
+                  '0',
+                ],
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) return null;
+
+      final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+      final responses = decoded['methodResponses'] as List<dynamic>;
+      final args =
+          (responses.first as List<dynamic>)[1] as Map<String, dynamic>;
+      final list = args['list'] as List<dynamic>?;
+      if (list == null || list.isEmpty) return null;
+
+      // Match an identity address against either the account email or the
+      // configured username (both are legitimate From candidates).
+      final wanted = <String>{
+        account.email.toLowerCase(),
+        if (account.username.isNotEmpty) account.username.toLowerCase(),
+      };
+      final identityEmails = <String>[];
+      for (final entry in list) {
+        if (entry is! Map) continue;
+        final email = entry['email'];
+        if (email is! String || email.isEmpty) continue;
+        identityEmails.add(email);
+        if (wanted.contains(email.toLowerCase())) return null;
+      }
+
+      return 'No send identity on the server matches ${account.email}. '
+          'Sending mail may be rejected '
+          '(server identities: ${identityEmails.join(', ')}).';
+    } catch (_) {
+      // Best-effort — never turn a probe failure into a connection failure.
+      return null;
+    }
+  }
+
+  /// The primary mail account id from the session, or the first account, or
+  /// null when the session exposes none.
+  String? _jmapAccountId(Map<String, dynamic> session) {
+    final primaryAccounts = session['primaryAccounts'];
+    if (primaryAccounts is Map) {
+      final id = primaryAccounts['urn:ietf:params:jmap:mail'] ??
+          primaryAccounts['urn:ietf:params:jmap:core'];
+      if (id is String && id.isNotEmpty) return id;
+    }
+    final accounts = session['accounts'];
+    if (accounts is Map && accounts.isNotEmpty) {
+      final first = accounts.keys.first;
+      if (first is String) return first;
+    }
+    return null;
   }
 }
