@@ -39,6 +39,8 @@ void main() {
         ),
       );
       expect(find.text('Connected!'), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle), findsOneWidget);
+      expect(find.byIcon(Icons.error), findsNothing);
     });
 
     testWidgets('shows errorMessage when provided', (tester) async {
@@ -52,6 +54,8 @@ void main() {
         ),
       );
       expect(find.text('Connection failed'), findsOneWidget);
+      expect(find.byIcon(Icons.error), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle), findsNothing);
     });
   });
 }
