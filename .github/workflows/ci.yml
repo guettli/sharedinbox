@@ -56,7 +56,28 @@ jobs:
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
     steps:
-      - uses: actions/checkout@v5
+      # Check out with plain git instead of actions/checkout.
+      #
+      # On the self-hosted ARC runners every `uses:` step is fetched from
+      # codeload.github.com during "Set up job", and that download periodically
+      # gets throttled with HTTP 429 (Too Many Requests) from the runners'
+      # shared egress IP -- failing the job before any real work runs (see #576,
+      # and #573 for the same fix applied to website.yml). A plain `git`
+      # checkout talks to github.com's git endpoint, which is not subject to the
+      # codeload throttle. There are no submodules to fetch, and the check suite
+      # only needs the working tree, so a shallow fetch of the triggering commit
+      # is enough. See the `Publish task check timings` step below for the other
+      # codeload dependency this job used to have.
+      - name: Checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=$AUTH_HEADER" \
+            fetch --no-tags --prune --depth=1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
       # sops, dagger and task come from the sharedinbox-arc runner image
       # (arc-runner-image/Dockerfile), which is the single source of truth for
       # their versions. We deliberately do NOT reinstall them here: if the
@@ -94,13 +115,26 @@ jobs:
           OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
           OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task check-dagger
-      # Publish per-subtask timings as an artefact so we can inspect where the
-      # wall-time is spent (see issue #335). Uploaded even on failure — a slow
-      # step that times out is exactly the case we want to inspect.
-      - name: Upload task check timings
+      # Publish per-subtask timings so we can inspect where the wall-time is
+      # spent (see issue #335). Written to the run's job summary rather than an
+      # uploaded artefact: actions/upload-artifact is fetched from
+      # codeload.github.com, the exact dependency whose 429 throttle we removed
+      # by checking out with plain git above (see #576). A plain shell step has
+      # no codeload dependency. Published even on failure — a slow step that
+      # times out is exactly the case we want to inspect.
+      - name: Publish task check timings
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: task-check-timings
-          path: build/task-check-timings.json
-          if-no-files-found: ignore
+        run: |
+          TIMINGS=build/task-check-timings.json
+          if [ -s "$TIMINGS" ]; then
+            {
+              echo "### Task check timings"
+              echo
+              echo '```json'
+              cat "$TIMINGS"
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No task check timings found at $TIMINGS." >> "$GITHUB_STEP_SUMMARY"
+          fi

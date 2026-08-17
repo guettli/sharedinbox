@@ -314,8 +314,9 @@ tasks:
           exit $RC
         fi
         PORTFILE=$(mktemp)
-        # Emit per-span timings as JSON so CI can upload them as an artefact
-        # (see .github/workflows/ci.yml). Path is overridable via env for tests.
+        # Emit per-span timings as JSON so CI can publish them in the job
+        # summary (see .github/workflows/ci.yml). Path is overridable via env
+        # for tests.
         TIMINGS_OUT="${TASK_CHECK_TIMINGS_OUT:-build/task-check-timings.json}"
         mkdir -p "$(dirname "$TIMINGS_OUT")"
         python3 ci/otel-receiver.py --port-file="$PORTFILE" --output-file="$TIMINGS_OUT" &
