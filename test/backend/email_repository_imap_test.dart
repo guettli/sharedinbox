@@ -15,7 +15,6 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
@@ -256,13 +255,16 @@ void main() {
     await r.accounts.addAccount(account, user.password);
 
     // The local copy is written into the mailbox tagged with role 'inbox', so
-    // the mailbox cache must exist before enqueueSend runs.
-    final mailboxes = MailboxRepositoryImpl(
-      r.db,
-      r.accounts,
-      imapConnect: testImapConnect,
-    );
-    await mailboxes.syncMailboxes('test');
+    // that cache row must exist before enqueueSend runs.
+    await r.db.into(r.db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'test:INBOX',
+            accountId: 'test',
+            path: 'INBOX',
+            name: 'INBOX',
+            role: const Value('inbox'),
+          ),
+        );
 
     // Establish the INBOX checkpoint (and modseq) before the self-mail is
     // delivered, so the delivery is what advances HIGHESTMODSEQ.
