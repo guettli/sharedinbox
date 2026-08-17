@@ -208,7 +208,9 @@ void main() {
           findsOneWidget,
         );
         expect(
-            find.widgetWithText(TextButton, 'View raw source'), findsOneWidget);
+          find.widgetWithText(TextButton, 'View raw source'),
+          findsOneWidget,
+        );
         // Whatever decoded is still shown …
         expect(find.text('partial text that did decode'), findsOneWidget);
         // … and the action bar is intact (e.g. the Archive button).
