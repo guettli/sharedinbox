@@ -90,6 +90,12 @@ class _AccountHomeBody extends ConsumerWidget {
         ),
         const Divider(),
         ListTile(
+          leading: const Icon(Icons.inbox),
+          title: const Text('Inbox'),
+          subtitle: const Text('Open this account\'s inbox'),
+          onTap: () => _openInbox(context, ref),
+        ),
+        ListTile(
           leading: const Icon(Icons.folder_open),
           title: const Text('Folders'),
           subtitle: const Text('Browse all mailboxes for this account'),
@@ -175,6 +181,29 @@ class _AccountHomeBody extends ConsumerWidget {
               runAccountAction(context, ref, account, AccountAction.delete),
         ),
       ],
+    );
+  }
+
+  /// Resolves this account's inbox mailbox (the one with `role == 'inbox'`)
+  /// and opens its email list. Falls back to the full folder list when no
+  /// inbox has been synced yet.
+  Future<void> _openInbox(BuildContext context, WidgetRef ref) async {
+    final inbox = await ref
+        .read(mailboxRepositoryProvider)
+        .findMailboxByRole(account.id, 'inbox');
+    if (!context.mounted) return;
+    if (inbox == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No inbox found yet — try syncing this account'),
+        ),
+      );
+      context.push('/accounts/${account.id}/mailboxes');
+      return;
+    }
+    context.push(
+      '/accounts/${account.id}/mailboxes/'
+      '${Uri.encodeComponent(inbox.path)}/emails',
     );
   }
 }
