@@ -103,14 +103,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  Future<void> _search(String query) async {
-    setState(() => _loading = true);
+  /// Persist a term to the recent-search history. Called only on an explicit
+  /// commit (submitting the field or tapping a recent-search chip), never from
+  /// the live-results debounce — otherwise a partial term the user typed on the
+  /// way to their real query ("foob" → "foobar") would land in the history.
+  void _commitToHistory(String query) {
+    final trimmed = query.trim();
+    if (trimmed.length < 3) return;
     unawaited(
       ref
           .read(searchHistoryRepositoryProvider)
-          .saveSearch(query)
+          .saveSearch(trimmed)
           .then((_) => ref.invalidate(_searchHistoryProvider)),
     );
+  }
+
+  void _onSubmitted(String value) {
+    _debounce?.cancel();
+    final query = value.trim();
+    if (query.length < 3) return;
+    _commitToHistory(query);
+    unawaited(_search(query));
+  }
+
+  Future<void> _search(String query) async {
+    setState(() => _loading = true);
     try {
       final emailRepo = ref.read(emailRepositoryProvider);
 
@@ -198,7 +215,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         hintText: 'Search emails…',
                         border: InputBorder.none,
                       ),
+                      textInputAction: TextInputAction.search,
                       onChanged: _onChanged,
+                      onSubmitted: _onSubmitted,
                     ),
               actions: [
                 if (!_advancedMode && _ctrl.text.isNotEmpty)
@@ -371,6 +390,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         _ctrl.selection = TextSelection.fromPosition(
                           TextPosition(offset: term.length),
                         );
+                        // Re-running a past search is an explicit commit, so
+                        // bump it back to the top of the history.
+                        _commitToHistory(term);
                         unawaited(_search(term));
                       },
                       onDeleted: () async {
