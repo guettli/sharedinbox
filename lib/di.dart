@@ -386,10 +386,27 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   @override
   Future<(Email?, EmailBody)> build() async {
     final repo = ref.read(emailRepositoryProvider);
-    final results = await Future.wait([
-      repo.getEmail(_emailId),
-      repo.getEmailBody(_emailId),
-    ]);
+    final List<Object?> results;
+    try {
+      results = await Future.wait([
+        repo.getEmail(_emailId),
+        repo.getEmailBody(_emailId),
+      ]);
+    } catch (e, stack) {
+      // A malformed body is now decoded best-effort inside getEmailBody, so a
+      // throw here means something else failed (network, DB, …). Record it so
+      // the dead detail screen isn't silent in the App Log / "Show Logs" (#579).
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'email.detail.load_failed',
+              'Could not open message',
+              emailId: _emailId,
+              error: e,
+              stack: stack,
+            ),
+      );
+      rethrow;
+    }
     unawaited(repo.setFlag(_emailId, seen: true));
     final header = results[0] as Email?;
     if (header != null) {

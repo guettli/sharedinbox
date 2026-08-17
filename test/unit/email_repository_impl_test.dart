@@ -248,6 +248,60 @@ class _PushStatusRecorder extends NoOpAppLogRepository {
   }
 }
 
+/// A [imap.MimeMessage] whose plain-text decode throws — mimics a malformed
+/// MIME message that makes enough_mail raise `RangeError (end)` (#579).
+class _ThrowingMimeMessage extends imap.MimeMessage {
+  @override
+  String? decodeTextPlainPart() =>
+      throw RangeError.range(44858, 0, 44856, 'end');
+}
+
+imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+
+/// Fake IMAP client that serves a single message whose body cannot be decoded.
+class _BadBodyImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      _fakeMailbox(path);
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async =>
+      imap.FetchImapResult([_ThrowingMimeMessage()], null);
+}
+
+/// Fake IMAP client whose move op always fails with a non-"gone" error, so the
+/// pending change is retried and its failure recorded/logged (#579).
+class _MoveFailsImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      _fakeMailbox(path);
+
+  @override
+  Future<imap.GenericImapResult> uidMove(
+    imap.MessageSequence sequence, {
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+  }) async =>
+      throw Exception('server said no');
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -2259,6 +2313,41 @@ void main() {
     );
   });
 
+  group('getEmailBody decode resilience (#579)', () {
+    test('survives a malformed body and logs the failure', () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _BadBodyImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      const emailId = 'acc-1:INBOX:5';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Before #579 the RangeError thrown by decodeTextPlainPart propagated to
+      // the detail screen; now getEmailBody salvages what it can and returns.
+      final body = await r.emails.getEmailBody(emailId);
+
+      expect(body.decodeFailed, isTrue);
+      expect(body.textBody, isNull);
+
+      final entry = recorder.entries
+          .firstWhere((e) => e.event == 'email.body.decode_failed');
+      expect(entry.level, AppLogLevel.error);
+      expect(entry.emailId, emailId);
+      expect(entry.accountId, 'acc-1');
+      expect(entry.mailboxPath, 'INBOX');
+    });
+  });
+
   group('IMAP flushPendingChanges', () {
     test('records attempt and error when IMAP throws', () async {
       final r = _makeRepos();
@@ -2309,6 +2398,98 @@ void main() {
 
       // 4+1 = 5 = _maxChangeAttempts → evicted
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('logs a retry warning when a move flush fails (#579)', () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _MoveFailsImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      const resourceId = 'acc-1:INBOX:5';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: resourceId,
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: resourceId,
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 5,
+                'mailboxPath': 'INBOX',
+                'dest': 'Archive',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // The change is kept for a retry and its error stored on the row …
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.attempts, 1);
+      expect(change.lastError, isNotNull);
+      // … and — the point of #579 — it is now also in the App Log, tagged with
+      // the message id so it surfaces in the per-message "Show Logs" view.
+      final warn =
+          recorder.entries.firstWhere((e) => e.event == 'pending_change.retry');
+      expect(warn.level, AppLogLevel.warn);
+      expect(warn.emailId, resourceId);
+      expect(warn.accountId, 'acc-1');
+      expect(warn.dataJson, contains('move'));
+    });
+
+    test('logs a final error when a change is dropped after max attempts',
+        () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _MoveFailsImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      const resourceId = 'acc-1:INBOX:5';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: resourceId,
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: resourceId,
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 5,
+                'mailboxPath': 'INBOX',
+                'dest': 'Archive',
+              }),
+              createdAt: DateTime.now(),
+              attempts: const Value(4),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // 4+1 = 5 = _maxChangeAttempts → dropped, and logged at error level.
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final err = recorder.entries
+          .firstWhere((e) => e.event == 'pending_change.failed');
+      expect(err.level, AppLogLevel.error);
+      expect(err.emailId, resourceId);
     });
 
     test(

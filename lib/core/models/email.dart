@@ -281,6 +281,12 @@ class EmailBody {
   final List<EmailHeader> headers;
   final MimePart? mimeTree;
 
+  /// True when one or more parts of the message could not be decoded (e.g. a
+  /// malformed MIME message that makes `enough_mail` throw). The body is then
+  /// served best-effort — whatever parts decoded — and the UI shows a "could
+  /// not be fully displayed" notice with a link to the raw source (#579).
+  final bool decodeFailed;
+
   const EmailBody({
     required this.emailId,
     this.textBody,
@@ -288,6 +294,7 @@ class EmailBody {
     required this.attachments,
     this.headers = const [],
     this.mimeTree,
+    this.decodeFailed = false,
   });
 }
 
