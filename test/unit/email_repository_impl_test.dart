@@ -3,6 +3,9 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart' as imap;
+// ignore: implementation_imports
+import 'package:enough_mail/src/private/util/client_base.dart'
+    show ConnectionInfo;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -14,6 +17,8 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
+import 'package:sharedinbox/data/imap/object_id.dart';
+import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
@@ -185,11 +190,19 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
 Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('SMTP unavailable in unit tests'));
 
+Future<Map<int, String>> _noObjectIds(
+  imap.ImapClient c,
+  imap.MessageSequence s,
+  ObjectIdKind k,
+) async =>
+    const {};
+
 ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
     _makeRepos({
   http.Client? httpClient,
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
+  FetchObjectIdsFn? fetchObjectIds,
   Duration? sendOperationTimeout,
   AppLogger? appLogger,
 }) {
@@ -201,6 +214,7 @@ Future<imap.SmtpClient> _noSmtpConnect(Account a, String u, String p) =>
     accounts,
     imapConnect: imapConnect ?? _noImapConnect,
     smtpConnect: smtpConnect ?? _noSmtpConnect,
+    fetchObjectIds: fetchObjectIds ?? _noObjectIds,
     httpClient: httpClient,
     sendOperationTimeout: sendOperationTimeout ?? const Duration(seconds: 50),
     appLogger: appLogger,
@@ -6646,6 +6660,145 @@ void main() {
     );
   });
 
+  group('IMAP move-stable server id (RFC 8474 EMAILID / X-GM-MSGID, #589)', () {
+    test('_fetchAndUpsertImap stores the server id returned for each UID',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _ObjectIdSyncImapClient(
+          serverInfo: _objectIdServerInfo(),
+          uidsByMailbox: {
+            'INBOX': [1],
+          },
+        ),
+        fetchObjectIds: (_, seq, __) async => {
+          for (final uid in seq.toList())
+            if (uid == 1) uid: 'E-stable-1',
+        },
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final row = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingleOrNull();
+      expect(row, isNotNull);
+      expect(row!.serverEmailId, 'E-stable-1');
+    });
+
+    test(
+        'a foreign move hands the cached body and undo refs to the '
+        'destination row instead of dropping them', () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _MovedAwayImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Source row (INBOX) with a cached body, and the destination row
+      // (Archive) that carries the same move-stable server id.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              serverEmailId: const Value('E1'),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:INBOX:1',
+              textBody: const Value('cached body'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Archive:100',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 100,
+              receivedAt: DateTime(2024),
+              serverEmailId: const Value('E1'),
+            ),
+          );
+      await r.db.into(r.db.undoActions).insert(
+            UndoActionsCompanion.insert(
+              id: 'undo-1',
+              accountId: 'acc-1',
+              createdAt: DateTime(2024),
+              dataJson: jsonEncode({
+                'emailIds': ['acc-1:INBOX:1'],
+              }),
+            ),
+          );
+
+      // Checkpoint so the sync goes incremental and reconciliation runs.
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: '{"uidValidity":1,"lastUid":1,"highestModSeq":null}',
+              syncedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // The vanished source row is gone…
+      final inbox = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingleOrNull();
+      expect(inbox, isNull);
+      // …and the destination row now owns the cached body and undo reference.
+      final body = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals('acc-1:Archive:100')))
+          .getSingleOrNull();
+      expect(body?.textBody, 'cached body');
+      final orphanBody = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals('acc-1:INBOX:1')))
+          .getSingleOrNull();
+      expect(orphanBody, isNull);
+      final undo = await (r.db.select(r.db.undoActions)
+            ..where((t) => t.id.equals('undo-1')))
+          .getSingle();
+      expect(undo.dataJson, contains('acc-1:Archive:100'));
+      expect(undo.dataJson, isNot(contains('acc-1:INBOX:1')));
+    });
+
+    test('a genuine deletion (no matching server id elsewhere) is removed',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _MovedAwayImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              serverEmailId: const Value('E1'),
+            ),
+          );
+      await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: '{"uidValidity":1,"lastUid":1,"highestModSeq":null}',
+              syncedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows, isEmpty);
+    });
+  });
+
   group('IMAP UID validity change', () {
     test('full re-sync wipes stale emails when uidValidity changes', () async {
       final r = _makeRepos(
@@ -7571,4 +7724,111 @@ class _PreviewBodyImapClient extends FakeImapClient {
     final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
     return imap.FetchImapResult([msg], null);
   }
+}
+
+// ── Fakes for the move-stable server id tests (#589) ───────────────────────
+
+imap.ImapServerInfo _objectIdServerInfo() => imap.ImapServerInfo(
+      const ConnectionInfo('fake.host', 993, isSecure: true),
+    )..capabilities = [const imap.Capability('OBJECTID')];
+
+/// Drives `_syncEmailsImap` end-to-end for a mailbox whose UIDs are supplied
+/// per path, advertising the OBJECTID capability so the sync fetches server
+/// ids via the injected `fetchObjectIds`.
+class _ObjectIdSyncImapClient extends FakeImapClient {
+  _ObjectIdSyncImapClient({
+    required imap.ImapServerInfo serverInfo,
+    required this.uidsByMailbox,
+  }) : _serverInfo = serverInfo;
+
+  final imap.ImapServerInfo _serverInfo;
+  final Map<String, List<int>> uidsByMailbox;
+  String _selected = 'INBOX';
+
+  @override
+  imap.ImapServerInfo get serverInfo => _serverInfo;
+
+  List<int> get _uids => uidsByMailbox[_selected] ?? const [];
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async {
+    _selected = path;
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+      uidValidity: 1,
+      messagesExists: _uids.length,
+    );
+  }
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async =>
+      imap.SearchImapResult()
+        ..matchingSequence = imap.MessageSequence.fromIds(_uids, isUid: true);
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final built = <imap.MimeMessage>[
+      for (final uid in sequence.toList())
+        if (_uids.contains(uid))
+          _PreviewTestMessage(
+            subject: 'Message $uid',
+            from: 'bob@example.com',
+            messageId: '<m$uid@example.com>',
+            text: 'body $uid',
+          ).build(uid),
+    ];
+    return imap.FetchImapResult(built, null);
+  }
+}
+
+/// A mailbox whose only message has vanished: SELECT reports EXISTS=0 and every
+/// search returns no UIDs, so `_reconcileDeletedImap` treats the local row as
+/// gone from the folder.
+class _MovedAwayImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        pathSeparator: '/',
+        flags: [],
+        uidValidity: 1,
+      );
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async =>
+      imap.SearchImapResult();
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async =>
+      const imap.FetchImapResult([], null);
 }

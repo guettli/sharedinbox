@@ -67,6 +67,21 @@ This document covers the mail-to-database sync layer only, not the UI.
   threads, queued pending changes, and undo entries follow the new id.
   Deletion reconciliation skips rows whose `move`/`snooze`/`unsnooze` is still
   in `pending_changes` so the optimistic local move isn't wiped mid-flight.
+- Move-stable server id (`emails.server_email_id`, #589): when the server
+  advertises RFC 8474 `OBJECTID` (fetched as `EMAILID`) or Gmail's `X-GM-EXT-1`
+  (fetched as `X-GM-MSGID`), each row records a mailbox-independent id that
+  survives `MOVE`/`COPY`. `enough_mail` can't parse those FETCH items, so they
+  come from a separate raw `UID FETCH … (UID EMAILID)` (see
+  `lib/data/imap/object_id_fetch.dart`); any failure leaves the column null and
+  sync falls back to UID-only identity. When a row vanishes from a folder but
+  the same id now exists under another folder, deletion reconciliation treats it
+  as a **foreign move**: it hands the vanished row's cached body and
+  undo/thread/pending references to the destination row before dropping it, so a
+  move made by another client preserves the same local state as one we made
+  ourselves. This only fires on an actual disappearance, so it stays correct for
+  Gmail/`COPY`, where the message legitimately lives in several folders at once.
+  The `(accountId, mailboxPath, uid)` scheme in `emails.id` remains the baseline
+  identity; `server_email_id` is an opportunistic enhancement, not a new key.
 - Sync retries use exponential backoff after failures.
 - **Draft sync**: compose drafts are mirrored two-way with the server `Drafts`
   folder. Edited drafts (`drafts.dirty = true`) are pushed as `APPEND` (with

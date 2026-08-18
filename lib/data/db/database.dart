@@ -118,6 +118,14 @@ class Emails extends Table {
   // outbound mutations must not be queued against them.
   BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
 
+  // Added in schema v53: a server-assigned, mailbox-independent message
+  // identifier that survives IMAP MOVE/COPY (RFC 8474 OBJECTID `EMAILID`, or
+  // Gmail's `X-GM-MSGID`). Null when the server doesn't advertise either
+  // extension — the `(accountId, mailboxPath, uid)` scheme in [id] remains the
+  // baseline identity. Used to relink a locally cached row to its new UID after
+  // a folder move instead of deleting and re-inserting it (#589).
+  TextColumn get serverEmailId => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -1157,6 +1165,19 @@ class AppDatabase extends _$AppDatabase {
             // account stuck on "not verified yet". Guarded against legacy test
             // snapshots that never created the table.
             await m.addColumn(syncHealth, syncHealth.lastError);
+          }
+          if (from < 53 && await _tableExists(this, 'emails')) {
+            // Server-assigned, move-stable message id (RFC 8474 EMAILID /
+            // Gmail X-GM-MSGID). Populated on the next sync for servers that
+            // advertise the capability; older rows stay null (#589).
+            await m.addColumn(emails, emails.serverEmailId);
+            await m.createIndex(
+              Index(
+                'emails_server_email_id',
+                'CREATE INDEX IF NOT EXISTS emails_server_email_id ON emails '
+                    '(account_id, server_email_id) WHERE server_email_id IS NOT NULL;',
+              ),
+            );
           }
         },
       );

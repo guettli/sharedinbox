@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 52);
+      expect(db.schemaVersion, 53);
       await db.close();
     });
 
@@ -113,6 +113,9 @@ void main() {
       // v52: local self-sent "virtual" message marker.
       expect(emailColumns, contains('is_local'));
 
+      // v53: move-stable server id (RFC 8474 EMAILID / Gmail X-GM-MSGID).
+      expect(emailColumns, contains('server_email_id'));
+
       // v8: mailboxes role column.
       final mailboxColumns = await _tableColumns(db, 'mailboxes');
       expect(mailboxColumns, contains('role'));
@@ -166,6 +169,7 @@ void main() {
           'emails_snoozed_until', // v22
           'mailboxes_account_id', // v25
           'threads_latest_date', // v25
+          'emails_server_email_id', // v53
         ]),
       );
 
