@@ -319,6 +319,128 @@ else
     _pass
 fi
 
+# --- ssh-keyscan retry block -------------------------------------------------
+# Drive the keyscan block by extracting the section that starts at the
+# `# Populate known_hosts` comment and stops just before the
+# `# Create a background SSH tunnel` line. Like the tunnel, a single transient
+# blip (DNS hiccup, brief connection refusal) makes ssh-keyscan give up with
+# rc=1, so the block retries before failing the whole job. See issue #601.
+_keyscan_snippet=$(awk '/^# Populate known_hosts/{p=1} /^# Create a background SSH tunnel/{exit} p' "$SCRIPT")
+if [ -z "$_keyscan_snippet" ]; then
+    echo "FAIL: could not locate ssh-keyscan block in $SCRIPT"
+    exit 1
+fi
+
+# Stub `ssh-keyscan` to count attempts and honor KEYSCAN_RC / KEYSCAN_SUCCEED_ON
+# / KEYSCAN_STDERR_MSG. On a successful attempt it prints a stub key line to
+# stdout (which the block appends to ~/.ssh/known_hosts); failures print the
+# configured stderr message and return the configured exit code.
+cat >"$SCRATCH/ssh-keyscan" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$SCRATCH/keyscan_attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/keyscan_attempts"
+if [ -n "\${KEYSCAN_STDERR_MSG:-}" ]; then
+    printf '%s\n' "\$KEYSCAN_STDERR_MSG" >&2
+fi
+succeed=0
+if [ -n "\${KEYSCAN_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$KEYSCAN_SUCCEED_ON" ]; then
+    succeed=1
+elif [ "\${KEYSCAN_RC:-0}" -eq 0 ]; then
+    succeed=1
+fi
+if [ "\$succeed" -eq 1 ]; then
+    echo "engine.example ssh-rsa AAAAstubkey"
+    exit 0
+fi
+exit "\${KEYSCAN_RC:-1}"
+EOF
+chmod +x "$SCRATCH/ssh-keyscan"
+
+# Run the keyscan snippet with the stubs above. Behavior is controlled by:
+#   KEYSCAN_RC          — exit code returned by ssh-keyscan
+#   KEYSCAN_SUCCEED_ON  — attempt number on which to flip to rc=0 (optional)
+#   KEYSCAN_STDERR_MSG  — stderr line the stub emits (simulates the real error)
+# HOME is redirected to a per-run scratch dir so the block's `>> ~/.ssh/known_hosts`
+# append never touches the real known_hosts. Read attempts via $SCRATCH/keyscan_attempts.
+run_keyscan() {
+    echo 0 >"$SCRATCH/keyscan_attempts"
+    local kshome="$SCRATCH/kshome"
+    rm -rf "$kshome"; mkdir -p "$kshome/.ssh"
+    PATH="$SCRATCH:$PATH" \
+        HOME="$kshome" \
+        DAGGER_KEYSCAN_MAX_ATTEMPTS=3 \
+        DAGGER_KEYSCAN_TIMEOUT_S=30 \
+        DAGGER_KEYSCAN_RETRY_WAIT_S=0 \
+        DAGGER_ENGINE_HOST="engine.example" \
+        bash -c "$_keyscan_snippet" 2>&1
+}
+
+# --- Success on first attempt: silent, one call, no retry warning -------------
+out=$(KEYSCAN_RC=0 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan success: should exit 0" "$out"
+elif [ "$attempts" -ne 1 ]; then
+    _fail "keyscan success: should call ssh-keyscan exactly once (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan success: should not print ::error:: lines" "$out"
+elif printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt"; then
+    _fail "keyscan success: should not print retry warnings" "$out"
+else
+    _pass
+fi
+
+# --- Transient failure that recovers on attempt 2: warning + exit 0 -----------
+out=$(KEYSCAN_RC=1 KEYSCAN_SUCCEED_ON=2 run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "keyscan transient: should exit 0 after retry succeeds" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "keyscan transient: expected 2 attempts (got $attempts)" "$out"
+elif printf '%s' "$out" | grep -q "::error::"; then
+    _fail "keyscan transient: should not print ::error:: lines after recovery" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 1/3 failed (rc=1)"; then
+    _fail "keyscan transient: should warn about the failed first attempt" "$out"
+else
+    _pass
+fi
+
+# --- Persistent failure through all attempts: retries then errors and exits ---
+scan_msg='getaddrinfo engine.example: Temporary failure in name resolution'
+out=$(KEYSCAN_RC=1 KEYSCAN_STDERR_MSG="$scan_msg" run_keyscan)
+rc=$?
+attempts=$(cat "$SCRATCH/keyscan_attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "keyscan persistent: should exit non-zero" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "keyscan persistent: should retry to 3 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "ssh-keyscan for engine.example failed after 3 attempts"; then
+    _fail "keyscan persistent: should print the final failure error" "$out"
+elif ! printf '%s' "$out" | grep -q "last rc=1"; then
+    _fail "keyscan persistent: should surface the last rc in the error" "$out"
+elif ! printf '%s' "$out" | grep -q "Temporary failure in name resolution"; then
+    _fail "keyscan persistent: should surface the ssh-keyscan stderr in diagnostics" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 2/3 failed"; then
+    _fail "keyscan persistent: should print an intermediate retry warning" "$out"
+elif printf '%s' "$out" | grep -q "::warning::ssh-keyscan attempt 3/3 failed"; then
+    _fail "keyscan persistent: should not warn on the final attempt (error prints instead)" "$out"
+else
+    _pass
+fi
+
+# --- Default budget matches the tunnel (issue #601): 5 attempts, 15s wait -----
+# Regression guard so a future edit doesn't quietly drop the keyscan retry loop
+# back to a single attempt that fails the job on a one-off blip.
+_ks_defaults=$(awk '/^KEYSCAN_TIMEOUT_S=/{t=$0} /^KEYSCAN_MAX_ATTEMPTS=/{a=$0} /^KEYSCAN_RETRY_WAIT_S=/{w=$0; print t; print a; print w; exit}' "$SCRIPT")
+if ! printf '%s' "$_ks_defaults" | grep -qE 'KEYSCAN_MAX_ATTEMPTS="\$\{DAGGER_KEYSCAN_MAX_ATTEMPTS:-5\}"'; then
+    _fail "keyscan defaults: KEYSCAN_MAX_ATTEMPTS default should be 5" "$_ks_defaults"
+elif ! printf '%s' "$_ks_defaults" | grep -qE 'KEYSCAN_RETRY_WAIT_S="\$\{DAGGER_KEYSCAN_RETRY_WAIT_S:-15\}"'; then
+    _fail "keyscan defaults: KEYSCAN_RETRY_WAIT_S default should be 15" "$_ks_defaults"
+else
+    _pass
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

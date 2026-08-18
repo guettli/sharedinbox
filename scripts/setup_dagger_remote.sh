@@ -79,12 +79,37 @@ chmod 600 ~/.ssh/dagger_key
 # used to fall through to StrictHostKeyChecking=no on the tunnel and silently
 # accept whatever host key was presented, which defeats host verification and
 # masks a real infra problem (DNS, firewall, engine down). See issue #372.
+#
+# ssh-keyscan is subject to the same transient blips as the tunnel and verify
+# steps below: a brief DNS/network hiccup or the engine host momentarily
+# refusing the connection makes it give up (rc=1 after its ~5s connect timeout)
+# even though the host recovers moments later. See issue #601, where a single
+# hourly run failed keyscan while the runs on either side succeeded. Retry a
+# handful of times so a one-off blip does not fail the whole job; a persistent
+# failure still exits loudly with the runbook below.
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-5}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-15}"
 _t0=$SECONDS
 scan_rc=0
-scan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+scan_err=""
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    scan_rc=0
+    # ssh-keyscan only writes keys it actually retrieves, so a failed attempt
+    # appends nothing — no duplicate host entries accumulate across retries.
+    scan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+    if [ "$scan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (rc=${scan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$scan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${_elapsed}s (rc=${scan_rc})."
+    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (${_elapsed}s total, last rc=${scan_rc})."
     if [ -n "$scan_err" ]; then
         printf '%s\n' "$scan_err" | sed 's/^/::error::  /'
     fi
