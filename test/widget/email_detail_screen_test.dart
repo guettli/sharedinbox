@@ -221,6 +221,59 @@ void main() {
       },
     );
 
+    testWidgets(
+      'shows a SnackBar pointing at the app log when the body fails to load '
+      '(#587)',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider
+                  .overrideWithValue(_FailingEmailRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The in-body error panel is shown …
+        expect(find.text('This message could not be opened.'), findsOneWidget);
+        // … alongside a SnackBar that hints at the app log with a "Show logs"
+        // action.
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsOneWidget,
+        );
+        expect(find.widgetWithText(SnackBarAction, 'Show logs'), findsOneWidget);
+
+        // A plain rebuild must not re-show the SnackBar. Let the current one
+        // fade, then pump again without changing provider state.
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsNothing,
+        );
+
+        // Re-render the screen — no state transition into error, so no snack.
+        await tester.pump();
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsNothing,
+        );
+      },
+    );
+
     testWidgets('Reply All button is not present in app bar', (tester) async {
       await tester.pumpWidget(
         buildApp(
@@ -1622,4 +1675,17 @@ class _NeverEmailRepository extends FakeEmailRepository {
   @override
   Future<EmailBody> getEmailBody(String emailId, {bool forceRefresh = false}) =>
       Completer<EmailBody>().future;
+}
+
+/// Email repository whose [getEmailBody] always throws, used to drive the
+/// detail provider into its error state (#587).
+class _FailingEmailRepository extends FakeEmailRepository {
+  _FailingEmailRepository() : super();
+
+  @override
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async =>
+      throw StateError('boom');
 }
