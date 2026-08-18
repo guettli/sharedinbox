@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 
 /// Renders the "Try connection" button together with its success/error result.
 ///
@@ -87,7 +88,7 @@ class _ResultRow extends StatelessWidget {
         Icon(icon, color: color, size: 20, semanticLabel: semanticLabel),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
-          child: Text(message, style: TextStyle(color: color)),
+          child: LinkifiedText(message, style: TextStyle(color: color)),
         ),
       ],
     );
