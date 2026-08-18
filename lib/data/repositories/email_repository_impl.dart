@@ -3094,6 +3094,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.mailboxPath,
         row.threadId ?? emailId,
       );
+      _logFlag(row, account, seen: seen, flagged: flagged);
       return;
     }
 
@@ -3131,6 +3132,37 @@ class EmailRepositoryImpl implements EmailRepository {
       row.accountId,
       row.mailboxPath,
       row.threadId ?? emailId,
+    );
+    _logFlag(row, account, seen: seen, flagged: flagged);
+  }
+
+  /// Writes a per-message `email.flag` log row so the read/unread/star change
+  /// is discoverable in that message's "Show Logs" view (#562). No-op when
+  /// neither flag was touched.
+  void _logFlag(
+    Email row,
+    account_model.Account account, {
+    bool? seen,
+    bool? flagged,
+  }) {
+    if (seen == null && flagged == null) return;
+    final parts = <String>[
+      if (seen != null) seen ? 'read' : 'unread',
+      if (flagged != null) flagged ? 'starred' : 'unstarred',
+    ];
+    unawaited(
+      _appLogger?.info(
+        'email.flag',
+        'Marked "${row.subject ?? '(no subject)'}" ${parts.join(', ')}',
+        emailId: row.id,
+        accountId: row.accountId,
+        mailboxPath: row.mailboxPath,
+        data: {
+          if (seen != null) 'seen': seen,
+          if (flagged != null) 'flagged': flagged,
+          'protocol': account.type.name,
+        },
+      ),
     );
   }
 
@@ -3189,6 +3221,25 @@ class EmailRepositoryImpl implements EmailRepository {
             ))
           .write(const ThreadsCompanion(hasUnread: Value(false)));
     });
+
+    // Log per message (outside the transaction) so each affected mail shows the
+    // read change in its own "Show Logs" view (#562).
+    for (final row in unread) {
+      unawaited(
+        _appLogger?.info(
+          'email.mark_read',
+          'Marked "${row.subject ?? '(no subject)'}" read',
+          emailId: row.id,
+          accountId: accountId,
+          mailboxPath: mailboxPath,
+          data: {
+            'seen': true,
+            'bulk': true,
+            'protocol': account.type.name,
+          },
+        ),
+      );
+    }
   }
 
   @override
@@ -3211,9 +3262,14 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Moves a single [row] to [destMailboxPath] on its own account: enqueues the
   /// protocol change and applies the optimistic local update. Does not mirror
   /// to counterpart accounts (see [_mirrorMoveToCounterparts]).
-  Future<void> _moveRow(Email row, String destMailboxPath) async {
+  Future<void> _moveRow(
+    Email row,
+    String destMailboxPath, {
+    String event = 'email.move',
+  }) async {
     if (row.mailboxPath == destMailboxPath) return;
     final emailId = row.id;
+    final srcMailboxPath = row.mailboxPath;
     final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
@@ -3221,7 +3277,7 @@ class EmailRepositoryImpl implements EmailRepository {
         account.id,
         emailId,
         'move',
-        jsonEncode({'src': row.mailboxPath, 'dest': destMailboxPath}),
+        jsonEncode({'src': srcMailboxPath, 'dest': destMailboxPath}),
       );
       // Optimistic: move the cached row so it disappears from the current
       // mailbox immediately and is visible in the destination mailbox.
@@ -3230,7 +3286,7 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       await _reconcileSourceThreads(
         row.accountId,
-        row.mailboxPath,
+        srcMailboxPath,
         emailId,
         row.threadId ?? emailId,
       );
@@ -3239,39 +3295,58 @@ class EmailRepositoryImpl implements EmailRepository {
         destMailboxPath,
         row.threadId ?? emailId,
       );
-      return;
+    } else {
+      await _enqueueChange(
+        account.id,
+        emailId,
+        'move',
+        jsonEncode({
+          'uid': row.uid,
+          'mailboxPath': srcMailboxPath,
+          'dest': destMailboxPath,
+        }),
+      );
+      // Optimistic: move the cached row locally instead of hard-deleting.
+      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+        EmailsCompanion(
+          mailboxPath: Value(destMailboxPath),
+          snoozedUntil: const Value(null),
+          snoozedFromMailboxPath: const Value(null),
+        ),
+      );
+      await _reconcileSourceThreads(
+        row.accountId,
+        srcMailboxPath,
+        emailId,
+        row.threadId ?? emailId,
+      );
+      await _updateThread(
+        row.accountId,
+        destMailboxPath,
+        row.threadId ?? emailId,
+      );
+      // Destination UID will be updated when synced (IMAP move = delete + copy).
     }
 
-    await _enqueueChange(
-      account.id,
-      emailId,
-      'move',
-      jsonEncode({
-        'uid': row.uid,
-        'mailboxPath': row.mailboxPath,
-        'dest': destMailboxPath,
-      }),
-    );
-    // Optimistic: move the cached row locally instead of hard-deleting.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(
-        mailboxPath: Value(destMailboxPath),
-        snoozedUntil: const Value(null),
-        snoozedFromMailboxPath: const Value(null),
+    // Per-message log so the move (or trash/archive/spam, which are all moves)
+    // shows up in this mail's "Show Logs" view (#562). The IMAP re-key on the
+    // next sync carries this row along (see [_remapEmailAfterImapMove]).
+    unawaited(
+      _appLogger?.info(
+        event,
+        'Moved "${row.subject ?? '(no subject)'}" '
+        'from $srcMailboxPath to $destMailboxPath',
+        emailId: emailId,
+        accountId: row.accountId,
+        mailboxPath: destMailboxPath,
+        data: {
+          'src': srcMailboxPath,
+          'dest': destMailboxPath,
+          'protocol': account.type.name,
+          if (row.messageId != null) 'messageId': row.messageId,
+        },
       ),
     );
-    await _reconcileSourceThreads(
-      row.accountId,
-      row.mailboxPath,
-      emailId,
-      row.threadId ?? emailId,
-    );
-    await _updateThread(
-      row.accountId,
-      destMailboxPath,
-      row.threadId ?? emailId,
-    );
-    // Destination UID will be updated when synced (IMAP move is a delete + copy).
   }
 
   @override
@@ -3304,11 +3379,30 @@ class EmailRepositoryImpl implements EmailRepository {
         .getSingleOrNull();
 
     if (trashRow != null && trashRow.path != row.mailboxPath) {
-      await _moveRow(row, trashRow.path);
+      await _moveRow(row, trashRow.path, event: 'email.trash');
       return trashRow.path;
     }
 
-    // Already in Trash or no Trash folder — hard delete.
+    // Already in Trash or no Trash folder — hard delete. Record it so the
+    // deletion still shows up in the global App Log even though the message
+    // row (and any per-message view of it) is about to disappear (#562).
+    unawaited(
+      _appLogger?.info(
+        'email.delete',
+        'Permanently deleted "${row.subject ?? '(no subject)'}" '
+            'from ${row.mailboxPath}',
+        emailId: emailId,
+        accountId: row.accountId,
+        mailboxPath: row.mailboxPath,
+        data: {
+          'permanent': true,
+          'mailboxPath': row.mailboxPath,
+          'protocol': account.type.name,
+          if (row.messageId != null) 'messageId': row.messageId,
+        },
+      ),
+    );
+
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
         account.id,
@@ -3461,6 +3555,23 @@ class EmailRepositoryImpl implements EmailRepository {
 
     await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
     await _updateThread(accountId, destPath, row.threadId ?? row.id);
+
+    unawaited(
+      _appLogger?.info(
+        'email.snooze',
+        'Snoozed "${row.subject ?? '(no subject)'}" until '
+            '${until.toIso8601String()}',
+        emailId: row.id,
+        accountId: accountId,
+        mailboxPath: destPath,
+        data: {
+          'src': row.mailboxPath,
+          'dest': destPath,
+          'until': until.toIso8601String(),
+          if (row.messageId != null) 'messageId': row.messageId,
+        },
+      ),
+    );
   }
 
   @override
@@ -3519,6 +3630,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
     await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
     await _updateThread(accountId, dest, row.threadId ?? row.id);
+
+    unawaited(
+      _appLogger?.info(
+        'email.unsnooze',
+        'Un-snoozed "${row.subject ?? '(no subject)'}" back to $dest',
+        emailId: row.id,
+        accountId: accountId,
+        mailboxPath: dest,
+        data: {
+          'src': row.mailboxPath,
+          'dest': dest,
+          if (row.messageId != null) 'messageId': row.messageId,
+        },
+      ),
+    );
   }
 
   /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
@@ -4432,6 +4558,15 @@ class EmailRepositoryImpl implements EmailRepository {
       await (_db.update(_db.pendingChanges)
             ..where((t) => t.resourceId.equals(oldId)))
           .write(PendingChangesCompanion(resourceId: Value(newId)));
+
+      // app_logs.emailId references emails.id with onDelete:setNull but no
+      // onUpdate action, so re-point the per-message logs by hand — otherwise
+      // "Show Logs" would come up empty after an IMAP move re-keys the row
+      // (delete + copy changes the (mailbox, UID) → id). See #562.
+      await _db.customStatement(
+        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
 
       // threads.latest_email_id is a plain equality match; threads.email_ids_json
       // is a JSON array of email IDs — both are safe to update via REPLACE()
