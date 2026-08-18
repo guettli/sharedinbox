@@ -539,6 +539,114 @@ void main() {
         expect(state.first.state, 'st1');
       });
 
+      test(
+        'incremental sync fetches an uncached parent so displayPath is not '
+        'the opaque id (#605)',
+        () async {
+          // Only the child "b" changed; its parent "a" was never cached. The
+          // sync must follow the parentId and fetch "a" so "b" renders as
+          // "Archive/2026" instead of leaking the opaque id as "a/2026".
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                _mailboxChangesResponse(
+                  oldState: 'st1',
+                  newState: 'st2',
+                  updated: ['b'],
+                ),
+                _mailboxGetResponse(
+                  state: 'st2',
+                  list: [
+                    {
+                      'id': 'b',
+                      'name': '2026',
+                      'parentId': 'a',
+                      'unreadEmails': 0,
+                      'totalEmails': 3,
+                    },
+                  ],
+                ),
+                _mailboxGetResponse(
+                  state: 'st2',
+                  list: [
+                    {'id': 'a', 'name': 'Archive'},
+                  ],
+                ),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: 'Mailbox',
+                  state: 'st1',
+                  syncedAt: DateTime.now(),
+                ),
+              );
+
+          await r.mailboxes.syncMailboxes('jmap-1');
+
+          final mailboxes = await r.mailboxes.observeMailboxes('jmap-1').first;
+          final byPath = {for (final m in mailboxes) m.path: m};
+          expect(byPath['a']!.name, 'Archive');
+          expect(byPath['b']!.displayPath, 'Archive/2026');
+          // No mailbox's displayPath may be the raw opaque server id.
+          for (final m in mailboxes) {
+            expect(m.displayPath.split('/'), isNot(contains(m.path)));
+          }
+        },
+      );
+
+      test(
+        'incremental sync truncates rather than embedding an unresolvable '
+        'parent id (#605)',
+        () async {
+          // The parent "a" was concurrently deleted, so Mailbox/get returns it
+          // in neither response. "b" must render as "2026" — a shorter but
+          // honest path — never "a/2026", and the fetch must not loop forever.
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              apiResponses: [
+                _mailboxChangesResponse(
+                  oldState: 'st1',
+                  newState: 'st2',
+                  updated: ['b'],
+                ),
+                _mailboxGetResponse(
+                  state: 'st2',
+                  list: [
+                    {
+                      'id': 'b',
+                      'name': '2026',
+                      'parentId': 'a',
+                      'unreadEmails': 0,
+                      'totalEmails': 3,
+                    },
+                  ],
+                ),
+                _mailboxGetResponse(state: 'st2', list: []),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: 'Mailbox',
+                  state: 'st1',
+                  syncedAt: DateTime.now(),
+                ),
+              );
+
+          await r.mailboxes.syncMailboxes('jmap-1');
+
+          final mailboxes = await r.mailboxes.observeMailboxes('jmap-1').first;
+          final byPath = {for (final m in mailboxes) m.path: m};
+          expect(byPath['b']!.displayPath, '2026');
+        },
+      );
+
       test('syncMailboxes throws when JMAP account has no jmapUrl', () async {
         const noUrlAccount = Account(
           id: 'jmap-no-url',
