@@ -5,15 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
-Widget _wrap(Widget child) => ProviderScope(
-      child: MaterialApp(
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-          useMaterial3: true,
-        ),
-        home: Scaffold(body: child),
-      ),
-    );
+// LinkifiedText is a ConsumerWidget, so a ProviderScope must be in the tree.
+Widget _wrap(Widget child) =>
+    ProviderScope(child: MaterialApp(home: Scaffold(body: child)));
 
 // Walks the rich-text spans and returns the tap recognizers attached to a span
 // whose text matches [url] — mirrors how LinkifiedText renders hyperlinks.
