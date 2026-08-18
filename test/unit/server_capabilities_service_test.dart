@@ -9,26 +9,26 @@ import 'package:sharedinbox/core/services/server_capabilities_service.dart';
 import 'fake_imap.dart';
 
 const _imapAccount = Account(
-  id: 'acc-1',
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
+  id: 'cap-imap',
+  displayName: 'Cap Tester',
+  email: 'cap@sample.test',
+  imapHost: 'mail.sample.test',
+  smtpHost: 'submission.sample.test',
 );
 
 const _jmapAccount = Account(
-  id: 'acc-2',
-  displayName: 'Alice',
-  email: 'alice@example.com',
+  id: 'cap-jmap',
+  displayName: 'Cap Tester',
+  email: 'cap@sample.test',
   type: AccountType.jmap,
-  jmapUrl: 'https://example.com/jmap/session',
+  jmapUrl: 'https://sample.test/.well-known/jmap',
 );
 
 const _jmapSessionJson = '{'
     '"capabilities":{"urn:ietf:params:jmap:core":{},'
     '"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:submission":{}},'
-    '"accounts":{"acc":{}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc"},'
-    '"username":"alice@example.com","apiUrl":"https://example.com/jmap/",'
+    '"accounts":{"a0":{}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"a0"},'
+    '"username":"cap@sample.test","apiUrl":"https://sample.test/jmap/api",'
     '"downloadUrl":"","uploadUrl":"","state":"0"'
     '}';
 
