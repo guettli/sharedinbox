@@ -945,9 +945,38 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// Resource ids on [accountId] with an unflushed optimistic mutation still
+  /// queued in `pendingChanges` — used to protect a local edit from being
+  /// reverted by a server-truth flag refresh before it has been pushed. The
+  /// `flag_flagged` / `flag_seen` change a mail-to-self dissolve queues when it
+  /// carries the star onto the real message lives here until it flushes (#565).
+  Future<Set<String>> _inFlightFlagResourceIds(String accountId) async {
+    final ids = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'delete',
+                  ],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    return ids.toSet();
+  }
+
   /// Fetches FLAGS for all messages modified since [sinceModSeq] and updates
   /// the local DB. Only messages whose modseq is > [sinceModSeq] are returned
-  /// by the server (RFC 7162 §3.2).
+  /// by the server (RFC 7162 §3.2). Skips rows with an unflushed optimistic
+  /// flag edit still queued in `pendingChanges`, so a newly delivered message
+  /// whose star the dissolve just carried over is not reverted to server truth
+  /// within the same sync (#565).
   Future<void> _refreshFlagsImap(
     imap.ImapClient client,
     account_model.Account account,
@@ -959,10 +988,12 @@ class EmailRepositoryImpl implements EmailRepository {
       'FLAGS',
       changedSinceModSequence: sinceModSeq,
     );
+    final inFlightSet = await _inFlightFlagResourceIds(account.id);
     for (final msg in result.messages) {
       final uid = msg.uid;
       if (uid == null) continue;
       final emailId = '${account.id}:$mailboxPath:$uid';
+      if (inFlightSet.contains(emailId)) continue;
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
         EmailsCompanion(
           isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
@@ -1019,24 +1050,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .get();
 
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const [
-                    'flag_seen',
-                    'flag_flagged',
-                    'move',
-                    'snooze',
-                    'unsnooze',
-                    'delete',
-                  ],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _inFlightFlagResourceIds(accountId);
 
     final affectedThreads = <String>{};
     var corrected = 0;
