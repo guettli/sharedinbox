@@ -282,6 +282,37 @@ class _BadBodyImapClient extends FakeImapClient {
       imap.FetchImapResult([_ThrowingMimeMessage()], null);
 }
 
+/// Fake IMAP client that serves a real message whose `text/html` part is
+/// quoted-printable and ends with a dangling `=` — the shape that makes
+/// enough_mail's stock decoder throw `RangeError (end)` but that the QP
+/// recovery wrappers salvage (#588). No trailing CRLF after the final `=`.
+class _QpDanglingBodyImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      _fakeMailbox(path);
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage.parseFromText(
+      'From: sender@example.com\r\n'
+      'Subject: Test\r\n'
+      'Content-Type: text/html; charset="utf-8"\r\n'
+      'Content-Transfer-Encoding: quoted-printable\r\n'
+      '\r\n'
+      '<p>f=C3=BCr Tills</p>=',
+    );
+    return imap.FetchImapResult([msg], null);
+  }
+}
+
 /// Fake IMAP client whose move op always fails with a non-"gone" error, so the
 /// pending change is retried and its failure recorded/logged (#579).
 class _MoveFailsImapClient extends FakeImapClient {
@@ -2345,6 +2376,37 @@ void main() {
       expect(entry.emailId, emailId);
       expect(entry.accountId, 'acc-1');
       expect(entry.mailboxPath, 'INBOX');
+    });
+
+    test('recovers a quoted-printable body with a dangling = (#588)', () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => _QpDanglingBodyImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      const emailId = 'acc-1:INBOX:5';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // The stock decoder would throw and blank the whole HTML part; the QP
+      // recovery wrapper salvages the content, so the body decodes cleanly and
+      // is not flagged as partial.
+      final body = await r.emails.getEmailBody(emailId);
+
+      expect(body.decodeFailed, isFalse);
+      expect(body.htmlBody, contains('für Tills'));
+      expect(
+        recorder.entries.where((e) => e.event == 'email.body.decode_failed'),
+        isEmpty,
+      );
     });
   });
 

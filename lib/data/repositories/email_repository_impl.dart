@@ -27,6 +27,7 @@ import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
@@ -537,8 +538,13 @@ class EmailRepositoryImpl implements EmailRepository {
         }
       }
 
-      final textBody = tryDecode(msg.decodeTextPlainPart);
-      final rawHtml = tryDecode(msg.decodeTextHtmlPart);
+      // Use the QP-recovering wrappers (#588): enough_mail throws a RangeError
+      // on a quoted-printable part that ends with a dangling `=`, which would
+      // otherwise drop the whole part; the wrappers salvage the content when
+      // they can and only rethrow — letting tryDecode flag the body as
+      // partial — when the part is genuinely unrecoverable.
+      final textBody = tryDecode(() => decodeTextPlainPartSafe(msg));
+      final rawHtml = tryDecode(() => decodeTextHtmlPartSafe(msg));
       final htmlBody = rawHtml == null
           ? null
           : tryDecode(() => injectInlineImages(rawHtml, msg));
