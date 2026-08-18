@@ -103,7 +103,7 @@ void main() {
   // even when the account never enabled verbose logging.
   test('failed IMAP sync records the protocol log so the command is visible',
       () async {
-    final syncLog = FakeSyncLogRepository();
+    final syncLog = _RecordingSyncLog();
 
     final m = AccountSyncManager(
       _OkAccountRepository(),
@@ -115,15 +115,16 @@ void main() {
     m.start();
     await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    final entry = syncLog.logs.firstWhere((l) => !l.success);
-    expect(entry.errorMessage, contains('BAD Could not parse command'));
-    expect(entry.protocolLog, isNotNull);
+    final failure = syncLog.firstFailure;
+    final protocolLog = failure[#protocolLog] as String?;
+    expect(failure[#errorMessage], contains('BAD Could not parse command'));
+    expect(protocolLog, isNotNull);
     // The failing command and its rejection are both present.
-    expect(entry.protocolLog, contains('SOMEBROKENCOMMAND'));
-    expect(entry.protocolLog, contains('BAD Could not parse command'));
+    expect(protocolLog, contains('SOMEBROKENCOMMAND'));
+    expect(protocolLog, contains('BAD Could not parse command'));
     // Credentials are redacted, not leaked verbatim.
-    expect(entry.protocolLog, contains('[REDACTED]'));
-    expect(entry.protocolLog, isNot(contains('secret123')));
+    expect(protocolLog, contains('[REDACTED]'));
+    expect(protocolLog, isNot(contains('secret123')));
 
     m.dispose();
   });
@@ -133,7 +134,7 @@ void main() {
   // holds the failing command — is always kept.
   test('captured protocol log on failure is bounded but keeps the failure',
       () async {
-    final syncLog = FakeSyncLogRepository();
+    final syncLog = _RecordingSyncLog();
 
     final m = AccountSyncManager(
       _OkAccountRepository(),
@@ -145,12 +146,12 @@ void main() {
     m.start();
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
-    final entry = syncLog.logs.firstWhere((l) => !l.success);
-    expect(entry.protocolLog, isNotNull);
+    final protocolLog = syncLog.firstFailure[#protocolLog] as String?;
+    expect(protocolLog, isNotNull);
     // Bounded well below the ~5000 filler lines that were emitted.
-    expect(entry.protocolLog!.length, lessThan(64 * 1024));
+    expect(protocolLog!.length, lessThan(64 * 1024));
     // The most recent lines (the failing command) survive the trimming.
-    expect(entry.protocolLog, contains('BAD Could not parse command'));
+    expect(protocolLog, contains('BAD Could not parse command'));
 
     m.dispose();
   });
@@ -299,14 +300,8 @@ class FakeEmailRepository implements EmailRepository {
 }
 
 class _Log {
-  _Log({
-    required this.success,
-    this.errorMessage,
-    this.protocolLog,
-  });
+  _Log({required this.success});
   final bool success;
-  final String? errorMessage;
-  final String? protocolLog;
 }
 
 class FakeSyncLogRepository implements SyncLogRepository {
@@ -330,13 +325,7 @@ class FakeSyncLogRepository implements SyncLogRepository {
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
   }) async {
-    logs.add(
-      _Log(
-        success: success,
-        errorMessage: errorMessage,
-        protocolLog: protocolLog,
-      ),
-    );
+    logs.add(_Log(success: success));
     return _nextId++;
   }
 
@@ -465,7 +454,8 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 
 /// A well-behaved account repository whose single IMAP account authenticates
 /// successfully — used to exercise the sync path up to the point a mailbox
-/// sync fails.
+/// sync fails. Implemented via [noSuchMethod] so it carries no repository
+/// boilerplate to duplicate.
 class _OkAccountRepository implements AccountRepository {
   static const _account = Account(
     id: '1',
@@ -475,22 +465,18 @@ class _OkAccountRepository implements AccountRepository {
   );
 
   @override
-  Stream<List<Account>> observeAccounts() => Stream.value([_account]);
-
-  @override
-  Future<Account?> getAccount(String id) async => _account;
-
-  @override
-  Future<String> getPassword(String accountId) async => 'secret123';
-
-  @override
-  Future<void> addAccount(Account account, String password) async {}
-
-  @override
-  Future<void> updateAccount(Account account, {String? password}) async {}
-
-  @override
-  Future<void> removeAccount(String id) async {}
+  dynamic noSuchMethod(Invocation invocation) {
+    switch (invocation.memberName) {
+      case #observeAccounts:
+        return Stream.value([_account]);
+      case #getAccount:
+        return Future.value(_account);
+      case #getPassword:
+        return Future.value('secret123');
+      default:
+        return Future<void>.value();
+    }
+  }
 }
 
 /// A mailbox repository whose [syncMailboxes] emits a fake IMAP protocol trace
@@ -519,4 +505,31 @@ class _FailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
     zone.print('S: 99 BAD Could not parse command');
     throw Exception('BAD Could not parse command');
   }
+}
+
+/// Captures the named arguments of every `log(...)` call so a test can assert
+/// on `errorMessage`/`protocolLog`. Implemented via [noSuchMethod] so it needs
+/// no copy of the long [SyncLogRepository.log] signature (which would clone
+/// the other sync-log fakes).
+class _RecordingSyncLog implements SyncLogRepository {
+  final calls = <Map<Symbol, dynamic>>[];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    switch (invocation.memberName) {
+      case #log:
+        calls.add(invocation.namedArguments);
+        return Future<int>.value(calls.length);
+      case #observeSyncLogs:
+        return const Stream<List<SyncLogEntry>>.empty();
+      case #observeLastError:
+        return const Stream<String?>.empty();
+      default:
+        return null;
+    }
+  }
+
+  /// The named arguments of the first failed (`success: false`) log call.
+  Map<Symbol, dynamic> get firstFailure =>
+      calls.firstWhere((c) => c[#success] == false);
 }
