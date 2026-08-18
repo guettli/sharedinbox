@@ -95,6 +95,65 @@ void main() {
 
     m.dispose();
   });
+
+  // Regression test for issue #608: a first-time Gmail account failed with
+  // "BAD Could not parse command" but the sync entry showed no protocol trace,
+  // so the user could not tell which command the server rejected. A failed
+  // sync must now attach the (credential-redacted) protocol log to its entry
+  // even when the account never enabled verbose logging.
+  test('failed IMAP sync records the protocol log so the command is visible',
+      () async {
+    final syncLog = FakeSyncLogRepository();
+
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      _FailingMailboxRepository(),
+      FakeEmailRepository(),
+      syncLog: syncLog,
+    );
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    final entry = syncLog.logs.firstWhere((l) => !l.success);
+    expect(entry.errorMessage, contains('BAD Could not parse command'));
+    expect(entry.protocolLog, isNotNull);
+    // The failing command and its rejection are both present.
+    expect(entry.protocolLog, contains('SOMEBROKENCOMMAND'));
+    expect(entry.protocolLog, contains('BAD Could not parse command'));
+    // Credentials are redacted, not leaked verbatim.
+    expect(entry.protocolLog, contains('[REDACTED]'));
+    expect(entry.protocolLog, isNot(contains('secret123')));
+
+    m.dispose();
+  });
+
+  // The captured trace is bounded: a large sync must not retain an unbounded
+  // amount of (potentially sensitive) message content, yet the tail — which
+  // holds the failing command — is always kept.
+  test('captured protocol log on failure is bounded but keeps the failure',
+      () async {
+    final syncLog = FakeSyncLogRepository();
+
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      _FailingMailboxRepository(emittedLines: 5000),
+      FakeEmailRepository(),
+      syncLog: syncLog,
+    );
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    final entry = syncLog.logs.firstWhere((l) => !l.success);
+    expect(entry.protocolLog, isNotNull);
+    // Bounded well below the ~5000 filler lines that were emitted.
+    expect(entry.protocolLog!.length, lessThan(64 * 1024));
+    // The most recent lines (the failing command) survive the trimming.
+    expect(entry.protocolLog, contains('BAD Could not parse command'));
+
+    m.dispose();
+  });
 }
 
 class FakeEmailRepository implements EmailRepository {
@@ -240,8 +299,14 @@ class FakeEmailRepository implements EmailRepository {
 }
 
 class _Log {
-  _Log({required this.success});
+  _Log({
+    required this.success,
+    this.errorMessage,
+    this.protocolLog,
+  });
   final bool success;
+  final String? errorMessage;
+  final String? protocolLog;
 }
 
 class FakeSyncLogRepository implements SyncLogRepository {
@@ -265,7 +330,13 @@ class FakeSyncLogRepository implements SyncLogRepository {
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
   }) async {
-    logs.add(_Log(success: success));
+    logs.add(
+      _Log(
+        success: success,
+        errorMessage: errorMessage,
+        protocolLog: protocolLog,
+      ),
+    );
     return _nextId++;
   }
 
@@ -390,4 +461,62 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 
   @override
   Future<void> removeAccount(String id) async {}
+}
+
+/// A well-behaved account repository whose single IMAP account authenticates
+/// successfully — used to exercise the sync path up to the point a mailbox
+/// sync fails.
+class _OkAccountRepository implements AccountRepository {
+  static const _account = Account(
+    id: '1',
+    displayName: 'Test',
+    email: 'test@example.com',
+    imapHost: 'imap.example.com',
+  );
+
+  @override
+  Stream<List<Account>> observeAccounts() => Stream.value([_account]);
+
+  @override
+  Future<Account?> getAccount(String id) async => _account;
+
+  @override
+  Future<String> getPassword(String accountId) async => 'secret123';
+
+  @override
+  Future<void> addAccount(Account account, String password) async {}
+
+  @override
+  Future<void> updateAccount(Account account, {String? password}) async {}
+
+  @override
+  Future<void> removeAccount(String id) async {}
+}
+
+/// A mailbox repository whose [syncMailboxes] emits a fake IMAP protocol trace
+/// (via `print`, exactly as `enough_mail` does when logging is enabled) and
+/// then throws the server's parse error — mirroring the Gmail failure in
+/// issue #608. [emittedLines] controls how much trace is produced so the
+/// bounding behaviour can be exercised.
+class _FailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  _FailingMailboxRepository({this.emittedLines = 1});
+
+  final int emittedLines;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    // Emit trace lines the way `enough_mail` does — through the current
+    // zone's print handler, which the sync loop overrides to capture them.
+    // The password reaches the trace via the LOGIN command; it must be
+    // redacted before the log is stored.
+    final zone = Zone.current;
+    zone.print('C: 1 LOGIN test@example.com secret123');
+    zone.print('S: 1 OK LOGIN completed');
+    for (var i = 0; i < emittedLines; i++) {
+      zone.print('C: ${i + 2} FETCH $i (BODY[]) <filler line $i>');
+    }
+    zone.print('C: 99 SOMEBROKENCOMMAND');
+    zone.print('S: 99 BAD Could not parse command');
+    throw Exception('BAD Could not parse command');
+  }
 }

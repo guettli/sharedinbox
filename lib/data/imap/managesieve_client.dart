@@ -116,7 +116,7 @@ class ManageSieveClient {
   }
 
   static Future<void> _writeLineTo(Socket socket, String line) async {
-    final log = Zone.current[verboseLogKey] as StringBuffer?;
+    final log = Zone.current[verboseLogKey] as StringSink?;
     if (log != null) log.writeln('SIEVE → $line');
     socket.add(utf8.encode(line));
     socket.add(_crlf);
@@ -216,7 +216,7 @@ class ManageSieveClient {
   static const List<int> _crlf = [0x0D, 0x0A];
 
   Future<void> _writeLine(String line, {Future<void> Function()? then}) async {
-    final log = Zone.current[verboseLogKey] as StringBuffer?;
+    final log = Zone.current[verboseLogKey] as StringSink?;
     if (log != null) {
       // Redact AUTHENTICATE PLAIN payload — contains base64-encoded password.
       log.writeln(
@@ -237,7 +237,7 @@ class ManageSieveClient {
 
   static Future<_Response> _readResponseFromSource(_ByteSource source) async {
     final dataLines = <String>[];
-    final log = Zone.current[verboseLogKey] as StringBuffer?;
+    final log = Zone.current[verboseLogKey] as StringSink?;
     while (true) {
       final lineBytes = await source.takeLine();
       var line = utf8.decode(lineBytes);
