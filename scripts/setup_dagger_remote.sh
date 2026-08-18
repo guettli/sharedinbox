@@ -79,12 +79,35 @@ chmod 600 ~/.ssh/dagger_key
 # used to fall through to StrictHostKeyChecking=no on the tunnel and silently
 # accept whatever host key was presented, which defeats host verification and
 # masks a real infra problem (DNS, firewall, engine down). See issue #372.
-_t0=$SECONDS
+#
+# Retry a handful of times before failing the job. The engine host occasionally
+# becomes briefly unreachable from the runner — the same transient blip the SSH
+# tunnel and verify blocks below already ride out (issues #241, #243) — and a
+# single ssh-keyscan miss used to sink the whole Deploy run with no retry. The
+# budget mirrors the tunnel block so a brief outage recovers on the next attempt
+# rather than forcing a re-run. See issue #600.
+echo "Scanning host keys for $DAGGER_ENGINE_HOST..."
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-5}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-15}"
 scan_rc=0
-scan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+scan_err=""
+_t0=$SECONDS
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    scan_rc=0
+    scan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+    if [ "$scan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (rc=${scan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$scan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${_elapsed}s (rc=${scan_rc})."
+    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (last rc=${scan_rc})."
     if [ -n "$scan_err" ]; then
         printf '%s\n' "$scan_err" | sed 's/^/::error::  /'
     fi
