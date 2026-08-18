@@ -100,8 +100,8 @@ void _printComparison(AccountComparisonResult result) {
   }
 }
 
-/// Syncs both accounts and compares them, retrying until their local DBs
-/// converge or [maxRounds] elapse.
+/// Syncs both accounts until their local DBs converge (or [maxRounds] elapse),
+/// prints the comparison, and asserts the two accounts are identical.
 ///
 /// Stalwart is eventually consistent between a JMAP mutation and the IMAP
 /// CONDSTORE HIGHESTMODSEQ that drives incremental sync — it doesn't always
@@ -110,14 +110,15 @@ void _printComparison(AccountComparisonResult result) {
 /// engine hosts, where the sync rounds run closer together than Stalwart
 /// propagates. Re-syncing a few times with a short pause absorbs that lag
 /// without hiding a real, persistent divergence: if the DBs never converge
-/// within the budget the final (non-identical) result is returned unchanged,
-/// so the caller's expect() still fails with the full diff dump.
-Future<AccountComparisonResult> _syncPairUntilIdentical(
+/// within the budget the final (non-identical) result is asserted anyway, so
+/// the caller still fails with the full diff dump.
+Future<void> _expectPairConverges(
   AppDatabase db,
   String imapAccountId,
   String jmapAccountId,
   EmailRepositoryImpl emailRepo,
   MailboxRepositoryImpl mailboxRepo, {
+  required String reason,
   int maxRounds = 5,
 }) async {
   late AccountComparisonResult result;
@@ -126,11 +127,12 @@ Future<AccountComparisonResult> _syncPairUntilIdentical(
     await _syncAllMailboxes(db, imapAccountId, emailRepo, mailboxRepo);
     result = await AccountComparison(db).compare(imapAccountId, jmapAccountId);
     if (result.isIdentical || round == maxRounds) {
-      return result;
+      break;
     }
     await Future<void>.delayed(const Duration(milliseconds: 300));
   }
-  return result;
+  _printComparison(result);
+  expect(result.isIdentical, isTrue, reason: reason);
 }
 
 void main() {
@@ -208,6 +210,20 @@ void main() {
       httpClient: httpClient,
     );
 
+    // Syncs the pair to convergence and asserts they match (see
+    // _expectPairConverges). A local closure so each mutation step below stays
+    // a single readable line and doesn't repeat the same five arguments.
+    Future<void> syncAndCompare(String reason) {
+      return _expectPairConverges(
+        db,
+        imapAccount.id,
+        jmapAccount.id,
+        emailRepo,
+        mailboxRepo,
+        reason: reason,
+      );
+    }
+
     // 3. Do some CRUD operations directly on the Stalwart server via IMAP
     print('Step 3: Appending random messages via IMAP...');
     final imapSender = await connectImap(env: env, user: user);
@@ -268,7 +284,7 @@ void main() {
     }
 
     print('Comparing initial state...');
-    var result =
+    final result =
         await AccountComparison(db).compare(imapAccount.id, jmapAccount.id);
     _printComparison(result);
     expect(result.isIdentical, isTrue, reason: 'Initial sync mismatch!');
@@ -301,22 +317,8 @@ void main() {
     print('  Flushing IMAP mutations to server...');
     await emailRepo.flushPendingChanges(imapAccount.id, user.password);
 
-    // Sync both sides to pull updates, retrying until they converge (Stalwart
-    // is eventually consistent — see _syncPairUntilIdentical).
     print('  Syncing after IMAP mutations...');
-    result = await _syncPairUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(
-      result.isIdentical,
-      isTrue,
-      reason: 'Mismatch after IMAP mutations!',
-    );
+    await syncAndCompare('Mismatch after IMAP mutations!');
 
     // 6. CRUD: JMAP mutations
     print('Step 6: Performing local JMAP mutations...');
@@ -347,24 +349,11 @@ void main() {
     print('  Flushing JMAP mutations to server...');
     await emailRepo.flushPendingChanges(jmapAccount.id, user.password);
 
-    // Sync both sides to pull updates. Stalwart 0.14.x doesn't always bump the
-    // IMAP HIGHESTMODSEQ on the same tick the JMAP mutation lands, so CONDSTORE
-    // can miss the change on the first pass — retry until the pair converges
-    // (see _syncPairUntilIdentical).
+    // Stalwart 0.14.x doesn't always bump the IMAP HIGHESTMODSEQ on the same
+    // tick the JMAP mutation lands, so CONDSTORE can miss the change on the
+    // first pass — syncAndCompare retries until the pair converges.
     print('  Syncing after JMAP mutations...');
-    result = await _syncPairUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(
-      result.isIdentical,
-      isTrue,
-      reason: 'Mismatch after JMAP mutations!',
-    );
+    await syncAndCompare('Mismatch after JMAP mutations!');
 
     // 7. CRUD: Hard delete from Trash on both sides
     print('Step 7: Hard deleting emails from Trash...');
@@ -397,18 +386,8 @@ void main() {
       await emailRepo.flushPendingChanges(imapAccount.id, user.password);
     }
 
-    // Sync both sides to pull updates, retrying until they converge (Stalwart
-    // is eventually consistent — see _syncPairUntilIdentical).
     print('  Syncing after hard deletes...');
-    result = await _syncPairUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(result.isIdentical, isTrue, reason: 'Mismatch after hard deletes!');
+    await syncAndCompare('Mismatch after hard deletes!');
 
     tempDir.deleteSync(recursive: true);
     await db.close();
