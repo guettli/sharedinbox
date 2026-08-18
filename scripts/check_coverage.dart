@@ -51,6 +51,9 @@ const _excluded = <String, String>{
       'Opens a real IMAP TLS socket to a mail server',
   'lib/data/imap/managesieve_client.dart':
       'Opens a real ManageSieve TCP socket to a mail server',
+  'lib/data/imap/object_id_fetch.dart':
+      'Issues a raw IMAP FETCH via ImapClient.sendCommand over a live '
+          'connection; the parser is unit-tested in object_id_test.dart',
   'lib/data/storage/flutter_secure_storage_impl.dart':
       'flutter_secure_storage platform channel — plugin-only surface',
   'lib/di.dart':

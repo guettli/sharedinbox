@@ -33,6 +33,8 @@ import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/object_id.dart';
+import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
@@ -81,6 +83,7 @@ class EmailRepositoryImpl implements EmailRepository {
     ImapConnectFn imapConnect = connectImap,
     SmtpConnectFn smtpConnect = connectSmtp,
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
+    FetchObjectIdsFn fetchObjectIds = fetchObjectIdsFromServer,
     http.Client? httpClient,
     OutboxRepository? outbox,
     AppLogger? appLogger,
@@ -89,6 +92,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _imapConnect = imapConnect,
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
+        _fetchObjectIds = fetchObjectIds,
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
@@ -97,6 +101,7 @@ class EmailRepositoryImpl implements EmailRepository {
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
+  final FetchObjectIdsFn _fetchObjectIds;
   final SmtpConnectFn _smtpConnect;
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
@@ -820,6 +825,9 @@ class EmailRepositoryImpl implements EmailRepository {
       final serverModSeq = selectedMailbox.highestModSequence;
       final resourceType = 'IMAP:$mailboxPath';
       final checkpoint = await _loadImapCheckpoint(account.id, resourceType);
+      // Move-stable server id source (RFC 8474 EMAILID / Gmail X-GM-MSGID),
+      // null when the server advertises neither (#589).
+      final objectIdKind = resolveObjectIdKind(client.serverInfo);
 
       if (checkpoint == null || checkpoint['uidValidity'] != uidValidity) {
         // First run or UID validity changed — full sync.
@@ -848,6 +856,7 @@ class EmailRepositoryImpl implements EmailRepository {
             account,
             mailboxPath,
             imap.MessageSequence.fromIds(allUids, isUid: true),
+            objectIdKind: objectIdKind,
           );
         }
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
@@ -894,6 +903,7 @@ class EmailRepositoryImpl implements EmailRepository {
             account,
             mailboxPath,
             imap.MessageSequence.fromIds(newUids, isUid: true),
+            objectIdKind: objectIdKind,
           );
         }
 
@@ -1076,8 +1086,9 @@ class EmailRepositoryImpl implements EmailRepository {
     imap.ImapClient client,
     account_model.Account account,
     String mailboxPath,
-    imap.MessageSequence sequence,
-  ) async {
+    imap.MessageSequence sequence, {
+    ObjectIdKind? objectIdKind,
+  }) async {
     // Request the first 8 KB of the body so we can derive an offline preview
     // snippet without a second round trip. Matches the JMAP `preview` field
     // (see [_upsertJmapEmails]); IMAP has no standard preview property.
@@ -1087,6 +1098,14 @@ class EmailRepositoryImpl implements EmailRepository {
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
+    // enough_mail can't parse EMAILID/X-GM-MSGID, so pull the move-stable id
+    // for the same sequence with a separate raw FETCH. Best-effort: any failure
+    // leaves the map empty and the rows fall back to UID-only identity (#589).
+    final serverEmailIdByUid = await _fetchServerEmailIds(
+      client,
+      sequence,
+      objectIdKind,
+    );
     final pendingByUid = await _pendingDeleteOrMoveUids(
       account.id,
       mailboxPath,
@@ -1124,6 +1143,7 @@ class EmailRepositoryImpl implements EmailRepository {
         }
         bytes += msg.size ?? 0;
         final emailId = '${account.id}:$mailboxPath:$uid';
+        final serverEmailId = serverEmailIdByUid[uid];
         final msgId = normaliseMessageId(envelope.messageId);
         final inReplyTo = normaliseMessageId(envelope.inReplyTo);
         final refs = normaliseReferences(msg.getHeaderValue('References'));
@@ -1181,6 +1201,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 references: Value(refs),
                 snoozedUntil: Value(snoozedUntil),
                 listUnsubscribeHeader: Value(listUnsubscribe),
+                // Preserve a previously captured id if this fetch couldn't
+                // read one, rather than clobbering it with null.
+                serverEmailId: serverEmailId == null
+                    ? const Value.absent()
+                    : Value(serverEmailId),
               ),
             );
         if (msgId != null) dissolveCandidates.add((emailId, msgId));
@@ -1200,6 +1225,25 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
     return bytes;
+  }
+
+  /// Fetches the move-stable server id for every UID in [sequence] when the
+  /// server advertises one ([objectIdKind] non-null). Returns an empty map when
+  /// unsupported or on any error, so a server that mishandles the raw FETCH
+  /// degrades to the UID-based identity scheme instead of failing the sync.
+  Future<Map<int, String>> _fetchServerEmailIds(
+    imap.ImapClient client,
+    imap.MessageSequence sequence,
+    ObjectIdKind? objectIdKind,
+  ) async {
+    if (objectIdKind == null) return const {};
+    try {
+      return await _fetchObjectIds(client, sequence, objectIdKind);
+    } catch (e) {
+      log('IMAP: ${objectIdKind.fetchItem} fetch failed, '
+          'falling back to UID identity: $e');
+      return const {};
+    }
   }
 
   /// Whether [accountId] has any local self-sent "virtual" rows awaiting a real
@@ -1339,6 +1383,17 @@ class EmailRepositoryImpl implements EmailRepository {
       if (row.isLocal) continue;
       if (!serverUidSet.contains(row.uid)) {
         if (inFlightSet.contains(row.id)) continue;
+        // A message that vanished from this folder but reappeared under a
+        // different folder with the same move-stable server id (RFC 8474
+        // EMAILID / Gmail X-GM-MSGID) was moved, not deleted. Hand its
+        // locally-cached body and undo/thread references to the destination
+        // row before dropping this one, so a foreign move preserves the same
+        // state as one we made ourselves (#589). Correct for Gmail/COPY too:
+        // those keep the message in the source folder, so no vanish fires.
+        final destId = await _movedDestinationId(accountId, row);
+        if (destId != null) {
+          await _adoptImapMovedRow(oldId: row.id, newId: destId);
+        }
         affectedThreads.add(row.threadId ?? row.id);
         await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
       }
@@ -1346,6 +1401,74 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxPath, tid);
     }
+  }
+
+  /// When [row] has just vanished from its folder, returns the id of another
+  /// locally cached row (in a different folder of the same account) that
+  /// carries the same move-stable server id — i.e. the destination of a folder
+  /// move. Returns null when [row] has no server id or no such sibling exists.
+  Future<String?> _movedDestinationId(String accountId, Email row) async {
+    final serverEmailId = row.serverEmailId;
+    if (serverEmailId == null || serverEmailId.isEmpty) return null;
+    final dest = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.serverEmailId.equals(serverEmailId) &
+                t.id.equals(row.id).not(),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return dest?.id;
+  }
+
+  /// Migrates the locally-cached artifacts of a moved-away row [oldId] onto the
+  /// destination row [newId]: the cached body (only when the destination has
+  /// none, to avoid a primary-key clash) and every undo/thread/pending
+  /// reference. The [oldId] `emails` row itself is deleted by the caller.
+  Future<void> _adoptImapMovedRow({
+    required String oldId,
+    required String newId,
+  }) async {
+    await _db.transaction(() async {
+      final destHasBody = await (_db.select(_db.emailBodies)
+                ..where((t) => t.emailId.equals(newId))
+                ..limit(1))
+              .getSingleOrNull() !=
+          null;
+      if (destHasBody) {
+        // Keep the destination's own body; drop the now-orphaned source copy.
+        await (_db.delete(_db.emailBodies)
+              ..where((t) => t.emailId.equals(oldId)))
+            .go();
+      } else {
+        await _db.customStatement(
+          'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
+          [newId, oldId],
+        );
+      }
+
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.resourceId.equals(oldId)))
+          .write(PendingChangesCompanion(resourceId: Value(newId)));
+
+      // threads.latest_email_id / threads.email_ids_json and undo_actions
+      // embed email ids as unique opaque strings — safe to rewrite by REPLACE.
+      await _db.customStatement(
+        'UPDATE threads SET latest_email_id = ?1 WHERE latest_email_id = ?2',
+        [newId, oldId],
+      );
+      await _db.customStatement(
+        'UPDATE threads SET email_ids_json = REPLACE(email_ids_json, ?1, ?2) '
+        'WHERE email_ids_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+      await _db.customStatement(
+        'UPDATE undo_actions SET data_json = REPLACE(data_json, ?1, ?2) '
+        'WHERE data_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+    });
   }
 
   // ── Sync Reliability ──────────────────────────────────────────────────────
