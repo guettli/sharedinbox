@@ -252,7 +252,10 @@ void main() {
               'details.'),
           findsOneWidget,
         );
-        expect(find.widgetWithText(SnackBarAction, 'Show logs'), findsOneWidget);
+        expect(
+          find.widgetWithText(SnackBarAction, 'Show logs'),
+          findsOneWidget,
+        );
 
         // A plain rebuild must not re-show the SnackBar. Let the current one
         // fade, then pump again without changing provider state.
