@@ -52,6 +52,10 @@ class JmapClient {
   /// Whether the server supports Sieve script management (RFC 9661).
   bool get supportsSieve => _capabilities.contains(_sieveCapability);
 
+  /// All capability URNs advertised by the server's Session object
+  /// (RFC 8620 §2), e.g. `urn:ietf:params:jmap:core`.
+  Set<String> get capabilities => _capabilities;
+
   /// SSE push URL advertised by the server, or null if push is unsupported.
   String? get eventSourceUrl => _eventSourceUrl;
 

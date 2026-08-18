@@ -243,6 +243,79 @@ void main() {
     );
   });
 
+  // #565: a mail-to-self shows a local copy immediately; starring it must
+  // survive the very sync that delivers the real message. The delivery
+  // advances HIGHESTMODSEQ, so the incremental sync runs the CONDSTORE flag
+  // refresh (_refreshFlagsImap) right after the dissolve carries the star
+  // over — and that refresh used to overwrite the just-transferred star back
+  // to server truth (unflagged).
+  test('self-message star survives the delivering sync (#565)', () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    // The local copy is written into the mailbox tagged with role 'inbox', so
+    // that cache row must exist before enqueueSend runs.
+    await r.db.into(r.db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'test:INBOX',
+            accountId: 'test',
+            path: 'INBOX',
+            name: 'INBOX',
+            role: const Value('inbox'),
+          ),
+        );
+
+    // Establish the INBOX checkpoint (and modseq) before the self-mail is
+    // delivered, so the delivery is what advances HIGHESTMODSEQ.
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final subject = 'self-star-${DateTime.now().millisecondsSinceEpoch}';
+    final outboxId = await r.emails.enqueueSend(
+      'test',
+      EmailDraft(
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(name: user.email, email: user.email)],
+        cc: const [],
+        subject: subject,
+        body: 'note to self',
+      ),
+    );
+    expect(outboxId, isNonZero);
+
+    // The virtual copy appears in the inbox immediately; star it.
+    final local = (await r.emails.observeEmails('test', 'INBOX').first)
+        .firstWhere((e) => e.subject == subject);
+    expect(local.isLocal, isTrue, reason: 'mail-to-self shows a local copy');
+    await r.emails.setFlag(local.id, flagged: true);
+
+    // Actually send it, then sync until the delivered message dissolves the
+    // virtual copy into the real one.
+    await r.emails.flushOutbox('test', user.password);
+
+    var arrived = false;
+    var stillStarred = false;
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      await r.emails.syncEmails('test', 'INBOX');
+      final match = (await r.emails.observeEmails('test', 'INBOX').first)
+          .where((e) => e.subject == subject && !e.isLocal)
+          .toList();
+      if (match.isNotEmpty) {
+        arrived = true;
+        stillStarred = match.single.isFlagged;
+        break;
+      }
+    }
+
+    expect(arrived, isTrue, reason: 'real message should arrive via sync');
+    expect(
+      stillStarred,
+      isTrue,
+      reason: 'the star set on the local copy must carry over to the real '
+          'message and survive the CONDSTORE flag refresh (#565)',
+    );
+  });
+
   test('syncEmails reconciliation removes emails deleted on server', () async {
     await appendToInbox('keep');
     await appendToInbox('delete-me');
