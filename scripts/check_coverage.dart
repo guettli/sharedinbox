@@ -99,6 +99,9 @@ const _excluded = <String, String>{
       'Widget-only mailbox email list with selection-mode UI',
   'lib/ui/screens/force_resync_screen.dart':
       'Widget-only progress UI wrapping AccountSyncManager.forceResync (unit-tested)',
+  'lib/ui/screens/mail_debug_markdown_screen.dart':
+      'Widget-only screen rendering the debug markdown + on-demand remote probe '
+          '(the pure builder is unit-tested in message_debug_service_test.dart)',
   'lib/ui/screens/mailbox_list_screen.dart': 'Widget-only mailbox tree view',
   'lib/ui/screens/message_debug_screen.dart':
       'Widget-only debug UI displaying raw message data',

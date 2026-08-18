@@ -1,7 +1,9 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
+import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 import 'db_test_helper.dart';
@@ -299,6 +301,132 @@ void main() {
     });
   });
 
+  group('buildMessageDebugMarkdown', () {
+    test('reports a missing local row', () {
+      final md = buildMessageDebugMarkdown(_emptySnapshot());
+      expect(md, contains('No local row found for this message id.'));
+    });
+
+    test('renders local state and marks an uncached body', () {
+      final md = buildMessageDebugMarkdown(_snapshot());
+
+      expect(md, contains('# Mail debug report'));
+      expect(md, contains('## Local state'));
+      expect(md, contains('| subject | Hello |'));
+      expect(md, contains('| messageId | <m1@example.com> |'));
+      expect(md, contains('## Body'));
+      expect(md, contains('| body | (not cached) |'));
+      // No remote section unless a probe is supplied.
+      expect(md, isNot(contains('## Remote state')));
+    });
+
+    test('reports cached body byte lengths', () {
+      final md = buildMessageDebugMarkdown(
+        _snapshot(
+          body: MessageDebugBody(
+            cachedAt: DateTime.utc(2026, 6, 1, 12),
+            textBodyLength: 5,
+            htmlBodyLength: 12,
+          ),
+        ),
+      );
+
+      expect(md, contains('| textBytes | 5 |'));
+      expect(md, contains('| htmlBytes | 12 |'));
+    });
+
+    test('lists pending mutations', () {
+      final md = buildMessageDebugMarkdown(
+        _snapshot(
+          pending: [
+            MessageDebugPending(
+              changeType: 'flag_seen',
+              attempts: 2,
+              createdAt: DateTime.utc(2026, 6, 1, 12),
+              lastError: 'boom',
+              payload: '{"seen":true}',
+            ),
+          ],
+        ),
+      );
+
+      expect(md, contains('## Pending changes (1)'));
+      expect(md, contains('| changeType | flag_seen |'));
+      expect(md, contains('| lastError | boom |'));
+    });
+
+    test('flags a local-vs-remote mismatch when a probe is supplied', () {
+      final md = buildMessageDebugMarkdown(
+        _snapshot(),
+        probe: const ProbeResult.snapshot(
+          RemoteMessageSnapshot(
+            mailboxPath: 'INBOX',
+            subject: 'A different subject',
+            messageId: '<m1@example.com>',
+            isSeen: false,
+            isFlagged: false,
+            hasAttachment: false,
+            uid: 42,
+            headers: {'x-debug': 'yes'},
+          ),
+        ),
+      );
+
+      expect(md, contains('## Remote state'));
+      expect(md, contains('### Local vs remote'));
+      expect(md, contains('Mismatch:'));
+      expect(md, contains('subject'));
+      expect(md, contains('### Headers'));
+      expect(md, contains('| x-debug | yes |'));
+    });
+
+    test('reports a matching probe result', () {
+      final md = buildMessageDebugMarkdown(
+        // Empty from/to and no sentAt so every compared field lines up with
+        // the remote snapshot below.
+        _snapshot(email: _email(fromJson: '', toAddresses: '')),
+        probe: const ProbeResult.snapshot(
+          RemoteMessageSnapshot(
+            mailboxPath: 'INBOX',
+            subject: 'Hello',
+            messageId: '<m1@example.com>',
+            isSeen: false,
+            isFlagged: false,
+            hasAttachment: false,
+            uid: 42,
+          ),
+        ),
+      );
+
+      expect(
+        md,
+        contains('Match: local and remote agree on every checked field.'),
+      );
+    });
+
+    test('surfaces a probe error', () {
+      final md = buildMessageDebugMarkdown(
+        _snapshot(),
+        probe: const ProbeResult.error('Offline: no route to host'),
+      );
+      expect(md, contains('Remote fetch failed: Offline: no route to host'));
+    });
+
+    test('escapes pipes and collapses newlines inside table cells', () {
+      final md = buildMessageDebugMarkdown(
+        _snapshot(
+          email: _email(
+            subject: 'a | b',
+            preview: 'line one\nline two',
+          ),
+        ),
+      );
+
+      expect(md, contains(r'| subject | a \| b |'));
+      expect(md, contains('| preview | line one line two |'));
+    });
+  });
+
   group('decodeMessageDebugAddresses', () {
     test('returns const empty list for empty input', () {
       expect(decodeMessageDebugAddresses(''), isEmpty);
@@ -326,6 +454,65 @@ void main() {
     });
   });
 }
+
+MessageDebugEmail _email({
+  String subject = 'Hello',
+  String? preview = 'A preview',
+  DateTime? sentAt,
+  String fromJson = '[{"email":"a@example.com"}]',
+  String toAddresses = '[{"email":"b@example.com"}]',
+}) {
+  return MessageDebugEmail(
+    id: 'acc-1:42',
+    accountId: 'acc-1',
+    mailboxPath: 'INBOX',
+    uid: 42,
+    subject: subject,
+    sentAt: sentAt,
+    receivedAt: DateTime.utc(2026, 1, 1, 12),
+    fromJson: fromJson,
+    toAddresses: toAddresses,
+    ccJson: '',
+    preview: preview,
+    isSeen: false,
+    isFlagged: false,
+    hasAttachment: false,
+    threadId: null,
+    messageId: '<m1@example.com>',
+    inReplyTo: null,
+    references: null,
+    snoozedUntil: null,
+    snoozedFromMailboxPath: null,
+    listUnsubscribeHeader: null,
+  );
+}
+
+/// Builds a snapshot whose email defaults to [_email]. Pass `email: null` (via
+/// the [_emptySnapshot] helper below) to exercise the missing-row path.
+MessageDebugSnapshot _snapshot({
+  MessageDebugEmail? email,
+  MessageDebugBody? body,
+  List<MessageDebugPending> pending = const [],
+  List<EmailAttachment> attachments = const [],
+}) {
+  return MessageDebugSnapshot(
+    email: email ?? _email(),
+    body: body,
+    pending: pending,
+    syncStates: const [],
+    lastSyncLog: null,
+    attachments: attachments,
+  );
+}
+
+MessageDebugSnapshot _emptySnapshot() => const MessageDebugSnapshot(
+      email: null,
+      body: null,
+      pending: [],
+      syncStates: [],
+      lastSyncLog: null,
+      attachments: [],
+    );
 
 Future<void> _seedAccount(AppDatabase db, String id) async {
   await db.into(db.accounts).insert(

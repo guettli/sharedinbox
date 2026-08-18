@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/di.dart';
@@ -394,7 +393,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       return const Text('No local row; nothing to compare.');
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, snapshot.attachments),
+      buildLocalMessageSnapshot(email, snapshot.attachments),
       remote,
     );
     return Column(
@@ -516,7 +515,7 @@ class _RemoteStatusChip extends StatelessWidget {
       return const _StatusChip(label: 'Remote-only', color: Colors.blue);
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, snapshot!.attachments),
+      buildLocalMessageSnapshot(email, snapshot!.attachments),
       remote,
     );
     return comparison.isMatch
@@ -584,28 +583,4 @@ class _KeyValueTable extends StatelessWidget {
       ],
     );
   }
-}
-
-LocalMessageSnapshot _buildLocalSnapshot(
-  MessageDebugEmail email,
-  List<EmailAttachment> attachments,
-) {
-  return LocalMessageSnapshot(
-    mailboxPath: email.mailboxPath,
-    messageId: email.messageId,
-    subject: email.subject,
-    sentAt: email.sentAt,
-    receivedAt: email.receivedAt,
-    isSeen: email.isSeen,
-    isFlagged: email.isFlagged,
-    hasAttachment: email.hasAttachment,
-    uid: email.uid,
-    from: decodeMessageDebugAddresses(email.fromJson),
-    to: decodeMessageDebugAddresses(email.toAddresses),
-    cc: decodeMessageDebugAddresses(email.ccJson),
-    inReplyTo: email.inReplyTo,
-    references: email.references,
-    listUnsubscribeHeader: email.listUnsubscribeHeader,
-    attachments: attachments,
-  );
 }

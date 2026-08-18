@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -26,6 +27,7 @@ import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/folder_diagnostics_screen.dart';
 import 'package:sharedinbox/ui/screens/force_resync_screen.dart';
+import 'package:sharedinbox/ui/screens/mail_debug_markdown_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
@@ -319,6 +321,18 @@ final router = GoRouter(
             final messages =
                 (state.extra as List<DebugMessageRef>?) ?? const [];
             return MessageDebugScreen(messages: messages);
+          },
+        ),
+        GoRoute(
+          path: '/debug/mail',
+          builder: (ctx, state) {
+            final messageRef = state.extra as DebugMessageRef?;
+            if (messageRef == null) {
+              return const Scaffold(
+                body: Center(child: Text('No message to debug.')),
+              );
+            }
+            return MailDebugMarkdownScreen(messageRef: messageRef);
           },
         ),
       ],
