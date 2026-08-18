@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/di.dart';
@@ -143,33 +142,18 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
 
   Future<void> _runProbe() async {
     if (_fetchingProbe) return;
-    final snapshot = ref.read(
-      messageDebugSnapshotProvider(widget.messageRef),
-    );
-    final local = snapshot.value;
-    if (local == null || local.email == null) return;
+    final local =
+        ref.read(messageDebugSnapshotProvider(widget.messageRef)).value;
+    if (local?.email == null) return;
     setState(() {
       _fetchingProbe = true;
       _probe = null;
     });
     try {
-      final probe = ref.read(messageProbeProvider);
-      final accountRepo = ref.read(accountRepositoryProvider);
-      final account = await accountRepo.getAccount(widget.messageRef.accountId);
-      if (account == null) {
-        if (!mounted) return;
-        setState(
-          () => _probe = const ProbeResult.error('Account not found'),
-        );
-        return;
-      }
-      final password = await accountRepo.getPassword(account.id);
-      final result = await probe.fetch(
-        account: account,
-        password: password,
-        mailboxPath: widget.messageRef.mailboxPath,
-        emailId: widget.messageRef.emailId,
-        uid: local.email!.uid,
+      final result = await fetchRemoteMessageSnapshot(
+        ref,
+        widget.messageRef,
+        local!.email!.uid,
       );
       if (!mounted) return;
       setState(() => _probe = result);
@@ -394,7 +378,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       return const Text('No local row; nothing to compare.');
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, snapshot.attachments),
+      buildLocalMessageSnapshot(email, snapshot.attachments),
       remote,
     );
     return Column(
@@ -516,7 +500,7 @@ class _RemoteStatusChip extends StatelessWidget {
       return const _StatusChip(label: 'Remote-only', color: Colors.blue);
     }
     final comparison = compareMessage(
-      _buildLocalSnapshot(email, snapshot!.attachments),
+      buildLocalMessageSnapshot(email, snapshot!.attachments),
       remote,
     );
     return comparison.isMatch
@@ -584,28 +568,4 @@ class _KeyValueTable extends StatelessWidget {
       ],
     );
   }
-}
-
-LocalMessageSnapshot _buildLocalSnapshot(
-  MessageDebugEmail email,
-  List<EmailAttachment> attachments,
-) {
-  return LocalMessageSnapshot(
-    mailboxPath: email.mailboxPath,
-    messageId: email.messageId,
-    subject: email.subject,
-    sentAt: email.sentAt,
-    receivedAt: email.receivedAt,
-    isSeen: email.isSeen,
-    isFlagged: email.isFlagged,
-    hasAttachment: email.hasAttachment,
-    uid: email.uid,
-    from: decodeMessageDebugAddresses(email.fromJson),
-    to: decodeMessageDebugAddresses(email.toAddresses),
-    cc: decodeMessageDebugAddresses(email.ccJson),
-    inReplyTo: email.inReplyTo,
-    references: email.references,
-    listUnsubscribeHeader: email.listUnsubscribeHeader,
-    attachments: attachments,
-  );
 }

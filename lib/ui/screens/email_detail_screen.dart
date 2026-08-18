@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
@@ -288,6 +289,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Show Logs'),
               ),
               const PopupMenuItem(
+                value: 'debug_mail',
+                child: Text('Debug Mail'),
+              ),
+              const PopupMenuItem(
                 value: 'bug_report',
                 child: Text('Report a Bug'),
               ),
@@ -316,6 +321,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               } else if (value == 'show_logs') {
                 unawaited(
                   context.push('/accounts/app-log?emailId=${widget.emailId}'),
+                );
+              } else if (value == 'debug_mail' && header != null) {
+                unawaited(
+                  context.push(
+                    '/debug/mail',
+                    extra: DebugMessageRef(
+                      accountId: header.accountId,
+                      mailboxPath: header.mailboxPath,
+                      emailId: widget.emailId,
+                    ),
+                  ),
                 );
               } else if (value == 'bug_report') {
                 unawaited(
