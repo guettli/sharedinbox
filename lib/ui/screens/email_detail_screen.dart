@@ -124,10 +124,35 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     ref.listen<AsyncValue<(Email?, EmailBody)>>(
       emailDetailProvider(widget.emailId),
-      (_, next) {
+      (prev, next) {
         final email = next.value?.$1;
         if (email != null && mounted) {
           setState(() => _isFlagged = email.isFlagged);
+        }
+        // Surface the load failure as a SnackBar so an empty body screen isn't
+        // silent — the in-body panel offers Retry/Raw, this points at the App
+        // Log where the underlying error was recorded (#587). Fire only on the
+        // transition *into* error so a plain rebuild doesn't re-show it, but a
+        // Retry that fails again (loading → error) does.
+        if (next.hasError && (prev == null || !prev.hasError) && mounted) {
+          context.showAppSnackBar(
+            'Could not load this message. See the app log for details.',
+            level: AppLogLevel.error,
+            event: 'email.detail.load_failed_snackbar',
+            emailId: widget.emailId,
+            duration: const Duration(seconds: 6),
+            persist: false,
+            action: SnackBarAction(
+              label: 'Show logs',
+              onPressed: () {
+                if (mounted) {
+                  unawaited(
+                    context.push('/accounts/app-log?emailId=${widget.emailId}'),
+                  );
+                }
+              },
+            ),
+          );
         }
       },
     );
