@@ -28,7 +28,10 @@ String _fmtBytes(int bytes) {
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
-String _buildSyncEntryMarkdown(SyncLogEntry entry) {
+/// Renders a shareable Markdown summary of a sync-log [entry]. Public so the
+/// "copy sync entry" output — the exact text users paste into bug reports —
+/// can be covered by tests.
+String buildSyncEntryMarkdown(SyncLogEntry entry) {
   final buf = StringBuffer();
   buf.writeln('## Sync Entry');
   buf.writeln();
@@ -75,6 +78,14 @@ String _buildSyncEntryMarkdown(SyncLogEntry entry) {
     buf.writeln();
     buf.writeln('```');
     buf.write(entry.stackTrace);
+    buf.writeln('```');
+  }
+  if (entry.protocolLog != null) {
+    buf.writeln();
+    buf.writeln('**Protocol log:**');
+    buf.writeln();
+    buf.writeln('```');
+    buf.write(entry.protocolLog);
     buf.writeln('```');
   }
   return buf.toString();
@@ -143,7 +154,7 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
 
     if (!context.mounted) return;
 
-    final syncMd = _buildSyncEntryMarkdown(entry);
+    final syncMd = buildSyncEntryMarkdown(entry);
     final aboutMd = buildAboutMarkdown(
       context: context,
       pkg: pkg,
