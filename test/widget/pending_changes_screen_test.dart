@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -230,4 +231,60 @@ void main() {
       );
     },
   );
+
+  testWidgets('tapping the affected email opens that message', (tester) async {
+    final repo = _StubbedQueue([_pc()], [_email()]);
+    String? openedRoute;
+    final router = GoRouter(
+      initialLocation: '/pending-changes',
+      routes: [
+        GoRoute(
+          path: '/pending-changes',
+          builder: (ctx, state) => const PendingChangesScreen(),
+        ),
+        GoRoute(
+          path: '/accounts/:accountId/mailboxes/:mailboxPath/emails/:emailId',
+          builder: (ctx, state) {
+            openedRoute = state.uri.toString();
+            return const Scaffold(body: Text('email-detail-route'));
+          },
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          syncNowProvider.overrideWithValue((_) => true),
+          accountRepositoryProvider
+              .overrideWithValue(FakeAccountRepository(const [alice])),
+          emailRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Quarterly report · Carol'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('email-detail-route'), findsOneWidget);
+    expect(openedRoute, '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42');
+  });
+
+  testWidgets('tapping the error shows the whole message in a dialog',
+      (tester) async {
+    const longError = 'MOVE failed: the server rejected the request because '
+        'the destination mailbox is read-only and cannot accept appended '
+        'messages under the current ACL. Contact your administrator.';
+    final repo = _StubbedQueue([_pc(lastError: longError)]);
+    await pump(tester, repo: repo);
+
+    expect(find.text('Tap to view full error'), findsOneWidget);
+
+    await tester.tap(find.text('Tap to view full error'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(AlertDialog, 'Last error'), findsOneWidget);
+    expect(find.text(longError), findsOneWidget);
+  });
 }
