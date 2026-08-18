@@ -31,6 +31,7 @@ import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/services/server_capabilities_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
@@ -366,6 +367,25 @@ final manageSieveProbeServiceProvider = Provider<ManageSieveProbeService>((
   ref,
 ) {
   return ManageSieveProbeService(ref.watch(accountRepositoryProvider));
+});
+
+final serverCapabilitiesServiceProvider =
+    Provider<ServerCapabilitiesService>((ref) {
+  return ServerCapabilitiesServiceImpl(
+    ref.watch(httpClientProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+  );
+});
+
+/// Live probe of the mail server's advertised capabilities for one account.
+/// autoDispose so leaving the screen drops the result; invalidate to refresh.
+final serverCapabilitiesProvider = FutureProvider.autoDispose
+    .family<ServerCapabilities, String>((ref, accountId) async {
+  final repo = ref.read(accountRepositoryProvider);
+  final account = await repo.getAccount(accountId);
+  if (account == null) throw Exception('Account not found');
+  final password = await repo.getPassword(accountId);
+  return ref.read(serverCapabilitiesServiceProvider).fetch(account, password);
 });
 
 final undoServiceProvider = NotifierProvider<UndoService, List<UndoAction>>(

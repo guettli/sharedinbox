@@ -125,6 +125,12 @@ class _AccountHomeBody extends ConsumerWidget {
               runAccountAction(context, ref, account, AccountAction.verifySync),
         ),
         ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: const Text('Server capabilities'),
+          subtitle: const Text('What this account\'s server supports'),
+          onTap: () => context.push('/accounts/${account.id}/capabilities'),
+        ),
+        ListTile(
           leading: const Icon(Icons.sync),
           title: const Text('Force full sync'),
           onTap: () =>

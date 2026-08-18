@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/sync/message_debug_service.dart';
 
 import 'package:sharedinbox/ui/app_log_observer.dart';
 import 'package:sharedinbox/ui/screens/about_screen.dart';
+import 'package:sharedinbox/ui/screens/account_capabilities_screen.dart';
 import 'package:sharedinbox/ui/screens/account_compare_screen.dart';
 import 'package:sharedinbox/ui/screens/account_home_screen.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
@@ -151,6 +152,12 @@ final router = GoRouter(
             GoRoute(
               path: ':accountId/sync-state',
               builder: (ctx, state) => SyncStateScreen(
+                accountId: state.pathParameters['accountId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/capabilities',
+              builder: (ctx, state) => AccountCapabilitiesScreen(
                 accountId: state.pathParameters['accountId']!,
               ),
             ),
