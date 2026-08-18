@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 enum _Step { email, detecting, chooseType, jmapForm, imapForm, connecting }
@@ -510,7 +511,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   Widget _errorBanner() {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.md),
-      child: Text(
+      child: LinkifiedText(
         _errorMessage!,
         style: TextStyle(color: Theme.of(context).colorScheme.error),
       ),

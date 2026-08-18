@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 class EditAccountScreen extends ConsumerStatefulWidget {
@@ -298,7 +299,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             if (_errorMessage != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                child: Text(
+                child: LinkifiedText(
                   _errorMessage!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
