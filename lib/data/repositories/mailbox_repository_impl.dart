@@ -233,18 +233,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final updated = List<String>.from(changes['updated'] as List? ?? []);
     final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
 
-    // Fetch details for created + updated mailboxes
+    // Fetch details for created + updated mailboxes, plus any of their
+    // ancestors not already cached, so displayPath can be built from real
+    // names instead of leaking an opaque parent id into the UI (#605).
     final toFetch = [...created, ...updated];
     if (toFetch.isNotEmpty) {
-      final getResponses = await jmap.call([
-        [
-          'Mailbox/get',
-          {'accountId': jmap.accountId, 'ids': toFetch},
-          '1',
-        ],
-      ]);
-      final getResult = _responseArgs(getResponses, 0, 'Mailbox/get');
-      await _upsertJmapMailboxes(accountId, getResult['list'] as List<dynamic>);
+      final fetched = await _fetchJmapMailboxesWithAncestors(
+        jmap,
+        accountId,
+        toFetch,
+      );
+      await _upsertJmapMailboxes(accountId, fetched);
     }
 
     // Remove destroyed mailboxes (and their cached emails / sync state).
@@ -258,6 +257,55 @@ class MailboxRepositoryImpl implements MailboxRepository {
       '~${updated.length} -${destroyed.length}, state=$newState',
     );
     return toFetch.length + destroyed.length;
+  }
+
+  /// Fetches [ids] via `Mailbox/get`, then follows every `parentId` that is
+  /// neither in the response nor already cached locally, repeating until the
+  /// ancestor chain is closed. An incremental sync only reports the mailboxes
+  /// that changed, so a child whose (unchanged) parent isn't cached would
+  /// otherwise have no name for that parent and render it as the opaque server
+  /// id — the recurring "a instead of folder name" bug (#605).
+  Future<List<dynamic>> _fetchJmapMailboxesWithAncestors(
+    JmapClient jmap,
+    String accountId,
+    List<String> ids,
+  ) async {
+    final cachedRows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    final cachedIds = {for (final r in cachedRows) r.path};
+
+    final collected = <String, Map<String, dynamic>>{};
+    final requested = <String>{};
+    var pending = ids.toSet();
+    while (pending.isNotEmpty) {
+      requested.addAll(pending);
+      final getResponses = await jmap.call([
+        [
+          'Mailbox/get',
+          {'accountId': jmap.accountId, 'ids': pending.toList()},
+          '1',
+        ],
+      ]);
+      final getResult = _responseArgs(getResponses, 0, 'Mailbox/get');
+      for (final mb in getResult['list'] as List<dynamic>) {
+        final m = mb as Map<String, dynamic>;
+        collected[m['id'] as String] = m;
+      }
+      final next = <String>{};
+      for (final m in collected.values) {
+        final parent = m['parentId'] as String?;
+        if (parent == null || parent.isEmpty) continue;
+        if (collected.containsKey(parent)) continue;
+        if (cachedIds.contains(parent)) continue;
+        // Skip ids we already asked for: a parent the server didn't return
+        // (e.g. concurrently deleted) must not loop us forever.
+        if (requested.contains(parent)) continue;
+        next.add(parent);
+      }
+      pending = next;
+    }
+    return collected.values.toList();
   }
 
   static String? _fallbackJmapRole(String? name) {
@@ -293,8 +341,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
     // reference it via mailboxPath) but the UI wants the hierarchical,
     // human-readable path — e.g. "Archive/2026". Build that by walking each
     // mailbox's `parentId` chain and joining `name`s with '/'. Missing links
-    // (parent not in this batch and not in the local cache) fall back to
-    // the leaf name, so we always store something readable.
+    // (parent not in this batch and not in the local cache) truncate the path
+    // rather than embedding the opaque parent id, so we never store "a/Work".
     final incoming = <String, Map<String, dynamic>>{};
     for (final mb in mailboxes) {
       final m = mb as Map<String, dynamic>;
@@ -313,8 +361,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       cachedParent[row.path] = row.parentId;
     }
 
-    String nameOf(String id) =>
-        (incoming[id]?['name'] as String?) ?? cachedName[id] ?? id;
+    // Resolves a mailbox's human-readable name, or null when it is neither in
+    // this batch nor in the local cache. Callers must never fall back to the
+    // opaque id for an *ancestor* — doing so leaks the server id into the UI
+    // as a phantom parent folder (e.g. "a/Work"), the recurring #605 bug.
+    String? resolvedNameOf(String id) =>
+        (incoming[id]?['name'] as String?) ?? cachedName[id];
+    String nameOf(String id) => resolvedNameOf(id) ?? id;
     String? parentOf(String id) {
       final m = incoming[id];
       if (m != null) return m['parentId'] as String?;
@@ -322,13 +375,21 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
 
     String buildDisplayPath(String startId) {
-      final parts = <String>[];
+      // The leaf keeps the id fallback: its own name comes from the record we
+      // are persisting, so this only bites if the server omits the name.
+      final parts = <String>[nameOf(startId)];
       var current = startId;
-      final seen = <String>{};
-      while (seen.add(current)) {
-        parts.insert(0, nameOf(current));
+      final seen = <String>{startId};
+      while (true) {
         final parent = parentOf(current);
         if (parent == null || parent.isEmpty) break;
+        if (!seen.add(parent)) break; // cycle guard
+        final parentName = resolvedNameOf(parent);
+        // Stop rather than embed an opaque parent id: a shorter but honest
+        // path ("Work") beats "a/Work". The next sync that fetches the parent
+        // heals it (see also the parent-closure fetch in the incremental sync).
+        if (parentName == null) break;
+        parts.insert(0, parentName);
         current = parent;
       }
       return parts.join('/');
@@ -1122,7 +1183,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       while (seen.add(current)) {
         final r = byPath[current];
         if (r == null) {
-          parts.insert(0, current);
+          // Unknown ancestor: truncate rather than embed the opaque id, so we
+          // never surface "a/Work" as a folder name (#605).
           break;
         }
         parts.insert(0, r.name);
