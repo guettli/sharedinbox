@@ -112,40 +112,28 @@ class _MailDebugMarkdownScreenState
   }
 
   Future<void> _runProbe() async {
-    if (_fetchingProbe) return;
-    final email = ref
-        .read(messageDebugSnapshotProvider(widget.messageRef))
-        .value
-        ?.email;
-    if (email == null) return;
+    final email =
+        ref.read(messageDebugSnapshotProvider(widget.messageRef)).value?.email;
+    if (email == null || _fetchingProbe) return;
     setState(() {
       _fetchingProbe = true;
       _probe = null;
     });
+    final result = await _safeProbe(email.uid);
+    if (!mounted) return;
+    setState(() {
+      _probe = result;
+      _fetchingProbe = false;
+    });
+  }
+
+  /// Wraps [fetchRemoteMessageSnapshot] so an unexpected throw surfaces in the
+  /// markdown as a remote-fetch error rather than tearing down the screen.
+  Future<ProbeResult> _safeProbe(int uid) async {
     try {
-      final probe = ref.read(messageProbeProvider);
-      final accountRepo = ref.read(accountRepositoryProvider);
-      final account = await accountRepo.getAccount(widget.messageRef.accountId);
-      if (account == null) {
-        if (!mounted) return;
-        setState(() => _probe = const ProbeResult.error('Account not found'));
-        return;
-      }
-      final password = await accountRepo.getPassword(account.id);
-      final result = await probe.fetch(
-        account: account,
-        password: password,
-        mailboxPath: widget.messageRef.mailboxPath,
-        emailId: widget.messageRef.emailId,
-        uid: email.uid,
-      );
-      if (!mounted) return;
-      setState(() => _probe = result);
+      return await fetchRemoteMessageSnapshot(ref, widget.messageRef, uid);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _probe = ProbeResult.error(e.toString()));
-    } finally {
-      if (mounted) setState(() => _fetchingProbe = false);
+      return ProbeResult.error(e.toString());
     }
   }
 }

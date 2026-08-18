@@ -277,6 +277,29 @@ final messageDebugSnapshotProvider = FutureProvider.autoDispose
   return loadMessageDebugSnapshot(database, messageRef);
 });
 
+/// Resolves the account + password behind [messageRef] and fetches the remote
+/// snapshot for [uid]. Shared by the "Debug messages" and "Debug Mail" screens
+/// so the probe wiring isn't duplicated. Returns [ProbeResult.error] when the
+/// account has gone; the probe itself never throws for network issues.
+Future<ProbeResult> fetchRemoteMessageSnapshot(
+  WidgetRef ref,
+  DebugMessageRef messageRef,
+  int uid,
+) async {
+  final accountRepo = ref.read(accountRepositoryProvider);
+  final account = await accountRepo.getAccount(messageRef.accountId);
+  if (account == null) return const ProbeResult.error('Account not found');
+  final password = await accountRepo.getPassword(account.id);
+  final probe = ref.read(messageProbeProvider);
+  return probe.fetch(
+    account: account,
+    password: password,
+    mailboxPath: messageRef.mailboxPath,
+    emailId: messageRef.emailId,
+    uid: uid,
+  );
+}
+
 /// Callback wrapper around [AccountSyncManager.syncNow]. The queued-message
 /// tiles depend on this instead of the full [syncManagerProvider] so widget
 /// tests can override the kick without materialising a real sync manager.

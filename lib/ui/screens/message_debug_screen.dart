@@ -142,33 +142,18 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
 
   Future<void> _runProbe() async {
     if (_fetchingProbe) return;
-    final snapshot = ref.read(
-      messageDebugSnapshotProvider(widget.messageRef),
-    );
-    final local = snapshot.value;
-    if (local == null || local.email == null) return;
+    final local =
+        ref.read(messageDebugSnapshotProvider(widget.messageRef)).value;
+    if (local?.email == null) return;
     setState(() {
       _fetchingProbe = true;
       _probe = null;
     });
     try {
-      final probe = ref.read(messageProbeProvider);
-      final accountRepo = ref.read(accountRepositoryProvider);
-      final account = await accountRepo.getAccount(widget.messageRef.accountId);
-      if (account == null) {
-        if (!mounted) return;
-        setState(
-          () => _probe = const ProbeResult.error('Account not found'),
-        );
-        return;
-      }
-      final password = await accountRepo.getPassword(account.id);
-      final result = await probe.fetch(
-        account: account,
-        password: password,
-        mailboxPath: widget.messageRef.mailboxPath,
-        emailId: widget.messageRef.emailId,
-        uid: local.email!.uid,
+      final result = await fetchRemoteMessageSnapshot(
+        ref,
+        widget.messageRef,
+        local!.email!.uid,
       );
       if (!mounted) return;
       setState(() => _probe = result);
