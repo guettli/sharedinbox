@@ -41,12 +41,7 @@ class _MailDebugMarkdownScreenState
           IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'Copy markdown',
-            onPressed: snapshotAsync.hasValue
-                ? () => _copy(buildMessageDebugMarkdown(
-                      snapshotAsync.value!,
-                      probe: _probe,
-                    ))
-                : null,
+            onPressed: snapshotAsync.hasValue ? _copyCurrent : null,
           ),
         ],
       ),
@@ -70,7 +65,7 @@ class _MailDebugMarkdownScreenState
             FilledButton.tonalIcon(
               icon: const Icon(Icons.copy),
               label: const Text('Copy markdown'),
-              onPressed: () => _copy(markdown),
+              onPressed: _copyCurrent,
             ),
             OutlinedButton.icon(
               icon: _fetchingProbe
@@ -100,7 +95,11 @@ class _MailDebugMarkdownScreenState
     );
   }
 
-  Future<void> _copy(String markdown) async {
+  Future<void> _copyCurrent() async {
+    final snapshot =
+        ref.read(messageDebugSnapshotProvider(widget.messageRef)).value;
+    if (snapshot == null) return;
+    final markdown = buildMessageDebugMarkdown(snapshot, probe: _probe);
     await Clipboard.setData(ClipboardData(text: markdown));
     if (!mounted) return;
     context.showAppSnackBar(
