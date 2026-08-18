@@ -12,7 +12,7 @@ typedef ImapConnectFn = Future<ImapClient> Function(
   String password,
 );
 
-/// Zone value key signalling that a [StringBuffer] for protocol logging is
+/// Zone value key signalling that a [StringSink] for protocol logging is
 /// active. When this key is non-null in the current zone, [connectImap]
 /// enables IMAP trace logging so the output is captured by the zone's
 /// print override.
@@ -20,17 +20,17 @@ const verboseLogKey = #verboseProtocolLog;
 
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
-/// When the current [Zone] carries a [StringBuffer] under [verboseLogKey],
+/// When the current [Zone] carries a capture sink under [verboseLogKey],
 /// IMAP trace logging is enabled so each command/response is captured there.
 Future<ImapClient> connectImap(
   Account account,
   String username,
   String password,
 ) async {
-  final verboseBuffer = Zone.current[verboseLogKey] as StringBuffer?;
+  final verboseSink = Zone.current[verboseLogKey];
   final client = ImapClient(
     defaultResponseTimeout: const Duration(seconds: 20),
-    isLogEnabled: verboseBuffer != null,
+    isLogEnabled: verboseSink != null,
   );
   if (!account.imapSsl && !isLocalhost(account.imapHost)) {
     throw Exception(

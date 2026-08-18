@@ -642,6 +642,12 @@ class _AccountSync implements _SyncLoop {
   Completer<void>? _stopSignal;
   Timer? _waitTimer;
 
+  /// Credential-redacted protocol trace captured for the most recent failed
+  /// sync attempt, so the error entry can surface which command failed even
+  /// when the account did not have verbose logging enabled. Cleared at the
+  /// start of every sync cycle and read by the error handler in [_loop].
+  String? _lastFailureLog;
+
   @override
   bool get isRunning => _running;
 
@@ -672,6 +678,7 @@ class _AccountSync implements _SyncLoop {
     while (_running) {
       final startedAt = DateTime.now();
       _onSyncStart?.call();
+      _lastFailureLog = null;
       try {
         final (_SyncStats stats, String? capturedLog) = await _runSync(
           account.verbose,
@@ -729,6 +736,7 @@ class _AccountSync implements _SyncLoop {
             bytesTransferred: 0,
             startedAt: startedAt,
             finishedAt: DateTime.now(),
+            protocolLog: _lastFailureLog,
           );
         } catch (logErr) {
           log('Failed to write IMAP sync log entry: $logErr');
@@ -802,16 +810,26 @@ class _AccountSync implements _SyncLoop {
   }
 
   Future<(_SyncStats, String?)> _runSync(bool verbose) async {
-    if (!verbose) return (await _sync(), null);
-    final buffer = StringBuffer();
-    final stats = await runZoned(
-      _sync,
-      zoneValues: {verboseLogKey: buffer},
-      zoneSpecification: ZoneSpecification(
-        print: (_, __, ___, line) => buffer.writeln(line),
-      ),
-    );
-    return (stats, _redactCredentials(buffer.toString()));
+    // Always capture the IMAP protocol trace so a failing sync can surface
+    // which command the server rejected — even for accounts that never
+    // enabled verbose logging (issue #608). The buffer is bounded to keep
+    // memory (and any captured message content) small; on success it is
+    // discarded unless the account opted into verbose logging.
+    final buffer = _BoundedProtocolLog();
+    try {
+      final stats = await runZoned(
+        _sync,
+        zoneValues: {verboseLogKey: buffer},
+        zoneSpecification: ZoneSpecification(
+          print: (_, __, ___, line) => buffer.writeln(line),
+        ),
+      );
+      return (stats, verbose ? _redactCredentials(buffer.toString()) : null);
+    } catch (_) {
+      _lastFailureLog =
+          buffer.isEmpty ? null : _redactCredentials(buffer.toString());
+      rethrow;
+    }
   }
 
   Future<_SyncStats> _sync() async {
@@ -1323,6 +1341,51 @@ class _SyncStats {
   final int pendingFlushed;
   final int bytesTransferred;
   final List<MailboxSyncStats> mailboxStats;
+}
+
+/// A [StringSink] that captures IMAP protocol trace lines, retaining only the
+/// most recent output so a failed sync can surface the failing command without
+/// keeping an unbounded amount of message content in memory.
+///
+/// Overly long individual lines (e.g. a FETCH body logged as one line) are
+/// truncated, and the oldest lines are dropped once the total exceeds the
+/// char budget. The [verboseLogKey] zone value is a [StringSink] so both this
+/// buffer and the ManageSieve client's writes flow into the same trace.
+class _BoundedProtocolLog implements StringSink {
+  static const _maxChars = 16384;
+  static const _maxLineLength = 2048;
+
+  final _lines = <String>[];
+  int _chars = 0;
+
+  bool get isEmpty => _lines.isEmpty;
+
+  void _add(String line) {
+    if (line.length > _maxLineLength) {
+      line = '${line.substring(0, _maxLineLength)}…';
+    }
+    _lines.add(line);
+    _chars += line.length + 1; // +1 accounts for the joining newline
+    while (_chars > _maxChars && _lines.length > 1) {
+      _chars -= _lines.removeAt(0).length + 1;
+    }
+  }
+
+  @override
+  void writeln([Object? object = '']) => _add(object.toString());
+
+  @override
+  void write(Object? object) => _add(object.toString());
+
+  @override
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) =>
+      _add(objects.join(separator));
+
+  @override
+  void writeCharCode(int charCode) => _add(String.fromCharCode(charCode));
+
+  @override
+  String toString() => _lines.join('\n');
 }
 
 /// Replaces credentials in a captured IMAP protocol log.
