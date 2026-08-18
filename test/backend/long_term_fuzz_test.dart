@@ -100,6 +100,39 @@ void _printComparison(AccountComparisonResult result) {
   }
 }
 
+/// Syncs both accounts and compares them, retrying until their local DBs
+/// converge or [maxRounds] elapse.
+///
+/// Stalwart is eventually consistent between a JMAP mutation and the IMAP
+/// CONDSTORE HIGHESTMODSEQ that drives incremental sync — it doesn't always
+/// bump on the same tick the mutation lands (see Step 6), so a single sync
+/// pass can momentarily miss a change. This surfaces more often on faster
+/// engine hosts, where the sync rounds run closer together than Stalwart
+/// propagates. Re-syncing a few times with a short pause absorbs that lag
+/// without hiding a real, persistent divergence: if the DBs never converge
+/// within the budget the final (non-identical) result is returned unchanged,
+/// so the caller's expect() still fails with the full diff dump.
+Future<AccountComparisonResult> _syncPairUntilIdentical(
+  AppDatabase db,
+  String imapAccountId,
+  String jmapAccountId,
+  EmailRepositoryImpl emailRepo,
+  MailboxRepositoryImpl mailboxRepo, {
+  int maxRounds = 5,
+}) async {
+  late AccountComparisonResult result;
+  for (var round = 1; round <= maxRounds; round++) {
+    await _syncAllMailboxes(db, jmapAccountId, emailRepo, mailboxRepo);
+    await _syncAllMailboxes(db, imapAccountId, emailRepo, mailboxRepo);
+    result = await AccountComparison(db).compare(imapAccountId, jmapAccountId);
+    if (result.isIdentical || round == maxRounds) {
+      return result;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+  }
+  return result;
+}
+
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
@@ -268,14 +301,16 @@ void main() {
     print('  Flushing IMAP mutations to server...');
     await emailRepo.flushPendingChanges(imapAccount.id, user.password);
 
-    // Sync both sides to pull updates
+    // Sync both sides to pull updates, retrying until they converge (Stalwart
+    // is eventually consistent — see _syncPairUntilIdentical).
     print('  Syncing after IMAP mutations...');
-    await _syncAllMailboxes(db, imapAccount.id, emailRepo, mailboxRepo);
-    await _syncAllMailboxes(db, jmapAccount.id, emailRepo, mailboxRepo);
-
-    // Compare
-    result =
-        await AccountComparison(db).compare(imapAccount.id, jmapAccount.id);
+    result = await _syncPairUntilIdentical(
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(
       result.isIdentical,
@@ -313,17 +348,17 @@ void main() {
     await emailRepo.flushPendingChanges(jmapAccount.id, user.password);
 
     // Sync both sides to pull updates. Stalwart 0.14.x doesn't always bump the
-    // IMAP HIGHESTMODSEQ on the same tick the JMAP mutation lands — sync the
-    // pair twice so CONDSTORE picks up the change on the second pass.
+    // IMAP HIGHESTMODSEQ on the same tick the JMAP mutation lands, so CONDSTORE
+    // can miss the change on the first pass — retry until the pair converges
+    // (see _syncPairUntilIdentical).
     print('  Syncing after JMAP mutations...');
-    for (var round = 0; round < 2; round++) {
-      await _syncAllMailboxes(db, jmapAccount.id, emailRepo, mailboxRepo);
-      await _syncAllMailboxes(db, imapAccount.id, emailRepo, mailboxRepo);
-    }
-
-    // Compare
-    result =
-        await AccountComparison(db).compare(imapAccount.id, jmapAccount.id);
+    result = await _syncPairUntilIdentical(
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(
       result.isIdentical,
@@ -362,14 +397,16 @@ void main() {
       await emailRepo.flushPendingChanges(imapAccount.id, user.password);
     }
 
-    // Sync both sides to pull updates
+    // Sync both sides to pull updates, retrying until they converge (Stalwart
+    // is eventually consistent — see _syncPairUntilIdentical).
     print('  Syncing after hard deletes...');
-    await _syncAllMailboxes(db, imapAccount.id, emailRepo, mailboxRepo);
-    await _syncAllMailboxes(db, jmapAccount.id, emailRepo, mailboxRepo);
-
-    // Compare final state
-    result =
-        await AccountComparison(db).compare(imapAccount.id, jmapAccount.id);
+    result = await _syncPairUntilIdentical(
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(result.isIdentical, isTrue, reason: 'Mismatch after hard deletes!');
 
