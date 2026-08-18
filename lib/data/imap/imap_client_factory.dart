@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:enough_mail/enough_mail.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
@@ -11,6 +13,43 @@ typedef ImapConnectFn = Future<ImapClient> Function(
   String username,
   String password,
 );
+
+/// Delays between connect attempts. A transient DNS hiccup right after a
+/// network change on mobile (`SocketException: Failed host lookup`, #609)
+/// usually clears within a second, so two quick retries avoid surfacing a
+/// spurious sync failure while keeping the total added latency under 2s so a
+/// genuinely offline device still fails fast into the loop-level backoff.
+const _connectRetryDelays = [
+  Duration(milliseconds: 500),
+  Duration(milliseconds: 1500),
+];
+
+/// True when [e] is a transient socket/DNS failure worth retrying at the
+/// connect layer. TLS and auth errors are permanent for the current config and
+/// must not be retried — they flow on to [rethrowAsTlsHint] / login instead.
+bool _isTransientConnectError(Object e) =>
+    e is SocketException || e is TimeoutException;
+
+/// Runs [connect] (a raw `connectToServer` call), retrying a bounded number of
+/// times when the failure is a transient socket/DNS error. The last failure is
+/// rethrown unchanged so callers still see the original exception.
+@visibleForTesting
+Future<void> connectWithRetry(Future<void> Function() connect) async {
+  var attempt = 0;
+  while (true) {
+    try {
+      await connect();
+      return;
+    } catch (e) {
+      if (attempt >= _connectRetryDelays.length ||
+          !_isTransientConnectError(e)) {
+        rethrow;
+      }
+      await Future<void>.delayed(_connectRetryDelays[attempt]);
+      attempt++;
+    }
+  }
+}
 
 /// Zone value key signalling that a [StringSink] for protocol logging is
 /// active. When this key is non-null in the current zone, [connectImap]
@@ -38,10 +77,12 @@ Future<ImapClient> connectImap(
     );
   }
   try {
-    await client.connectToServer(
-      account.imapHost,
-      account.imapPort,
-      isSecure: account.imapSsl,
+    await connectWithRetry(
+      () => client.connectToServer(
+        account.imapHost,
+        account.imapPort,
+        isSecure: account.imapSsl,
+      ),
     );
   } catch (e, st) {
     rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
@@ -74,10 +115,12 @@ Future<SmtpClient> connectSmtp(
   }
   final client = SmtpClient(clientDomain);
   try {
-    await client.connectToServer(
-      account.smtpHost,
-      account.smtpPort,
-      isSecure: account.smtpSsl,
+    await connectWithRetry(
+      () => client.connectToServer(
+        account.smtpHost,
+        account.smtpPort,
+        isSecure: account.smtpSsl,
+      ),
     );
   } catch (e, st) {
     rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);

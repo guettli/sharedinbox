@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show HandshakeException, HttpException, SocketException;
 
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
@@ -27,6 +28,20 @@ bool _isTransientNetworkError(Object e) {
       e is HttpException ||
       e is HandshakeException ||
       e is TimeoutException;
+}
+
+/// Message shown in the Sync Entry's error field. For a transient network
+/// failure the raw exception (e.g. "SocketException: Failed host lookup:
+/// 'imap.gmail.com' ... errno = 7", #609) reads like a bug to users whose
+/// connection is fine, so we show a friendly hint instead. The raw exception
+/// and stack trace are still recorded in the app log for debugging.
+@visibleForTesting
+String syncErrorMessage(Object e) {
+  if (_isTransientNetworkError(e)) {
+    return 'Could not reach the mail server — temporary network or DNS '
+        'problem. Will retry automatically.';
+  }
+  return e.toString();
 }
 
 typedef OnNewMailCallback = Future<void> Function(String accountEmail);
@@ -725,7 +740,7 @@ class _AccountSync implements _SyncLoop {
           syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
-            errorMessage: e.toString(),
+            errorMessage: syncErrorMessage(e),
             stackTrace: st.toString(),
             isPermanent: isPermanent,
             protocol: 'imap',
@@ -1070,7 +1085,7 @@ class _JmapAccountSync implements _SyncLoop {
           syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
-            errorMessage: e.toString(),
+            errorMessage: syncErrorMessage(e),
             stackTrace: st.toString(),
             isPermanent: isPermanent,
             protocol: 'jmap',
