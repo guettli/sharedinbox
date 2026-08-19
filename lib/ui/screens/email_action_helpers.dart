@@ -103,28 +103,30 @@ Future<void> batchArchive(
   BuildContext context,
   WidgetRef ref, {
   required List<EmailThread> threads,
-}) => _batchMoveToRole(
-  context,
-  ref,
-  threads: threads,
-  role: 'archive',
-  dialogTitle: 'No archive folder found',
-  createFolderName: 'Archive',
-);
+}) =>
+    _batchMoveToRole(
+      context,
+      ref,
+      threads: threads,
+      role: 'archive',
+      dialogTitle: 'No archive folder found',
+      createFolderName: 'Archive',
+    );
 
 /// Moves every thread in [threads] to its account's junk folder.
 Future<void> batchMarkSpam(
   BuildContext context,
   WidgetRef ref, {
   required List<EmailThread> threads,
-}) => _batchMoveToRole(
-  context,
-  ref,
-  threads: threads,
-  role: 'junk',
-  dialogTitle: 'No spam folder found',
-  createFolderName: 'Junk',
-);
+}) =>
+    _batchMoveToRole(
+      context,
+      ref,
+      threads: threads,
+      role: 'junk',
+      dialogTitle: 'No spam folder found',
+      createFolderName: 'Junk',
+    );
 
 /// Moves every thread in [threads] back to its account's inbox. Backs the
 /// "Not junk" / "Restore" batch actions shown while viewing the Junk or Trash
@@ -133,14 +135,15 @@ Future<void> batchMoveToInbox(
   BuildContext context,
   WidgetRef ref, {
   required List<EmailThread> threads,
-}) => _batchMoveToRole(
-  context,
-  ref,
-  threads: threads,
-  role: 'inbox',
-  dialogTitle: 'No inbox folder found',
-  createFolderName: 'Inbox',
-);
+}) =>
+    _batchMoveToRole(
+      context,
+      ref,
+      threads: threads,
+      role: 'inbox',
+      dialogTitle: 'No inbox folder found',
+      createFolderName: 'Inbox',
+    );
 
 Future<void> _batchMoveToRole(
   BuildContext context,
@@ -285,21 +288,6 @@ Future<void> snoozeThreadsUntil(
   }
 }
 
-/// Moves every thread in [threads] to [destPath] (an account-specific mailbox
-/// path), pushing one aggregated undo action per source folder. Used by the
-/// swipe-tree `Move → folder` leaves, which already scope the folder list to a
-/// single account.
-Future<void> moveThreadsToPath(
-  WidgetRef ref, {
-  required List<EmailThread> threads,
-  required String destPath,
-}) async {
-  if (threads.isEmpty) return;
-  for (final accountThreads in _groupByAccount(threads).values) {
-    await _moveThreadsTo(ref, accountThreads, destPath);
-  }
-}
-
 /// Flags (stars) or unflags every email in every thread in [threads]. The
 /// selection-mode bottom bar decides which direction to apply based on the
 /// current thread flags: if any selected thread is unstarred we star all of
@@ -316,6 +304,55 @@ Future<void> batchStar(
       await repo.setFlag(id, flagged: flagged);
     }
   }
+}
+
+/// Handles a swipe-to-archive (start→end) or swipe-to-delete (end→start) on a
+/// single [thread]. Shared between folder and combined inbox surfaces.
+Future<void> swipeDismissThread(
+  WidgetRef ref,
+  EmailThread thread,
+  DismissDirection direction,
+) async {
+  final repo = ref.read(emailRepositoryProvider);
+
+  final originalEmails = await _fetchOriginals(repo, thread.emailIds);
+
+  if (direction == DismissDirection.startToEnd) {
+    final archive = await ref
+        .read(mailboxRepositoryProvider)
+        .findMailboxByRole(thread.accountId, 'archive');
+    if (archive == null) return;
+    for (final id in thread.emailIds) {
+      await repo.moveEmail(id, archive.path);
+    }
+    final action = UndoAction(
+      id: DateTime.now().toIso8601String(),
+      accountId: thread.accountId,
+      type: UndoType.move,
+      emailIds: thread.emailIds,
+      sourceMailboxPath: thread.mailboxPath,
+      destinationMailboxPath: archive.path,
+      destinationMailboxRole: 'archive',
+      originalEmails: originalEmails,
+    );
+    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
+    return;
+  }
+
+  String? lastDestPath;
+  for (final id in thread.emailIds) {
+    lastDestPath = await repo.deleteEmail(id);
+  }
+  final action = UndoAction(
+    id: DateTime.now().toIso8601String(),
+    accountId: thread.accountId,
+    type: UndoType.delete,
+    emailIds: thread.emailIds,
+    sourceMailboxPath: thread.mailboxPath,
+    destinationMailboxPath: lastDestPath,
+    originalEmails: originalEmails,
+  );
+  unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
 }
 
 Future<List<Email>> _fetchOriginals(
@@ -351,21 +388,37 @@ Future<void> _moveThreadsTo(
   List<EmailThread> threads,
   String destPath, {
   String? role,
-}) =>
-    // Callers hand us a single-account thread list; _pushGroupedUndo aggregates
-    // by source folder so the UndoAction carries every message in that folder.
-    _pushGroupedUndo(
-      ref,
-      threads,
-      type: UndoType.move,
-      destinationMailboxRole: role,
-      apply: (repo, emailIds) async {
-        for (final id in emailIds) {
-          await repo.moveEmail(id, destPath);
-        }
-        return destPath;
-      },
-    );
+}) {
+  // Callers hand us a single-account thread list; _pushGroupedUndo aggregates
+  // by source folder so the UndoAction carries every message in that folder.
+  return _pushGroupedUndo(
+    ref,
+    threads,
+    type: UndoType.move,
+    destinationMailboxRole: role,
+    apply: (repo, emailIds) async {
+      for (final id in emailIds) {
+        await repo.moveEmail(id, destPath);
+      }
+      return destPath;
+    },
+  );
+}
+
+/// Moves every thread in [threads] to [destPath] (an account-specific mailbox
+/// path), pushing one aggregated undo action per source folder. Used by the
+/// swipe-tree `Move → folder` leaves, which already scope the folder list to a
+/// single account.
+Future<void> moveThreadsToPath(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required String destPath,
+}) async {
+  if (threads.isEmpty) return;
+  for (final accountThreads in _groupByAccount(threads).values) {
+    await _moveThreadsTo(ref, accountThreads, destPath);
+  }
+}
 
 /// Applies [apply] to every email in each source-folder group of [threads]
 /// (a single-account list) and pushes one aggregated [UndoAction] of [type]
@@ -380,8 +433,7 @@ Future<void> _pushGroupedUndo(
   WidgetRef ref,
   List<EmailThread> threads, {
   required UndoType type,
-  required Future<String?> Function(EmailRepository repo, List<String> emailIds)
-  apply,
+  required Future<String?> Function(EmailRepository, List<String>) apply,
   String? destinationMailboxRole,
 }) async {
   final repo = ref.read(emailRepositoryProvider);
