@@ -461,6 +461,24 @@ Widget buildSelectionBottomBar(
     }());
   }
 
+  // In Junk/Trash the destructive action becomes a "move back to Inbox" button;
+  // both variants are identical apart from their icon and tooltip.
+  Widget moveToInboxButton({required IconData icon, required String tooltip}) {
+    return _BulkActionButton(
+      icon: icon,
+      tooltip: tooltip,
+      color: const Color(0xFF2E7D32),
+      haptic: HapticFeedback.mediumImpact,
+      onPressed: () => run(
+        () => batchMoveToInbox(
+          context,
+          ref,
+          threads: controller.selectedThreads,
+        ),
+      ),
+    );
+  }
+
   // If every selected thread is already starred, the button unstars them all;
   // otherwise it stars every selection (so a mixed selection resolves to
   // "everything gets starred").
@@ -501,18 +519,9 @@ Widget buildSelectionBottomBar(
           ),
         if (includeDelete)
           if (currentFolderRole == 'trash')
-            _BulkActionButton(
+            moveToInboxButton(
               icon: Icons.restore_from_trash,
               tooltip: 'Restore',
-              color: const Color(0xFF2E7D32),
-              haptic: HapticFeedback.mediumImpact,
-              onPressed: () => run(
-                () => batchMoveToInbox(
-                  context,
-                  ref,
-                  threads: controller.selectedThreads,
-                ),
-              ),
             )
           else
             _BulkActionButton(
@@ -526,18 +535,9 @@ Widget buildSelectionBottomBar(
             ),
         if (includeSpam)
           if (currentFolderRole == 'junk')
-            _BulkActionButton(
+            moveToInboxButton(
               icon: Icons.report_off,
               tooltip: 'Not junk',
-              color: const Color(0xFF2E7D32),
-              haptic: HapticFeedback.mediumImpact,
-              onPressed: () => run(
-                () => batchMoveToInbox(
-                  context,
-                  ref,
-                  threads: controller.selectedThreads,
-                ),
-              ),
             )
           else
             _BulkActionButton(
