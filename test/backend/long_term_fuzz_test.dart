@@ -262,7 +262,12 @@ void main() {
 
     print('Comparing initial state...');
     var result = await _syncUntilIdentical(
-        db, imapAccount.id, jmapAccount.id, emailRepo, mailboxRepo);
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(result.isIdentical, isTrue, reason: 'Initial sync mismatch!');
 
@@ -297,7 +302,12 @@ void main() {
     // Sync both sides to pull updates, retrying to absorb propagation lag.
     print('  Syncing after IMAP mutations...');
     result = await _syncUntilIdentical(
-        db, imapAccount.id, jmapAccount.id, emailRepo, mailboxRepo);
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(
       result.isIdentical,
@@ -340,7 +350,12 @@ void main() {
     // pass.
     print('  Syncing after JMAP mutations...');
     result = await _syncUntilIdentical(
-        db, imapAccount.id, jmapAccount.id, emailRepo, mailboxRepo);
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(
       result.isIdentical,
@@ -382,7 +397,12 @@ void main() {
     // Sync both sides to pull updates, retrying to absorb propagation lag.
     print('  Syncing after hard deletes...');
     result = await _syncUntilIdentical(
-        db, imapAccount.id, jmapAccount.id, emailRepo, mailboxRepo);
+      db,
+      imapAccount.id,
+      jmapAccount.id,
+      emailRepo,
+      mailboxRepo,
+    );
     _printComparison(result);
     expect(result.isIdentical, isTrue, reason: 'Mismatch after hard deletes!');
 
