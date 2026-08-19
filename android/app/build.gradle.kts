@@ -89,11 +89,18 @@ flutter {
 dependencies {
     // Required for flutter_local_notifications and other plugins that need Java 8+ APIs on API < 26.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-    // integration_test is a dev dependency; the Flutter plugin loader adds it as
-    // debugImplementation only, but GeneratedPluginRegistrant.java (in src/main)
-    // references its class in all variants. Make it available for release compilation
-    // without bundling it in the APK.
-    releaseCompileOnly(project(":integration_test"))
+    // integration_test is a dev dependency. Since Flutter 3.47 the plugin loader
+    // strips dev-dependency plugins from release builds entirely (flutter#161826):
+    // it neither registers the `:integration_test` Gradle subproject nor references
+    // its class from the release GeneratedPluginRegistrant, so no manual release
+    // dependency is needed. Older Flutter (and every debug build) still includes the
+    // subproject and references its class in src/main's GeneratedPluginRegistrant, so
+    // keep making it available for release compilation when the subproject exists —
+    // guarded with findProject so the reference does not fail once it is stripped
+    // (`Project with path ':integration_test' could not be found`, see #631).
+    if (findProject(":integration_test") != null) {
+        releaseCompileOnly(project(":integration_test"))
+    }
     // Flutter's embedding bundles PlayStoreDeferredComponentManager, which references
     // com.google.android.play.core.* classes (tasks.Task, splitinstall.*). We don't use
     // deferred components, but AGP 9.x's release build trace-references step fails on
