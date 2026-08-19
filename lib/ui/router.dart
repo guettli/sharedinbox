@@ -39,7 +39,6 @@ import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_state_screen.dart';
-import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
 import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/undo_log_screen.dart';
@@ -263,18 +262,6 @@ final router = GoRouter(
                   builder: (ctx, state) => ForceResyncScreen(
                     accountId: state.pathParameters['accountId']!,
                     mailboxPath: state.pathParameters['mailboxPath']!,
-                  ),
-                ),
-                GoRoute(
-                  path: ':mailboxPath/threads/:threadId',
-                  builder: (ctx, state) => ThreadDetailScreen(
-                    accountId: state.pathParameters['accountId']!,
-                    mailboxPath: Uri.decodeComponent(
-                      state.pathParameters['mailboxPath']!,
-                    ),
-                    threadId: Uri.decodeComponent(
-                      state.pathParameters['threadId']!,
-                    ),
                   ),
                 ),
               ],

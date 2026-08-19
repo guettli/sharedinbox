@@ -57,7 +57,6 @@ import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
-import 'package:sharedinbox/ui/screens/thread_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 
@@ -776,18 +775,6 @@ Widget buildApp({
                 builder: (ctx, state) => FolderDiagnosticsScreen(
                   accountId: state.pathParameters['accountId']!,
                   mailboxPath: state.pathParameters['mailboxPath']!,
-                ),
-              ),
-              GoRoute(
-                path: ':mailboxPath/threads/:threadId',
-                builder: (ctx, state) => ThreadDetailScreen(
-                  accountId: state.pathParameters['accountId']!,
-                  mailboxPath: Uri.decodeComponent(
-                    state.pathParameters['mailboxPath']!,
-                  ),
-                  threadId: Uri.decodeComponent(
-                    state.pathParameters['threadId']!,
-                  ),
                 ),
               ),
             ],

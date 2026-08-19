@@ -117,7 +117,6 @@ const _excluded = <String, String>{
   'lib/ui/screens/sync_log_screen.dart': 'Widget-only sync-log viewer',
   'lib/ui/screens/sync_state_screen.dart':
       'Widget-only per-mailbox sync-state view',
-  'lib/ui/screens/thread_detail_screen.dart': 'Widget-only thread reader',
   'lib/ui/screens/trusted_image_senders_screen.dart':
       'Widget-only settings screen for the trusted-image sender allowlist',
   'lib/ui/screens/undo_log_detail_screen.dart':
