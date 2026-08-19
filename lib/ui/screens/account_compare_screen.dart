@@ -123,7 +123,11 @@ class _CompareBody extends StatelessWidget {
     }
     if (result.bodies.isNotEmpty) {
       children.add(_section('Bodies', context));
-      children.addAll(result.bodies.map((d) => _BodyDiffTile(diff: d)));
+      children.addAll(
+        result.bodies.map(
+          (d) => _BodyDiffTile(diff: d, labelA: labelA, labelB: labelB),
+        ),
+      );
     }
     if (result.unmatchable.isNotEmpty) {
       children.add(_section('Skipped (no Message-ID)', context));
@@ -261,9 +265,15 @@ class _EmailDiffTile extends StatelessWidget {
 }
 
 class _BodyDiffTile extends StatelessWidget {
-  const _BodyDiffTile({required this.diff});
+  const _BodyDiffTile({
+    required this.diff,
+    required this.labelA,
+    required this.labelB,
+  });
 
   final BodyDiff diff;
+  final String labelA;
+  final String labelB;
 
   @override
   Widget build(BuildContext context) {
@@ -279,7 +289,10 @@ class _BodyDiffTile extends StatelessWidget {
         const Divider(height: AppSpacing.lg),
         ..._comparisonRows(diff.a, diff.b, diff.folderName),
         const Divider(height: AppSpacing.lg),
-        const _DetailRow(label: 'Body diff', value: 'A = −, B = +'),
+        _DetailRow(
+          label: 'Body diff',
+          value: 'A ($labelA) = −, B ($labelB) = +',
+        ),
         _BodyDiffView(lines: diff.diffLines),
         _OpenButtons(a: diff.a, b: diff.b),
       ],
