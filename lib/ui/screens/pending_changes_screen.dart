@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -13,6 +15,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart'
     show QueueRowActions, SyncNowFn, retryQueueRow;
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
@@ -166,11 +169,26 @@ class PendingChangeTile extends StatelessWidget {
           if (change.lastError != null)
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.xs),
-              child: Text(
-                'Last error: ${change.lastError}',
-                style: TextStyle(color: theme.colorScheme.error),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              child: InkWell(
+                onTap: () => _showErrorDetails(context, change.lastError!),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Last error: ${change.lastError}',
+                      style: TextStyle(color: theme.colorScheme.error),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      'Tap to view full error',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
@@ -189,6 +207,36 @@ class PendingChangeTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Opens a dialog showing the complete [error] text (the inline row truncates
+/// it to two lines), with a Copy action so long server errors can be quoted in
+/// a bug report.
+Future<void> _showErrorDetails(BuildContext context, String error) {
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Last error'),
+      content: SingleChildScrollView(
+        child: SelectableText(error),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: error));
+            if (dialogContext.mounted) {
+              dialogContext.showAppSnackBar('Copied to clipboard');
+            }
+          },
+          child: const Text('Copy'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Human-readable label for the `change_type` column stored in the DB.
@@ -266,11 +314,31 @@ class _EmailIdentity extends StatelessWidget {
       future: repo.getEmail(change.resourceId),
       builder: (context, snapshot) {
         final email = snapshot.data;
-        final text = email == null ? _fallback : _describeEmail(email);
-        return Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        if (email == null) {
+          // The email is no longer stored locally (or the lookup is still in
+          // flight), so there is no mailbox to build a message URL from.
+          return Text(
+            _fallback,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        }
+        final theme = Theme.of(context);
+        return InkWell(
+          onTap: () => context.push(
+            '/accounts/${email.accountId}/mailboxes'
+            '/${Uri.encodeComponent(email.mailboxPath)}'
+            '/emails/${Uri.encodeComponent(email.id)}',
+          ),
+          child: Text(
+            _describeEmail(email),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: theme.colorScheme.primary,
+              decoration: TextDecoration.underline,
+            ),
+          ),
         );
       },
     );
