@@ -121,6 +121,6 @@ class AccountRepositoryImpl implements AccountRepository {
         manageSieveAvailable: row.manageSieveAvailable,
         jmapUrl: row.jmapUrl,
         verbose: row.verbose,
-        signature: row.signature,
+        signature: row.signature ?? '',
       );
 }
