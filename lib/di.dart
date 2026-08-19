@@ -29,6 +29,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
+import 'package:sharedinbox/core/services/encrypted_report_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/services/server_capabilities_service.dart';
@@ -365,6 +366,10 @@ final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((
   ref,
 ) {
   return AccountDiscoveryServiceImpl(ref.watch(httpClientProvider));
+});
+
+final encryptedReportServiceProvider = Provider<EncryptedReportService>((ref) {
+  return EncryptedReportService(ref.watch(httpClientProvider));
 });
 
 final sieveRepositoryProvider = Provider<SieveRepository>((ref) {

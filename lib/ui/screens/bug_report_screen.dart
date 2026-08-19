@@ -16,6 +16,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 const _bugReportApiUrl = String.fromEnvironment(
   'BUG_REPORT_API_URL',
@@ -42,6 +43,9 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
   final List<PlatformFile> _attachments = [];
   bool _includeEmail = false;
   bool _includeSyncLog = false;
+  // When reporting about a specific email, the full mail is encrypted on-device
+  // to the maintainer's public key and attached to a public GitHub issue.
+  bool _includeEncryptedMail = false;
   bool _submitting = false;
 
   Email? _attachedEmail;
@@ -75,6 +79,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
             await ref.read(emailRepositoryProvider).getEmail(widget.emailId!);
         if (mounted && email != null) {
           _attachedEmail = email;
+          _includeEncryptedMail = true;
           _selectedAccountId = email.accountId;
           final fromStr =
               email.from.isNotEmpty ? email.from.first.toString() : 'unknown';
@@ -182,14 +187,36 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
     try {
       final client = ref.read(httpClientProvider);
-      final uri = Uri.parse(_bugReportApiUrl);
+      final encryptedReports = ref.read(encryptedReportServiceProvider);
+      final useEncryptedIssue = _includeEncryptedMail && _attachedEmail != null;
+      final uri = Uri.parse(
+        useEncryptedIssue ? encryptedReports.submitUrl : _bugReportApiUrl,
+      );
       final request = http.MultipartRequest('POST', uri);
 
       // Description
       request.fields['description'] = _descriptionController.text;
 
-      // Email Data if from email view
-      if (_attachedEmail != null) {
+      if (useEncryptedIssue) {
+        // Encrypt the full raw mail on-device to the maintainer's public key
+        // and attach the ciphertext. Only the maintainer (who holds the
+        // matching private key) can decrypt it, so the mail is never exposed
+        // on the public issue tracker.
+        final key = await encryptedReports.fetchPublicKey();
+        final rawMail = await ref
+            .read(emailRepositoryProvider)
+            .fetchRawRfc822(_attachedEmail!.id);
+        final encrypted =
+            await encryptedReports.encryptMail(key, utf8.encode(rawMail));
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'encrypted_mail',
+            encrypted,
+            filename: 'mail.enc',
+          ),
+        );
+      } else if (_attachedEmail != null) {
+        // Email metadata for the confidential report.
         final emailMap = {
           'id': _attachedEmail!.id,
           'subject': _attachedEmail!.subject,
@@ -252,8 +279,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
       if (response.statusCode == 201) {
         final resData = jsonDecode(response.body) as Map<String, dynamic>;
-        final reportId = resData['id'] as String;
-        _showSuccessDialog(reportId);
+        if (useEncryptedIssue) {
+          await _onIssueCreated(resData['issueUrl'] as String);
+        } else {
+          _showSuccessDialog(resData['id'] as String);
+        }
       } else if (response.statusCode == 429) {
         final retryAfter = response.headers['retry-after'] ?? '6';
         context.showAppSnackBar(
@@ -299,43 +329,92 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
     }
   }
 
+  Future<void> _onIssueCreated(String issueUrl) async {
+    // Record the URL in the App Log so the user can find it again later.
+    await ref.read(appLoggerProvider).log(
+      level: AppLogLevel.info,
+      event: 'bug_report.issue_created',
+      message: 'Created GitHub issue: $issueUrl',
+      screen: 'bug_report',
+      emailId: _attachedEmail?.id,
+      data: {'issueUrl': issueUrl},
+    );
+    if (!mounted) return;
+    await _showResultDialog(
+      title: 'Issue Created',
+      content: [
+        const Text(
+          'Thank you! A GitHub issue was created with the email attached in '
+          'encrypted form — only the maintainer can read it.',
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SelectableText(
+          issueUrl,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ],
+      leadingActions: [
+        TextButton(
+          onPressed: () async {
+            final uri = Uri.tryParse(issueUrl);
+            if (uri != null) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+          },
+          child: const Text('Open'),
+        ),
+      ],
+    );
+  }
+
   void _showSuccessDialog(String reportId) {
     unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Bug Report Submitted'),
-            content: SingleChildScrollView(
-              child: ListBody(
-                children: [
-                  const Text('Thank you for helping us improve SharedInbox!'),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    'Your Report ID is:\n$reportId',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  const Text(
-                    'Your report is handled confidentially and has not been posted to the public issue tracker.',
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop(); // Dismiss dialog
-                  context.pop(); // Go back to previous screen
-                },
-                child: const Text('Close'),
-              ),
-            ],
-          );
-        },
+      _showResultDialog(
+        title: 'Bug Report Submitted',
+        content: [
+          const Text('Thank you for helping us improve SharedInbox!'),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            'Your Report ID is:\n$reportId',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          const Text(
+            'Your report is handled confidentially and has not been posted to the public issue tracker.',
+          ),
+        ],
       ),
+    );
+  }
+
+  /// Shows a modal result dialog. The trailing "Close" button dismisses the
+  /// dialog and pops back to the previous screen; [leadingActions] are placed
+  /// before it (e.g. an "Open" button).
+  Future<void> _showResultDialog({
+    required String title,
+    required List<Widget> content,
+    List<Widget> leadingActions = const [],
+  }) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(child: ListBody(children: content)),
+          actions: [
+            ...leadingActions,
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // Dismiss dialog
+                context.pop(); // Go back to previous screen
+              },
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -378,10 +457,16 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                             color: theme.colorScheme.secondary,
                           ),
                           const SizedBox(width: AppSpacing.lg),
-                          const Expanded(
+                          Expanded(
                             child: Text(
-                              'Your report is handled confidentially and will not be posted to the public issue tracker.',
-                              style: TextStyle(height: 1.3),
+                              _attachedEmail != null && _includeEncryptedMail
+                                  ? 'A public GitHub issue will be created. The '
+                                      'email is encrypted on this device and can '
+                                      'only be read by the maintainer.'
+                                  : 'Your report is handled confidentially and '
+                                      'will not be posted to the public issue '
+                                      'tracker.',
+                              style: const TextStyle(height: 1.3),
                             ),
                           ),
                         ],
@@ -412,33 +497,25 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Email info chip if email is attached
+                  // Encrypted-mail opt-in when reporting about an email.
                   if (_attachedEmail != null) ...[
-                    Card(
-                      elevation: 0,
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.md,
-                          vertical: AppSpacing.sm,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.email_outlined,
-                              size: AppIconSize.md,
-                              color: theme.colorScheme.primary,
-                            ),
-                            const SizedBox(width: AppSpacing.md),
-                            const Expanded(
-                              child: Text(
-                                'The current email metadata will be attached automatically.',
-                                style: TextStyle(fontSize: 13),
-                              ),
-                            ),
-                          ],
-                        ),
+                    CheckboxListTile(
+                      title: const Text('Attach this email (encrypted)'),
+                      subtitle: const Text(
+                        'Creates a public GitHub issue. The full email is '
+                        'encrypted on this device so only the maintainer can '
+                        'read it.',
                       ),
+                      value: _includeEncryptedMail,
+                      onChanged: _submitting
+                          ? null
+                          : (val) {
+                              setState(
+                                () => _includeEncryptedMail = val ?? false,
+                              );
+                            },
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: AppSpacing.lg),
                   ],

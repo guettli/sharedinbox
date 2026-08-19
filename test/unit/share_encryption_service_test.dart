@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:test/test.dart';
 
@@ -55,6 +56,54 @@ void main() {
           'sharedinbox.de:pubkey:v1:${base64.encode(Uint8List(10))}',
         ),
         isNull,
+      );
+    });
+
+    // ── encryptBytes / decryptBytes round-trip ──────────────────────────────
+
+    test('encryptBytes + decryptBytes round-trip restores raw bytes', () async {
+      final m = await ShareEncryptionService.generateKeyPair();
+      final plaintext = utf8.encode('From: a@x.com\r\nSubject: hi\r\n\r\nbody');
+
+      final cipher = await ShareEncryptionService.encryptBytes(
+        recipientKeyId: m.keyId,
+        recipientPublicKeyBytes: m.publicKeyBytes,
+        plaintext: plaintext,
+        info: 'sharedinbox-encrypted-report',
+      );
+
+      // Ciphertext is opaque and carries the recipient key ID up front.
+      expect(cipher.sublist(0, 16), equals(m.keyId));
+
+      final decrypted = await ShareEncryptionService.decryptBytes(
+        data: cipher,
+        privateKeyBytes: m.privateKeyBytes,
+        publicKeyBytes: m.publicKeyBytes,
+        keyId: m.keyId,
+        info: 'sharedinbox-encrypted-report',
+      );
+
+      expect(decrypted, equals(plaintext));
+    });
+
+    test('decryptBytes fails with a mismatched HKDF info label', () async {
+      final m = await ShareEncryptionService.generateKeyPair();
+      final cipher = await ShareEncryptionService.encryptBytes(
+        recipientKeyId: m.keyId,
+        recipientPublicKeyBytes: m.publicKeyBytes,
+        plaintext: utf8.encode('secret'),
+        info: 'sharedinbox-encrypted-report',
+      );
+
+      expect(
+        () => ShareEncryptionService.decryptBytes(
+          data: cipher,
+          privateKeyBytes: m.privateKeyBytes,
+          publicKeyBytes: m.publicKeyBytes,
+          keyId: m.keyId,
+          info: 'wrong-label',
+        ),
+        throwsA(isA<SecretBoxAuthenticationError>()),
       );
     });
 
