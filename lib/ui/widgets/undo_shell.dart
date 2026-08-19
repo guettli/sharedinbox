@@ -361,6 +361,15 @@ _FeedbackDisplay _feedbackFor(UndoAction action, ColorScheme scheme) {
             undoColor: Colors.white,
             pattern: _Pattern.crossHatch,
           );
+        case 'inbox':
+          return _FeedbackDisplay(
+            label: 'Moved $count email$plural to Inbox',
+            icon: Icons.move_to_inbox,
+            background: const Color(0xFF2E7D32),
+            foreground: Colors.white,
+            undoColor: Colors.white,
+            pattern: _Pattern.forwardSlash,
+          );
         default:
           return _FeedbackDisplay(
             label: '$count email$plural moved',

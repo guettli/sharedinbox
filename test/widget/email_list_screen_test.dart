@@ -384,6 +384,47 @@ void main() {
       expect(find.byTooltip('More actions'), findsOneWidget);
     });
 
+    testWidgets(
+      'selection bar swaps spam/delete for restore in Junk/Trash (#621)',
+      (tester) async {
+        final email = testEmail(subject: 'Filed away');
+        const junkMailbox = Mailbox(
+          id: 'acc-1:Junk',
+          accountId: 'acc-1',
+          path: 'Junk',
+          name: 'Junk',
+          role: 'junk',
+          unreadCount: 0,
+          totalCount: 0,
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/Junk/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository([junkMailbox])),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(emails: [email]),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.longPress(find.text('Filed away'));
+        await tester.pumpAndSettle();
+
+        // In the Junk folder "Mark as spam" becomes "Not junk"; delete stays.
+        expect(find.byTooltip('Not junk'), findsOneWidget);
+        expect(find.byTooltip('Mark as spam'), findsNothing);
+        expect(find.byTooltip('Delete'), findsOneWidget);
+      },
+    );
+
     testWidgets('overflow menu exposes "Debug messages" entry', (tester) async {
       final email = testEmail(subject: 'Select me');
       await tester.pumpWidget(

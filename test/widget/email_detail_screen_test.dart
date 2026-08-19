@@ -536,6 +536,140 @@ void main() {
       },
     );
 
+    testWidgets(
+      'Junk folder replaces "Mark as spam" with "Not junk" (#621)',
+      (tester) async {
+        final junkMail = Email(
+          id: 'acc-1:99',
+          accountId: 'acc-1',
+          mailboxPath: 'Junk',
+          uid: 99,
+          subject: 'Not actually junk',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        const mailboxes = [
+          Mailbox(
+            id: 'acc-1:Junk',
+            accountId: 'acc-1',
+            path: 'Junk',
+            name: 'Junk',
+            role: 'junk',
+            unreadCount: 1,
+            totalCount: 1,
+          ),
+        ];
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/Junk/emails/acc-1%3A99',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository(mailboxes)),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  emailDetail: junkMail,
+                  emailBody:
+                      const EmailBody(emailId: 'acc-1:99', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Tooltip && w.message == 'Not junk',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Tooltip && w.message == 'Mark as spam',
+          ),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'Trash folder replaces "Delete" with "Restore" (#621)',
+      (tester) async {
+        final trashMail = Email(
+          id: 'acc-1:77',
+          accountId: 'acc-1',
+          mailboxPath: 'Trash',
+          uid: 77,
+          subject: 'Deleted by mistake',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        const mailboxes = [
+          Mailbox(
+            id: 'acc-1:Trash',
+            accountId: 'acc-1',
+            path: 'Trash',
+            name: 'Trash',
+            role: 'trash',
+            unreadCount: 1,
+            totalCount: 1,
+          ),
+        ];
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/Trash/emails/acc-1%3A77',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository(mailboxes)),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  emailDetail: trashMail,
+                  emailBody:
+                      const EmailBody(emailId: 'acc-1:77', attachments: []),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Tooltip && w.message == 'Restore',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Tooltip && w.message == 'Delete',
+          ),
+          findsNothing,
+        );
+      },
+    );
+
     testWidgets('Archive button is present in app bar', (tester) async {
       await tester.pumpWidget(
         buildApp(

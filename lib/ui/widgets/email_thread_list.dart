@@ -449,6 +449,7 @@ Widget buildSelectionBottomBar(
   bool includeMove = true,
   bool includeSnooze = true,
   bool includeStar = true,
+  String? currentFolderRole,
   void Function(List<String> actedThreadIds)? onAfterAction,
 }) {
   void run(Future<void> Function() body) {
@@ -499,29 +500,59 @@ Widget buildSelectionBottomBar(
             ),
           ),
         if (includeDelete)
-          _BulkActionButton(
-            icon: Icons.delete,
-            tooltip: 'Delete',
-            color: Colors.red.shade700,
-            haptic: HapticFeedback.heavyImpact,
-            onPressed: () => run(
-              () => batchDelete(ref, threads: controller.selectedThreads),
-            ),
-          ),
-        if (includeSpam)
-          _BulkActionButton(
-            icon: Icons.report,
-            tooltip: 'Mark as spam',
-            color: const Color(0xFFE65100),
-            haptic: HapticFeedback.mediumImpact,
-            onPressed: () => run(
-              () => batchMarkSpam(
-                context,
-                ref,
-                threads: controller.selectedThreads,
+          if (currentFolderRole == 'trash')
+            _BulkActionButton(
+              icon: Icons.restore_from_trash,
+              tooltip: 'Restore',
+              color: const Color(0xFF2E7D32),
+              haptic: HapticFeedback.mediumImpact,
+              onPressed: () => run(
+                () => batchMoveToInbox(
+                  context,
+                  ref,
+                  threads: controller.selectedThreads,
+                ),
+              ),
+            )
+          else
+            _BulkActionButton(
+              icon: Icons.delete,
+              tooltip: 'Delete',
+              color: Colors.red.shade700,
+              haptic: HapticFeedback.heavyImpact,
+              onPressed: () => run(
+                () => batchDelete(ref, threads: controller.selectedThreads),
               ),
             ),
-          ),
+        if (includeSpam)
+          if (currentFolderRole == 'junk')
+            _BulkActionButton(
+              icon: Icons.report_off,
+              tooltip: 'Not junk',
+              color: const Color(0xFF2E7D32),
+              haptic: HapticFeedback.mediumImpact,
+              onPressed: () => run(
+                () => batchMoveToInbox(
+                  context,
+                  ref,
+                  threads: controller.selectedThreads,
+                ),
+              ),
+            )
+          else
+            _BulkActionButton(
+              icon: Icons.report,
+              tooltip: 'Mark as spam',
+              color: const Color(0xFFE65100),
+              haptic: HapticFeedback.mediumImpact,
+              onPressed: () => run(
+                () => batchMarkSpam(
+                  context,
+                  ref,
+                  threads: controller.selectedThreads,
+                ),
+              ),
+            ),
         if (includeMove)
           IconButton(
             icon: const Icon(Icons.drive_file_move),
