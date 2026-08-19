@@ -101,7 +101,7 @@ class SyncLogScreen extends ConsumerStatefulWidget {
 }
 
 class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
-  List<SyncLogEntry> _entries = [];
+  List<SyncLogEntry>? _entries;
   bool _syncing = false;
   int? _presynCount;
   StreamSubscription<List<SyncLogEntry>>? _sub;
@@ -134,7 +134,7 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
   void _syncNow() {
     setState(() {
       _syncing = true;
-      _presynCount = _entries.length;
+      _presynCount = _entries?.length ?? 0;
     });
     ref.read(syncManagerProvider).syncNow(widget.accountId);
   }
@@ -195,15 +195,17 @@ class _SyncLogScreenState extends ConsumerState<SyncLogScreen> {
             ),
         ],
       ),
-      body: _entries.isEmpty
-          ? const Center(child: Text('No sync entries yet'))
-          : ListView.builder(
-              itemCount: _entries.length,
-              itemBuilder: (ctx, i) => _SyncLogTile(
-                entry: _entries[i],
-                onCopy: () => _copyEntry(_entries[i], ctx),
-              ),
-            ),
+      body: _entries == null
+          ? const Center(child: CircularProgressIndicator())
+          : _entries!.isEmpty
+              ? const Center(child: Text('No sync entries yet'))
+              : ListView.builder(
+                  itemCount: _entries!.length,
+                  itemBuilder: (ctx, i) => _SyncLogTile(
+                    entry: _entries![i],
+                    onCopy: () => _copyEntry(_entries![i], ctx),
+                  ),
+                ),
     );
   }
 }
