@@ -31,7 +31,7 @@ class BodyCacheService {
       final currentSize = await _getCacheSizeBytes();
       if (currentSize >= limitBytes) break;
       try {
-        await emailRepo.getEmailBody(emailId);
+        await emailRepo.getEmailBody(emailId, prefetch: true);
       } catch (_) {
         // Skip emails that fail to fetch.
       }

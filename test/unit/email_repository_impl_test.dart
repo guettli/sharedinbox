@@ -657,6 +657,102 @@ void main() {
       expect(body.htmlBody, '<p>Hello</p>');
     });
 
+    // ── "Did opening this mail need the Internet?" logging (#642) ─────────────
+    group('getEmailBody logs how the body was loaded (#642)', () {
+      AppLogEntry loadedEntry(_PushStatusRecorder recorder) =>
+          recorder.entries.singleWhere((e) => e.event == 'email.body.loaded');
+
+      test('a fresh cache hit logs internet: false, source: cache', () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(appLogger: AppLogger(recorder));
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: 'acc-1:1',
+                textBody: const Value('Hello'),
+                headersJson: const Value('[]'),
+                mimeTreeJson: const Value('{"type":"text/plain"}'),
+                cachedAt: Value(DateTime.now()),
+              ),
+            );
+
+        await r.emails.getEmailBody('acc-1:1');
+
+        final entry = loadedEntry(recorder);
+        expect(entry.level, AppLogLevel.info);
+        expect(entry.emailId, 'acc-1:1');
+        final data = jsonDecode(entry.dataJson!) as Map<String, dynamic>;
+        expect(data['internet'], false);
+        expect(data['source'], 'cache');
+        expect(data['trigger'], 'open');
+      });
+
+      test('a cache miss that fetches over IMAP logs internet: true', () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          appLogger: AppLogger(recorder),
+          imapConnect: (Account _, String __, String ___) async =>
+              _PreviewBodyImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        await r.emails.getEmailBody('acc-1:INBOX:1');
+
+        final entry = loadedEntry(recorder);
+        expect(entry.level, AppLogLevel.info);
+        expect(entry.emailId, 'acc-1:INBOX:1');
+        expect(entry.accountId, 'acc-1');
+        final data = jsonDecode(entry.dataJson!) as Map<String, dynamic>;
+        expect(data['internet'], true);
+        expect(data['source'], 'imap');
+        expect(data['trigger'], 'open');
+      });
+
+      test('a background prefetch is tagged trigger: prefetch', () async {
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          appLogger: AppLogger(recorder),
+          imapConnect: (Account _, String __, String ___) async =>
+              _PreviewBodyImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+        await r.emails.getEmailBody('acc-1:INBOX:1', prefetch: true);
+
+        final data =
+            jsonDecode(loadedEntry(recorder).dataJson!) as Map<String, dynamic>;
+        expect(data['trigger'], 'prefetch');
+        expect(data['internet'], true);
+      });
+    });
+
     // ── JMAP body parsing ────────────────────────────────────────────────────
 
     group('parseJmapBody type guarding', () {
