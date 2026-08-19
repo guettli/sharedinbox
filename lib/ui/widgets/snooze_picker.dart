@@ -36,7 +36,7 @@ class SnoozePicker extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.next_week_outlined),
           title: const Text('Next week'),
-          trailing: Text(DateFormat('MMM d, 08:00').format(nextWeek)),
+          trailing: Text(DateFormat('EEE, MMM d, 08:00').format(nextWeek)),
           onTap: () => Navigator.pop(context, nextWeek),
         ),
         ListTile(
