@@ -465,8 +465,13 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
       );
       rethrow;
     }
-    unawaited(repo.setFlag(_emailId, seen: true));
     final header = results[0] as Email?;
+    // Only mark as read on the false→true transition. Re-opening an
+    // already-read message must not re-enqueue a flag change or re-log it (#644;
+    // setFlag itself also short-circuits, this just avoids the round-trip).
+    if (header?.isSeen == false) {
+      unawaited(repo.setFlag(_emailId, seen: true));
+    }
     if (header != null) {
       unawaited(_prefetchNextEmailBody(repo, header));
     }

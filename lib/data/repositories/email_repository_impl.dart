@@ -3340,6 +3340,16 @@ class EmailRepositoryImpl implements EmailRepository {
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return;
+
+    // Reduce the request to only the flags that actually change. Callers such
+    // as the detail-screen auto-mark-on-open (`lib/di.dart`) fire
+    // `setFlag(id, seen: true)` on every open; without this guard an
+    // already-read message would re-enqueue a `flag_seen` change (re-STORE on
+    // the server) and re-emit an `email.flag` log entry on every open (#644).
+    seen = (seen != null && seen != row.isSeen) ? seen : null;
+    flagged = (flagged != null && flagged != row.isFlagged) ? flagged : null;
+    if (seen == null && flagged == null) return;
+
     final account = (await _accounts.getAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
@@ -3724,6 +3734,25 @@ class EmailRepositoryImpl implements EmailRepository {
     // is instead applied locally and carried over to the real message when it
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (await _isLocalEmail(resourceId)) return;
+
+    // Collapse redundant flag changes: if an un-attempted `flag_seen` /
+    // `flag_flagged` for this message with the same payload is already queued,
+    // don't append a duplicate. Only flag changes are de-duped — move / delete /
+    // snooze carry ordering semantics and must not be collapsed here (#644).
+    if (changeType == 'flag_seen' || changeType == 'flag_flagged') {
+      final existing = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(resourceId) &
+                  t.changeType.equals(changeType) &
+                  t.payload.equals(payload) &
+                  t.attempts.equals(0),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (existing != null) return;
+    }
+
     await _db.into(_db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: accountId,
