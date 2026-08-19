@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
@@ -948,12 +949,21 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return _applyImapPathRewrite(row, newServerPath, row.name);
   }
 
-  imap.Mailbox _imapBoxFor(MailboxRow row) => imap.Mailbox(
-        encodedName: row.path,
-        encodedPath: row.path,
-        flags: <imap.MailboxFlag>[],
-        pathSeparator: row.path.contains('.') ? '.' : '/',
-      );
+  imap.Mailbox _imapBoxFor(MailboxRow row) {
+    final separator = row.path.contains('.') ? '.' : '/';
+    // The stored `path` is the decoded Unicode form, but enough_mail writes
+    // `encodedPath` verbatim into RENAME/DELETE, so re-encode to modified
+    // UTF-7 first (#633).
+    final encodedPath = encodeImapMailboxPath(row.path, separator);
+    final leafIndex = encodedPath.lastIndexOf(separator);
+    return imap.Mailbox(
+      encodedName:
+          leafIndex == -1 ? encodedPath : encodedPath.substring(leafIndex + 1),
+      encodedPath: encodedPath,
+      flags: <imap.MailboxFlag>[],
+      pathSeparator: separator,
+    );
+  }
 
   /// Rewrites the local rows for [row] and every descendant so `path`,
   /// `displayPath`, and `name` reflect the new server path. IMAP `path`

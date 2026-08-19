@@ -34,6 +34,7 @@ import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
@@ -515,7 +516,7 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectMailboxByPath(emailRow.mailboxPath);
+      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
       final msg = fetch.messages.firstOrNull;
       if (msg == null) {
@@ -956,7 +957,7 @@ class EmailRepositoryImpl implements EmailRepository {
           client.serverInfo.supports('QRESYNC');
       final imap.Mailbox selectedMailbox;
       try {
-        selectedMailbox = await client.selectMailboxByPath(
+        selectedMailbox = await client.selectUnicodeMailboxByPath(
           mailboxPath,
           enableCondStore: supportsCondStore,
         );
@@ -1793,7 +1794,7 @@ class EmailRepositoryImpl implements EmailRepository {
     try {
       // SELECT yields the server's EXISTS count — the same number the folder
       // list's STATUS query trusts.
-      final selected = await client.selectMailboxByPath(mailboxPath);
+      final selected = await client.selectUnicodeMailboxByPath(mailboxPath);
       final serverTotal = selected.messagesExists;
       // uidSearchMessages defaults to the UNSEEN criteria.
       final unseen = await client.uidSearchMessages();
@@ -1927,7 +1928,7 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectMailboxByPath(mailboxPath);
+      await client.selectUnicodeMailboxByPath(mailboxPath);
       final serverUids = (await client.uidSearchMessages(
             searchCriteria: 'ALL',
           ))
@@ -4704,7 +4705,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // snooze/unsnooze payloads use 'src' for the source folder; all others use 'mailboxPath'.
     final mailboxPath = (payload['mailboxPath'] ?? payload['src']) as String;
     final seq = imap.MessageSequence.fromId(uid, isUid: true);
-    await client.selectMailboxByPath(mailboxPath);
+    await client.selectUnicodeMailboxByPath(mailboxPath);
 
     switch (row.changeType) {
       case 'flag_seen':
@@ -4859,7 +4860,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     if (messageId == null || messageId.isEmpty) return null;
     try {
-      await client.selectMailboxByPath(mailboxPath);
+      await client.selectUnicodeMailboxByPath(mailboxPath);
       // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is safe
       // for typical Message-ID syntax (no embedded quotes or backslashes).
       final escaped = messageId.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
@@ -5726,7 +5727,7 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectMailboxByPath(emailRow.mailboxPath);
+      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
       // Fetch the full message so enough_mail has MIME headers (including
       // Content-Transfer-Encoding) and getPart() can decode the part correctly.
       // A partial BODY.PEEK[n] fetch omits those headers, causing
@@ -5828,7 +5829,7 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectMailboxByPath(emailRow.mailboxPath);
+      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
       final fetch = await client.uidFetchMessage(emailRow.uid, 'BODY.PEEK[]');
       final msg = fetch.messages.firstOrNull;
       if (msg == null) {
