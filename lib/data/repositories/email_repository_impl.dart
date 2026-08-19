@@ -523,6 +523,31 @@ class EmailRepositoryImpl implements EmailRepository {
           'IMAP server returned no message for UID ${emailRow.uid}.',
         );
       }
+
+      // Guard against caching another message's body under this row (#616). An
+      // optimistic snooze/unsnooze/move flips mailbox_path to the destination
+      // but keeps the source UID until the server MOVE is remapped (see
+      // [_remapEmailAfterImapMove]). If that remap never lands and the stale
+      // source UID happens to also exist in the destination mailbox, this
+      // (mailboxPath, uid) pair now points at an unrelated message — the fetch
+      // above would silently return it. Never trust a body whose Message-ID
+      // contradicts the row's; try to re-resolve the real UID instead.
+      final expectedMessageId = normaliseMessageId(emailRow.messageId);
+      final fetchedMessageId =
+          normaliseMessageId(msg.getHeaderValue('Message-ID'));
+      if (expectedMessageId != null &&
+          fetchedMessageId != null &&
+          expectedMessageId != fetchedMessageId) {
+        // await so the client stays open for the re-resolve search below.
+        return await _healMismatchedImapBody(
+          client: client,
+          emailId: emailId,
+          emailRow: emailRow,
+          cached: cached,
+          expectedMessageId: expectedMessageId,
+          fetchedMessageId: fetchedMessageId,
+        );
+      }
       // Decoding a malformed MIME message can make enough_mail throw — e.g. a
       // `RangeError (end)` on an off-by-a-few-bytes part boundary (#579), the
       // same class of bug already guarded against on the prefetch path (#232).
@@ -649,6 +674,128 @@ class EmailRepositoryImpl implements EmailRepository {
     } finally {
       await client.logout();
     }
+  }
+
+  /// Handles the case where a body fetch returned a message whose Message-ID
+  /// contradicts the local row's (#616): the row's (mailboxPath, uid) no longer
+  /// identifies the intended message. Tries to re-resolve the true UID by
+  /// Message-ID in the same mailbox; on success it re-keys the row and re-fetches
+  /// under the corrected identity. When the message can't be found the stale
+  /// (mailbox, uid) identity is invalid — we never cache the wrong body and
+  /// return whatever we can without corrupting the cache.
+  Future<model.EmailBody> _healMismatchedImapBody({
+    required imap.ImapClient client,
+    required String emailId,
+    required Email emailRow,
+    required EmailBody? cached,
+    required String expectedMessageId,
+    required String fetchedMessageId,
+  }) async {
+    final resolvedUid = await _searchUidByMessageId(
+      client,
+      emailRow.mailboxPath,
+      emailRow.messageId,
+    );
+    if (resolvedUid != null && resolvedUid != emailRow.uid) {
+      final newId =
+          '${emailRow.accountId}:${emailRow.mailboxPath}:$resolvedUid';
+      await _rekeyEmailRow(
+        oldId: emailId,
+        newId: newId,
+        newUid: resolvedUid,
+        newMailboxPath: emailRow.mailboxPath,
+      );
+      log(
+        'getEmailBody: re-keyed mis-bound row $emailId → $newId after '
+        'Message-ID mismatch (expected=$expectedMessageId, '
+        'fetched=$fetchedMessageId)',
+      );
+      // forceRefresh bypasses the (now re-keyed, possibly stale) cache and
+      // re-verifies identity under the corrected UID.
+      return getEmailBody(newId, forceRefresh: true);
+    }
+
+    unawaited(
+      _appLogger?.error(
+        'email.body.identity_mismatch',
+        'Skipped caching a body whose Message-ID did not match this message '
+            '(expected $expectedMessageId, server returned $fetchedMessageId '
+            'for UID ${emailRow.uid} in ${emailRow.mailboxPath}). The message '
+            'is not at that UID; the correct copy will be re-fetched on sync.',
+        accountId: emailRow.accountId,
+        mailboxPath: emailRow.mailboxPath,
+        emailId: emailId,
+      ),
+    );
+    // Only serve the cache when it belongs to this same message; otherwise
+    // return an empty body rather than another message's content.
+    if (cached != null) return _bodyRowToModel(cached);
+    return model.EmailBody(emailId: emailId, attachments: const []);
+  }
+
+  /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all
+  /// references that embed the old id — the cached body, pending changes,
+  /// per-message logs, thread aggregates and undo history — in one transaction.
+  /// Shared by [_remapEmailAfterImapMove] and the body-fetch identity guard.
+  Future<void> _rekeyEmailRow({
+    required String oldId,
+    required String newId,
+    required int newUid,
+    required String newMailboxPath,
+  }) async {
+    if (newId == oldId) return;
+    await _db.transaction(() async {
+      await _db.customStatement('PRAGMA defer_foreign_keys = ON');
+
+      await _db.customStatement(
+        'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
+
+      await (_db.update(_db.emails)..where((t) => t.id.equals(oldId))).write(
+        EmailsCompanion(
+          id: Value(newId),
+          uid: Value(newUid),
+          mailboxPath: Value(newMailboxPath),
+        ),
+      );
+
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.resourceId.equals(oldId)))
+          .write(PendingChangesCompanion(resourceId: Value(newId)));
+
+      // app_logs.emailId references emails.id with onDelete:setNull but no
+      // onUpdate action, so re-point the per-message logs by hand — otherwise
+      // "Show Logs" would come up empty after a re-key. See #562.
+      await _db.customStatement(
+        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
+
+      // threads.latest_email_id is a plain equality match; threads.email_ids_json
+      // is a JSON array of email IDs — both are safe to update via REPLACE()
+      // because email IDs are unique opaque strings.
+      await _db.customStatement(
+        'UPDATE threads SET latest_email_id = ?1 '
+        'WHERE latest_email_id = ?2',
+        [newId, oldId],
+      );
+      await _db.customStatement(
+        'UPDATE threads SET email_ids_json = '
+        'REPLACE(email_ids_json, ?1, ?2) '
+        'WHERE email_ids_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+
+      // UndoAction.toJson() embeds email IDs as quoted JSON strings in both
+      // emailIds and originalEmails[].id, so the same REPLACE() works.
+      await _db.customStatement(
+        'UPDATE undo_actions SET data_json = '
+        'REPLACE(data_json, ?1, ?2) '
+        'WHERE data_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+    });
   }
 
   Future<model.EmailBody> _getEmailBodyJmap(
@@ -4668,59 +4815,12 @@ class EmailRepositoryImpl implements EmailRepository {
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
     if (newId == oldId) return;
 
-    await _db.transaction(() async {
-      await _db.customStatement('PRAGMA defer_foreign_keys = ON');
-
-      await _db.customStatement(
-        'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
-        [newId, oldId],
-      );
-
-      await (_db.update(_db.emails)..where((t) => t.id.equals(oldId))).write(
-        EmailsCompanion(
-          id: Value(newId),
-          uid: Value(newUid),
-          mailboxPath: Value(destMailboxPath),
-        ),
-      );
-
-      await (_db.update(_db.pendingChanges)
-            ..where((t) => t.resourceId.equals(oldId)))
-          .write(PendingChangesCompanion(resourceId: Value(newId)));
-
-      // app_logs.emailId references emails.id with onDelete:setNull but no
-      // onUpdate action, so re-point the per-message logs by hand — otherwise
-      // "Show Logs" would come up empty after an IMAP move re-keys the row
-      // (delete + copy changes the (mailbox, UID) → id). See #562.
-      await _db.customStatement(
-        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
-        [newId, oldId],
-      );
-
-      // threads.latest_email_id is a plain equality match; threads.email_ids_json
-      // is a JSON array of email IDs — both are safe to update via REPLACE()
-      // because email IDs are unique opaque strings.
-      await _db.customStatement(
-        'UPDATE threads SET latest_email_id = ?1 '
-        'WHERE latest_email_id = ?2',
-        [newId, oldId],
-      );
-      await _db.customStatement(
-        'UPDATE threads SET email_ids_json = '
-        'REPLACE(email_ids_json, ?1, ?2) '
-        'WHERE email_ids_json LIKE ?3',
-        ['"$oldId"', '"$newId"', '%"$oldId"%'],
-      );
-
-      // UndoAction.toJson() embeds email IDs as quoted JSON strings in both
-      // emailIds and originalEmails[].id, so the same REPLACE() works.
-      await _db.customStatement(
-        'UPDATE undo_actions SET data_json = '
-        'REPLACE(data_json, ?1, ?2) '
-        'WHERE data_json LIKE ?3',
-        ['"$oldId"', '"$newId"', '%"$oldId"%'],
-      );
-    });
+    await _rekeyEmailRow(
+      oldId: oldId,
+      newId: newId,
+      newUid: newUid,
+      newMailboxPath: destMailboxPath,
+    );
 
     // Rebuild thread aggregates in both mailboxes from the now-updated emails.
     final threadId = row.threadId ?? newId;
