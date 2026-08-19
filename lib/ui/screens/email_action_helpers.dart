@@ -185,31 +185,19 @@ Future<void> batchDelete(
   required List<EmailThread> threads,
 }) async {
   if (threads.isEmpty) return;
-  final repo = ref.read(emailRepositoryProvider);
-
   for (final accountThreads in _groupByAccount(threads).values) {
-    for (final entry in _groupBySource(accountThreads).entries) {
-      final sourcePath = entry.key;
-      final sourceThreads = entry.value;
-      final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
-      final originalEmails = await _fetchOriginals(repo, allEmailIds);
-
-      String? lastDestPath;
-      for (final id in allEmailIds) {
-        lastDestPath = await repo.deleteEmail(id);
-      }
-
-      final action = UndoAction(
-        id: DateTime.now().toIso8601String(),
-        accountId: sourceThreads.first.accountId,
-        type: UndoType.delete,
-        emailIds: allEmailIds,
-        sourceMailboxPath: sourcePath,
-        destinationMailboxPath: lastDestPath,
-        originalEmails: originalEmails,
-      );
-      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    }
+    await _pushGroupedUndo(
+      ref,
+      accountThreads,
+      type: UndoType.delete,
+      apply: (repo, emailIds) async {
+        String? lastDestPath;
+        for (final id in emailIds) {
+          lastDestPath = await repo.deleteEmail(id);
+        }
+        return lastDestPath;
+      },
+    );
   }
 }
 
@@ -272,29 +260,31 @@ Future<void> batchSnooze(
   );
   if (until == null || !context.mounted) return;
 
-  final repo = ref.read(emailRepositoryProvider);
+  await snoozeThreadsUntil(ref, threads: threads, until: until);
+}
 
+/// Snoozes every thread in [threads] until [until], pushing one aggregated
+/// undo action per `(accountId, sourceMailboxPath)` group. Shared by the
+/// [SnoozePicker]-driven [batchSnooze] and the swipe-tree numeric snooze
+/// levels, which compute [until] directly from a day/week count.
+Future<void> snoozeThreadsUntil(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required DateTime until,
+}) async {
+  if (threads.isEmpty) return;
   for (final accountThreads in _groupByAccount(threads).values) {
-    for (final entry in _groupBySource(accountThreads).entries) {
-      final sourcePath = entry.key;
-      final sourceThreads = entry.value;
-      final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
-      final originalEmails = await _fetchOriginals(repo, allEmailIds);
-
-      for (final id in allEmailIds) {
-        await repo.snoozeEmail(id, until);
-      }
-
-      final action = UndoAction(
-        id: DateTime.now().toIso8601String(),
-        accountId: sourceThreads.first.accountId,
-        type: UndoType.snooze,
-        emailIds: allEmailIds,
-        sourceMailboxPath: sourcePath,
-        originalEmails: originalEmails,
-      );
-      unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    }
+    await _pushGroupedUndo(
+      ref,
+      accountThreads,
+      type: UndoType.snooze,
+      apply: (repo, emailIds) async {
+        for (final id in emailIds) {
+          await repo.snoozeEmail(id, until);
+        }
+        return null;
+      },
+    );
   }
 }
 
@@ -398,29 +388,71 @@ Future<void> _moveThreadsTo(
   List<EmailThread> threads,
   String destPath, {
   String? role,
+}) {
+  // Callers hand us a single-account thread list; _pushGroupedUndo aggregates
+  // by source folder so the UndoAction carries every message in that folder.
+  return _pushGroupedUndo(
+    ref,
+    threads,
+    type: UndoType.move,
+    destinationMailboxRole: role,
+    apply: (repo, emailIds) async {
+      for (final id in emailIds) {
+        await repo.moveEmail(id, destPath);
+      }
+      return destPath;
+    },
+  );
+}
+
+/// Moves every thread in [threads] to [destPath] (an account-specific mailbox
+/// path), pushing one aggregated undo action per source folder. Used by the
+/// swipe-tree `Move → folder` leaves, which already scope the folder list to a
+/// single account.
+Future<void> moveThreadsToPath(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required String destPath,
+}) async {
+  if (threads.isEmpty) return;
+  for (final accountThreads in _groupByAccount(threads).values) {
+    await _moveThreadsTo(ref, accountThreads, destPath);
+  }
+}
+
+/// Applies [apply] to every email in each source-folder group of [threads]
+/// (a single-account list) and pushes one aggregated [UndoAction] of [type]
+/// per group.
+///
+/// Grouping by source folder lets undo restore each folder's messages to their
+/// own origin and makes the shell's SnackBar report the true batch count rather
+/// than just the last thread's (#289). [apply] returns the destination mailbox
+/// path recorded on the undo entry — the delete target for a delete, the folder
+/// path for a move, or `null` when the action doesn't relocate mail.
+Future<void> _pushGroupedUndo(
+  WidgetRef ref,
+  List<EmailThread> threads, {
+  required UndoType type,
+  required Future<String?> Function(EmailRepository, List<String>) apply,
+  String? destinationMailboxRole,
 }) async {
   final repo = ref.read(emailRepositoryProvider);
-  // Callers hand us a single-account thread list; aggregate by source folder
-  // so the resulting UndoAction carries every message in that folder, and
-  // the shell's SnackBar reports the true batch count (#289).
   for (final entry in _groupBySource(threads).entries) {
     final sourcePath = entry.key;
     final sourceThreads = entry.value;
     final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
     final originalEmails = await _fetchOriginals(repo, allEmailIds);
 
-    for (final id in allEmailIds) {
-      await repo.moveEmail(id, destPath);
-    }
+    final destPath = await apply(repo, allEmailIds);
 
     final action = UndoAction(
       id: DateTime.now().toIso8601String(),
       accountId: sourceThreads.first.accountId,
-      type: UndoType.move,
+      type: type,
       emailIds: allEmailIds,
       sourceMailboxPath: sourcePath,
       destinationMailboxPath: destPath,
-      destinationMailboxRole: role,
+      destinationMailboxRole: destinationMailboxRole,
       originalEmails: originalEmails,
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));

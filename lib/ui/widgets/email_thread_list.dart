@@ -11,7 +11,8 @@ import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
-import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/swipe_tree/swipe_action_menu.dart';
+import 'package:sharedinbox/ui/widgets/swipe_tree/swipe_tree_node.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 /// Controller for [EmailThreadList].
@@ -71,8 +72,9 @@ class EmailThreadListController extends ChangeNotifier {
 /// A unified list of email threads used by folder, combined-inbox, search and
 /// address-emails views.
 ///
-/// Renders selection-mode checkboxes, optional swipe-to-archive/delete and
-/// optional pagination. Selection state lives in [controller]; the host screen
+/// Renders selection-mode checkboxes, an optional swipe-to-open action tree
+/// and optional pagination. Selection state lives in [controller]; the host
+/// screen
 /// listens to it to swap its AppBar / BottomBar for selection-mode equivalents
 /// (see [buildSelectionAppBar] / [buildSelectionBottomBar]).
 ///
@@ -108,9 +110,10 @@ class EmailThreadList extends ConsumerStatefulWidget {
   /// [stream].
   final List<EmailThread>? items;
 
-  /// When true, threads can be swiped to archive (start→end) or delete
-  /// (end→start). Disabled for search-result lists where a swipe would
-  /// silently drop an item from a filtered view.
+  /// When true, a horizontal swipe on a row opens the radial tree of actions
+  /// (archive, star, delete, spam, move, snooze — see [SwipeActionMenu], #240).
+  /// Disabled for search-result lists where acting on a row would silently drop
+  /// an item from a filtered view.
   final bool enableSwipe;
 
   /// When true, the list shows a "Load more" button once the visible count
@@ -271,37 +274,153 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
 
     if (!widget.enableSwipe) return tile;
 
-    return Dismissible(
-      key: ValueKey('${t.accountId}:${t.threadId}'),
-      direction:
-          isSelecting ? DismissDirection.none : DismissDirection.horizontal,
-      background: _swipeBackground(
-        alignment: Alignment.centerLeft,
-        color: const Color(0xFF2E7D32),
-        icon: Icons.archive,
-        label: 'Archive',
-      ),
-      secondaryBackground: _swipeBackground(
-        alignment: Alignment.centerRight,
-        color: Colors.red.shade700,
-        icon: Icons.delete,
-        label: 'Delete',
-      ),
-      confirmDismiss: (direction) async {
-        // Fire a distinct haptic on delete vs archive at the moment the
-        // dismiss is committed, before the row starts animating away — the
-        // sensation matches the coloured overlay banner the user is about
-        // to see (#233).
-        if (direction == DismissDirection.endToStart) {
-          unawaited(HapticFeedback.heavyImpact());
-        } else {
-          unawaited(HapticFeedback.mediumImpact());
-        }
-        return true;
-      },
-      onDismissed: (direction) =>
-          unawaited(swipeDismissThread(ref, t, direction)),
+    // A horizontal swipe opens a radial tree of actions instead of the old
+    // fixed archive/delete dismiss (#240). The tree is rebuilt on each swipe so
+    // it reflects the current selection: a swipe while multi-selecting drives
+    // the batch handlers on every selected thread, otherwise just this row.
+    return SwipeActionMenu(
+      key: ValueKey('swipe:${t.accountId}:${t.threadId}'),
+      buildRoot: () => _buildActionTree(t),
       child: tile,
+    );
+  }
+
+  /// Threads a swipe on row [t] acts on: the whole selection while
+  /// multi-selecting, otherwise just [t].
+  List<EmailThread> _targetThreads(EmailThread t) =>
+      widget.controller.isSelecting ? widget.controller.selectedThreads : [t];
+
+  /// Runs a batch [body] and clears the selection afterwards when the swipe
+  /// acted on a multi-selection, mirroring [buildSelectionBottomBar].
+  void _invoke(Future<void> Function() body) {
+    final wasSelecting = widget.controller.isSelecting;
+    unawaited(() async {
+      await body();
+      if (wasSelecting) widget.controller.clear();
+    }());
+  }
+
+  /// Builds the hard-coded action tree (#240). Every leaf routes to the shared
+  /// batch helpers in `email_action_helpers.dart`, so undo behaves exactly as
+  /// the selection bottom bar does. Only the `Move` folder list is dynamic.
+  BranchNode _buildActionTree(EmailThread t) {
+    final targets = _targetThreads(t);
+    final allStarred = targets.isNotEmpty && targets.every((t) => t.isFlagged);
+
+    return BranchNode(
+      icon: Icons.more_horiz,
+      label: 'Actions',
+      color: Colors.blueGrey,
+      children: [
+        ActionNode(
+          icon: Icons.archive,
+          label: 'Archive',
+          color: const Color(0xFF2E7D32),
+          onInvoke: () => _invoke(
+            () => batchArchive(context, ref, threads: targets),
+          ),
+        ),
+        ActionNode(
+          icon: allStarred ? Icons.star : Icons.star_border,
+          label: allStarred ? 'Unstar' : 'Star',
+          color: Colors.amber.shade700,
+          onInvoke: () => _invoke(
+            () => batchStar(ref, threads: targets, flagged: !allStarred),
+          ),
+        ),
+        ActionNode(
+          icon: Icons.delete,
+          label: 'Delete',
+          color: Colors.red.shade700,
+          onInvoke: () => _invoke(() => batchDelete(ref, threads: targets)),
+        ),
+        ActionNode(
+          icon: Icons.report,
+          label: 'Spam',
+          color: const Color(0xFFE65100),
+          onInvoke: () => _invoke(
+            () => batchMarkSpam(context, ref, threads: targets),
+          ),
+        ),
+        BranchNode(
+          icon: Icons.drive_file_move,
+          label: 'Move',
+          color: Colors.blue.shade700,
+          loadChildren: () => _moveFolderNodes(targets),
+        ),
+        BranchNode(
+          icon: Icons.access_time,
+          label: 'Snooze',
+          color: Colors.deepPurple,
+          children: [
+            ScrubberNode(
+              icon: Icons.today,
+              label: 'Days',
+              color: Colors.deepPurple,
+              format: (v) => v == 0 ? 'Cancel' : '$v day${v == 1 ? '' : 's'}',
+              onPick: (v) => _snoozeIn(targets, Duration(days: v)),
+            ),
+            ScrubberNode(
+              icon: Icons.date_range,
+              label: 'Weeks',
+              color: Colors.deepPurple,
+              format: (v) => v == 0 ? 'Cancel' : '$v week${v == 1 ? '' : 's'}',
+              onPick: (v) => _snoozeIn(targets, Duration(days: v * 7)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Resolves the `Move` branch children: one folder leaf per destination for a
+  /// single-account selection, or a single "Choose…" leaf that opens the
+  /// existing per-account modal picker when the selection spans accounts.
+  Future<List<SwipeTreeNode>> _moveFolderNodes(
+    List<EmailThread> targets,
+  ) async {
+    final accounts = targets.map((t) => t.accountId).toSet();
+    final blue = Colors.blue.shade700;
+    if (accounts.length != 1) {
+      return [
+        ActionNode(
+          icon: Icons.drive_file_move,
+          label: 'Choose…',
+          color: blue,
+          onInvoke: () =>
+              _invoke(() => batchMove(context, ref, threads: targets)),
+        ),
+      ];
+    }
+    final accountId = accounts.first;
+    final currentPath = targets.first.mailboxPath;
+    final mailboxes = await ref
+        .read(mailboxRepositoryProvider)
+        .observeMailboxes(accountId)
+        .first;
+    return [
+      for (final m in mailboxes.where((m) => m.path != currentPath))
+        ActionNode(
+          icon: Icons.folder_outlined,
+          label: m.name,
+          color: blue,
+          onInvoke: () => _invoke(
+            () => moveThreadsToPath(ref, threads: targets, destPath: m.path),
+          ),
+        ),
+    ];
+  }
+
+  /// Snoozes [targets] by [d]. A zero duration (the scrubber at its minimum)
+  /// is treated as a cancel.
+  void _snoozeIn(List<EmailThread> targets, Duration d) {
+    if (d.inSeconds <= 0) return;
+    _invoke(
+      () => snoozeThreadsUntil(
+        ref,
+        threads: targets,
+        until: DateTime.now().add(d),
+      ),
     );
   }
 
@@ -320,34 +439,6 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
         '/${Uri.encodeComponent(t.mailboxPath)}'
         '/emails/${Uri.encodeComponent(t.latestEmailId)}',
         extra: EmailDetailNav.fromThreads(widget.controller.visibleThreads),
-      ),
-    );
-  }
-
-  static Widget _swipeBackground({
-    required AlignmentGeometry alignment,
-    required Color color,
-    required IconData icon,
-    required String label,
-  }) {
-    return Container(
-      color: color,
-      alignment: alignment,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white, size: 28),
-          const SizedBox(width: AppSpacing.sm),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
