@@ -467,11 +467,18 @@ class EmailRepositoryImpl implements EmailRepository {
 
   static const _bodyCacheTtl = Duration(days: 7);
 
+  /// [prefetch] marks a background prefetch (the opportunistic next-message
+  /// load on open, or the [BodyCacheService] cache warmer) so its App Log
+  /// entry is distinguishable from the foreground open the user triggered
+  /// (#642). It is deliberately absent from the [EmailRepository] interface —
+  /// only the concrete implementation needs it.
   @override
   Future<model.EmailBody> getEmailBody(
     String emailId, {
     bool forceRefresh = false,
+    bool prefetch = false,
   }) async {
+    final startedAt = DateTime.now();
     final cached = await (_db.select(
       _db.emailBodies,
     )..where((t) => t.emailId.equals(emailId)))
@@ -488,6 +495,13 @@ class EmailRepositoryImpl implements EmailRepository {
       final isMissingExtras =
           cached.mimeTreeJson == null || cached.headersJson == null;
       if (age <= _bodyCacheTtl && !isMissingExtras) {
+        _logBodyLoaded(
+          emailId: emailId,
+          source: 'cache',
+          network: false,
+          prefetch: prefetch,
+          cacheAgeSeconds: age.inSeconds,
+        );
         return _bodyRowToModel(cached);
       }
     }
@@ -499,6 +513,14 @@ class EmailRepositoryImpl implements EmailRepository {
     // Local self-sent "virtual" messages have no server copy to fetch — always
     // serve the cached body we wrote when the message was composed (#545).
     if (emailRow.isLocal) {
+      _logBodyLoaded(
+        emailId: emailId,
+        accountId: emailRow.accountId,
+        mailboxPath: emailRow.mailboxPath,
+        source: 'local',
+        network: false,
+        prefetch: prefetch,
+      );
       return cached != null
           ? _bodyRowToModel(cached)
           : const model.EmailBody(emailId: '', attachments: []);
@@ -507,7 +529,13 @@ class EmailRepositoryImpl implements EmailRepository {
     final password = await _accounts.getPassword(account.id);
 
     if (account.type == account_model.AccountType.jmap) {
-      return _getEmailBodyJmap(emailId, account, password);
+      return _getEmailBodyJmap(
+        emailId,
+        account,
+        password,
+        prefetch: prefetch,
+        startedAt: startedAt,
+      );
     }
 
     final client = await _imapConnect(
@@ -663,6 +691,17 @@ class EmailRepositoryImpl implements EmailRepository {
         }
       }
 
+      _logBodyLoaded(
+        emailId: emailId,
+        accountId: emailRow.accountId,
+        mailboxPath: emailRow.mailboxPath,
+        source: 'imap',
+        network: true,
+        prefetch: prefetch,
+        bytes: _bodySize(textBody, htmlBody),
+        durationMs: DateTime.now().difference(startedAt).inMilliseconds,
+      );
+
       return model.EmailBody(
         emailId: emailId,
         textBody: textBody,
@@ -802,8 +841,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<model.EmailBody> _getEmailBodyJmap(
     String emailId,
     account_model.Account account,
-    String password,
-  ) async {
+    String password, {
+    bool prefetch = false,
+    DateTime? startedAt,
+  }) async {
     final jmapUrl = account.jmapUrl!;
     final jmap = await JmapClient.connect(
       httpClient: _httpClient,
@@ -911,6 +952,18 @@ class EmailRepositoryImpl implements EmailRepository {
             bodySize: Value(_bodySize(textBody, htmlBody)),
           ),
         );
+
+    _logBodyLoaded(
+      emailId: emailId,
+      accountId: account.id,
+      source: 'jmap',
+      network: true,
+      prefetch: prefetch,
+      bytes: _bodySize(textBody, htmlBody),
+      durationMs: startedAt == null
+          ? null
+          : DateTime.now().difference(startedAt).inMilliseconds,
+    );
 
     return model.EmailBody(
       emailId: emailId,
@@ -6477,6 +6530,47 @@ class EmailRepositoryImpl implements EmailRepository {
   /// htmlBody length. Reported by the Sync state screen; not the wire size.
   int _bodySize(String? textBody, String? htmlBody) =>
       (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
+
+  /// Records how a message body was loaded so the per-message "Show Logs" view
+  /// answers "did opening this mail need the Internet?" (#642). [source] is one
+  /// of `cache`, `local`, `imap` or `jmap`; [network] says whether the load hit
+  /// the server. Best-effort and fire-and-forget — logging must never affect or
+  /// slow down the body load.
+  void _logBodyLoaded({
+    required String emailId,
+    required String source,
+    required bool network,
+    required bool prefetch,
+    String? accountId,
+    String? mailboxPath,
+    int? cacheAgeSeconds,
+    int? bytes,
+    int? durationMs,
+  }) {
+    final where = network
+        ? 'over the Internet (${source.toUpperCase()})'
+        : source == 'local'
+            ? 'from this device (locally-composed message) — no Internet needed'
+            : 'from the local cache — no Internet needed';
+    final how = prefetch ? 'Prefetched' : 'Loaded';
+    unawaited(
+      _appLogger?.info(
+        'email.body.loaded',
+        '$how message body $where',
+        data: {
+          'source': source,
+          'internet': network,
+          'trigger': prefetch ? 'prefetch' : 'open',
+          if (cacheAgeSeconds != null) 'cacheAgeSeconds': cacheAgeSeconds,
+          if (bytes != null) 'bytes': bytes,
+          if (durationMs != null) 'durationMs': durationMs,
+        },
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+      ),
+    );
+  }
 
   List<model.EmailAttachment> _parseAttachments(String json) {
     final list = jsonDecode(json) as List<dynamic>;
