@@ -507,7 +507,14 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
       if (currentIndex < 0 || currentIndex + 1 >= threads.length) return;
 
       final nextId = threads[currentIndex + 1].latestEmailId;
-      await repo.getEmailBody(nextId);
+      // Tag the background prefetch so its App Log entry is distinguishable
+      // from the foreground open that later reads the same body from cache
+      // (#642). Only the concrete repository carries the [prefetch] flag.
+      if (repo is EmailRepositoryImpl) {
+        await repo.getEmailBody(nextId, prefetch: true);
+      } else {
+        await repo.getEmailBody(nextId);
+      }
     } catch (e, st) {
       log('prefetch next email body failed', error: e, stackTrace: st);
     }
