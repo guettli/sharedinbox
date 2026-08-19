@@ -34,6 +34,23 @@ void main() {
         threadId: threadId,
       );
 
+  // A two-message thread: Bob's message (incoming, "To me") and Alice's reply
+  // from the account's own address (outgoing, "From me").
+  final incoming = threadEmail(
+    id: 'acc-1:1',
+    subject: 'Question',
+    fromEmail: 'bob@example.com',
+    sentAt: DateTime(2024, 6, 1, 9),
+    threadId: 'thread-x',
+  );
+  final reply = threadEmail(
+    id: 'acc-1:2',
+    subject: 'Re: Question',
+    fromEmail: 'alice@example.com',
+    sentAt: DateTime(2024, 6, 2, 10),
+    threadId: 'thread-x',
+  );
+
   const body = EmailBody(emailId: '', attachments: []);
 
   // Matches only [Text] widgets (not the inner RichText) so counts are exact.
@@ -82,20 +99,6 @@ void main() {
 
     testWidgets('lists one line per message with direction and date',
         (tester) async {
-      final incoming = threadEmail(
-        id: 'acc-1:1',
-        subject: 'Question',
-        fromEmail: 'bob@example.com',
-        sentAt: DateTime(2024, 6, 1, 9),
-        threadId: 'thread-x',
-      );
-      final reply = threadEmail(
-        id: 'acc-1:2',
-        subject: 'Re: Question',
-        fromEmail: 'alice@example.com',
-        sentAt: DateTime(2024, 6, 2, 10),
-        threadId: 'thread-x',
-      );
       await pumpWith(tester, emails: [incoming, reply], openId: incoming.id);
 
       // Bob -> Alice is incoming, Alice (own address) -> Bob is outgoing.
@@ -109,20 +112,6 @@ void main() {
     });
 
     testWidgets('highlights the current mail in the list', (tester) async {
-      final incoming = threadEmail(
-        id: 'acc-1:1',
-        subject: 'Question',
-        fromEmail: 'bob@example.com',
-        sentAt: DateTime(2024, 6, 1, 9),
-        threadId: 'thread-x',
-      );
-      final reply = threadEmail(
-        id: 'acc-1:2',
-        subject: 'Re: Question',
-        fromEmail: 'alice@example.com',
-        sentAt: DateTime(2024, 6, 2, 10),
-        threadId: 'thread-x',
-      );
       await pumpWith(tester, emails: [incoming, reply], openId: incoming.id);
 
       final currentLine = tester.widget<Text>(textLine('To me'));
@@ -132,20 +121,6 @@ void main() {
     });
 
     testWidgets('tapping another line opens that message', (tester) async {
-      final incoming = threadEmail(
-        id: 'acc-1:1',
-        subject: 'Question',
-        fromEmail: 'bob@example.com',
-        sentAt: DateTime(2024, 6, 1, 9),
-        threadId: 'thread-x',
-      );
-      final reply = threadEmail(
-        id: 'acc-1:2',
-        subject: 'Re: Question',
-        fromEmail: 'alice@example.com',
-        sentAt: DateTime(2024, 6, 2, 10),
-        threadId: 'thread-x',
-      );
       await pumpWith(tester, emails: [incoming, reply], openId: incoming.id);
 
       // Opening the incoming mail shows its subject in the header.
