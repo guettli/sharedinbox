@@ -464,7 +464,7 @@ allow-plain-text = true
 # Disable rate limiting for local development/testing.
 #
 # `authentication.rate-limit` was the pre-v0.11 knob (login attempts) and is a
-# no-op in v0.14, kept for docs continuity.
+# no-op in current Stalwart, kept for docs continuity.
 #
 # `http.rate-limit.account` is what actually fires on our tests: the default
 # `1000/1m` per authenticated account is exceeded once the multi-message /

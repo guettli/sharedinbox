@@ -90,5 +90,5 @@ exec "${RUNTIME}" run --rm -i \
     -p "${STALWART_SIEVE_PORT}:4190" \
     -v "${REPO_ROOT}/stalwart-dev/config.toml:/etc/stalwart/config.toml:ro" \
     -v "${TMPDIR}:/tmp/stalwart:rw" \
-    docker.io/stalwartlabs/stalwart:v0.14.1 \
+    docker.io/stalwartlabs/stalwart:v0.16.18 \
     --config /etc/stalwart/config.toml

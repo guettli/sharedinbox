@@ -470,7 +470,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 		Directory("/tmp/stalwart")
 
 	return dag.Container().
-		From("stalwartlabs/stalwart:v0.14.1").
+		From("stalwartlabs/stalwart:v0.16.18").
 		WithFile("/etc/stalwart/config.toml.orig", config).
 		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
 		WithDirectory("/tmp/stalwart", dataDir).
