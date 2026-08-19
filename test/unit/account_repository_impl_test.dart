@@ -118,5 +118,26 @@ void main() {
       final accounts = await repo.observeAccounts().first;
       expect(accounts, isEmpty);
     });
+
+    test('signature defaults to empty and round-trips', () async {
+      final repo = _makeRepo();
+      await repo.addAccount(_account, 'secret');
+      expect((await repo.getAccount('acc-1'))!.signature, '');
+
+      await repo.addAccount(
+        _account.copyWith(signature: 'Cheers,\nAlice'),
+        'secret',
+      );
+      expect((await repo.getAccount('acc-1'))!.signature, 'Cheers,\nAlice');
+    });
+
+    test('updateAccount persists the signature', () async {
+      final repo = _makeRepo();
+      await repo.addAccount(_account, 'secret');
+      await repo.updateAccount(
+        _account.copyWith(signature: 'Regards,\nAlice'),
+      );
+      expect((await repo.getAccount('acc-1'))!.signature, 'Regards,\nAlice');
+    });
   });
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
+
 import 'helpers.dart';
 
 void main() {
@@ -31,6 +33,33 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.widgetWithText(TextFormField, 'Alice'), findsOneWidget);
+    });
+
+    testWidgets('pre-fills the signature field', (tester) async {
+      const signed = Account(
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+        signature: 'Cheers,\nAlice',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [signed]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('editSignatureField')),
+        findsOneWidget,
+      );
+      final field = tester.widget<TextFormField>(
+        find.byKey(const Key('editSignatureField')),
+      );
+      expect(field.controller!.text, 'Cheers,\nAlice');
     });
 
     testWidgets('shows Save button', (tester) async {

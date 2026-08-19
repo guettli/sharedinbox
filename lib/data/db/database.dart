@@ -47,6 +47,8 @@ class Accounts extends Table {
   // true  = probe succeeded; show ManageSieve UI
   // false = probe failed; hide ManageSieve UI (server doesn't support it)
   BoolColumn get manageSieveAvailable => boolean().nullable()();
+  // Added in schema v54: per-account plain-text signature.
+  TextColumn get signature => text().withDefault(const Constant(''))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -1178,6 +1180,10 @@ class AppDatabase extends _$AppDatabase {
                     '(account_id, server_email_id) WHERE server_email_id IS NOT NULL;',
               ),
             );
+          }
+          if (from < 54) {
+            // Per-account plain-text signature (#646).
+            await m.addColumn(accounts, accounts.signature);
           }
         },
       );

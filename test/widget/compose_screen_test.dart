@@ -163,6 +163,87 @@ void main() {
       },
     );
 
+    testWidgets('appends the account signature on a new message', (
+      tester,
+    ) async {
+      const signed = Account(
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+        signature: 'Cheers,\nAlice',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(),
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([signed]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final body = tester.widget<TextField>(
+        find
+            .descendant(
+              of: find.byType(TextFormField),
+              matching: find.byType(TextField),
+            )
+            .last,
+      );
+      expect(body.controller!.text, '\n\nCheers,\nAlice');
+    });
+
+    testWidgets('inserts the signature above the quoted text on a reply', (
+      tester,
+    ) async {
+      const signed = Account(
+        id: 'acc-1',
+        displayName: 'Alice',
+        email: 'alice@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+        signature: 'Cheers,\nAlice',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(
+            replyToEmailId: 'e1',
+            prefillBody: '> quoted original',
+          ),
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([signed]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final body = tester.widget<TextField>(
+        find
+            .descendant(
+              of: find.byType(TextFormField),
+              matching: find.byType(TextField),
+            )
+            .last,
+      );
+      expect(body.controller!.text, 'Cheers,\nAlice\n\n> quoted original');
+    });
+
     testWidgets('restores saved draft when no prefill is provided', (
       tester,
     ) async {
