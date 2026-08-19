@@ -568,8 +568,7 @@ void main() {
 
         await tester.pumpWidget(
           buildApp(
-            initialLocation:
-                '/accounts/acc-1/mailboxes/Junk/emails/acc-1%3A99',
+            initialLocation: '/accounts/acc-1/mailboxes/Junk/emails/acc-1%3A99',
             overrides: [
               accountRepositoryProvider.overrideWithValue(
                 FakeAccountRepository([kTestAccount]),
