@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -23,6 +28,13 @@ type BugReport struct {
 	SyncLog     string    `json:"sync_log,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
 }
+
+// maxBodySize caps request bodies at 20 MB.
+const maxBodySize = 20 * 1024 * 1024
+
+// uuidRe matches the UUID v4 strings we generate; used to reject path
+// traversal in the encrypted-mail download route.
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 var (
 	rateLimitMu  sync.Mutex
@@ -58,6 +70,68 @@ func checkRateLimit() (bool, time.Duration) {
 	return true, 0
 }
 
+// setCORS allows the web app to talk to the API from any origin.
+func setCORS(w http.ResponseWriter, methods string) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", methods)
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+// writeJSONError writes {"error": msg} with the given status code.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// enforceRateLimit returns false (and writes a 429) when the global limit is
+// exceeded; callers should stop processing in that case.
+func enforceRateLimit(w http.ResponseWriter) bool {
+	allowed, waitTime := checkRateLimit()
+	if allowed {
+		return true
+	}
+	retryAfter := int(waitTime.Seconds())
+	if retryAfter < 1 {
+		retryAfter = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	writeJSONError(w, http.StatusTooManyRequests, "Too many requests. Please try again later.")
+	return false
+}
+
+// preflightPost handles the shared prologue for the multipart POST endpoints:
+// CORS, the OPTIONS pre-flight, the method guard, rate limiting and body
+// parsing. It returns false when it has already written the response and the
+// caller should stop.
+func preflightPost(w http.ResponseWriter, r *http.Request) bool {
+	setCORS(w, "POST, OPTIONS")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if !enforceRateLimit(w) {
+		return false
+	}
+	return parseMultipart(w, r)
+}
+
+// parseMultipart enforces the body-size cap and parses the multipart form,
+// writing a 413 on failure. Returns false when parsing failed.
+func parseMultipart(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	if err := r.ParseMultipartForm(maxBodySize); err != nil {
+		log.Printf("Failed to parse multipart form: %v", err)
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "Request body too large or invalid multipart form.")
+		return false
+	}
+	return true
+}
+
 func generateUUID() (string, error) {
 	b := make([]byte, 16)
 	_, err := rand.Read(b)
@@ -70,48 +144,27 @@ func generateUUID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
+// saveFormFile copies a single uploaded file into destPath.
+func saveFormFile(fileHeader *multipart.FileHeader, destPath string) error {
+	src, err := fileHeader.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
+
 func bugReportHandler(storageDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Enable CORS so the web app (if applicable) can upload
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Rate limiting check
-		allowed, waitTime := checkRateLimit()
-		if !allowed {
-			retryAfter := int(waitTime.Seconds())
-			if retryAfter < 1 {
-				retryAfter = 1
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests. Please try again later."})
-			return
-		}
-
-		// Limit body size to 20 MB (20 * 1024 * 1024 bytes)
-		const maxBodySize = 20 * 1024 * 1024
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
-
-		// Parse the multipart form
-		err := r.ParseMultipartForm(maxBodySize)
-		if err != nil {
-			log.Printf("Failed to parse multipart form: %v", err)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Request body too large or invalid multipart form."})
+		if !preflightPost(w, r) {
 			return
 		}
 		defer func() {
@@ -122,9 +175,7 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		aboutInfo := r.FormValue("about_info")
 
 		if description == "" || aboutInfo == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "description and about_info are required fields."})
+			writeJSONError(w, http.StatusBadRequest, "description and about_info are required fields.")
 			return
 		}
 
@@ -160,19 +211,7 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 			Timestamp:   now,
 		}
 
-		reportJSONPath := filepath.Join(reportDir, "report.json")
-		reportJSONFile, err := os.OpenFile(reportJSONPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-		if err != nil {
-			log.Printf("Failed to create report.json: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		defer reportJSONFile.Close()
-
-		enc := json.NewEncoder(reportJSONFile)
-		enc.SetIndent("", "  ")
-		err = enc.Encode(report)
-		if err != nil {
+		if err := writeReportJSON(reportDir, report); err != nil {
 			log.Printf("Failed to write report.json: %v", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
@@ -193,30 +232,11 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		form := r.MultipartForm
 		files := form.File["attachments[]"]
 		for i, fileHeader := range files {
-			file, err := fileHeader.Open()
-			if err != nil {
-				log.Printf("Failed to open attachment %d: %v", i, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-			defer file.Close()
-
 			// Sanitize filename to avoid directory traversal
 			baseName := filepath.Base(fileHeader.Filename)
 			attachmentName := fmt.Sprintf("attachment_%d_%s", i, baseName)
-			attachmentPath := filepath.Join(reportDir, attachmentName)
-
-			destFile, err := os.OpenFile(attachmentPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-			if err != nil {
-				log.Printf("Failed to create attachment file %s: %v", attachmentName, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-			defer destFile.Close()
-
-			_, err = io.Copy(destFile, file)
-			if err != nil {
-				log.Printf("Failed to copy attachment content to %s: %v", attachmentName, err)
+			if err := saveFormFile(fileHeader, filepath.Join(reportDir, attachmentName)); err != nil {
+				log.Printf("Failed to save attachment %s: %v", attachmentName, err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
@@ -225,6 +245,223 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": uuidVal})
+	}
+}
+
+// writeReportJSON writes an indented report.json into reportDir.
+func writeReportJSON(reportDir string, report BugReport) error {
+	f, err := os.OpenFile(filepath.Join(reportDir, "report.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(report)
+}
+
+// reportKeyHandler serves the maintainer's public key. pubKeyB64 is
+// base64(keyId[16] || publicKey[32]) — the same payload the app embeds in its
+// public-key QR codes.
+func reportKeyHandler(pubKeyB64 string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		setCORS(w, "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if pubKeyB64 == "" {
+			writeJSONError(w, http.StatusServiceUnavailable, "Encrypted reports are not configured on this server.")
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(pubKeyB64)
+		if err != nil || len(raw) != 48 {
+			log.Printf("Invalid REPORT_PUBLIC_KEY: err=%v len=%d", err, len(raw))
+			writeJSONError(w, http.StatusInternalServerError, "Server public key is misconfigured.")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"keyId":     base64.StdEncoding.EncodeToString(raw[:16]),
+			"publicKey": base64.StdEncoding.EncodeToString(raw[16:]),
+			"alg":       "x25519-ecies-aesgcm",
+		})
+	}
+}
+
+// issueCreator abstracts GitHub issue creation so the handler is testable.
+type issueCreator interface {
+	CreateIssue(ctx context.Context, title, body string) (htmlURL string, number int, err error)
+}
+
+// githubIssueCreator creates issues via the GitHub REST API.
+type githubIssueCreator struct {
+	token   string // GitHub token with `issues:write` on the target repo
+	repo    string // "owner/name"
+	apiBase string // e.g. https://api.github.com
+	client  *http.Client
+}
+
+func (g *githubIssueCreator) CreateIssue(ctx context.Context, title, body string) (string, int, error) {
+	payload, _ := json.Marshal(map[string]any{
+		"title":  title,
+		"body":   body,
+		"labels": []string{"encrypted-report"},
+	})
+	url := fmt.Sprintf("%s/repos/%s/issues", g.apiBase, g.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusCreated {
+		return "", 0, fmt.Errorf("github returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var parsed struct {
+		HTMLURL string `json:"html_url"`
+		Number  int    `json:"number"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", 0, err
+	}
+	return parsed.HTMLURL, parsed.Number, nil
+}
+
+// encryptedReportHandler stores the encrypted mail and opens a public GitHub
+// issue that links to it. The mail is encrypted on the device, so only the
+// maintainer (holding the private key) can read it.
+func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreator) http.HandlerFunc {
+	encDir := filepath.Join(storageDir, "encrypted")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !preflightPost(w, r) {
+			return
+		}
+		defer func() {
+			_ = r.MultipartForm.RemoveAll()
+		}()
+		if issuer == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "Encrypted reports are not configured on this server.")
+			return
+		}
+
+		description := r.FormValue("description")
+		if description == "" {
+			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
+			return
+		}
+		mailFiles := r.MultipartForm.File["encrypted_mail"]
+		if len(mailFiles) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "encrypted_mail is a required file.")
+			return
+		}
+
+		uuidVal, err := generateUUID()
+		if err != nil {
+			log.Printf("Failed to generate UUID: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		reportDir := filepath.Join(encDir, uuidVal)
+		if err := os.MkdirAll(reportDir, 0750); err != nil {
+			log.Printf("Failed to create report directory: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := saveFormFile(mailFiles[0], filepath.Join(reportDir, "mail.enc")); err != nil {
+			log.Printf("Failed to save encrypted mail: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		report := BugReport{
+			Description: description,
+			AboutInfo:   r.FormValue("about_info"),
+			SyncLog:     r.FormValue("sync_log"),
+			Timestamp:   time.Now(),
+		}
+		if err := writeReportJSON(reportDir, report); err != nil {
+			log.Printf("Failed to write report.json: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		downloadURL := fmt.Sprintf("%s/api/v1/encrypted-reports/%s/mail.enc", publicBaseURL, uuidVal)
+		title, body := buildIssue(report, downloadURL)
+		issueURL, number, err := issuer.CreateIssue(r.Context(), title, body)
+		if err != nil {
+			log.Printf("Failed to create GitHub issue: %v", err)
+			writeJSONError(w, http.StatusBadGateway, "Failed to create the GitHub issue.")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          uuidVal,
+			"issueUrl":    issueURL,
+			"issueNumber": number,
+		})
+	}
+}
+
+// buildIssue renders the public (cleartext) issue title and body. The mail
+// itself is never inlined — only a link to its encrypted download.
+func buildIssue(report BugReport, downloadURL string) (title, body string) {
+	title = "Bug report with encrypted mail"
+	var b bytes.Buffer
+	b.WriteString(report.Description)
+	b.WriteString("\n\n---\n\n")
+	b.WriteString("📎 **Encrypted mail:** ")
+	b.WriteString(downloadURL)
+	b.WriteString("\n\n_The attached mail is end-to-end encrypted; only the maintainer can decrypt it._\n")
+	if report.AboutInfo != "" {
+		b.WriteString("\n<details><summary>System info</summary>\n\n")
+		b.WriteString(report.AboutInfo)
+		b.WriteString("\n</details>\n")
+	}
+	return title, b.String()
+}
+
+// encryptedMailHandler serves a stored encrypted-mail blob by report id.
+func encryptedMailHandler(storageDir string) http.HandlerFunc {
+	encDir := filepath.Join(storageDir, "encrypted")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := r.PathValue("id")
+		if !uuidRe.MatchString(id) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		path := filepath.Join(encDir, id, "mail.enc")
+		f, err := os.Open(path)
+		if err != nil {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="mail.enc"`)
+		_, _ = io.Copy(w, f)
 	}
 }
 
@@ -245,8 +482,34 @@ func main() {
 		log.Fatalf("Failed to create storage directory %s: %v", storageDir, err)
 	}
 
+	publicBaseURL := os.Getenv("PUBLIC_BASE_URL")
+	if publicBaseURL == "" {
+		publicBaseURL = "https://sharedinbox.de"
+	}
+
+	// GitHub issue creation is optional: without a token/repo the encrypted
+	// report endpoint reports itself as unavailable instead of failing hard.
+	var issuer issueCreator
+	ghToken := os.Getenv("GITHUB_TOKEN")
+	ghRepo := os.Getenv("GITHUB_REPO")
+	if ghToken != "" && ghRepo != "" {
+		apiBase := os.Getenv("GITHUB_API_URL")
+		if apiBase == "" {
+			apiBase = "https://api.github.com"
+		}
+		issuer = &githubIssueCreator{
+			token:   ghToken,
+			repo:    ghRepo,
+			apiBase: apiBase,
+			client:  &http.Client{Timeout: 15 * time.Second},
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/bug-reports", bugReportHandler(storageDir))
+	mux.HandleFunc("/api/v1/report-key", reportKeyHandler(os.Getenv("REPORT_PUBLIC_KEY")))
+	mux.HandleFunc("/api/v1/encrypted-reports", encryptedReportHandler(storageDir, publicBaseURL, issuer))
+	mux.HandleFunc("GET /api/v1/encrypted-reports/{id}/mail.enc", encryptedMailHandler(storageDir))
 
 	addr := net.JoinHostPort("0.0.0.0", port)
 	log.Printf("Bug report server starting on %s...", addr)
@@ -264,5 +527,3 @@ func main() {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
-
-// Automerge test

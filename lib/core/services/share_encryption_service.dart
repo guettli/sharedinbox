@@ -107,6 +107,68 @@ class ShareEncryptionService {
 
   // ── Encryption ───────────────────────────────────────────────────────────────
 
+  /// Encrypts arbitrary [plaintext] to the recipient's X25519 public key using
+  /// ECIES (X25519-ECDH + HKDF-SHA256 + AES-256-GCM).
+  ///
+  /// [info] is the HKDF domain-separation label; the same value must be used
+  /// when decrypting.  Returns the raw wire-format bytes:
+  ///   keyId[16] || ephPubKey[32] || nonce[12] || ciphertext || mac[16]
+  static Future<Uint8List> encryptBytes({
+    required Uint8List recipientKeyId,
+    required Uint8List recipientPublicKeyBytes,
+    required List<int> plaintext,
+    required String info,
+  }) async {
+    // Ephemeral sender key pair for forward-secrecy.
+    final ephKeyPair = await _x25519.newKeyPair();
+    final ephPub = await ephKeyPair.extractPublicKey();
+
+    // ECDH: shared secret = X25519(ephPriv, recipientPub).
+    final sharedSecret = await _x25519.sharedSecretKey(
+      keyPair: ephKeyPair,
+      remotePublicKey: SimplePublicKey(
+        recipientPublicKeyBytes,
+        type: KeyPairType.x25519,
+      ),
+    );
+
+    // Derive AES key via HKDF-SHA256.
+    final aesKey = await _hkdf.deriveKey(
+      secretKey: sharedSecret,
+      nonce: recipientKeyId,
+      info: utf8.encode(info),
+    );
+
+    // Encrypt with AES-256-GCM.
+    final nonce = Uint8List(_nonceLen);
+    for (var i = 0; i < _nonceLen; i++) {
+      nonce[i] = _rng.nextInt(256);
+    }
+
+    final box = await _aesGcm.encrypt(
+      plaintext,
+      secretKey: aesKey,
+      nonce: nonce,
+    );
+
+    // Pack wire format.
+    final ephPubBytes = Uint8List.fromList(ephPub.bytes);
+    final cipherBytes = Uint8List.fromList(box.cipherText);
+    final macBytes = Uint8List.fromList(box.mac.bytes);
+
+    return Uint8List(
+      _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length + _macLen,
+    )
+      ..setAll(0, recipientKeyId)
+      ..setAll(_keyIdLen, ephPubBytes)
+      ..setAll(_keyIdLen + _pubKeyLen, nonce)
+      ..setAll(_keyIdLen + _pubKeyLen + _nonceLen, cipherBytes)
+      ..setAll(
+        _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length,
+        macBytes,
+      );
+  }
+
   /// Encrypts [accounts] for the given recipient key pair using ECIES.
   ///
   /// Returns the QR-code string to show on the sender device.
@@ -129,86 +191,34 @@ class ShareEncryptionService {
       }),
     );
 
-    // Ephemeral sender key pair for forward-secrecy.
-    final ephKeyPair = await _x25519.newKeyPair();
-    final ephPub = await ephKeyPair.extractPublicKey();
-
-    // ECDH: shared secret = X25519(ephPriv, recipientPub).
-    final sharedSecret = await _x25519.sharedSecretKey(
-      keyPair: ephKeyPair,
-      remotePublicKey: SimplePublicKey(
-        recipientPublicKeyBytes,
-        type: KeyPairType.x25519,
-      ),
+    final out = await encryptBytes(
+      recipientKeyId: recipientKeyId,
+      recipientPublicKeyBytes: recipientPublicKeyBytes,
+      plaintext: plaintext,
+      info: 'sharedinbox-account-transfer',
     );
-
-    // Derive AES key via HKDF-SHA256.
-    final aesKey = await _hkdf.deriveKey(
-      secretKey: sharedSecret,
-      nonce: recipientKeyId,
-      info: utf8.encode('sharedinbox-account-transfer'),
-    );
-
-    // Encrypt with AES-256-GCM.
-    final nonce = Uint8List(_nonceLen);
-    for (var i = 0; i < _nonceLen; i++) {
-      nonce[i] = _rng.nextInt(256);
-    }
-
-    final box = await _aesGcm.encrypt(
-      plaintext,
-      secretKey: aesKey,
-      nonce: nonce,
-    );
-
-    // Pack wire format.
-    final ephPubBytes = Uint8List.fromList(ephPub.bytes);
-    final cipherBytes = Uint8List.fromList(box.cipherText);
-    final macBytes = Uint8List.fromList(box.mac.bytes);
-
-    final out = Uint8List(
-      _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length + _macLen,
-    )
-      ..setAll(0, recipientKeyId)
-      ..setAll(_keyIdLen, ephPubBytes)
-      ..setAll(_keyIdLen + _pubKeyLen, nonce)
-      ..setAll(_keyIdLen + _pubKeyLen + _nonceLen, cipherBytes)
-      ..setAll(
-        _keyIdLen + _pubKeyLen + _nonceLen + cipherBytes.length,
-        macBytes,
-      );
 
     return '$_encAccountsPrefix${base64.encode(out)}';
   }
 
   // ── Decryption ───────────────────────────────────────────────────────────────
 
-  /// Parses and decrypts an encrypted-accounts QR string.
+  /// Decrypts a raw ECIES payload produced by [encryptBytes].
   ///
-  /// Throws [FormatException] if the format is invalid.
-  /// Throws [SecretBoxAuthenticationError] if authentication fails (tampered).
-  static Future<List<AccountPayload>> decryptAccounts({
-    required String qrString,
+  /// [info] must match the label used at encryption time.
+  /// Throws [FormatException] if the payload is malformed or was encrypted for
+  /// a different key pair; [SecretBoxAuthenticationError] if authentication
+  /// fails (tampered).
+  static Future<Uint8List> decryptBytes({
+    required Uint8List data,
     required Uint8List privateKeyBytes,
     required Uint8List publicKeyBytes,
     required Uint8List keyId,
+    required String info,
   }) async {
-    if (!qrString.startsWith(_encAccountsPrefix)) {
-      throw const FormatException('Not an encrypted-accounts QR code');
-    }
-
-    final Uint8List data;
-    try {
-      data = Uint8List.fromList(
-        base64.decode(qrString.substring(_encAccountsPrefix.length)),
-      );
-    } catch (_) {
-      throw const FormatException('Invalid base64 in encrypted-accounts QR');
-    }
-
     // Minimum: keyId + ephPubKey + nonce + mac (no ciphertext is valid but odd).
     if (data.length < _keyIdLen + _pubKeyLen + _nonceLen + _macLen) {
-      throw const FormatException('Encrypted-accounts payload too short');
+      throw const FormatException('Encrypted payload too short');
     }
 
     final embeddedKeyId = data.sublist(0, _keyIdLen);
@@ -216,7 +226,7 @@ class ShareEncryptionService {
     for (var i = 0; i < _keyIdLen; i++) {
       if (embeddedKeyId[i] != keyId[i]) {
         throw const FormatException(
-          'Key ID mismatch — please scan a fresh public-key QR code',
+          'Key ID mismatch — please use a fresh public key',
         );
       }
     }
@@ -249,13 +259,47 @@ class ShareEncryptionService {
     final aesKey = await _hkdf.deriveKey(
       secretKey: sharedSecret,
       nonce: keyId,
-      info: utf8.encode('sharedinbox-account-transfer'),
+      info: utf8.encode(info),
     );
 
     // Decrypt — throws SecretBoxAuthenticationError if tampered.
     final plaintext = await _aesGcm.decrypt(
       SecretBox(cipherText, nonce: nonce, mac: Mac(mac)),
       secretKey: aesKey,
+    );
+
+    return Uint8List.fromList(plaintext);
+  }
+
+  /// Parses and decrypts an encrypted-accounts QR string.
+  ///
+  /// Throws [FormatException] if the format is invalid.
+  /// Throws [SecretBoxAuthenticationError] if authentication fails (tampered).
+  static Future<List<AccountPayload>> decryptAccounts({
+    required String qrString,
+    required Uint8List privateKeyBytes,
+    required Uint8List publicKeyBytes,
+    required Uint8List keyId,
+  }) async {
+    if (!qrString.startsWith(_encAccountsPrefix)) {
+      throw const FormatException('Not an encrypted-accounts QR code');
+    }
+
+    final Uint8List data;
+    try {
+      data = Uint8List.fromList(
+        base64.decode(qrString.substring(_encAccountsPrefix.length)),
+      );
+    } catch (_) {
+      throw const FormatException('Invalid base64 in encrypted-accounts QR');
+    }
+
+    final plaintext = await decryptBytes(
+      data: data,
+      privateKeyBytes: privateKeyBytes,
+      publicKeyBytes: publicKeyBytes,
+      keyId: keyId,
+      info: 'sharedinbox-account-transfer',
     );
 
     // Parse JSON.
