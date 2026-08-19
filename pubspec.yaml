@@ -44,7 +44,7 @@ dependencies:
   go_router: ^17.3.0
 
   # Secure credential storage (passwords)
-  flutter_secure_storage: ^10.0.0
+  flutter_secure_storage: ^11.0.0
 
   # Date formatting
   intl: ^0.20.2
