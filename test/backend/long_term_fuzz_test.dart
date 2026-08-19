@@ -201,6 +201,20 @@ void main() {
       httpClient: httpClient,
     );
 
+    // Syncs both accounts to convergence (absorbing Stalwart's cross-protocol
+    // propagation lag), dumps the comparison, and asserts the two sides match.
+    Future<void> syncAndExpectIdentical(String reason) async {
+      final result = await _syncUntilIdentical(
+        db,
+        imapAccount.id,
+        jmapAccount.id,
+        emailRepo,
+        mailboxRepo,
+      );
+      _printComparison(result);
+      expect(result.isIdentical, isTrue, reason: reason);
+    }
+
     // 3. Do some CRUD operations directly on the Stalwart server via IMAP
     print('Step 3: Appending random messages via IMAP...');
     final imapSender = await connectImap(env: env, user: user);
@@ -261,15 +275,7 @@ void main() {
     }
 
     print('Comparing initial state...');
-    var result = await _syncUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(result.isIdentical, isTrue, reason: 'Initial sync mismatch!');
+    await syncAndExpectIdentical('Initial sync mismatch!');
 
     // 5. CRUD: IMAP mutations
     print('Step 5: Performing local IMAP mutations...');
@@ -301,19 +307,7 @@ void main() {
 
     // Sync both sides to pull updates, retrying to absorb propagation lag.
     print('  Syncing after IMAP mutations...');
-    result = await _syncUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(
-      result.isIdentical,
-      isTrue,
-      reason: 'Mismatch after IMAP mutations!',
-    );
+    await syncAndExpectIdentical('Mismatch after IMAP mutations!');
 
     // 6. CRUD: JMAP mutations
     print('Step 6: Performing local JMAP mutations...');
@@ -349,19 +343,7 @@ void main() {
     // JMAP mutation lands, so CONDSTORE may only pick the change up on a later
     // pass.
     print('  Syncing after JMAP mutations...');
-    result = await _syncUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(
-      result.isIdentical,
-      isTrue,
-      reason: 'Mismatch after JMAP mutations!',
-    );
+    await syncAndExpectIdentical('Mismatch after JMAP mutations!');
 
     // 7. CRUD: Hard delete from Trash on both sides
     print('Step 7: Hard deleting emails from Trash...');
@@ -396,15 +378,7 @@ void main() {
 
     // Sync both sides to pull updates, retrying to absorb propagation lag.
     print('  Syncing after hard deletes...');
-    result = await _syncUntilIdentical(
-      db,
-      imapAccount.id,
-      jmapAccount.id,
-      emailRepo,
-      mailboxRepo,
-    );
-    _printComparison(result);
-    expect(result.isIdentical, isTrue, reason: 'Mismatch after hard deletes!');
+    await syncAndExpectIdentical('Mismatch after hard deletes!');
 
     tempDir.deleteSync(recursive: true);
     await db.close();
