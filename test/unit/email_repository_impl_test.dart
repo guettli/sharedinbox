@@ -2292,6 +2292,82 @@ void main() {
       },
     );
 
+    // #644: opening an already-read message must not re-enqueue a flag change.
+    // setFlag short-circuits when the requested flag already matches local
+    // state, so re-marking read is a no-op instead of re-STOREing every open.
+    test('setFlag seen=true is a no-op when already seen', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              isSeen: const Value(true),
+            ),
+          );
+
+      await r.emails.setFlag('acc-1:5', seen: true);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, isEmpty);
+    });
+
+    // #644: a repeated setFlag with an unchanged value must not pile up
+    // duplicate un-attempted rows in pending_changes even if the first hasn't
+    // flushed yet.
+    test('setFlag does not enqueue a duplicate unchanged flag change',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // First call is a genuine transition and enqueues one change; a repeated
+      // call after the optimistic local flip is a no-op.
+      await r.emails.setFlag('acc-1:5', seen: true);
+      await r.emails.setFlag('acc-1:5', seen: true);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+    });
+
+    // #644: a mixed call must still process the flag that genuinely differs
+    // even when the other one is already at the requested value.
+    test('setFlag processes only the flag that changes in a mixed call',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              isSeen: const Value(true),
+            ),
+          );
+
+      // Already seen, newly flagged: only flag_flagged should be enqueued.
+      await r.emails.setFlag('acc-1:5', seen: true, flagged: true);
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(1));
+      expect(changes.single.changeType, 'flag_flagged');
+      final email = await r.emails.getEmail('acc-1:5');
+      expect(email!.isFlagged, isTrue);
+    });
+
     test(
       'moveEmail enqueues move change and updates local mailboxPath (optimistic)',
       () async {
@@ -2594,6 +2670,29 @@ void main() {
       final data = jsonDecode(entries.single.dataJson!) as Map<String, dynamic>;
       expect(data['seen'], true);
       expect(data['flagged'], true);
+    });
+
+    // #644: re-marking an already-read message read must not spam the
+    // per-message log with another "Marked … read" entry on every open.
+    test('setFlag writes no email.flag entry when the flag is unchanged',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              isSeen: const Value(true),
+            ),
+          );
+
+      await r.emails.setFlag('acc-1:5', seen: true);
+
+      final entries = await logsFor(r.logs, 'acc-1:5');
+      expect(entries, isEmpty);
     });
 
     test('markAllAsRead records an email.mark_read entry per message',
