@@ -866,8 +866,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (final m in emails)
-            _buildThreadStripLine(ctx, m, ownEmail,
-                isCurrent: m.id == email.id),
+            _buildThreadStripLine(
+              ctx,
+              m,
+              ownEmail,
+              isCurrent: m.id == email.id,
+            ),
         ],
       ),
     );
