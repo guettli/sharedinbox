@@ -500,6 +500,13 @@
     },
     {
       "tool": "jscpd",
+      "file": "lib/ui/screens/add_account_screen.dart",
+      "start_line": 534,
+      "end_line": 547,
+      "key": "0ff118a91ae2765c"
+    },
+    {
+      "tool": "jscpd",
       "file": "lib/ui/screens/address_emails_screen.dart",
       "start_line": 35,
       "end_line": 50,
@@ -546,6 +553,13 @@
       "start_line": 388,
       "end_line": 404,
       "key": "f510084aa3934a04"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/ui/screens/edit_account_screen.dart",
+      "start_line": 443,
+      "end_line": 456,
+      "key": "0ff118a91ae2765c"
     },
     {
       "tool": "jscpd",
@@ -2576,6 +2590,20 @@
       "start_line": 107,
       "end_line": 119,
       "key": "a0524e3678eb5418"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/compose_screen_test.dart",
+      "start_line": 171,
+      "end_line": 194,
+      "key": "08ad14f63c41444d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/compose_screen_test.dart",
+      "start_line": 205,
+      "end_line": 228,
+      "key": "08ad14f63c41444d"
     },
     {
       "tool": "jscpd",

@@ -166,20 +166,12 @@ void main() {
     testWidgets('appends the account signature on a new message', (
       tester,
     ) async {
-      const signed = Account(
-        id: 'acc-1',
-        displayName: 'Alice',
-        email: 'alice@example.com',
-        imapHost: 'imap.example.com',
-        smtpHost: 'smtp.example.com',
-        signature: 'Cheers,\nAlice',
-      );
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(),
           overrides: [
             accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([signed]),
+              FakeAccountRepository([kSignedAccount]),
             ),
             mailboxRepositoryProvider.overrideWithValue(
               FakeMailboxRepository(),
@@ -205,14 +197,6 @@ void main() {
     testWidgets('inserts the signature above the quoted text on a reply', (
       tester,
     ) async {
-      const signed = Account(
-        id: 'acc-1',
-        displayName: 'Alice',
-        email: 'alice@example.com',
-        imapHost: 'imap.example.com',
-        smtpHost: 'smtp.example.com',
-        signature: 'Cheers,\nAlice',
-      );
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(
@@ -221,7 +205,7 @@ void main() {
           ),
           overrides: [
             accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([signed]),
+              FakeAccountRepository([kSignedAccount]),
             ),
             mailboxRepositoryProvider.overrideWithValue(
               FakeMailboxRepository(),

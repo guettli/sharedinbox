@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:sharedinbox/core/models/account.dart';
-
 import 'helpers.dart';
 
 void main() {
@@ -36,18 +34,10 @@ void main() {
     });
 
     testWidgets('pre-fills the signature field', (tester) async {
-      const signed = Account(
-        id: 'acc-1',
-        displayName: 'Alice',
-        email: 'alice@example.com',
-        imapHost: 'imap.example.com',
-        smtpHost: 'smtp.example.com',
-        signature: 'Cheers,\nAlice',
-      );
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [signed]),
+          overrides: baseOverrides(accounts: [kSignedAccount]),
         ),
       );
       await tester.pumpAndSettle();
