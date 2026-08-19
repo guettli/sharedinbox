@@ -35,6 +35,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
 
+/// Compact date for the inline thread strip — no year, no seconds (#618).
+final _threadLineFmt = DateFormat('EEE, MMM d, HH:mm');
+
 class EmailDetailScreen extends ConsumerStatefulWidget {
   const EmailDetailScreen({super.key, required this.emailId, this.nav});
   final String emailId;
@@ -829,12 +832,78 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             _dateFmt.format(email.sentAt!),
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
+        _buildThreadStrip(ctx, email),
         if (email.listUnsubscribeHeader != null)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: _UnsubscribeChip(email: email),
           ),
       ],
+    );
+  }
+
+  /// One small line per message in this mail's thread, shown below the date.
+  /// Hidden when the mail is not part of a multi-message thread. The current
+  /// mail is highlighted; tapping another line opens that message (#618).
+  Widget _buildThreadStrip(BuildContext ctx, Email email) {
+    final threadId = email.threadId;
+    if (threadId == null) return const SizedBox.shrink();
+
+    final key = (email.accountId, email.mailboxPath, threadId);
+    final emails =
+        ref.watch(threadEmailsProvider(key)).value ?? const <Email>[];
+    if (emails.length < 2) return const SizedBox.shrink();
+
+    final ownEmail = ref
+        .watch(accountByIdProvider(email.accountId))
+        .value
+        ?.email
+        .toLowerCase();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final m in emails)
+            _buildThreadStripLine(ctx, m, ownEmail,
+                isCurrent: m.id == email.id),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThreadStripLine(
+    BuildContext ctx,
+    Email m,
+    String? ownEmail, {
+    required bool isCurrent,
+  }) {
+    final fromMe = ownEmail != null &&
+        m.from.isNotEmpty &&
+        m.from.first.email.toLowerCase() == ownEmail;
+    final date = m.sentAt != null ? _threadLineFmt.format(m.sentAt!) : '';
+    final label = '${fromMe ? 'From me' : 'To me'} · $date';
+    final theme = Theme.of(ctx);
+    final style = theme.textTheme.bodySmall?.copyWith(
+      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+      color: isCurrent ? theme.colorScheme.primary : null,
+    );
+
+    return InkWell(
+      onTap: isCurrent
+          ? null
+          : () => _goToNeighbour(
+                EmailDetailNavItem(
+                  accountId: m.accountId,
+                  mailboxPath: m.mailboxPath,
+                  emailId: m.id,
+                ),
+              ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+        child: Text(label, style: style),
+      ),
     );
   }
 

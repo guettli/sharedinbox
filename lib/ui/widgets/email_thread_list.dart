@@ -314,16 +314,6 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
       widget.onTap!(t);
       return;
     }
-    if (t.messageCount > 1) {
-      unawaited(
-        context.push(
-          '/accounts/${t.accountId}/mailboxes'
-          '/${Uri.encodeComponent(t.mailboxPath)}'
-          '/threads/${Uri.encodeComponent(t.threadId)}',
-        ),
-      );
-      return;
-    }
     unawaited(
       context.push(
         '/accounts/${t.accountId}/mailboxes'

@@ -415,6 +415,16 @@ final undoServiceProvider = NotifierProvider<UndoService, List<UndoAction>>(
   UndoService.new,
 );
 
+/// Streams every message in a thread (oldest first). Backs the inline thread
+/// strip in the mail detail view. Key is `(accountId, mailboxPath, threadId)`.
+final threadEmailsProvider = StreamProvider.autoDispose
+    .family<List<Email>, (String, String, String)>((ref, key) {
+  final (accountId, mailboxPath, threadId) = key;
+  return ref
+      .watch(emailRepositoryProvider)
+      .observeEmailsInThread(accountId, mailboxPath, threadId);
+});
+
 /// Loads email header + body and marks the email as seen.
 /// Owned by [EmailDetailScreen]; decouples data loading from the widget tree.
 final emailDetailProvider = AsyncNotifierProvider.autoDispose
