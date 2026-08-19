@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
@@ -294,6 +295,51 @@ void main() {
         await tester.tap(find.text('Archive'));
         await tester.pumpAndSettle();
         expect(find.text('Folders'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'failed-mutation banner links to the Pending Changes view (#622)',
+      (tester) async {
+        final emailRepo = FakeEmailRepository(
+          failedMutations: [
+            FailedMutation(
+              id: 1,
+              accountId: 'acc-1',
+              changeType: 'move',
+              resourceId: 'acc-1:42',
+              lastError: 'server said no',
+              attempts: 3,
+              createdAt: DateTime.utc(2026, 3, 4, 9),
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([kTestMailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(emailRepo),
+              syncNowProvider.overrideWithValue((_) => false),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The red banner surfaces the failed change and offers a View link.
+        expect(find.text('1 pending move failed'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'View'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(TextButton, 'View'));
+        await tester.pumpAndSettle();
+
+        // Lands on the Pending Changes screen, where the details live.
+        expect(find.text('Pending Changes'), findsOneWidget);
       },
     );
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -523,6 +525,17 @@ class _FailedMutationBanner extends StatelessWidget {
             Expanded(
               child: Text(
                 _label(mutations.first),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            TextButton(
+              // Link to the Pending Changes screen, where each failed mutation
+              // shows its concrete change, affected email and last error (#622).
+              onPressed: () => unawaited(context.push('/pending-changes')),
+              child: Text(
+                'View',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                 ),
