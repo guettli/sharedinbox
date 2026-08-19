@@ -333,6 +333,8 @@ class FakeEmailRepository implements EmailRepository {
 
   final List<PendingChange> _pendingChanges;
 
+  final List<FailedMutation> _failedMutations;
+
   FakeEmailRepository({
     List<Email>? emails,
     Email? emailDetail,
@@ -342,9 +344,11 @@ class FakeEmailRepository implements EmailRepository {
     List<Email>? byAddressResults,
     List<Email>? structuredSearchResults,
     List<PendingChange>? pendingChanges,
+    List<FailedMutation>? failedMutations,
     String rawRfc822 = '',
     this.onSearch,
   })  : _pendingChanges = pendingChanges ?? const [],
+        _failedMutations = failedMutations ?? const [],
         _emails = emails ?? [],
         _emailDetail = emailDetail,
         _searchResults = searchResults ?? [],
@@ -577,7 +581,9 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
-      Stream.value([]);
+      Stream.value(
+        _failedMutations.where((m) => m.accountId == accountId).toList(),
+      );
 
   @override
   Stream<List<PendingChange>> observePendingChanges(String accountId) =>
