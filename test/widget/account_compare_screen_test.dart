@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/di.dart';
@@ -43,14 +44,19 @@ AccountComparisonResult _resultWith(List<EmailDiff> emails) =>
       unmatchable: const [],
     );
 
-Future<void> _pump(WidgetTester tester, AccountComparisonResult result) async {
+Future<void> _pump(
+  WidgetTester tester,
+  AccountComparisonResult result, {
+  Account? accountA,
+  Account? accountB,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         accountComparisonProvider(('a', 'b'))
             .overrideWith((ref) => Future.value(result)),
-        accountByIdProvider('a').overrideWith((ref) => Stream.value(null)),
-        accountByIdProvider('b').overrideWith((ref) => Stream.value(null)),
+        accountByIdProvider('a').overrideWith((ref) => Stream.value(accountA)),
+        accountByIdProvider('b').overrideWith((ref) => Stream.value(accountB)),
       ],
       child: const MaterialApp(
         home: AccountCompareScreen(accountIdA: 'a', accountIdB: 'b'),
@@ -116,5 +122,43 @@ void main() {
     // The matched pair offers both sides; the missing-in-B one only offers A.
     expect(find.text('Open in A'), findsNWidgets(2));
     expect(find.text('Open in B'), findsOneWidget);
+  });
+
+  testWidgets('body-diff legend names the accounts on each side',
+      (tester) async {
+    final body = BodyDiff(
+      messageId: '<m1@example.com>',
+      folderName: 'Inbox',
+      a: _row(id: 'a:1', accountId: 'a'),
+      b: _row(id: 'b:1', accountId: 'b'),
+    );
+    final result = AccountComparisonResult(
+      accountIdA: 'a',
+      accountIdB: 'b',
+      mailboxes: const [],
+      emails: const [],
+      bodies: [body],
+      unmatchable: const [],
+    );
+
+    await _pump(
+      tester,
+      result,
+      accountA: const Account(id: 'a', displayName: 'Work', email: 'w@x.com'),
+      accountB: const Account(
+        id: 'b',
+        displayName: 'Personal',
+        email: 'p@x.com',
+        type: AccountType.jmap,
+      ),
+    );
+    await tester.tap(find.byType(ExpansionTile).first);
+    await tester.pumpAndSettle();
+
+    // The legend spells out which account is A (−) and which is B (+).
+    expect(
+      find.text('A (Work (IMAP)) = −, B (Personal (JMAP)) = +'),
+      findsOneWidget,
+    );
   });
 }
