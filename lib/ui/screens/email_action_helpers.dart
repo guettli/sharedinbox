@@ -272,6 +272,19 @@ Future<void> batchSnooze(
   );
   if (until == null || !context.mounted) return;
 
+  await snoozeThreadsUntil(ref, threads: threads, until: until);
+}
+
+/// Snoozes every thread in [threads] until [until], pushing one aggregated
+/// undo action per `(accountId, sourceMailboxPath)` group. Shared by the
+/// [SnoozePicker]-driven [batchSnooze] and the swipe-tree numeric snooze
+/// levels, which compute [until] directly from a day/week count.
+Future<void> snoozeThreadsUntil(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required DateTime until,
+}) async {
+  if (threads.isEmpty) return;
   final repo = ref.read(emailRepositoryProvider);
 
   for (final accountThreads in _groupByAccount(threads).values) {
@@ -298,6 +311,21 @@ Future<void> batchSnooze(
   }
 }
 
+/// Moves every thread in [threads] to [destPath] (an account-specific mailbox
+/// path), pushing one aggregated undo action per source folder. Used by the
+/// swipe-tree `Move → folder` leaves, which already scope the folder list to a
+/// single account.
+Future<void> moveThreadsToPath(
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+  required String destPath,
+}) async {
+  if (threads.isEmpty) return;
+  for (final accountThreads in _groupByAccount(threads).values) {
+    await _moveThreadsTo(ref, accountThreads, destPath);
+  }
+}
+
 /// Flags (stars) or unflags every email in every thread in [threads]. The
 /// selection-mode bottom bar decides which direction to apply based on the
 /// current thread flags: if any selected thread is unstarred we star all of
@@ -314,55 +342,6 @@ Future<void> batchStar(
       await repo.setFlag(id, flagged: flagged);
     }
   }
-}
-
-/// Handles a swipe-to-archive (start→end) or swipe-to-delete (end→start) on a
-/// single [thread]. Shared between folder and combined inbox surfaces.
-Future<void> swipeDismissThread(
-  WidgetRef ref,
-  EmailThread thread,
-  DismissDirection direction,
-) async {
-  final repo = ref.read(emailRepositoryProvider);
-
-  final originalEmails = await _fetchOriginals(repo, thread.emailIds);
-
-  if (direction == DismissDirection.startToEnd) {
-    final archive = await ref
-        .read(mailboxRepositoryProvider)
-        .findMailboxByRole(thread.accountId, 'archive');
-    if (archive == null) return;
-    for (final id in thread.emailIds) {
-      await repo.moveEmail(id, archive.path);
-    }
-    final action = UndoAction(
-      id: DateTime.now().toIso8601String(),
-      accountId: thread.accountId,
-      type: UndoType.move,
-      emailIds: thread.emailIds,
-      sourceMailboxPath: thread.mailboxPath,
-      destinationMailboxPath: archive.path,
-      destinationMailboxRole: 'archive',
-      originalEmails: originalEmails,
-    );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    return;
-  }
-
-  String? lastDestPath;
-  for (final id in thread.emailIds) {
-    lastDestPath = await repo.deleteEmail(id);
-  }
-  final action = UndoAction(
-    id: DateTime.now().toIso8601String(),
-    accountId: thread.accountId,
-    type: UndoType.delete,
-    emailIds: thread.emailIds,
-    sourceMailboxPath: thread.mailboxPath,
-    destinationMailboxPath: lastDestPath,
-    originalEmails: originalEmails,
-  );
-  unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
 }
 
 Future<List<Email>> _fetchOriginals(

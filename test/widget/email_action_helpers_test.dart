@@ -174,4 +174,73 @@ void main() {
       expect(bySource['Newsletters']!.emailIds, ['acc1:3']);
     },
   );
+
+  // The swipe-tree snooze levels compute the target date themselves and call
+  // snoozeThreadsUntil directly, bypassing the SnoozePicker modal (#240).
+  testWidgets(
+    'snoozeThreadsUntil snoozes every email and pushes one undo action',
+    (tester) async {
+      late WidgetRef capturedRef;
+      await tester.pumpWidget(harness(onReady: (r) => capturedRef = r));
+      await tester.pump();
+
+      final until = DateTime(2026, 9, 1, 8);
+      await snoozeThreadsUntil(
+        capturedRef,
+        threads: [
+          thread(
+            threadId: 't1',
+            accountId: 'acc1',
+            mailboxPath: 'INBOX',
+            emailIds: ['acc1:1', 'acc1:2'],
+          ),
+        ],
+        until: until,
+      );
+
+      verify(mockEmailRepo.snoozeEmail('acc1:1', until)).called(1);
+      verify(mockEmailRepo.snoozeEmail('acc1:2', until)).called(1);
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(Consumer)),
+      );
+      final actions = await waitForActions(tester, container);
+      expect(actions, hasLength(1));
+      expect(actions.single.type, UndoType.snooze);
+      expect(actions.single.emailIds, ['acc1:1', 'acc1:2']);
+    },
+  );
+
+  // The swipe-tree Move → folder leaves move to a concrete path directly.
+  testWidgets(
+    'moveThreadsToPath moves every email and pushes one move undo action',
+    (tester) async {
+      late WidgetRef capturedRef;
+      await tester.pumpWidget(harness(onReady: (r) => capturedRef = r));
+      await tester.pump();
+
+      await moveThreadsToPath(
+        capturedRef,
+        threads: [
+          thread(
+            threadId: 't1',
+            accountId: 'acc1',
+            mailboxPath: 'INBOX',
+            emailIds: ['acc1:1'],
+          ),
+        ],
+        destPath: 'Archive/2026',
+      );
+
+      verify(mockEmailRepo.moveEmail('acc1:1', 'Archive/2026')).called(1);
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(Consumer)),
+      );
+      final actions = await waitForActions(tester, container);
+      expect(actions, hasLength(1));
+      expect(actions.single.type, UndoType.move);
+      expect(actions.single.destinationMailboxPath, 'Archive/2026');
+    },
+  );
 }
