@@ -56,6 +56,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool _draftDirty = false;
   Timer? _saveTimer;
   bool _draftSaved = false; // drives the "Saved" badge
+
+  // The account signature currently inserted into the body, including the
+  // surrounding blank lines, so switching the "From" account swaps it cleanly
+  // rather than stacking signatures (#646). Left untouched once a saved draft
+  // has been restored — the draft already carries whatever body was saved.
+  String _sigBlock = '';
+  String? _sigAccountId;
+  bool _draftRestored = false;
+  bool _suppressAutoSave = false;
   // Captured in initState so it remains accessible in dispose() after ref is gone.
   late final DraftRepository _draftRepo;
 
@@ -96,6 +105,46 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       // keeps its value via ??=.
       _accountId ??= accounts.length == 1 ? accounts.first.id : null;
     });
+    await _applySignatureForAccount(_accountId);
+  }
+
+  /// Inserts the selected account's signature into the body, swapping out any
+  /// previously inserted one. For a reply the signature sits above the quoted
+  /// text so the user writes between it and the quote; otherwise it is appended.
+  Future<void> _applySignatureForAccount(String? accountId) async {
+    // A restored draft already carries its body verbatim — never rewrite it.
+    if (_draftRestored) return;
+    if (accountId == _sigAccountId) return;
+    final signature = accountId == null
+        ? ''
+        : (await ref.read(accountRepositoryProvider).getAccount(accountId))
+                ?.signature ??
+            '';
+    if (!mounted) return;
+    _sigAccountId = accountId;
+    final isReply = widget.replyToEmailId != null;
+    final newBlock = signature.isEmpty
+        ? ''
+        : (isReply ? '$signature\n\n' : '\n\n$signature');
+    final text = _body.text;
+    final oldIndex = _sigBlock.isEmpty ? -1 : text.indexOf(_sigBlock);
+    String updated;
+    if (oldIndex >= 0) {
+      updated =
+          text.replaceRange(oldIndex, oldIndex + _sigBlock.length, newBlock);
+    } else if (newBlock.isEmpty) {
+      updated = text;
+    } else if (isReply) {
+      updated = '$newBlock$text';
+    } else {
+      updated = '$text$newBlock';
+    }
+    _sigBlock = newBlock;
+    if (updated == text) return;
+    // Programmatic edit — don't count it as the user dirtying a draft.
+    _suppressAutoSave = true;
+    _body.text = updated;
+    _suppressAutoSave = false;
   }
 
   Future<void> _restoreDraft() async {
@@ -104,16 +153,20 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         .findDraft(replyToEmailId: widget.replyToEmailId);
     if (draft == null || !mounted) return;
     setState(() {
+      _draftRestored = true;
       _draftId = draft.id;
       _to.text = draft.toText;
       _cc.text = draft.ccText;
       _subject.text = draft.subjectText;
       _body.text = draft.bodyText;
       if (draft.accountId != null) _accountId = draft.accountId;
+      _sigAccountId = _accountId;
+      _sigBlock = '';
     });
   }
 
   void _onTextChanged() {
+    if (_suppressAutoSave) return;
     _draftDirty = true;
     _saveTimer?.cancel();
     _saveTimer = Timer(_saveDelay, _autoSave);
@@ -338,7 +391,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                       ),
                     )
                     .toList(),
-                onChanged: (v) => setState(() => _accountId = v),
+                onChanged: (v) {
+                  setState(() => _accountId = v);
+                  unawaited(_applySignatureForAccount(v));
+                },
               ),
             )
           else if (_accounts.length == 1)

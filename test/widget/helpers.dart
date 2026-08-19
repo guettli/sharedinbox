@@ -931,6 +931,16 @@ const kTestAccount = Account(
   smtpHost: 'smtp.example.com',
 );
 
+/// Like [kTestAccount] but carries a plain-text signature.
+const kSignedAccount = Account(
+  id: 'acc-1',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'imap.example.com',
+  smtpHost: 'smtp.example.com',
+  signature: 'Cheers,\nAlice',
+);
+
 const kTestMailbox = Mailbox(
   id: 'acc-1:INBOX',
   accountId: 'acc-1',

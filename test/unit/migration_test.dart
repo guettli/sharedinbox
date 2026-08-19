@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 53);
+      expect(db.schemaVersion, 54);
       await db.close();
     });
 
@@ -93,6 +93,9 @@ void main() {
         containsAll(['account_type', 'jmap_url', 'username']),
       );
       expect(accountColumns, contains('manage_sieve_host'));
+
+      // v54: per-account signature.
+      expect(accountColumns, contains('signature'));
 
       // v14: threading columns.
       final emailColumns = await _tableColumns(db, 'emails');

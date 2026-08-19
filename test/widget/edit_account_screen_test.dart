@@ -33,6 +33,25 @@ void main() {
       expect(find.widgetWithText(TextFormField, 'Alice'), findsOneWidget);
     });
 
+    testWidgets('pre-fills the signature field', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/edit',
+          overrides: baseOverrides(accounts: [kSignedAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('editSignatureField')),
+        findsOneWidget,
+      );
+      final field = tester.widget<TextFormField>(
+        find.byKey(const Key('editSignatureField')),
+      );
+      expect(field.controller!.text, 'Cheers,\nAlice');
+    });
+
     testWidgets('shows Save button', (tester) async {
       await tester.pumpWidget(
         buildApp(

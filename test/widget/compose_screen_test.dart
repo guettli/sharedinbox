@@ -163,6 +163,71 @@ void main() {
       },
     );
 
+    testWidgets('appends the account signature on a new message', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(),
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kSignedAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final body = tester.widget<TextField>(
+        find
+            .descendant(
+              of: find.byType(TextFormField),
+              matching: find.byType(TextField),
+            )
+            .last,
+      );
+      expect(body.controller!.text, '\n\nCheers,\nAlice');
+    });
+
+    testWidgets('inserts the signature above the quoted text on a reply', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(
+            replyToEmailId: 'e1',
+            prefillBody: '> quoted original',
+          ),
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kSignedAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final body = tester.widget<TextField>(
+        find
+            .descendant(
+              of: find.byType(TextFormField),
+              matching: find.byType(TextField),
+            )
+            .last,
+      );
+      expect(body.controller!.text, 'Cheers,\nAlice\n\n> quoted original');
+    });
+
     testWidgets('restores saved draft when no prefill is provided', (
       tester,
     ) async {

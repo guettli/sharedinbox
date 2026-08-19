@@ -38,6 +38,10 @@ class Account {
   /// credential redaction.
   final bool verbose;
 
+  /// Plain-text signature appended to outgoing messages composed from this
+  /// account. Empty means no signature.
+  final String signature;
+
   const Account({
     required this.id,
     required this.displayName,
@@ -56,6 +60,7 @@ class Account {
     this.manageSieveAvailable,
     this.jmapUrl,
     this.verbose = false,
+    this.signature = '',
   });
 
   Account copyWith({
@@ -76,6 +81,7 @@ class Account {
     bool? manageSieveAvailable,
     String? jmapUrl,
     bool? verbose,
+    String? signature,
   }) {
     return Account(
       id: id ?? this.id,
@@ -95,6 +101,7 @@ class Account {
       manageSieveAvailable: manageSieveAvailable ?? this.manageSieveAvailable,
       jmapUrl: jmapUrl ?? this.jmapUrl,
       verbose: verbose ?? this.verbose,
+      signature: signature ?? this.signature,
     );
   }
 
@@ -120,6 +127,7 @@ class Account {
       manageSieveAvailable: json['manageSieveAvailable'] as bool?,
       jmapUrl: json['jmapUrl'] as String?,
       verbose: json['verbose'] as bool? ?? false,
+      signature: json['signature'] as String? ?? '',
     );
   }
 
@@ -142,6 +150,7 @@ class Account {
       'manageSieveAvailable': manageSieveAvailable,
       'jmapUrl': jmapUrl,
       'verbose': verbose,
+      'signature': signature,
     };
   }
 

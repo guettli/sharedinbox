@@ -39,6 +39,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _sievePortCtrl = TextEditingController();
   var _sieveSsl = true;
   var _verbose = false;
+  final _signatureCtrl = TextEditingController();
   final _jmapUrlCtrl = TextEditingController();
   bool _hasStoredPassword = false;
 
@@ -87,6 +88,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _sievePortCtrl.text = account.manageSievePort.toString();
     _sieveSsl = account.manageSieveSsl;
     _verbose = account.verbose;
+    _signatureCtrl.text = account.signature;
     _jmapUrlCtrl.text = account.jmapUrl ?? '';
     setState(() => _loading = false);
   }
@@ -107,6 +109,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       _smtpPortCtrl,
       _sieveHostCtrl,
       _sievePortCtrl,
+      _signatureCtrl,
       _jmapUrlCtrl,
     ]) {
       c.dispose();
@@ -148,6 +151,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       jmapUrl:
           _jmapUrlCtrl.text.trim().isEmpty ? null : _jmapUrlCtrl.text.trim(),
       verbose: _verbose,
+      signature: _signatureCtrl.text,
     );
   }
 
@@ -319,6 +323,14 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               obscure: true,
               required: !_hasStoredPassword,
             ),
+            _field(
+              _signatureCtrl,
+              'Signature',
+              key: const Key('editSignatureField'),
+              required: false,
+              minLines: 3,
+              maxLines: null,
+            ),
             if (account.type == AccountType.jmap) ...[
               const Divider(height: 32),
               _field(
@@ -417,6 +429,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     bool required = true,
     TextInputType? keyboardType,
     String? Function(String?)? validator,
+    int? minLines,
+    int? maxLines = 1,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
@@ -425,6 +439,8 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         controller: ctrl,
         obscureText: obscure,
         keyboardType: keyboardType,
+        minLines: minLines,
+        maxLines: maxLines,
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
