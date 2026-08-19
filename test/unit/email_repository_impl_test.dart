@@ -348,6 +348,48 @@ class _MoveFailsImapClient extends FakeImapClient {
       throw Exception('server said no');
 }
 
+/// Fake IMAP client that returns a *different* message than the row expects for
+/// a given UID — the shape produced by an optimistic snooze/unsnooze/move whose
+/// destination UID happens to collide with an unrelated message (#616). The
+/// message served for [correctUid] carries [correctMessageId]; every other UID
+/// yields [wrongMessageId]. `uidSearchMessages` support is inherited from
+/// [SnoozeSpyImapClient] via the `searchResults` map.
+class _MismatchedBodyImapClient extends SnoozeSpyImapClient {
+  _MismatchedBodyImapClient({
+    required this.correctMessageId,
+    required this.wrongMessageId,
+    required this.correctUid,
+    super.searchResults,
+  });
+
+  final String correctMessageId;
+  final String wrongMessageId;
+  final int correctUid;
+  final List<int> fetchedUids = [];
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    fetchedUids.add(messageUid);
+    final match = messageUid == correctUid;
+    final mid = match ? correctMessageId : wrongMessageId;
+    final subject = match ? 'Automatic reply' : 'Paket';
+    final body = match ? 'Rentenversicherung body' : 'GLS package body';
+    final msg = imap.MimeMessage.parseFromText(
+      'Message-ID: <$mid>\r\n'
+      'From: sender@example.com\r\n'
+      'Subject: $subject\r\n'
+      'Content-Type: text/plain; charset="utf-8"\r\n'
+      '\r\n'
+      '$body',
+    );
+    return imap.FetchImapResult([msg], null);
+  }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -7157,6 +7199,105 @@ void main() {
             ..where((t) => t.id.equals('acc-1:INBOX:1')))
           .getSingle();
       expect(emailRow.preview, 'Existing preview');
+    });
+  });
+
+  group('getEmailBody identity guard (#616)', () {
+    // The mis-bound row from the bug report: an optimistic snooze→unsnooze left
+    // the row keyed to `Snoozed:6` but with mailbox_path = INBOX and uid 6,
+    // where INBOX uid 6 is now an unrelated message.
+    const rowMessageId = 'a6bc5f7fd7e64e8286f6d954fa8ab274@htw-dresden.de';
+    const packageMessageId = '8GAfUG56TeqX2z8-knx7qw@geopod-ismtpd-12';
+
+    test('does not cache a body whose Message-ID contradicts the row',
+        () async {
+      final client = _MismatchedBodyImapClient(
+        correctMessageId: rowMessageId,
+        wrongMessageId: packageMessageId,
+        // The real message can't be located by Message-ID search, so no
+        // re-key happens and the wrong body must simply not be cached.
+        correctUid: 999,
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Snoozed:6',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 6,
+              receivedAt: DateTime(2024),
+              messageId: const Value(rowMessageId),
+              preview: const Value('Automatic reply preview'),
+            ),
+          );
+
+      final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
+
+      // The package body was never surfaced or cached.
+      expect(body.textBody, anyOf(isNull, isEmpty));
+      final cachedBody = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals('acc-1:Snoozed:6')))
+          .getSingleOrNull();
+      expect(cachedBody, isNull);
+
+      // The row is left in place with its original headers and preview.
+      final row = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:Snoozed:6')))
+          .getSingle();
+      expect(row.preview, 'Automatic reply preview');
+      expect(row.messageId, rowMessageId);
+    });
+
+    test('re-keys the row and caches the correct body when the UID is found',
+        () async {
+      final client = _MismatchedBodyImapClient(
+        correctMessageId: rowMessageId,
+        wrongMessageId: packageMessageId,
+        // The real message lives at INBOX uid 42; Message-ID search finds it.
+        correctUid: 42,
+        searchResults: {
+          'HEADER Message-ID "$rowMessageId"': const [42],
+        },
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Snoozed:6',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 6,
+              receivedAt: DateTime(2024),
+              messageId: const Value(rowMessageId),
+              preview: const Value('Automatic reply preview'),
+            ),
+          );
+
+      final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
+
+      // The correct body is returned and cached under the re-keyed id.
+      expect(body.textBody, 'Rentenversicherung body');
+      final newRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:42')))
+          .getSingleOrNull();
+      expect(newRow, isNotNull);
+      expect(newRow!.uid, 42);
+      expect(newRow.messageId, rowMessageId);
+
+      final staleRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:Snoozed:6')))
+          .getSingleOrNull();
+      expect(staleRow, isNull);
+
+      final cachedBody = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals('acc-1:INBOX:42')))
+          .getSingle();
+      expect(cachedBody.textBody, 'Rentenversicherung body');
     });
   });
 
