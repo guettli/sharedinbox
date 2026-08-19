@@ -176,6 +176,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               context,
               ref,
               _selection,
+              currentFolderRole: ref
+                  .watch(
+                    mailboxByPathProvider(
+                      (widget.accountId, widget.mailboxPath),
+                    ),
+                  )
+                  .value
+                  ?.role,
               onAfterAction: _onAfterBatchAction,
             )
           : (menuAtBottom ? _folderNavBottomBar() : null),

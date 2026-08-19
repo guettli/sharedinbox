@@ -128,6 +128,23 @@ Future<void> batchMarkSpam(
       createFolderName: 'Junk',
     );
 
+/// Moves every thread in [threads] back to its account's inbox. Backs the
+/// "Not junk" / "Restore" batch actions shown while viewing the Junk or Trash
+/// folder.
+Future<void> batchMoveToInbox(
+  BuildContext context,
+  WidgetRef ref, {
+  required List<EmailThread> threads,
+}) =>
+    _batchMoveToRole(
+      context,
+      ref,
+      threads: threads,
+      role: 'inbox',
+      dialogTitle: 'No inbox folder found',
+      createFolderName: 'Inbox',
+    );
+
 Future<void> _batchMoveToRole(
   BuildContext context,
   WidgetRef ref, {

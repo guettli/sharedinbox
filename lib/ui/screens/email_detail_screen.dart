@@ -168,6 +168,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final prevItem = activeNav?.prevOf(widget.emailId);
     final nextItem = activeNav?.nextOf(widget.emailId);
 
+    // Role of the folder the open message lives in. When it is the Junk or
+    // Trash folder the destructive action turns into its inverse (un-junk /
+    // un-trash) so re-junking / re-deleting an already-filed mail is replaced
+    // by a clearly labelled "move back to Inbox".
+    final folderRole = header == null
+        ? null
+        : ref
+            .watch(
+              mailboxByPathProvider((header.accountId, header.mailboxPath)),
+            )
+            .value
+            ?.role;
+
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !isMobile,
@@ -206,37 +219,51 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                     unawaited(_archive(context, header));
                   },
           ),
-          _ActionMorphButton(
-            icon: Icons.delete,
-            tooltip: 'Delete',
-            color: Theme.of(context).colorScheme.error,
-            onPressed: () async {
-              unawaited(HapticFeedback.heavyImpact());
-              final nextEmail = await _getNextEmailIfNeeded(header);
-              final destPath = await repo.deleteEmail(widget.emailId);
+          if (folderRole == 'trash')
+            _ActionMorphButton(
+              icon: Icons.restore_from_trash,
+              tooltip: 'Restore',
+              color: const Color(0xFF2E7D32),
+              onPressed: header == null
+                  ? null
+                  : () {
+                      unawaited(HapticFeedback.mediumImpact());
+                      unawaited(_moveToInbox(context, header));
+                    },
+            )
+          else
+            _ActionMorphButton(
+              icon: Icons.delete,
+              tooltip: 'Delete',
+              color: Theme.of(context).colorScheme.error,
+              onPressed: () async {
+                unawaited(HapticFeedback.heavyImpact());
+                final nextEmail = await _getNextEmailIfNeeded(header);
+                final destPath = await repo.deleteEmail(widget.emailId);
 
-              if (header != null) {
-                // Fire-and-forget so the state update (which is applied
-                // synchronously inside pushAction) reaches UndoShell before
-                // we start the route transition. Matches _archive / _markAsSpam.
-                unawaited(
-                  ref.read(undoServiceProvider.notifier).pushAction(
-                        UndoAction(
-                          id: DateTime.now().toIso8601String(),
-                          accountId: header.accountId,
-                          type: UndoType.delete,
-                          emailIds: [widget.emailId],
-                          sourceMailboxPath: header.mailboxPath,
-                          destinationMailboxPath: destPath,
-                          originalEmails: [header],
+                if (header != null) {
+                  // Fire-and-forget so the state update (which is applied
+                  // synchronously inside pushAction) reaches UndoShell before
+                  // we start the route transition. Matches _archive /
+                  // _markAsSpam.
+                  unawaited(
+                    ref.read(undoServiceProvider.notifier).pushAction(
+                          UndoAction(
+                            id: DateTime.now().toIso8601String(),
+                            accountId: header.accountId,
+                            type: UndoType.delete,
+                            emailIds: [widget.emailId],
+                            sourceMailboxPath: header.mailboxPath,
+                            destinationMailboxPath: destPath,
+                            originalEmails: [header],
+                          ),
                         ),
-                      ),
-                );
-              }
+                  );
+                }
 
-              if (context.mounted) _navigateTo(context, header, nextEmail);
-            },
-          ),
+                if (context.mounted) _navigateTo(context, header, nextEmail);
+              },
+            ),
           IconButton(
             icon: Icon(
               _isFlagged ? Icons.star : Icons.star_border,
@@ -249,17 +276,30 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               if (mounted) setState(() => _isFlagged = next);
             },
           ),
-          _ActionMorphButton(
-            icon: Icons.report_outlined,
-            tooltip: 'Mark as spam',
-            color: const Color(0xFFE65100),
-            onPressed: header == null
-                ? null
-                : () {
-                    unawaited(HapticFeedback.mediumImpact());
-                    unawaited(_markAsSpam(context, header));
-                  },
-          ),
+          if (folderRole == 'junk')
+            _ActionMorphButton(
+              icon: Icons.report_off,
+              tooltip: 'Not junk',
+              color: const Color(0xFF2E7D32),
+              onPressed: header == null
+                  ? null
+                  : () {
+                      unawaited(HapticFeedback.mediumImpact());
+                      unawaited(_moveToInbox(context, header));
+                    },
+            )
+          else
+            _ActionMorphButton(
+              icon: Icons.report_outlined,
+              tooltip: 'Mark as spam',
+              color: const Color(0xFFE65100),
+              onPressed: header == null
+                  ? null
+                  : () {
+                      unawaited(HapticFeedback.mediumImpact());
+                      unawaited(_markAsSpam(context, header));
+                    },
+            ),
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
               const PopupMenuItem(value: 'forward', child: Text('Forward')),
@@ -1006,6 +1046,47 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'junk',
+              originalEmails: [header],
+            ),
+          ),
+    );
+
+    if (context.mounted) _navigateTo(context, header, nextEmail);
+  }
+
+  /// Moves the open message back to its account's inbox. Backs the "Not junk"
+  /// and "Restore" actions shown when the mail is being viewed from the Junk
+  /// or Trash folder.
+  Future<void> _moveToInbox(BuildContext context, Email header) async {
+    final nextEmail = await _getNextEmailIfNeeded(header);
+    if (!context.mounted) return;
+
+    final mailbox = await resolveMailboxByRole(
+      context,
+      ref.read(mailboxRepositoryProvider),
+      header.accountId,
+      header.mailboxPath,
+      'inbox',
+      dialogTitle: 'No inbox folder found',
+      createFolderName: 'Inbox',
+    );
+
+    if (mailbox == null || !context.mounted) return;
+
+    await ref
+        .read(emailRepositoryProvider)
+        .moveEmail(widget.emailId, mailbox.path);
+
+    unawaited(
+      ref.read(undoServiceProvider.notifier).pushAction(
+            UndoAction(
+              id: DateTime.now().toIso8601String(),
+              accountId: header.accountId,
+              type: UndoType.move,
+              emailIds: [widget.emailId],
+              sourceMailboxPath: header.mailboxPath,
+              destinationMailboxPath: mailbox.path,
+              destinationMailboxRole: 'inbox',
               originalEmails: [header],
             ),
           ),

@@ -194,6 +194,34 @@ void main() {
     expect(findFlashStrip(), findsOneWidget);
   });
 
+  testWidgets('shows "Moved to Inbox" label for a move with inbox role', (
+    tester,
+  ) async {
+    when(
+      mockUndoRepo.getHistory(limit: anyNamed('limit')),
+    ).thenAnswer((_) async => []);
+
+    await tester.pumpWidget(buildShell(mockUndoRepo));
+    await tester.pumpAndSettle();
+
+    await pushAction(
+      tester,
+      UndoAction(
+        id: '5',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'Junk',
+        destinationMailboxPath: 'INBOX',
+        destinationMailboxRole: 'inbox',
+      ),
+    );
+
+    expect(find.text('Moved 1 email to Inbox'), findsOneWidget);
+    expect(find.byIcon(Icons.move_to_inbox), findsOneWidget);
+    expect(findFlashStrip(), findsOneWidget);
+  });
+
   testWidgets(
     'flash strip auto-dismisses after ~800 ms without obscuring the AppBar',
     (tester) async {
