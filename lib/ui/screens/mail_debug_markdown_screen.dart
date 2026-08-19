@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
@@ -8,11 +11,12 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
-/// Shows a single message's debug snapshot rendered as copy-pasteable markdown
-/// so the user can drop it straight into a bug report. Reached from the mail
-/// detail overflow menu ("Debug Mail"). Local state renders immediately;
-/// "Check remote" fetches the server's view and folds a local-vs-remote diff
-/// into the markdown.
+/// Shows a single message's debug snapshot rendered as markdown so the user can
+/// eyeball it or copy it straight into a bug report. Reached from the mail
+/// detail overflow menu ("Debug Mail"). Local state renders immediately; the
+/// server's view is fetched automatically on open (when online) and a
+/// local-vs-remote diff is folded into the document. The AppBar copy button
+/// copies the raw markdown source.
 class MailDebugMarkdownScreen extends ConsumerStatefulWidget {
   const MailDebugMarkdownScreen({super.key, required this.messageRef});
 
@@ -27,12 +31,15 @@ class _MailDebugMarkdownScreenState
     extends ConsumerState<MailDebugMarkdownScreen> {
   ProbeResult? _probe;
   bool _fetchingProbe = false;
+  bool _probeStarted = false;
 
   @override
   Widget build(BuildContext context) {
     final snapshotAsync = ref.watch(
       messageDebugSnapshotProvider(widget.messageRef),
     );
+
+    _maybeStartProbe(snapshotAsync.value);
 
     return Scaffold(
       appBar: AppBar(
@@ -55,44 +62,30 @@ class _MailDebugMarkdownScreenState
 
   Widget _buildBody(BuildContext context, MessageDebugSnapshot snapshot) {
     final markdown = buildMessageDebugMarkdown(snapshot, probe: _probe);
-    return ListView(
-      padding: const EdgeInsets.all(AppSpacing.md),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          spacing: AppSpacing.sm,
-          runSpacing: AppSpacing.xs,
-          children: [
-            FilledButton.tonalIcon(
-              icon: const Icon(Icons.copy),
-              label: const Text('Copy markdown'),
-              onPressed: _copyCurrent,
-            ),
-            OutlinedButton.icon(
-              icon: _fetchingProbe
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud_sync),
-              label: const Text('Check remote'),
-              onPressed:
-                  _fetchingProbe || snapshot.email == null ? null : _runProbe,
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.md),
-        Card(
-          child: Padding(
+        if (_fetchingProbe) const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: Markdown(
+            data: markdown,
+            selectable: true,
             padding: const EdgeInsets.all(AppSpacing.md),
-            child: SelectableText(
-              markdown,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
           ),
         ),
       ],
     );
+  }
+
+  /// Kicks off the remote probe exactly once, as soon as the local snapshot is
+  /// available and has a message to compare. Fetching only works while online;
+  /// a failed probe surfaces as a "Remote fetch failed" line in the markdown.
+  void _maybeStartProbe(MessageDebugSnapshot? snapshot) {
+    if (_probeStarted || snapshot?.email == null) return;
+    _probeStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_runProbe());
+    });
   }
 
   Future<void> _copyCurrent() async {
