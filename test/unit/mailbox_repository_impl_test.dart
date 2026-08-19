@@ -999,6 +999,64 @@ void main() {
       });
     });
 
+    group('rename / delete (IMAP, non-ASCII names)', () {
+      test(
+        'IMAP: RENAME sends the source folder in modified UTF-7 (#633)',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Geschäftsführer',
+                  accountId: 'acc-1',
+                  path: 'Geschäftsführer',
+                  name: 'Geschäftsführer',
+                  displayPath: const Value('Geschäftsführer'),
+                ),
+              );
+
+          await mailboxes.renameMailbox('acc-1', 'Geschäftsführer', 'Chef');
+
+          expect(spy.renamedFromEncodedPath, 'Gesch&AOQ-ftsf&APw-hrer');
+        },
+      );
+
+      test(
+        'IMAP: DELETE sends the folder in modified UTF-7 (#633)',
+        () async {
+          final spy = SnoozeSpyImapClient();
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Geschäftsführer',
+                  accountId: 'acc-1',
+                  path: 'Geschäftsführer',
+                  name: 'Geschäftsführer',
+                  displayPath: const Value('Geschäftsführer'),
+                ),
+              );
+
+          await mailboxes.deleteMailbox('acc-1', 'Geschäftsführer');
+
+          expect(spy.deletedEncodedPath, 'Gesch&AOQ-ftsf&APw-hrer');
+        },
+      );
+    });
+
     group('syncMailboxes IMAP reconciles deleted folders', () {
       test(
         'mailbox removed on server is pruned locally along with cached emails',

@@ -30,6 +30,13 @@ class SnoozeSpyImapClient extends FakeImapClient {
   String? movedToMailbox;
   String? lastSearchCriteria;
 
+  /// The `encodedPath` of the box handed to the most recent RENAME / DELETE —
+  /// i.e. exactly what enough_mail would write onto the wire. Lets tests assert
+  /// the source folder is sent in modified UTF-7 rather than raw Unicode.
+  String? renamedFromEncodedPath;
+  String? renamedToName;
+  String? deletedEncodedPath;
+
   /// When non-null, `uidMove` returns a `COPYUID` response code built from
   /// these mappings (sourceUid → destinationUid) for the moved sequence.
   final int? copyUidValidity;
@@ -60,6 +67,19 @@ class SnoozeSpyImapClient extends FakeImapClient {
   Future<imap.Mailbox> createMailbox(String path) async {
     createdMailbox = path;
     return _fakeMailbox(path);
+  }
+
+  @override
+  Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
+    renamedFromEncodedPath = box.encodedPath;
+    renamedToName = newName;
+    return _fakeMailbox(newName);
+  }
+
+  @override
+  Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
+    deletedEncodedPath = box.encodedPath;
+    return box;
   }
 
   @override

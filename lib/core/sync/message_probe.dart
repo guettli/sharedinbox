@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 /// Snapshot of a single message fetched from the remote server. Used by the
@@ -161,7 +162,7 @@ class MessageProbeImpl implements MessageProbe {
         account.username.isNotEmpty ? account.username : account.email;
     final client = await _imapConnect(account, username, password);
     try {
-      await client.selectMailboxByPath(mailboxPath);
+      await client.selectUnicodeMailboxByPath(mailboxPath);
       final result = await client.uidFetchMessage(
         uid,
         '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER])',
