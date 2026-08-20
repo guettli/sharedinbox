@@ -295,6 +295,19 @@ func (m *Ci) Base() *dagger.Container {
 // across runs. Re-executes only when pubspec.yaml or pubspec.lock changes.
 // Packages land in the execution-cache snapshot (not a named volume) so that
 // dagger prune can reclaim space from stale pubspec.lock snapshots.
+//
+// The empty `android/` marker directory is what makes `flutter pub get` write
+// .flutter-plugins-dependencies here. Since Flutter 3.47 (#619) pub get only
+// regenerates the plugin manifest when a platform directory is present; with
+// only pubspec.* in /src it would skip it entirely. The Android release build
+// runs with --no-pub (BuildAndroidApk / buildAndroidReleaseDir), so it never
+// regenerates the manifest itself — it relies on this snapshot's copy. Without
+// it the Flutter Gradle plugin registers no plugin subprojects and the release
+// assembleRelease fails to compile GeneratedPluginRegistrant.java ("package …
+// does not exist" for every plugin, see #648). The manifest's contents depend
+// only on the resolved package set, not on android/ contents, so a bare marker
+// produces the same file the real project would; drop it afterwards so no stray
+// android/ files leak into the snapshot that later overlays the real tree.
 func (m *Ci) pubGetLayer() *dagger.Container {
 	pubspecOnly := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"pubspec.yaml", "pubspec.lock"},
@@ -303,8 +316,10 @@ func (m *Ci) pubGetLayer() *dagger.Container {
 		WithDirectory("/src", pubspecOnly, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c",
-			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+			`mkdir -p android; ` +
+				`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter pub get >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`rm -rf android; ` +
 				`grep -vE '^(\+|Downloading packages)' "$tmp" || true`}).
 		WithExec([]string{"python3", "-c",
 			"import json, os\n" +
