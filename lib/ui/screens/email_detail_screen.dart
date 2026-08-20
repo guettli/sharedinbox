@@ -28,7 +28,7 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
-import 'package:sharedinbox/ui/widgets/linkified_text.dart';
+import 'package:sharedinbox/ui/widgets/foldable_quote_text.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -504,7 +504,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
           ),
         ] else
-          LinkifiedText(
+          FoldableQuoteText(
             body.textBody ?? '',
             style: Theme.of(ctx).textTheme.bodyMedium,
           ),
