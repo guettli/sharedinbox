@@ -56,6 +56,35 @@ loop/merge →  loop/merge-in-process →  loop/merge-done
 6. Merge agent waits for CI and merges the PR automatically
 ```
 
+## Toolchain — build, test, analyze (via Dagger)
+
+**Flutter and Dart are NOT installed in this environment.** Do not try to run
+`flutter`, `dart`, or `fvm` directly — they are guard shims that fail with a
+pointer back here. The worker node is memory-constrained, so all Flutter/Dart
+work runs through **Dagger on the remote engine**, not on this host.
+
+Drive everything through `task`, which calls `dagger call -m ci …` under the
+hood. The commands you need:
+
+| Command | What it runs (on the Dagger engine) |
+|---|---|
+| `task check` | The full gate (format + analyze + generated + backend tests) — run before finishing |
+| `task check-fast` | Fast subset (format, analyze, layer/hygiene checks) |
+| `task analyze` | `dart analyze --fatal-infos` |
+| `task test-backend` | Backend/unit tests |
+| `task integration-ui` | UI integration tests (Xvfb, headless) |
+| `task format` | Rewrite Dart formatting in place |
+| `task codegen` | Run build_runner codegen, write results back |
+
+Notes:
+- These are **the same checks CI runs** (`Full Project Check`), so a green
+  `task check` locally means CI will pass.
+- The **local-only** tasks (`task test`, `task run`, `task build-linux`, …) use
+  a local Flutter SDK + nix shell and will **not** work here — use the Dagger
+  targets above instead.
+- Requires the Dagger engine to be reachable (`DAGGER_ENGINE_HOST` + SSH key);
+  if `dagger` cannot connect, stop and report it rather than working blind.
+
 ## Code conventions
 
 - Avoid `else`, use "early return".
