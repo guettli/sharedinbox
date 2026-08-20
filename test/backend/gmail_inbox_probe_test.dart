@@ -114,10 +114,43 @@ void main() {
         final errsBefore =
             (await appLog.watchEntries(errorFilter).first).length;
 
-        try {
-          await emails.getEmailBody(e.id);
-        } catch (err, st) {
-          fail(_report(e, err.toString(), st.toString()));
+        // getEmailBody opens a fresh IMAP connection + login per call, and
+        // Gmail throttles rapid logins — a tight probe loop trips its 20s login
+        // timeout. That is infrastructure, not a decode bug, so retry transient
+        // connect/login failures with backoff (which also slows the login rate
+        // and lets the throttle clear). A NON-transient throw is a genuine
+        // decode/parse failure — report it immediately, it is what we hunt.
+        Object? bodyErr;
+        StackTrace? bodyStack;
+        for (var attempt = 1; attempt <= 5; attempt++) {
+          try {
+            await emails.getEmailBody(e.id);
+            bodyErr = null;
+            break;
+          } catch (err, st) {
+            bodyErr = err;
+            bodyStack = st;
+            final m = err.toString().toLowerCase();
+            final transient = m.contains('timeout') ||
+                m.contains('socket') ||
+                m.contains('connection') ||
+                m.contains('reset');
+            if (!transient || attempt == 5) break;
+            await Future<void>.delayed(Duration(seconds: attempt * 4));
+          }
+        }
+        if (bodyErr != null) {
+          final m = bodyErr.toString().toLowerCase();
+          final infra = m.contains('timeout') ||
+              m.contains('socket') ||
+              m.contains('connection') ||
+              m.contains('reset');
+          final label = infra
+              ? 'CONNECTION/INFRA (persisted after retries — not a decode bug; '
+                  'likely Gmail login throttling; see getEmailBody per-call '
+                  'connect at email_repository_impl.dart)'
+              : bodyErr.toString();
+          fail(_report(e, label, bodyStack?.toString() ?? ''));
         }
 
         // getEmailBody decodes best-effort and logs (rather than throws) on a
