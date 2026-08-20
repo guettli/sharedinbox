@@ -49,8 +49,13 @@ RUN pip install --break-system-packages --no-cache-dir \
     httplib2 \
     pre-commit==4.5.1
 
-# Install acpx CLI globally
-RUN npm install -g acpx@0.10.0
+# Install acpx CLI globally.
+# In agentloop devcontainer mode this image *is* the worker, and agentloop calls
+# the acpx baked in here (it injects only its own binary, not acpx). This pin
+# must therefore match the acpx version of the agentloop release you run —
+# agentloop currently ships acpx 0.13.0 (see its package.json). Bump both
+# together; a skew breaks the agent runner.
+RUN npm install -g acpx@0.13.0
 
 # Setup user "ci"
 RUN useradd -m -s /bin/bash ci
