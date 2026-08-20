@@ -1,44 +1,30 @@
-# Development and Testing Container for SharedInbox
-# Replaces the Nix shell environment.
-FROM ghcr.io/cirruslabs/flutter:3.44.0
+# Development and Testing Container for SharedInbox.
+#
+# This image is BOTH the local dev container and the agentloop worker image.
+#
+# Flutter/Dart are intentionally NOT installed here. The repo runs all Flutter
+# work through Dagger (`task analyze`, `task test-backend`, ... -> `dagger call
+# -m ci ...`), which executes on the remote Dagger engine, not on this host.
+# Keeping the ~4.6 GB SDK out makes the image small enough to build and run on
+# the memory-constrained agentloop worker node — the full Flutter SDK OOM-killed
+# it (envbuilder snapshotting the SDK + `flutter test` compiling on an 8 GB node
+# shared with etcd). See AGENTS.md -> "Toolchain".
+FROM ubuntu:24.04
 
-# Install Linux desktop build and test dependencies, Go, NodeJS, python3, and utilities
+# Base CLI tools. agentloop's worker preflight requires a baseline set on PATH
+# (agentloop internal/doctor DefaultTools: awk curl fd find gh grep gzip jq ls
+# pre-commit rg sed ssh tar). Ubuntu provides awk/find/grep/gzip/ls/sed/tar;
+# the rest are installed here. fd-find ships its binary as `fdfind`, so symlink
+# it to the `fd` name the preflight looks for; gh needs GitHub's apt repo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    clang \
-    cmake \
-    ninja-build \
-    pkg-config \
-    libgtk-3-dev \
-    liblzma-dev \
-    libsecret-1-dev \
-    libgcrypt20-dev \
-    libjsoncpp-dev \
-    sqlite3 \
-    libsqlite3-dev \
-    libssl-dev \
-    iproute2 \
-    netcat-openbsd \
-    xvfb \
-    libosmesa6 \
-    libegl1 \
-    lld \
+    ca-certificates \
     git \
     curl \
     jq \
+    ripgrep \
+    fd-find \
     python3-pip \
-    hugo \
-    lcov \
-    rsync \
     openssh-client \
-    && rm -rf /var/lib/apt/lists/*
-
-# agentloop's worker preflight requires a baseline set of CLI tools on PATH
-# (see agentloop internal/doctor DefaultTools). All but these three are already
-# present above (awk, curl, find, grep, gzip, jq, ls, sed, ssh, tar) or via pip
-# (pre-commit); fd, gh and rg are not, so install them here. fd-find ships its
-# binary as `fdfind` on Debian/Ubuntu, so symlink it to the `fd` name the
-# preflight looks for. gh needs GitHub's apt repo.
-RUN apt-get update && apt-get install -y --no-install-recommends ripgrep fd-find \
     && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -49,72 +35,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends ripgrep fd-find
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Task runner
-RUN curl -fsSL https://taskfile.dev/install.sh \
-    | sh -s -- -b /usr/local/bin v3.48.0
+# Task runner — the agent drives everything through `task <target>`.
+RUN curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin v3.48.0
 
-# Install Dagger CLI
-RUN curl -fsSL https://dl.dagger.io/dagger/install.sh \
-    | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
+# Dagger CLI — how all Flutter/Dart/build/test work actually runs (against the
+# remote engine, not this host). The pin must equal the engine version;
+# Renovate keeps it in sync (see renovate.json customManager).
+RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
 
-# Install python packages (Play Store API clients + pre-commit)
-RUN pip install --break-system-packages --no-cache-dir \
-    google-api-python-client \
-    google-auth-httplib2 \
-    httplib2 \
-    pre-commit==4.5.1
+# pre-commit (project git hooks).
+RUN pip install --break-system-packages --no-cache-dir pre-commit==4.5.1
 
-# Install acpx CLI globally.
-# In agentloop devcontainer mode this image *is* the worker, and agentloop calls
-# the acpx baked in here (it injects only its own binary, not acpx). This pin
-# Node.js 22. acpx 0.13.0 requires Node >= 22.13 (it uses Array.prototype.toSorted
-# etc.); Ubuntu 24.04's apt `nodejs` is 18, on which acpx crashes at runtime with
-# "toSorted is not a function". Install Node 22 from NodeSource instead (this also
-# provides npm), which is why apt `nodejs`/`npm` were dropped above.
+# Node 22 (NodeSource) for acpx — acpx 0.13.0 needs Node >= 22.13; Ubuntu's apt
+# `nodejs` is 18, on which acpx crashes ("toSorted is not a function").
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# must therefore match the acpx version of the agentloop release you run —
-# agentloop currently ships acpx 0.13.0 (see its package.json). Bump both
-# together; a skew breaks the agent runner.
+# acpx CLI (the agentloop agent runner). In agentloop devcontainer mode this
+# image IS the worker and agentloop calls the acpx baked in here, so this pin
+# must match the acpx version of the agentloop release you run (currently
+# 0.13.0); Renovate tracks it (renovate.json). A skew breaks the agent runner.
 RUN npm install -g acpx@0.13.0
 
-# Setup user "ci".
-# Pin ci to uid 1000 (-o allows sharing it with the base image's `ubuntu` user,
-# which already holds 1000). In agentloop devcontainer mode the agent runs as
-# ci, and the daemon that pre-creates the shared run directory runs as uid 1000;
-# matching uids means ci OWNS the files it writes, so no group-write on the
-# shared PVC is needed. Without this, useradd picked 1001 and the worker got
+# Flutter / Dart / fvm are intentionally absent (see the header). Install guard
+# shims so a stray `flutter …` / `dart …` / `fvm …` fails LOUDLY with a pointer
+# to the Dagger-backed task, instead of a confusing "command not found".
+RUN for t in flutter dart fvm; do \
+      printf '%s\n' \
+        '#!/bin/sh' \
+        'echo "flutter/dart/fvm are not installed in this worker." >&2' \
+        'echo "They run via Dagger on the remote engine. Use e.g.:" >&2' \
+        'echo "  task test-backend   # backend tests   (dagger)" >&2' \
+        'echo "  task analyze        # dart analyze     (dagger)" >&2' \
+        'echo "  task check-fast     # fast checks      (dagger)" >&2' \
+        'echo "  task check          # full check       (dagger)" >&2' \
+        'echo "See AGENTS.md -> Toolchain." >&2' \
+        'exit 127' \
+      > "/usr/local/bin/$t" && chmod 0755 "/usr/local/bin/$t"; \
+    done
+
+# ci user pinned to uid 1000 so the worker OWNS the files it writes into the
+# shared run directory the agentloop daemon (also uid 1000) pre-creates. -o
+# shares 1000 with the base's `ubuntu` user. Without this the worker gets
 # "permission denied" writing output.json.
 RUN useradd -m -o -u 1000 -s /bin/bash ci
-
-# Make the pre-baked Flutter SDK usable by ci. The cirruslabs base ships the
-# SDK at /sdks/flutter owned by root; running as ci (uid 1000) otherwise hits
-# git's "dubious ownership" guard on read AND cannot write bin/cache. Chown it
-# to ci (owner-match, so no safe.directory games) and add a system-wide
-# safe.directory as belt-and-suspenders (system config is read regardless of
-# the runtime HOME agentloop overrides to /data/home).
-RUN chown -R 1000:1000 /sdks/flutter \
-    && git config --system --add safe.directory /sdks/flutter
-
-# fvm shim. The repo's Taskfile drives Flutter via `fvm flutter` / `fvm dart`
-# and pins 3.47.0 in .fvmrc — which is exactly the version this base ships at
-# /sdks/flutter. Rather than install real fvm and re-download an identical SDK
-# on every worker, forward `fvm flutter …` / `fvm dart …` to the system SDK and
-# no-op fvm's SDK-management subcommands (install/use/config). If .fvmrc ever
-# pins a version other than the base SDK, replace this shim with real fvm.
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    '# sharedinbox dev-container fvm shim -> pre-baked /sdks/flutter (see Dockerfile.dev)' \
-    'case "$1" in' \
-    '  flutter|dart) c="$1"; shift; exec "$c" "$@" ;;' \
-    '  install|use|config|"") exit 0 ;;' \
-    '  *) exec flutter "$@" ;;' \
-    'esac' \
-    > /usr/local/bin/fvm \
-    && chmod 0755 /usr/local/bin/fvm
-
 USER ci
 ENV HOME=/home/ci
 ENV PATH=/home/ci/.pub-cache/bin:$PATH
