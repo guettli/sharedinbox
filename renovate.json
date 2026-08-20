@@ -79,6 +79,14 @@
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "description": "acpx CLI baked into the dev container. In agentloop devcontainer mode this image is the worker and agentloop calls this acpx, so it must match the acpx version of the agentloop release you run. Nothing else guards this pin, so keep the manager here to stop it drifting.",
+      "customType": "regex",
+      "fileMatch": ["^Dockerfile\\.dev$"],
+      "matchStrings": ["acpx@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "acpx",
+      "datasourceTemplate": "npm"
     }
   ]
 }
