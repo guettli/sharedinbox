@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/native.dart';
@@ -5,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/services/changelog_status_service.dart';
+import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
@@ -26,6 +29,8 @@ class _FakeAssetBundle extends CachingAssetBundle {
 Widget _buildScreen({
   required Map<String, String> assets,
   Map<String, DateTime> installedVersions = const {},
+  RepoStatus? repoStatus,
+  UpdateInfo? updateInfo,
 }) {
   return ProviderScope(
     overrides: [
@@ -35,6 +40,8 @@ Widget _buildScreen({
         return db;
       }),
       installedVersionsProvider.overrideWith((ref) async => installedVersions),
+      repoStatusProvider.overrideWith((ref) async => repoStatus),
+      updateInfoProvider.overrideWith((ref) async => updateInfo),
     ],
     child: DefaultAssetBundle(
       bundle: _FakeAssetBundle(assets),
@@ -115,5 +122,105 @@ void main() {
 
     // The link text "#42" must be visible in the rendered output.
     expect(find.textContaining('#42'), findsOneWidget);
+  });
+
+  testWidgets('renders the changelog body while the header still loads', (
+    tester,
+  ) async {
+    // A repoStatusProvider that never completes leaves the header spinning.
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          dbProvider.overrideWith((ref) {
+            final db = AppDatabase(NativeDatabase.memory());
+            ref.onDispose(db.close);
+            return db;
+          }),
+          installedVersionsProvider.overrideWith((ref) async => const {}),
+          repoStatusProvider.overrideWith(
+            (ref) => Completer<RepoStatus?>().future,
+          ),
+          updateInfoProvider.overrideWith((ref) async => null),
+        ],
+        child: DefaultAssetBundle(
+          bundle: _FakeAssetBundle({'assets/changelog.txt': _fakeChangelog}),
+          child: const MaterialApp(home: ChangeLogScreen()),
+        ),
+      ),
+    );
+    // Let the asset future resolve without settling the header spinner.
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Checking GitHub…'), findsOneWidget);
+    // The body is not blocked by the header spinner.
+    expect(find.textContaining('initial release'), findsOneWidget);
+  });
+
+  testWidgets('shows how many commits behind main with the latest date', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+        repoStatus: RepoStatus(
+          state: RepoStatusState.behind,
+          behindCount: 3,
+          latestCommitDate: DateTime(2026, 8, 20),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('3 commits behind main'), findsOneWidget);
+    expect(find.textContaining('20 Aug 2026'), findsOneWidget);
+  });
+
+  testWidgets('shows up to date when the build is the tip of main', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+        repoStatus: const RepoStatus(state: RepoStatusState.upToDate),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Up to date with main'), findsOneWidget);
+  });
+
+  testWidgets('shows a development-build note when there is no comparison', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Development build'), findsOneWidget);
+  });
+
+  testWidgets('shows a new-app-version line when an update is available', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+        repoStatus: const RepoStatus(state: RepoStatusState.upToDate),
+        updateInfo: const UpdateInfo(
+          latestVersion: 'v2.0',
+          downloadUrl: 'https://example.com/download',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('A new app version is available (v2.0)'),
+      findsOneWidget,
+    );
   });
 }
