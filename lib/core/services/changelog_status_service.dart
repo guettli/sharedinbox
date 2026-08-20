@@ -45,12 +45,10 @@ Future<RepoStatus> fetchRepoStatus(
   String appVersion,
 ) async {
   try {
-    final resp = await client
-        .get(
-          Uri.parse('$_kCompareUrl/$appVersion...main'),
-          headers: const {'Accept': 'application/vnd.github+json'},
-        )
-        .timeout(const Duration(seconds: 10));
+    final resp = await client.get(
+      Uri.parse('$_kCompareUrl/$appVersion...main'),
+      headers: const {'Accept': 'application/vnd.github+json'},
+    ).timeout(const Duration(seconds: 10));
     if (resp.statusCode != 200) {
       return const RepoStatus(state: RepoStatusState.unknown);
     }
