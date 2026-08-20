@@ -34,6 +34,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
+# agentloop's worker preflight requires a baseline set of CLI tools on PATH
+# (see agentloop internal/doctor DefaultTools). All but these three are already
+# present above (awk, curl, find, grep, gzip, jq, ls, sed, ssh, tar) or via pip
+# (pre-commit); fd, gh and rg are not, so install them here. fd-find ships its
+# binary as `fdfind` on Debian/Ubuntu, so symlink it to the `fd` name the
+# preflight looks for. gh needs GitHub's apt repo.
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep fd-find \
+    && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Task runner
 RUN curl -fsSL https://taskfile.dev/install.sh \
     | sh -s -- -b /usr/local/bin v3.48.0
