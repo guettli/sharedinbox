@@ -63,8 +63,18 @@ loop/merge →  loop/merge-in-process →  loop/merge-done
 pointer back here. The worker node is memory-constrained, so all Flutter/Dart
 work runs through **Dagger on the remote engine**, not on this host.
 
-Drive everything through `task`, which calls `dagger call -m ci …` under the
-hood. The commands you need:
+**First, once per session, open the Dagger tunnel:**
+
+```
+bash scripts/worker_dagger_tunnel.sh
+```
+
+This opens an SSH tunnel to the remote Dagger engine (idempotent — safe to
+re-run). The Dagger `task`s below fail to connect until it is up. If it errors
+(e.g. the engine is unreachable), stop and report it rather than working blind.
+
+Then drive everything through `task`, which calls `dagger call -m ci …` under
+the hood. The commands you need:
 
 | Command | What it runs (on the Dagger engine) |
 |---|---|
