@@ -88,6 +88,33 @@ RUN npm install -g acpx@0.13.0
 # shared PVC is needed. Without this, useradd picked 1001 and the worker got
 # "permission denied" writing output.json.
 RUN useradd -m -o -u 1000 -s /bin/bash ci
+
+# Make the pre-baked Flutter SDK usable by ci. The cirruslabs base ships the
+# SDK at /sdks/flutter owned by root; running as ci (uid 1000) otherwise hits
+# git's "dubious ownership" guard on read AND cannot write bin/cache. Chown it
+# to ci (owner-match, so no safe.directory games) and add a system-wide
+# safe.directory as belt-and-suspenders (system config is read regardless of
+# the runtime HOME agentloop overrides to /data/home).
+RUN chown -R 1000:1000 /sdks/flutter \
+    && git config --system --add safe.directory /sdks/flutter
+
+# fvm shim. The repo's Taskfile drives Flutter via `fvm flutter` / `fvm dart`
+# and pins 3.47.0 in .fvmrc — which is exactly the version this base ships at
+# /sdks/flutter. Rather than install real fvm and re-download an identical SDK
+# on every worker, forward `fvm flutter …` / `fvm dart …` to the system SDK and
+# no-op fvm's SDK-management subcommands (install/use/config). If .fvmrc ever
+# pins a version other than the base SDK, replace this shim with real fvm.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    '# sharedinbox dev-container fvm shim -> pre-baked /sdks/flutter (see Dockerfile.dev)' \
+    'case "$1" in' \
+    '  flutter|dart) c="$1"; shift; exec "$c" "$@" ;;' \
+    '  install|use|config|"") exit 0 ;;' \
+    '  *) exec flutter "$@" ;;' \
+    'esac' \
+    > /usr/local/bin/fvm \
+    && chmod 0755 /usr/local/bin/fvm
+
 USER ci
 ENV HOME=/home/ci
 ENV PATH=/home/ci/.pub-cache/bin:$PATH
