@@ -39,9 +39,7 @@ class ChangeLogScreen extends ConsumerWidget {
   }
 
   static void _launch(String url) {
-    unawaited(
-      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-    );
+    unawaited(launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication));
   }
 
   static const _repoUrl = 'https://github.com/guettli/sharedinbox';
@@ -73,7 +71,8 @@ class ChangeLogScreen extends ConsumerWidget {
         final lineHash = match.group(1)!;
         for (final entry in versions.entries) {
           final stored = entry.key;
-          final matches = stored == lineHash ||
+          final matches =
+              stored == lineHash ||
               stored.startsWith(lineHash) ||
               lineHash.startsWith(stored);
           if (!matches) continue;
@@ -108,8 +107,7 @@ class ChangeLogScreen extends ConsumerWidget {
   Widget _buildBody(BuildContext context, WidgetRef ref) {
     final installedVersions = ref.watch(installedVersionsProvider);
     return FutureBuilder<String>(
-      future:
-          DefaultAssetBundle.of(context).loadString('assets/changelog.txt'),
+      future: DefaultAssetBundle.of(context).loadString('assets/changelog.txt'),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting ||
             installedVersions.isLoading) {
@@ -173,8 +171,7 @@ class _StatusHeader extends ConsumerWidget {
             const SizedBox(height: 6),
             _AppLink(
               text: 'A new app version is available (${update.latestVersion})',
-              onTap: () =>
-                  ChangeLogScreen._launch(update.downloadUrl),
+              onTap: () => ChangeLogScreen._launch(update.downloadUrl),
             ),
           ],
         ],
@@ -197,7 +194,7 @@ class _StatusHeader extends ConsumerWidget {
         return Text(
           date != null
               ? 'Up to date with main (latest commit: '
-                  '${ChangeLogScreen._formatCommitDate(date)})'
+                    '${ChangeLogScreen._formatCommitDate(date)})'
               : 'Up to date with main',
         );
       case RepoStatusState.behind:

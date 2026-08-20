@@ -5,8 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/di.dart';
 
 const _kAppVersion = String.fromEnvironment('GIT_HASH');
-const _kCompareUrl =
-    'https://api.github.com/repos/guettli/sharedinbox/compare';
+const _kCompareUrl = 'https://api.github.com/repos/guettli/sharedinbox/compare';
 
 /// Outcome of comparing the running build against the `main` branch.
 enum RepoStatusState {
@@ -41,12 +40,17 @@ class RepoStatus {
 /// compare API, returning how many commits the build is behind and the date of
 /// the latest `main` commit. Never throws: any failure maps to
 /// [RepoStatusState.unknown].
-Future<RepoStatus> fetchRepoStatus(http.Client client, String appVersion) async {
+Future<RepoStatus> fetchRepoStatus(
+  http.Client client,
+  String appVersion,
+) async {
   try {
-    final resp = await client.get(
-      Uri.parse('$_kCompareUrl/$appVersion...main'),
-      headers: const {'Accept': 'application/vnd.github+json'},
-    ).timeout(const Duration(seconds: 10));
+    final resp = await client
+        .get(
+          Uri.parse('$_kCompareUrl/$appVersion...main'),
+          headers: const {'Accept': 'application/vnd.github+json'},
+        )
+        .timeout(const Duration(seconds: 10));
     if (resp.statusCode != 200) {
       return const RepoStatus(state: RepoStatusState.unknown);
     }
