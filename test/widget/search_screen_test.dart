@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
@@ -17,13 +18,14 @@ Future<void> pumpSearchScreen(
   WidgetTester tester, {
   required FakeSearchHistoryRepository history,
   FakeEmailRepository? emails,
+  List<Account> accounts = const [kTestAccount],
 }) async {
   await tester.pumpWidget(
     buildApp(
       initialLocation: '/accounts/acc-1/search',
       overrides: [
         accountRepositoryProvider.overrideWithValue(
-          FakeAccountRepository([kTestAccount]),
+          FakeAccountRepository(accounts),
         ),
         mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
         emailRepositoryProvider.overrideWithValue(
@@ -292,6 +294,127 @@ void main() {
 
       expect(find.text('Foobar mail'), findsOneWidget);
       expect(await history.getRecentSearches(), ['foobar']);
+    });
+  });
+
+  group('SearchScreen account filter', () {
+    // A second account so global-search results can span two accounts. The
+    // route stays account-scoped ('acc-1') but the fake repository ignores the
+    // scope and returns whatever it was seeded with, mirroring a global search.
+    const kSecondAccount = Account(
+      id: 'acc-2',
+      displayName: 'Work',
+      email: 'work@example.com',
+      imapHost: 'imap.example.com',
+      smtpHost: 'smtp.example.com',
+    );
+
+    Email mailFrom(String accountId, String id, String subject) =>
+        testEmail(id: id, subject: subject, accountId: accountId);
+
+    Future<void> pumpMultiAccountSearch(WidgetTester tester) async {
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        accounts: const [kTestAccount, kSecondAccount],
+        emails: FakeEmailRepository(
+          searchResults: [
+            mailFrom('acc-1', 'acc-1:1', 'Alpha from Alice'),
+            mailFrom('acc-1', 'acc-1:2', 'Beta from Alice'),
+            mailFrom('acc-2', 'acc-2:1', 'Gamma from Work'),
+          ],
+        ),
+      );
+
+      await tester.enterText(find.byType(TextField), 'from');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+    }
+
+    // Finds the account chip carrying [label] (the InputChip in the filter bar),
+    // disambiguating from any list-row location label with the same text.
+    Finder accountChip(String label) => find.ancestor(
+          of: find.text(label),
+          matching: find.byType(InputChip),
+        );
+
+    testWidgets('shows one chip per matching account above the results', (
+      tester,
+    ) async {
+      await pumpMultiAccountSearch(tester);
+
+      expect(accountChip('Alice'), findsOneWidget);
+      expect(accountChip('Work'), findsOneWidget);
+
+      // All three matches are visible before any account is deactivated.
+      expect(find.text('Alpha from Alice'), findsOneWidget);
+      expect(find.text('Beta from Alice'), findsOneWidget);
+      expect(find.text('Gamma from Work'), findsOneWidget);
+    });
+
+    testWidgets('no account bar when every match is from one account', (
+      tester,
+    ) async {
+      final email = testEmail(subject: 'Only mail');
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        accounts: const [kTestAccount, kSecondAccount],
+        emails: FakeEmailRepository(searchResults: [email]),
+      );
+
+      await tester.enterText(find.byType(TextField), 'only');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      // A single-account result set needs no filter bar.
+      expect(find.byType(InputChip), findsNothing);
+      expect(find.text('Only mail'), findsOneWidget);
+    });
+
+    testWidgets('pressing X hides that account\'s mail immediately', (
+      tester,
+    ) async {
+      await pumpMultiAccountSearch(tester);
+
+      // Deactivate "Work" via its X (delete icon).
+      final deleteIcon = find.descendant(
+        of: accountChip('Work'),
+        matching: find.byIcon(Icons.close),
+      );
+      expect(deleteIcon, findsOneWidget);
+      await tester.tap(deleteIcon);
+      await tester.pumpAndSettle();
+
+      // Work's mail is gone; Alice's mail stays. No re-search was needed.
+      expect(find.text('Gamma from Work'), findsNothing);
+      expect(find.text('Alpha from Alice'), findsOneWidget);
+      expect(find.text('Beta from Alice'), findsOneWidget);
+
+      // The chip remains so the account can be brought back.
+      expect(accountChip('Work'), findsOneWidget);
+    });
+
+    testWidgets('tapping a deactivated chip restores its mail', (
+      tester,
+    ) async {
+      await pumpMultiAccountSearch(tester);
+
+      await tester.tap(
+        find.descendant(
+          of: accountChip('Work'),
+          matching: find.byIcon(Icons.close),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Gamma from Work'), findsNothing);
+
+      // Re-including the account: tap the (now deactivated) chip body.
+      await tester.tap(accountChip('Work'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Gamma from Work'), findsOneWidget);
+      expect(find.text('Alpha from Alice'), findsOneWidget);
     });
   });
 

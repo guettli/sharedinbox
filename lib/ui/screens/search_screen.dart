@@ -39,6 +39,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   bool _loading = false;
   bool _fieldFocused = false;
 
+  /// Accounts the user has deactivated on the current result set. Purely a
+  /// client-side view filter over [_results] — deactivating an account hides
+  /// its mail immediately without re-running the search. Reset whenever a new
+  /// result set arrives so a stale set never silently filters a later query.
+  final Set<String> _hiddenAccountIds = {};
+
   // Advanced (structured) search state.
   bool _advancedMode = false;
   FilterGroup _filterGroup = FilterGroup.empty();
@@ -88,13 +94,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() {
       _advancedMode = !_advancedMode;
       _results = null;
+      _hiddenAccountIds.clear();
     });
   }
 
   void _onChanged(String value) {
     _debounce?.cancel();
     if (value.trim().length < 3) {
-      setState(() => _results = null);
+      setState(() {
+        _results = null;
+        _hiddenAccountIds.clear();
+      });
       return;
     }
     _debounce = Timer(
@@ -150,6 +160,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) {
         setState(() {
           _results = merged;
+          _hiddenAccountIds.clear();
           _loading = false;
         });
       }
@@ -179,6 +190,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) {
         setState(() {
           _results = emails;
+          _hiddenAccountIds.clear();
           _loading = false;
         });
       }
@@ -226,7 +238,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     tooltip: 'Clear search',
                     onPressed: () {
                       _ctrl.clear();
-                      setState(() => _results = null);
+                      setState(() {
+                        _results = null;
+                        _hiddenAccountIds.clear();
+                      });
                     },
                   ),
                 IconButton(
@@ -264,7 +279,90 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
     final r = _results!;
     if (r.isEmpty) return const Center(child: Text('No results'));
-    return _buildResultsList(r);
+    return _buildResultsRegion(r);
+  }
+
+  /// Results after removing mail from deactivated accounts (see
+  /// [_hiddenAccountIds]).
+  List<Email> get _visibleResults =>
+      _results!.where((e) => !_hiddenAccountIds.contains(e.accountId)).toList();
+
+  /// The account filter bar stacked above the message list. Only meaningful
+  /// when a result set spans two or more accounts, so an empty box is returned
+  /// otherwise. Deactivating an account is a pure [setState] view filter, so
+  /// the list below rebuilds immediately with no re-query.
+  Widget _buildResultsRegion(List<Email> results) {
+    final visible = _visibleResults;
+    return Column(
+      children: [
+        _buildAccountBar(results),
+        Expanded(
+          child: visible.isEmpty
+              ? const Center(
+                  child: Text('No accounts selected — tap an account to '
+                      'show its mail'),
+                )
+              : _buildResultsList(visible),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAccountBar(List<Email> results) {
+    // Distinct account ids in first-seen (received) order.
+    final ids = <String>[];
+    final seen = <String>{};
+    for (final e in results) {
+      if (seen.add(e.accountId)) ids.add(e.accountId);
+    }
+    // A single-account result set needs no filter.
+    if (ids.length < 2) return const SizedBox.shrink();
+
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    final accountsById = {for (final a in accounts) a.id: a};
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        0,
+      ),
+      child: Wrap(
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.xs,
+        children: [
+          for (final id in ids)
+            _buildAccountChip(id, accountDisplayLabel(accountsById[id], id)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccountChip(String accountId, String label) {
+    final hidden = _hiddenAccountIds.contains(accountId);
+    return InputChip(
+      label: Text(
+        label,
+        style: hidden
+            ? TextStyle(
+                decoration: TextDecoration.lineThrough,
+                color: Theme.of(context).disabledColor,
+              )
+            : null,
+      ),
+      selected: !hidden,
+      showCheckmark: false,
+      // Deactivated chips stay put and re-include the account when tapped, so
+      // hiding is always reversible without re-running the search.
+      onPressed: hidden
+          ? () => setState(() => _hiddenAccountIds.remove(accountId))
+          : null,
+      onDeleted: hidden
+          ? null
+          : () => setState(() => _hiddenAccountIds.add(accountId)),
+      deleteIcon: const Icon(Icons.close, size: 18),
+      deleteButtonTooltipMessage: 'Hide $label',
+    );
   }
 
   Widget _buildAdvancedBody() {
@@ -279,6 +377,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             onChanged: (g) => setState(() {
               _filterGroup = g;
               _results = null;
+              _hiddenAccountIds.clear();
             }),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -295,7 +394,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return Column(
         children: [
           filterHeader,
-          Expanded(child: _buildResultsList(_results!)),
+          Expanded(child: _buildResultsRegion(_results!)),
         ],
       );
     }
