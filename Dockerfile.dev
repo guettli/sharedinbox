@@ -83,5 +83,12 @@ RUN useradd -m -o -u 1000 -s /bin/bash ci
 USER ci
 ENV HOME=/home/ci
 ENV PATH=/home/ci/.pub-cache/bin:$PATH
+# All Dagger work runs against the REMOTE engine over an SSH tunnel that
+# scripts/worker_dagger_tunnel.sh opens on localhost:8080. Baking this here means
+# every shell (the agent's separate bash calls included) uses the tunnel once
+# it's up, without needing to re-export anything. Harmless until the tunnel
+# exists — `dagger` simply cannot connect, which is the intended "run the tunnel
+# first" signal.
+ENV _EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080
 
 WORKDIR /src
