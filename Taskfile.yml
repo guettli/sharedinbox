@@ -606,6 +606,15 @@ tasks:
     cmds:
       - stalwart-dev/run_android.sh
 
+  gmail-probe:
+    desc: "Read-only Gmail inbox decode probe (on the Dagger engine). Silent on success; stops at the first message that fails to decode. Reads GMAIL_MAIL/GMAIL_PASSWORD from ~/.env locally, or the injected worker Secret."
+    cmds:
+      - |
+        set -a; [ -f "$HOME/.env" ] && . "$HOME/.env"; set +a
+        : "${GMAIL_MAIL:?set GMAIL_MAIL (in ~/.env, or the agentloop-repo-sharedinbox-secrets Secret)}"
+        : "${GMAIL_PASSWORD:?set GMAIL_PASSWORD (in ~/.env, or the Secret)}"
+        dagger call --progress=plain -q -m ci --source=. gmail-probe --gmail-mail=env:GMAIL_MAIL --gmail-password=env:GMAIL_PASSWORD
+
   coverage:
     desc: Coverage gate — run after test (and optionally integration) have written lcov.info
     deps: [_preflight]
