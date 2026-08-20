@@ -744,6 +744,39 @@ func (m *Ci) ChaosMonkeyBackend(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// GmailProbe runs the read-only Gmail inbox decode probe
+// (test/backend/gmail_inbox_probe_test.dart) against a LIVE Gmail account. It
+// walks INBOX newest-first through the app's real sync + decode path and stops
+// at the first message that fails to decode, printing one error block; it is
+// silent when every message decodes cleanly.
+//
+// gmailMail / gmailPassword are the address and an app-password, passed as
+// Dagger secrets (never baked into the layer). Unlike the backend tests this
+// does NOT attach Stalwart — it talks to imap.gmail.com directly, so it needs
+// the engine's outbound network. Message-ids proven clean are recorded in a
+// persistent Dagger cache volume, so a re-run skips them and advances to the
+// next unseen message — the fail-forward loop.
+//
+// Read-only: the probe only syncs + decodes (BODY.PEEK everywhere, no
+// flag/move/append writes), so it never mutates the mailbox.
+func (m *Ci) GmailProbe(
+	ctx context.Context,
+	gmailMail *dagger.Secret,
+	gmailPassword *dagger.Secret,
+) (string, error) {
+	return m.setup(m.backendSrc()).
+		WithSecretVariable("GMAIL_MAIL", gmailMail).
+		WithSecretVariable("GMAIL_PASSWORD", gmailPassword).
+		WithEnvVariable("GMAIL_PROBE_CACHE", "/home/ci/.cache/gmail-probe/clean.json").
+		WithMountedCache("/home/ci/.cache/gmail-probe", dag.CacheVolume("gmail-probe-cache"),
+			dagger.ContainerWithMountedCacheOpts{Owner: "ci"}).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter test test/backend/gmail_inbox_probe_test.dart --reporter expanded --concurrency=1 --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
+		Stdout(ctx)
+}
+
 // Check runs the full check suite.
 func (m *Ci) Check(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
