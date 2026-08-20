@@ -26,8 +26,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     jq \
     python3-pip \
-    nodejs \
-    npm \
     hugo \
     lcov \
     rsync \
@@ -69,6 +67,14 @@ RUN pip install --break-system-packages --no-cache-dir \
 # Install acpx CLI globally.
 # In agentloop devcontainer mode this image *is* the worker, and agentloop calls
 # the acpx baked in here (it injects only its own binary, not acpx). This pin
+# Node.js 22. acpx 0.13.0 requires Node >= 22.13 (it uses Array.prototype.toSorted
+# etc.); Ubuntu 24.04's apt `nodejs` is 18, on which acpx crashes at runtime with
+# "toSorted is not a function". Install Node 22 from NodeSource instead (this also
+# provides npm), which is why apt `nodejs`/`npm` were dropped above.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # must therefore match the acpx version of the agentloop release you run —
 # agentloop currently ships acpx 0.13.0 (see its package.json). Bump both
 # together; a skew breaks the agent runner.
