@@ -122,7 +122,7 @@ void main() {
         // decode/parse failure — report it immediately, it is what we hunt.
         Object? bodyErr;
         StackTrace? bodyStack;
-        for (var attempt = 1; attempt <= 5; attempt++) {
+        for (var attempt = 1; attempt <= _bodyAttempts; attempt++) {
           try {
             await emails.getEmailBody(e.id);
             bodyErr = null;
@@ -130,22 +130,12 @@ void main() {
           } catch (err, st) {
             bodyErr = err;
             bodyStack = st;
-            final m = err.toString().toLowerCase();
-            final transient = m.contains('timeout') ||
-                m.contains('socket') ||
-                m.contains('connection') ||
-                m.contains('reset');
-            if (!transient || attempt == 5) break;
+            if (!_isTransient(err) || attempt == _bodyAttempts) break;
             await Future<void>.delayed(Duration(seconds: attempt * 4));
           }
         }
         if (bodyErr != null) {
-          final m = bodyErr.toString().toLowerCase();
-          final infra = m.contains('timeout') ||
-              m.contains('socket') ||
-              m.contains('connection') ||
-              m.contains('reset');
-          final label = infra
+          final label = _isTransient(bodyErr)
               ? 'CONNECTION/INFRA (persisted after retries — not a decode bug; '
                   'likely Gmail login throttling; see getEmailBody per-call '
                   'connect at email_repository_impl.dart)'
@@ -174,8 +164,25 @@ void main() {
     skip: creds
         ? false
         : 'set GMAIL_MAIL and GMAIL_PASSWORD (e.g. via ~/.env) to run',
-    timeout: const Timeout(Duration(minutes: 30)),
+    // A full INBOX plus retry backoff outruns 30 minutes. The skip-cache
+    // makes a timed-out run resumable, but a wider budget means fewer
+    // restarts before the probe reaches an undecodable message.
+    timeout: const Timeout(Duration(minutes: 60)),
   );
+}
+
+/// Attempts per message before a failure is reported (1 try + 4 retries).
+const _bodyAttempts = 5;
+
+/// A connect/login-level failure — infrastructure, not a decode bug. Matched on
+/// the message because enough_mail surfaces these as plain [Exception]s and
+/// [SocketException]s rather than one distinguishable type.
+bool _isTransient(Object err) {
+  final m = err.toString().toLowerCase();
+  return m.contains('timeout') ||
+      m.contains('socket') ||
+      m.contains('connection') ||
+      m.contains('reset');
 }
 
 Set<String> _loadClean(File f) {
