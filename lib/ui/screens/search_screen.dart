@@ -357,8 +357,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       onPressed: hidden
           ? () => setState(() => _hiddenAccountIds.remove(accountId))
           : null,
-      onDeleted:
-          hidden ? null : () => setState(() => _hiddenAccountIds.add(accountId)),
+      onDeleted: hidden
+          ? null
+          : () => setState(() => _hiddenAccountIds.add(accountId)),
       deleteIcon: const Icon(Icons.close, size: 18),
       deleteButtonTooltipMessage: 'Hide $label',
     );
