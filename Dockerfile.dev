@@ -57,8 +57,14 @@ RUN pip install --break-system-packages --no-cache-dir \
 # together; a skew breaks the agent runner.
 RUN npm install -g acpx@0.13.0
 
-# Setup user "ci"
-RUN useradd -m -s /bin/bash ci
+# Setup user "ci".
+# Pin ci to uid 1000 (-o allows sharing it with the base image's `ubuntu` user,
+# which already holds 1000). In agentloop devcontainer mode the agent runs as
+# ci, and the daemon that pre-creates the shared run directory runs as uid 1000;
+# matching uids means ci OWNS the files it writes, so no group-write on the
+# shared PVC is needed. Without this, useradd picked 1001 and the worker got
+# "permission denied" writing output.json.
+RUN useradd -m -o -u 1000 -s /bin/bash ci
 USER ci
 ENV HOME=/home/ci
 ENV PATH=/home/ci/.pub-cache/bin:$PATH
