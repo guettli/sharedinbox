@@ -953,6 +953,7 @@ const kTestMailbox = Mailbox(
 Email testEmail({
   String id = 'acc-1:42',
   String subject = 'Hello world',
+  String accountId = 'acc-1',
   bool isSeen = false,
   bool isFlagged = false,
   bool hasAttachment = false,
@@ -960,7 +961,7 @@ Email testEmail({
 }) =>
     Email(
       id: id,
-      accountId: 'acc-1',
+      accountId: accountId,
       mailboxPath: 'INBOX',
       uid: 42,
       subject: subject,

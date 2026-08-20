@@ -18,13 +18,14 @@ Future<void> pumpSearchScreen(
   WidgetTester tester, {
   required FakeSearchHistoryRepository history,
   FakeEmailRepository? emails,
+  List<Account> accounts = const [kTestAccount],
 }) async {
   await tester.pumpWidget(
     buildApp(
       initialLocation: '/accounts/acc-1/search',
       overrides: [
         accountRepositoryProvider.overrideWithValue(
-          FakeAccountRepository([kTestAccount]),
+          FakeAccountRepository(accounts),
         ),
         mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
         emailRepositoryProvider.overrideWithValue(
@@ -308,49 +309,22 @@ void main() {
       smtpHost: 'smtp.example.com',
     );
 
-    Email mailFrom(String accountId, String id, String subject) => Email(
-          id: id,
-          accountId: accountId,
-          mailboxPath: 'INBOX',
-          uid: 1,
-          subject: subject,
-          receivedAt: DateTime(2024, 6),
-          sentAt: DateTime(2024, 6),
-          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-          to: const [EmailAddress(email: 'alice@example.com')],
-          cc: const [],
-          isSeen: false,
-          isFlagged: false,
-          hasAttachment: false,
-        );
+    Email mailFrom(String accountId, String id, String subject) =>
+        testEmail(id: id, subject: subject, accountId: accountId);
 
     Future<void> pumpMultiAccountSearch(WidgetTester tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount, kSecondAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(
-                searchResults: [
-                  mailFrom('acc-1', 'acc-1:1', 'Alpha from Alice'),
-                  mailFrom('acc-1', 'acc-1:2', 'Beta from Alice'),
-                  mailFrom('acc-2', 'acc-2:1', 'Gamma from Work'),
-                ],
-              ),
-            ),
-            searchHistoryRepositoryProvider.overrideWithValue(
-              FakeSearchHistoryRepository(),
-            ),
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        accounts: const [kTestAccount, kSecondAccount],
+        emails: FakeEmailRepository(
+          searchResults: [
+            mailFrom('acc-1', 'acc-1:1', 'Alpha from Alice'),
+            mailFrom('acc-1', 'acc-1:2', 'Beta from Alice'),
+            mailFrom('acc-2', 'acc-2:1', 'Gamma from Work'),
           ],
         ),
       );
-      await tester.pumpAndSettle();
 
       await tester.enterText(find.byType(TextField), 'from');
       await tester.pump(const Duration(milliseconds: 400));
@@ -382,26 +356,12 @@ void main() {
       tester,
     ) async {
       final email = testEmail(subject: 'Only mail');
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/search',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount, kSecondAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(searchResults: [email]),
-            ),
-            searchHistoryRepositoryProvider.overrideWithValue(
-              FakeSearchHistoryRepository(),
-            ),
-          ],
-        ),
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        accounts: const [kTestAccount, kSecondAccount],
+        emails: FakeEmailRepository(searchResults: [email]),
       );
-      await tester.pumpAndSettle();
 
       await tester.enterText(find.byType(TextField), 'only');
       await tester.pump(const Duration(milliseconds: 400));
