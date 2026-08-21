@@ -27,14 +27,20 @@ class BodyCacheService {
 
     final emailRepo = EmailRepositoryImpl(_db, _accountRepo);
 
-    for (final emailId in candidates) {
-      final currentSize = await _getCacheSizeBytes();
-      if (currentSize >= limitBytes) break;
-      try {
-        await emailRepo.getEmailBody(emailId, prefetch: true);
-      } catch (_) {
-        // Skip emails that fail to fetch.
+    try {
+      for (final emailId in candidates) {
+        final currentSize = await _getCacheSizeBytes();
+        if (currentSize >= limitBytes) break;
+        try {
+          await emailRepo.getEmailBody(emailId, prefetch: true);
+        } catch (_) {
+          // Skip emails that fail to fetch.
+        }
       }
+    } finally {
+      // These fetches share one pooled IMAP connection (#679); release it as
+      // soon as the batch is done instead of waiting for the idle timer.
+      await emailRepo.dispose();
     }
   }
 

@@ -6978,6 +6978,139 @@ void main() {
     );
   });
 
+  group('IMAP body connection pooling (#679)', () {
+    Future<void> seedEmail(AppDatabase db, int uid) =>
+        db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                receivedAt: DateTime(2024),
+              ),
+            );
+
+    test('sequential body fetches share one connection', () async {
+      var connects = 0;
+      final client = _PoolBodyImapClient();
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async {
+          connects++;
+          return client;
+        },
+      );
+      addTearDown(r.emails.dispose);
+      await r.accounts.addAccount(_account, 'pw');
+      for (var uid = 1; uid <= 3; uid++) {
+        await seedEmail(r.db, uid);
+      }
+
+      for (var uid = 1; uid <= 3; uid++) {
+        await r.emails.getEmailBody('acc-1:INBOX:$uid');
+      }
+
+      expect(connects, 1, reason: 'one login for the whole run, not three');
+      expect(client.fetches, 3);
+      expect(client.loggedOut, isFalse, reason: 'pooled client stays open');
+    });
+
+    test('a fetch arriving while the pooled client is busy gets its own',
+        () async {
+      final clients = <_PoolBodyImapClient>[];
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async {
+          final client = _PoolBodyImapClient();
+          clients.add(client);
+          return client;
+        },
+      );
+      addTearDown(r.emails.dispose);
+      await r.accounts.addAccount(_account, 'pw');
+      await seedEmail(r.db, 1);
+      await seedEmail(r.db, 2);
+
+      // Both in flight at once: the second must not wait for the first.
+      await Future.wait([
+        r.emails.getEmailBody('acc-1:INBOX:1'),
+        r.emails.getEmailBody('acc-1:INBOX:2'),
+      ]);
+
+      expect(clients, hasLength(2));
+      expect(
+        clients.last.loggedOut,
+        isTrue,
+        reason: 'the non-pooled connection is closed after its fetch',
+      );
+    });
+
+    test('a dropped pooled connection is retried on a fresh one', () async {
+      final clients = <_PoolBodyImapClient>[];
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async {
+          final client = _PoolBodyImapClient();
+          clients.add(client);
+          return client;
+        },
+      );
+      addTearDown(r.emails.dispose);
+      await r.accounts.addAccount(_account, 'pw');
+      await seedEmail(r.db, 1);
+      await seedEmail(r.db, 2);
+
+      // First fetch pools a connection; then the server drops it.
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+      clients.single.failFetches = true;
+
+      final body = await r.emails.getEmailBody('acc-1:INBOX:2');
+
+      expect(body.textBody, contains('Backfilled preview body.'));
+      expect(clients, hasLength(2), reason: 'reconnected after the drop');
+    });
+
+    test('a failure on a fresh connection is not retried', () async {
+      var connects = 0;
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async {
+          connects++;
+          return _PoolBodyImapClient(failFetches: true);
+        },
+      );
+      addTearDown(r.emails.dispose);
+      await r.accounts.addAccount(_account, 'pw');
+      await seedEmail(r.db, 1);
+
+      await expectLater(
+        r.emails.getEmailBody('acc-1:INBOX:1'),
+        throwsA(isA<imap.ImapException>()),
+      );
+      expect(connects, 1, reason: 'nothing to blame on a stale connection');
+    });
+
+    test('dispose closes the pooled connection', () async {
+      var connects = 0;
+      final clients = <_PoolBodyImapClient>[];
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async {
+          connects++;
+          final client = _PoolBodyImapClient();
+          clients.add(client);
+          return client;
+        },
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedEmail(r.db, 1);
+      await seedEmail(r.db, 2);
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+      await r.emails.dispose();
+      expect(clients.single.loggedOut, isTrue);
+
+      await r.emails.getEmailBody('acc-1:INBOX:2');
+      expect(connects, 2);
+      addTearDown(r.emails.dispose);
+    });
+  });
+
   group('IMAP move-stable server id (RFC 8474 EMAILID / X-GM-MSGID, #589)', () {
     test('_fetchAndUpsertImap stores the server id returned for each UID',
         () async {
@@ -8163,6 +8296,39 @@ class _PreviewBodyImapClient extends FakeImapClient {
   }) async {
     final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
     return imap.FetchImapResult([msg], null);
+  }
+}
+
+/// Body-fetch client for the connection-pooling tests (#679). Records how many
+/// fetches it served, can be told to fail (as a dropped connection would), and
+/// notes its own logout.
+class _PoolBodyImapClient extends _PreviewBodyImapClient {
+  _PoolBodyImapClient({this.failFetches = false});
+
+  bool failFetches;
+  int fetches = 0;
+  bool loggedOut = false;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    fetches++;
+    if (failFetches) {
+      throw imap.ImapException(this, 'connection closed by server');
+    }
+    return super.uidFetchMessage(
+      messageUid,
+      fetchContentDefinition,
+      responseTimeout: responseTimeout,
+    );
+  }
+
+  @override
+  Future<dynamic> logout() async {
+    loggedOut = true;
   }
 }
 
