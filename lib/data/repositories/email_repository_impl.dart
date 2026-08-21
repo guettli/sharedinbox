@@ -37,6 +37,8 @@ import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
+import 'package:sharedinbox/data/imap/preview_fetch.dart';
+import 'package:sharedinbox/data/imap/preview_snippet.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
@@ -86,6 +88,8 @@ class EmailRepositoryImpl implements EmailRepository {
     SmtpConnectFn smtpConnect = connectSmtp,
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
     FetchObjectIdsFn fetchObjectIds = fetchObjectIdsFromServer,
+    FetchPreviewSnippetsFn fetchPreviewSnippets =
+        fetchPreviewSnippetsFromServer,
     http.Client? httpClient,
     OutboxRepository? outbox,
     AppLogger? appLogger,
@@ -95,6 +99,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
         _fetchObjectIds = fetchObjectIds,
+        _fetchPreviewSnippets = fetchPreviewSnippets,
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
@@ -104,6 +109,7 @@ class EmailRepositoryImpl implements EmailRepository {
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final FetchObjectIdsFn _fetchObjectIds;
+  final FetchPreviewSnippetsFn _fetchPreviewSnippets;
   final SmtpConnectFn _smtpConnect;
   final GetCacheDirFn _getCacheDir;
   final http.Client _httpClient;
@@ -1310,12 +1316,13 @@ class EmailRepositoryImpl implements EmailRepository {
     imap.MessageSequence sequence, {
     ObjectIdKind? objectIdKind,
   }) async {
-    // Request the first 8 KB of the body so we can derive an offline preview
-    // snippet without a second round trip. Matches the JMAP `preview` field
-    // (see [_upsertJmapEmails]); IMAP has no standard preview property.
+    // The offline preview snippet (matching the JMAP `preview` field, see
+    // [_upsertJmapEmails] — IMAP has no standard preview property) is fetched
+    // separately by [_fetchPreviewSnippetsSafely]: enough_mail's response
+    // tokeniser mis-parses any partial `BODY.PEEK[…]<0.n>` item, so asking for
+    // it here would set the message body to the literal string `0>` (#680).
     const fetchItems = '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE '
-        'BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)] '
-        'BODY.PEEK[TEXT]<0.8192>)';
+        'BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1326,6 +1333,10 @@ class EmailRepositoryImpl implements EmailRepository {
       client,
       sequence,
       objectIdKind,
+    );
+    final previewSnippetByUid = await _fetchPreviewSnippetsSafely(
+      client,
+      sequence,
     );
     final pendingByUid = await _pendingDeleteOrMoveUids(
       account.id,
@@ -1412,7 +1423,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
-                preview: Value(_extractImapPreview(msg)),
+                preview: Value(
+                  previewFromSnippet(msg, previewSnippetByUid[uid]),
+                ),
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
                 hasAttachment: Value(msg.hasAttachments()),
@@ -1463,6 +1476,26 @@ class EmailRepositoryImpl implements EmailRepository {
     } catch (e) {
       log('IMAP: ${objectIdKind.fetchItem} fetch failed, '
           'falling back to UID identity: $e');
+      return const {};
+    }
+  }
+
+  /// Fetches the body prefix used for the offline preview snippet, best-effort.
+  ///
+  /// Fail-open: a server that rejects the partial fetch leaves rows without a
+  /// preview until [getEmailBody] backfills one, which beats failing the sync.
+  Future<Map<int, Uint8List>> _fetchPreviewSnippetsSafely(
+    imap.ImapClient client,
+    imap.MessageSequence sequence,
+  ) async {
+    try {
+      return await _fetchPreviewSnippets(
+        client,
+        sequence,
+        kPreviewSnippetBytes,
+      );
+    } catch (e) {
+      log('IMAP: preview snippet fetch failed, syncing without previews: $e');
       return const {};
     }
   }
@@ -6735,11 +6768,6 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 }
-
-/// Derives a JMAP-style preview snippet from an IMAP [imap.MimeMessage].
-/// Prefers the text/plain part; falls back to a tag-stripped text/html part.
-String? _extractImapPreview(imap.MimeMessage msg) =>
-    previewFromBody(msg.decodeTextPlainPart(), msg.decodeTextHtmlPart());
 
 /// Recursively converts an [imap.MimePart] into a JSON-serialisable map.
 Map<String, dynamic> _mimePartToJson(imap.MimePart part) {

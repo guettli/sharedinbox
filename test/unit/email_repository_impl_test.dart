@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
+import 'package:sharedinbox/data/imap/preview_fetch.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
@@ -197,12 +198,29 @@ Future<Map<int, String>> _noObjectIds(
 ) async =>
     const {};
 
+Future<Map<int, Uint8List>> _noPreviewSnippets(
+  imap.ImapClient c,
+  imap.MessageSequence s,
+  int maxBytes,
+) async =>
+    const {};
+
+/// Serves each message's raw body — exactly what `BODY[TEXT]<0.n>` returns —
+/// as the preview snippet, so the sync path is exercised the way it runs
+/// against a real server (headers from the fetch, body from the snippet).
+FetchPreviewSnippetsFn _snippetsFor(Map<int, _PreviewTestMessage> messages) =>
+    (imap.ImapClient _, imap.MessageSequence sequence, int __) async => {
+          for (final uid in sequence.toList())
+            if (messages[uid] != null) uid: messages[uid]!.bodyBytes(),
+        };
+
 ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
     _makeRepos({
   http.Client? httpClient,
   Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
   Future<imap.SmtpClient> Function(Account, String, String)? smtpConnect,
   FetchObjectIdsFn? fetchObjectIds,
+  FetchPreviewSnippetsFn? fetchPreviewSnippets,
   Duration? sendOperationTimeout,
   AppLogger? appLogger,
 }) {
@@ -215,6 +233,7 @@ Future<Map<int, String>> _noObjectIds(
     imapConnect: imapConnect ?? _noImapConnect,
     smtpConnect: smtpConnect ?? _noSmtpConnect,
     fetchObjectIds: fetchObjectIds ?? _noObjectIds,
+    fetchPreviewSnippets: fetchPreviewSnippets ?? _noPreviewSnippets,
     httpClient: httpClient,
     sendOperationTimeout: sendOperationTimeout ?? const Duration(seconds: 50),
     appLogger: appLogger,
@@ -7272,18 +7291,18 @@ void main() {
   group('IMAP preview (issue #228)', () {
     test('syncEmails writes a preview snippet on the email and thread rows',
         () async {
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'Hello',
+          from: 'sender@example.com',
+          text: 'Line one.\r\nLine two — with a NBSP inside.',
+          messageId: '<m42@example.com>',
+        ),
+      };
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
-            _PreviewSyncImapClient(
-          messages: {
-            42: _PreviewTestMessage(
-              subject: 'Hello',
-              from: 'sender@example.com',
-              text: 'Line one.\r\nLine two — with a NBSP inside.',
-              messageId: '<m42@example.com>',
-            ),
-          },
-        ),
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
       );
       await r.accounts.addAccount(_account, 'pw');
 
@@ -7303,18 +7322,18 @@ void main() {
 
     test('syncEmails derives preview from HTML when there is no text part',
         () async {
+      final messages = {
+        7: _PreviewTestMessage(
+          subject: 'HTML',
+          from: 'sender@example.com',
+          html: '<p>Hello <b>world</b></p>',
+          messageId: '<m7@example.com>',
+        ),
+      };
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
-            _PreviewSyncImapClient(
-          messages: {
-            7: _PreviewTestMessage(
-              subject: 'HTML',
-              from: 'sender@example.com',
-              html: '<p>Hello <b>world</b></p>',
-              messageId: '<m7@example.com>',
-            ),
-          },
-        ),
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
       );
       await r.accounts.addAccount(_account, 'pw');
 
@@ -7991,15 +8010,50 @@ class _PreviewTestMessage {
   final String? text;
   final String? html;
 
+  /// Body part 1 as `BODY[1]` returns it: the first part's content, with no
+  /// headers of its own.
+  Uint8List bodyBytes() => Uint8List.fromList(utf8.encode(text ?? html ?? ''));
+
+  /// The BODYSTRUCTURE `enough_mail` parses onto the message during sync —
+  /// where [previewFromSnippet] reads the snippet's content type from.
+  imap.BodyPart _bodyStructure() {
+    imap.BodyPart part(String contentType) =>
+        imap.BodyPart()..contentType = imap.ContentTypeHeader(contentType);
+    if (text != null && html != null) {
+      return part('multipart/alternative')
+        ..addPart(part('text/plain; charset=UTF-8'))
+        ..addPart(part('text/html; charset=UTF-8'));
+    }
+    return part(
+      text != null ? 'text/plain; charset=UTF-8' : 'text/html; charset=UTF-8',
+    );
+  }
+
   imap.MimeMessage build(int uid) {
     // Emit a bare-bones RFC 822 message so `decodeTextPlainPart()` and
     // `decodeTextHtmlPart()` return the strings we planted here. The IMAP
     // sync path reads `envelope`, `flags`, `size` etc. separately, so we
     // populate those on the parsed MimeMessage.
-    final String rawMime;
+    final rawMime = _rawMime();
+    final msg = imap.MimeMessage.parseFromText(rawMime)
+      ..body = _bodyStructure()
+      ..uid = uid
+      ..size = rawMime.length
+      ..flags = <String>[]
+      ..envelope = imap.Envelope(
+        date: DateTime.utc(2024, 6, 15, 12),
+        subject: subject,
+        from: [imap.MailAddress(null, from)],
+        to: const [imap.MailAddress(null, 'alice@example.com')],
+        messageId: messageId,
+      );
+    return msg;
+  }
+
+  String _rawMime() {
     if (text != null && html != null) {
       const boundary = '----=_Boundary_Preview';
-      rawMime = [
+      return [
         'MIME-Version: 1.0',
         'Content-Type: multipart/alternative; boundary="$boundary"',
         '',
@@ -8013,33 +8067,21 @@ class _PreviewTestMessage {
         html,
         '--$boundary--',
       ].join('\r\n');
-    } else if (text != null) {
-      rawMime = [
+    }
+    if (text != null) {
+      return [
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=UTF-8',
         '',
         text,
       ].join('\r\n');
-    } else {
-      rawMime = [
-        'MIME-Version: 1.0',
-        'Content-Type: text/html; charset=UTF-8',
-        '',
-        html ?? '',
-      ].join('\r\n');
     }
-    final msg = imap.MimeMessage.parseFromText(rawMime)
-      ..uid = uid
-      ..size = rawMime.length
-      ..flags = <String>[]
-      ..envelope = imap.Envelope(
-        date: DateTime.utc(2024, 6, 15, 12),
-        subject: subject,
-        from: [imap.MailAddress(null, from)],
-        to: const [imap.MailAddress(null, 'alice@example.com')],
-        messageId: messageId,
-      );
-    return msg;
+    return [
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=UTF-8',
+      '',
+      html ?? '',
+    ].join('\r\n');
   }
 }
 

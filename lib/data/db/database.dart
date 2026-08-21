@@ -1189,6 +1189,21 @@ class AppDatabase extends _$AppDatabase {
             // Per-account plain-text signature (#646).
             await m.addColumn(accounts, accounts.signature);
           }
+          if (from < 55 && await _tableExists(this, 'emails')) {
+            // Clear previews poisoned by the mis-parsed partial body fetch
+            // (#680): every plain-text message synced over IMAP was stored
+            // with the literal snippet `0>`. Nulling them lets the next
+            // getEmailBody backfill write a real preview — the backfill only
+            // fires on an empty one, so these rows would stay wrong forever.
+            await customStatement(
+              "UPDATE emails SET preview = NULL WHERE preview = '0>'",
+            );
+            if (await _tableExists(this, 'threads')) {
+              await customStatement(
+                "UPDATE threads SET preview = NULL WHERE preview = '0>'",
+              );
+            }
+          }
         },
       );
 
