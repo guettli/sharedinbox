@@ -56,7 +56,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # image IS the worker and agentloop calls the acpx baked in here, so this pin
 # must match the acpx version of the agentloop release you run (currently
 # 0.13.0); Renovate tracks it (renovate.json). A skew breaks the agent runner.
-RUN npm install -g acpx@0.13.0
+RUN npm install -g acpx@0.13.1
 
 # Flutter / Dart / fvm are intentionally absent (see the header). Install guard
 # shims so a stray `flutter …` / `dart …` / `fvm …` fails LOUDLY with a pointer
