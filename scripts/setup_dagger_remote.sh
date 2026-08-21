@@ -15,7 +15,11 @@ trap 'rm -f "$SECRETS_JSON"' EXIT
 sops --decrypt --output-type json secrets.enc.yaml > "$SECRETS_JSON"
 
 DAGGER_SSH_KEY=$(jq -r '.DAGGER_SSH_KEY' "$SECRETS_JSON")
-DAGGER_ENGINE_HOST=$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")
+# The stored host is the engine's WireGuard address, which is what the CI
+# runners route to. A developer machine on the same LAN as the engine may not
+# have that address routed (p16 -> tc deliberately does not), so an already-set
+# DAGGER_ENGINE_HOST wins. Nothing sets it in CI, so CI behaviour is unchanged.
+DAGGER_ENGINE_HOST="${DAGGER_ENGINE_HOST:-$(jq -r '.DAGGER_ENGINE_HOST' "$SECRETS_JSON")}"
 
 # Register inline secrets for log redaction. Multiline values (e.g. SSH keys)
 # must be masked line-by-line because ::add-mask:: covers one line at a time.

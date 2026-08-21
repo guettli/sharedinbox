@@ -75,7 +75,7 @@ must error out instead of silently degrading.
 ## Local development
 
 Local development uses the same remote engine, not a local one. With
-`SOPS_AGE_KEY` set, running
+`SOPS_AGE_KEY` set, sourcing
 [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh) establishes
 the SSH tunnel and exports `_EXPERIMENTAL_DAGGER_RUNNER_HOST` exactly as CI does.
 
@@ -85,6 +85,34 @@ use `--progress=plain` for readable logs:
 ```bash
 nix develop --command dagger call --progress=plain -q -m ci --source=. check
 ```
+
+Two things differ on a developer machine, and both look like "the engine is
+unreachable" when they bite:
+
+**The engine address.** `secrets.enc.yaml` stores the engine's WireGuard
+address, which is what the CI runners route to. A machine on the same LAN as
+the engine may not have that address routed at all. Set `DAGGER_ENGINE_HOST` to
+the address your machine can actually reach and the script uses it instead:
+
+```bash
+DAGGER_ENGINE_HOST=<engine-lan-ip> . scripts/setup_dagger_remote.sh
+```
+
+**The CLI version.** The Dagger CLI and the engine must be the *exact* same
+version — see [Version pinning](#version-pinning). A CLI from a distro or nix
+channel usually is not, and the mismatch surfaces as an unreachable engine even
+though the tunnel is healthy. Install the pinned version somewhere on `PATH`
+ahead of the system one:
+
+```bash
+curl -fsSL https://dl.dagger.io/dagger/install.sh \
+  | DAGGER_VERSION=<pinned-version> BIN_DIR="$PWD/.dagger-bin" sh
+```
+
+The tunnel is a detached `ssh -f -N`; it survives across shells but not across
+a suspend or a network change. If a Dagger invocation suddenly hangs on
+"connecting to engine", check the forward is still there
+(`ss -ltn | grep 8080`) and re-run the script — it is safe to run again.
 
 ## Secrets
 
