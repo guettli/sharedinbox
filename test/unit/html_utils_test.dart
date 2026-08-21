@@ -23,6 +23,41 @@ void main() {
       expect(htmlToPlain('<p>paragraph</p>'), 'paragraph');
     });
 
+    test('drops the content of a style block (#680)', () {
+      expect(
+        htmlToPlain(
+          '<style>@media screen{.hide{display:none}}</style>'
+          '<p>Real body text</p>',
+        ),
+        'Real body text',
+      );
+    });
+
+    test('drops script and head blocks', () {
+      expect(
+        htmlToPlain(
+          '<head><title>Ignore me</title></head>'
+          '<script>var x = 1;</script>'
+          'Visible',
+        ),
+        'Visible',
+      );
+    });
+
+    test('drops an unclosed style block truncated mid-way', () {
+      expect(
+        htmlToPlain('<p>Intro</p><style>@font-face { font-family: "Lex'),
+        'Intro',
+      );
+    });
+
+    test('drops a tag left unterminated by truncation', () {
+      expect(
+        htmlToPlain('Intro<br>Body text <div style="font-family: Anth'),
+        'Intro\nBody text',
+      );
+    });
+
     test('decodes &amp;', () {
       expect(htmlToPlain('a &amp; b'), 'a & b');
     });

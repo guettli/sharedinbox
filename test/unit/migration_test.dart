@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 54);
+      expect(db.schemaVersion, 55);
       await db.close();
     });
 
@@ -75,6 +75,13 @@ void main() {
       rawDb.execute(
         "INSERT INTO accounts (id, display_name, email, imap_host, imap_port, imap_ssl, smtp_host, smtp_port, smtp_ssl) VALUES ('acc-1', 'Alice', 'alice@example.com', 'imap.example.com', 993, 1, 'smtp.example.com', 465, 1);",
       );
+      // Two pre-existing rows for the v55 preview repair (#680): one poisoned
+      // with the partial-fetch offset token, one with a real preview.
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at, preview)
+        VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, 0, '0>'),
+               ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, 0, 'A real preview.');
+      ''');
       rawDb.execute('PRAGMA user_version = 1;');
       rawDb.close();
 
@@ -118,6 +125,18 @@ void main() {
 
       // v53: move-stable server id (RFC 8474 EMAILID / Gmail X-GM-MSGID).
       expect(emailColumns, contains('server_email_id'));
+
+      // v55: previews poisoned by the mis-parsed partial body fetch (#680) are
+      // cleared so getEmailBody's backfill can replace them; real previews are
+      // left alone.
+      final previews = {
+        for (final row in await db
+            .customSelect('SELECT id, preview FROM emails ORDER BY id')
+            .get())
+          row.read<String>('id'): row.read<String?>('preview'),
+      };
+      expect(previews['acc-1:INBOX:1'], isNull);
+      expect(previews['acc-1:INBOX:2'], 'A real preview.');
 
       // v8: mailboxes role column.
       final mailboxColumns = await _tableColumns(db, 'mailboxes');
