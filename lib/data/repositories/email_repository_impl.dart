@@ -544,183 +544,285 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
 
-    final client = await _imapConnect(
+    return _withBodyImapClient(
       account,
       _effectiveUsername(account),
       password,
-    );
-    try {
-      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
-      final fetch = await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
-      final msg = fetch.messages.firstOrNull;
-      if (msg == null) {
-        throw StateError(
-          'IMAP server returned no message for UID ${emailRow.uid}.',
-        );
-      }
-
-      // Guard against caching another message's body under this row (#616). An
-      // optimistic snooze/unsnooze/move flips mailbox_path to the destination
-      // but keeps the source UID until the server MOVE is remapped (see
-      // [_remapEmailAfterImapMove]). If that remap never lands and the stale
-      // source UID happens to also exist in the destination mailbox, this
-      // (mailboxPath, uid) pair now points at an unrelated message — the fetch
-      // above would silently return it. Never trust a body whose Message-ID
-      // contradicts the row's; try to re-resolve the real UID instead.
-      final expectedMessageId = normaliseMessageId(emailRow.messageId);
-      final fetchedMessageId =
-          normaliseMessageId(msg.getHeaderValue('Message-ID'));
-      if (expectedMessageId != null &&
-          fetchedMessageId != null &&
-          expectedMessageId != fetchedMessageId) {
-        // await so the client stays open for the re-resolve search below.
-        return await _healMismatchedImapBody(
-          client: client,
-          emailId: emailId,
-          emailRow: emailRow,
-          cached: cached,
-          expectedMessageId: expectedMessageId,
-          fetchedMessageId: fetchedMessageId,
-        );
-      }
-      // Decoding a malformed MIME message can make enough_mail throw — e.g. a
-      // `RangeError (end)` on an off-by-a-few-bytes part boundary (#579), the
-      // same class of bug already guarded against on the prefetch path (#232).
-      // Decode each piece defensively so one bad part can't blank the whole
-      // message: salvage what we can, flag the body as partial, and log so the
-      // failure is discoverable in the per-message "Show Logs" view.
-      var decodeFailed = false;
-      Object? decodeError;
-      StackTrace? decodeStack;
-      T? tryDecode<T>(T Function() decode) {
-        try {
-          return decode();
-        } catch (e, stack) {
-          decodeFailed = true;
-          decodeError ??= e;
-          decodeStack ??= stack;
-          return null;
+      (client) async {
+        await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
+        final fetch =
+            await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
+        final msg = fetch.messages.firstOrNull;
+        if (msg == null) {
+          throw StateError(
+            'IMAP server returned no message for UID ${emailRow.uid}.',
+          );
         }
-      }
 
-      // Use the QP-recovering wrappers (#588): enough_mail throws a RangeError
-      // on a quoted-printable part that ends with a dangling `=`, which would
-      // otherwise drop the whole part; the wrappers salvage the content when
-      // they can and only rethrow — letting tryDecode flag the body as
-      // partial — when the part is genuinely unrecoverable.
-      final textBody = tryDecode(() => decodeTextPlainPartSafe(msg));
-      final rawHtml = tryDecode(() => decodeTextHtmlPartSafe(msg));
-      final htmlBody = rawHtml == null
-          ? null
-          : tryDecode(() => injectInlineImages(rawHtml, msg));
-      final contentInfos =
-          tryDecode(msg.findContentInfo) ?? const <imap.ContentInfo>[];
-
-      final attachmentsJson = tryDecode(
-            () => jsonEncode(
-              contentInfos
-                  .map(
-                    (a) => {
-                      'filename': a.fileName ?? '',
-                      'contentType': a.contentType?.mediaType.text ?? '',
-                      // ContentInfo.fetchId is empty for parts that aren't
-                      // addressable (e.g. a non-multipart message whose
-                      // top-level part is itself marked as an attachment).
-                      // MimeMessage.getPart() throws on an empty fetchId, so
-                      // guard before calling it.
-                      'size': a.size ??
-                          (a.fetchId.isNotEmpty
-                              ? msg
-                                  .getPart(a.fetchId)
-                                  ?.decodeContentBinary()
-                                  ?.length
-                              : null) ??
-                          0,
-                      'fetchPartId': a.fetchId,
-                    },
-                  )
-                  .toList(),
-            ),
-          ) ??
-          '[]';
-
-      final headersJson = tryDecode(
-            () => jsonEncode(
-              (msg.headers ?? [])
-                  .map((h) => {'name': h.name, 'value': h.value})
-                  .toList(),
-            ),
-          ) ??
-          '[]';
-
-      final mimeTreeJson = tryDecode(() => _buildMimeTreeJson(msg));
-
-      if (decodeFailed) {
-        unawaited(
-          _appLogger?.error(
-            'email.body.decode_failed',
-            'Could not fully decode message body — showing what was salvaged',
-            accountId: emailRow.accountId,
-            mailboxPath: emailRow.mailboxPath,
+        // Guard against caching another message's body under this row (#616). An
+        // optimistic snooze/unsnooze/move flips mailbox_path to the destination
+        // but keeps the source UID until the server MOVE is remapped (see
+        // [_remapEmailAfterImapMove]). If that remap never lands and the stale
+        // source UID happens to also exist in the destination mailbox, this
+        // (mailboxPath, uid) pair now points at an unrelated message — the fetch
+        // above would silently return it. Never trust a body whose Message-ID
+        // contradicts the row's; try to re-resolve the real UID instead.
+        final expectedMessageId = normaliseMessageId(emailRow.messageId);
+        final fetchedMessageId =
+            normaliseMessageId(msg.getHeaderValue('Message-ID'));
+        if (expectedMessageId != null &&
+            fetchedMessageId != null &&
+            expectedMessageId != fetchedMessageId) {
+          // The pooled client is held until this future completes, so the
+          // re-resolve search below still runs on an open connection.
+          return _healMismatchedImapBody(
+            client: client,
             emailId: emailId,
-            error: decodeError,
-            stack: decodeStack,
-          ),
-        );
-      }
-
-      await _db.into(_db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: emailId,
-              textBody: Value(textBody),
-              htmlBody: Value(htmlBody),
-              attachmentsJson: Value(attachmentsJson),
-              headersJson: Value(headersJson),
-              mimeTreeJson: Value(mimeTreeJson),
-              cachedAt: Value(DateTime.now()),
-              bodySize: Value(_bodySize(textBody, htmlBody)),
-            ),
-          );
-
-      // Opportunistic backfill for rows synced before we started writing
-      // previews on the IMAP sync path. Costs no extra IMAP round trip.
-      if ((emailRow.preview ?? '').isEmpty) {
-        final backfill = previewFromBody(textBody, rawHtml);
-        if (backfill != null && backfill.isNotEmpty) {
-          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-              .write(EmailsCompanion(preview: Value(backfill)));
-          await _updateThread(
-            emailRow.accountId,
-            emailRow.mailboxPath,
-            emailRow.threadId ?? emailRow.id,
+            emailRow: emailRow,
+            cached: cached,
+            expectedMessageId: expectedMessageId,
+            fetchedMessageId: fetchedMessageId,
           );
         }
+        // Decoding a malformed MIME message can make enough_mail throw — e.g. a
+        // `RangeError (end)` on an off-by-a-few-bytes part boundary (#579), the
+        // same class of bug already guarded against on the prefetch path (#232).
+        // Decode each piece defensively so one bad part can't blank the whole
+        // message: salvage what we can, flag the body as partial, and log so the
+        // failure is discoverable in the per-message "Show Logs" view.
+        var decodeFailed = false;
+        Object? decodeError;
+        StackTrace? decodeStack;
+        T? tryDecode<T>(T Function() decode) {
+          try {
+            return decode();
+          } catch (e, stack) {
+            decodeFailed = true;
+            decodeError ??= e;
+            decodeStack ??= stack;
+            return null;
+          }
+        }
+
+        // Use the QP-recovering wrappers (#588): enough_mail throws a RangeError
+        // on a quoted-printable part that ends with a dangling `=`, which would
+        // otherwise drop the whole part; the wrappers salvage the content when
+        // they can and only rethrow — letting tryDecode flag the body as
+        // partial — when the part is genuinely unrecoverable.
+        final textBody = tryDecode(() => decodeTextPlainPartSafe(msg));
+        final rawHtml = tryDecode(() => decodeTextHtmlPartSafe(msg));
+        final htmlBody = rawHtml == null
+            ? null
+            : tryDecode(() => injectInlineImages(rawHtml, msg));
+        final contentInfos =
+            tryDecode(msg.findContentInfo) ?? const <imap.ContentInfo>[];
+
+        final attachmentsJson = tryDecode(
+              () => jsonEncode(
+                contentInfos
+                    .map(
+                      (a) => {
+                        'filename': a.fileName ?? '',
+                        'contentType': a.contentType?.mediaType.text ?? '',
+                        // ContentInfo.fetchId is empty for parts that aren't
+                        // addressable (e.g. a non-multipart message whose
+                        // top-level part is itself marked as an attachment).
+                        // MimeMessage.getPart() throws on an empty fetchId, so
+                        // guard before calling it.
+                        'size': a.size ??
+                            (a.fetchId.isNotEmpty
+                                ? msg
+                                    .getPart(a.fetchId)
+                                    ?.decodeContentBinary()
+                                    ?.length
+                                : null) ??
+                            0,
+                        'fetchPartId': a.fetchId,
+                      },
+                    )
+                    .toList(),
+              ),
+            ) ??
+            '[]';
+
+        final headersJson = tryDecode(
+              () => jsonEncode(
+                (msg.headers ?? [])
+                    .map((h) => {'name': h.name, 'value': h.value})
+                    .toList(),
+              ),
+            ) ??
+            '[]';
+
+        final mimeTreeJson = tryDecode(() => _buildMimeTreeJson(msg));
+
+        if (decodeFailed) {
+          unawaited(
+            _appLogger?.error(
+              'email.body.decode_failed',
+              'Could not fully decode message body — showing what was salvaged',
+              accountId: emailRow.accountId,
+              mailboxPath: emailRow.mailboxPath,
+              emailId: emailId,
+              error: decodeError,
+              stack: decodeStack,
+            ),
+          );
+        }
+
+        await _db.into(_db.emailBodies).insertOnConflictUpdate(
+              EmailBodiesCompanion.insert(
+                emailId: emailId,
+                textBody: Value(textBody),
+                htmlBody: Value(htmlBody),
+                attachmentsJson: Value(attachmentsJson),
+                headersJson: Value(headersJson),
+                mimeTreeJson: Value(mimeTreeJson),
+                cachedAt: Value(DateTime.now()),
+                bodySize: Value(_bodySize(textBody, htmlBody)),
+              ),
+            );
+
+        // Opportunistic backfill for rows synced before we started writing
+        // previews on the IMAP sync path. Costs no extra IMAP round trip.
+        if ((emailRow.preview ?? '').isEmpty) {
+          final backfill = previewFromBody(textBody, rawHtml);
+          if (backfill != null && backfill.isNotEmpty) {
+            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+                .write(EmailsCompanion(preview: Value(backfill)));
+            await _updateThread(
+              emailRow.accountId,
+              emailRow.mailboxPath,
+              emailRow.threadId ?? emailRow.id,
+            );
+          }
+        }
+
+        _logBodyLoaded(
+          emailId: emailId,
+          accountId: emailRow.accountId,
+          mailboxPath: emailRow.mailboxPath,
+          source: 'imap',
+          network: true,
+          prefetch: prefetch,
+          bytes: _bodySize(textBody, htmlBody),
+          durationMs: DateTime.now().difference(startedAt).inMilliseconds,
+        );
+
+        return model.EmailBody(
+          emailId: emailId,
+          textBody: textBody,
+          htmlBody: htmlBody,
+          attachments: _parseAttachments(attachmentsJson),
+          headers: _parseHeaders(headersJson),
+          mimeTree: _parseMimeTree(mimeTreeJson),
+          decodeFailed: decodeFailed,
+        );
+      },
+    );
+  }
+
+  // ── Pooled IMAP connection for body fetches (#679) ───────────────────────
+  //
+  // getEmailBody used to connect and log in once per message. Gmail throttles
+  // rapid logins, so anything that walks a mailbox — the background prefetch in
+  // BodyCacheService, the "open the next message" prefetch, the read-only Gmail
+  // probe — eventually stalls inside LOGIN until the 20s response timeout
+  // fires. Keeping one connection open between fetches removes the login (and
+  // the TLS handshake) from every message but the first.
+  //
+  // Only one fetch may hold the pooled client at a time: an ImapClient cannot
+  // interleave commands. A fetch that arrives while it is busy opens its own
+  // connection rather than queueing, so opening a message never waits behind a
+  // background prefetch.
+
+  /// How long the pooled connection is kept open after the last body fetch.
+  static const _bodyClientIdle = Duration(seconds: 30);
+
+  imap.ImapClient? _bodyClient;
+  String? _bodyClientAccountId;
+  bool _bodyClientBusy = false;
+  Timer? _bodyClientIdleTimer;
+
+  /// Runs [action] against an IMAP connection for [account], reusing the pooled
+  /// one when it is free and belongs to the same account.
+  Future<T> _withBodyImapClient<T>(
+    account_model.Account account,
+    String username,
+    String password,
+    Future<T> Function(imap.ImapClient client) action,
+  ) async {
+    if (_bodyClientBusy) {
+      final client = await _imapConnect(account, username, password);
+      try {
+        return await action(client);
+      } finally {
+        await _logoutQuietly(client);
       }
+    }
 
-      _logBodyLoaded(
-        emailId: emailId,
-        accountId: emailRow.accountId,
-        mailboxPath: emailRow.mailboxPath,
-        source: 'imap',
-        network: true,
-        prefetch: prefetch,
-        bytes: _bodySize(textBody, htmlBody),
-        durationMs: DateTime.now().difference(startedAt).inMilliseconds,
-      );
-
-      return model.EmailBody(
-        emailId: emailId,
-        textBody: textBody,
-        htmlBody: htmlBody,
-        attachments: _parseAttachments(attachmentsJson),
-        headers: _parseHeaders(headersJson),
-        mimeTree: _parseMimeTree(mimeTreeJson),
-        decodeFailed: decodeFailed,
-      );
+    _bodyClientBusy = true;
+    _bodyClientIdleTimer?.cancel();
+    try {
+      final reused = _bodyClient != null && _bodyClientAccountId == account.id;
+      if (!reused) {
+        await _closePooledBodyClient();
+        _bodyClient = await _imapConnect(account, username, password);
+        _bodyClientAccountId = account.id;
+      }
+      try {
+        return await action(_bodyClient!);
+      } catch (e) {
+        if (!reused) rethrow;
+        // A pooled connection can have been dropped while it sat idle. Retry
+        // once on a fresh one: the reuse is an optimisation and must never turn
+        // a working fetch into a failure.
+        log('IMAP: pooled body connection failed ($e) — reconnecting');
+        await _closePooledBodyClient();
+        _bodyClient = await _imapConnect(account, username, password);
+        _bodyClientAccountId = account.id;
+        return await action(_bodyClient!);
+      }
     } finally {
-      await client.logout();
+      _bodyClientBusy = false;
+      _armBodyClientIdleTimer();
     }
   }
+
+  void _armBodyClientIdleTimer() {
+    _bodyClientIdleTimer?.cancel();
+    _bodyClientIdleTimer = null;
+    if (_bodyClient == null) return;
+    _bodyClientIdleTimer = Timer(
+      _bodyClientIdle,
+      () => unawaited(_closePooledBodyClient()),
+    );
+  }
+
+  Future<void> _closePooledBodyClient() async {
+    _bodyClientIdleTimer?.cancel();
+    _bodyClientIdleTimer = null;
+    final client = _bodyClient;
+    _bodyClient = null;
+    _bodyClientAccountId = null;
+    if (client != null) await _logoutQuietly(client);
+  }
+
+  Future<void> _logoutQuietly(imap.ImapClient client) async {
+    try {
+      await client.logout();
+    } catch (e) {
+      // The connection is being discarded either way.
+      log('IMAP: logout failed while closing a body connection: $e');
+    }
+  }
+
+  /// Closes the pooled body-fetch connection and cancels its idle timer.
+  ///
+  /// Call this when a repository instance is done with (e.g. the one
+  /// BodyCacheService builds per run) so the connection is not held until the
+  /// idle timer fires. Safe to call more than once.
+  Future<void> dispose() => _closePooledBodyClient();
 
   /// Handles the case where a body fetch returned a message whose Message-ID
   /// contradicts the local row's (#616): the row's (mailboxPath, uid) no longer
