@@ -176,7 +176,11 @@ class _FilterBar extends StatelessWidget {
                     for (final a in accounts)
                       DropdownMenuItem<String?>(
                         value: a.id,
-                        child: Text(a.email),
+                        child: Text(
+                          a.displayName.isNotEmpty
+                              ? '${a.displayName} <${a.email}>'
+                              : a.email,
+                        ),
                       ),
                   ],
                   onChanged: (value) {
