@@ -313,6 +313,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Find similar emails'),
               ),
               const PopupMenuItem(
+                value: 'select_text',
+                child: Text('Select text'),
+              ),
+              const PopupMenuItem(
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
               ),
@@ -351,6 +355,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 unawaited(
                   context.push('/search', extra: similarFilterFor(header)),
                 );
+              } else if (value == 'select_text' && body != null) {
+                _showSelectText(context, body);
               } else if (value == 'mark_unread') {
                 final nextEmail = await _getNextEmailIfNeeded(header);
                 await repo.setFlag(widget.emailId, seen: false);
@@ -1330,6 +1336,65 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       );
       _navigateTo(context, header, nextEmail);
     }
+  }
+
+  /// Shows the message body as selectable plain text.
+  ///
+  /// Native text selection inside the HTML [SecureEmailWebView] is unreliable
+  /// when the WebView is embedded in the scrollable detail screen (#707), so
+  /// this offers a deterministic way to select and copy the body on every
+  /// platform. HTML is stripped to plain text via [htmlToPlain]; text-only
+  /// messages are shown as-is.
+  void _showSelectText(BuildContext context, EmailBody body) {
+    final html = body.htmlBody;
+    final text = html != null && html.trim().isNotEmpty
+        ? htmlToPlain(html)
+        : (body.textBody ?? '');
+    if (text.trim().isEmpty) {
+      context.showAppSnackBar(
+        'This message has no text to select.',
+        event: 'email.select_text.empty',
+        emailId: widget.emailId,
+      );
+      return;
+    }
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Select text'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                text,
+                style: Theme.of(ctx).textTheme.bodyMedium,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: text));
+                if (ctx.mounted) {
+                  ctx.showAppSnackBar(
+                    'Copied to clipboard',
+                    event: 'email.select_text.copied',
+                    emailId: widget.emailId,
+                  );
+                }
+              },
+              child: const Text('Copy all'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _showRaw(BuildContext context, Email? header) async {
