@@ -754,6 +754,85 @@ void main() {
       expect(find.text('Find similar emails'), findsOneWidget);
     });
 
+    testWidgets('Select text opens a dialog with the stripped body text', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              htmlBody: '<p>Hello selectable world</p>',
+              attachments: [],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Select text'), findsOneWidget);
+      await tester.tap(find.text('Select text'));
+      await tester.pumpAndSettle();
+
+      // The dialog shows the HTML stripped to plain text inside a
+      // SelectableText the user can highlight and copy.
+      final selectable = find.byType(SelectableText);
+      expect(selectable, findsOneWidget);
+      expect(
+        tester.widget<SelectableText>(selectable).data,
+        'Hello selectable world',
+      );
+      expect(find.text('Copy all'), findsOneWidget);
+    });
+
+    testWidgets('Select text copies the body to the clipboard', (tester) async {
+      final clipboardTexts = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardTexts.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        },
+      );
+      addTearDown(() {
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+      });
+
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Plain body to copy',
+              attachments: [],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Select text'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Copy all'));
+      await tester.pumpAndSettle();
+
+      expect(clipboardTexts, ['Plain body to copy']);
+      expect(find.text('Copied to clipboard'), findsOneWidget);
+    });
+
     testWidgets('Show Raw Email dialog shows size of email', (tester) async {
       // 'A' * 2048 → fmtSize(2048) == '2.0 KB'
       final rawContent = 'A' * 2048;
