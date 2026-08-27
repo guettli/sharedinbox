@@ -779,8 +779,13 @@ void main() {
       await tester.pumpAndSettle();
 
       // The dialog shows the HTML stripped to plain text inside a
-      // SelectableText the user can highlight and copy.
-      final selectable = find.byType(SelectableText);
+      // SelectableText the user can highlight and copy. Scope the finder to the
+      // dialog: on the Linux test host SecureEmailWebView also renders the body
+      // in its own SelectableText fallback, so an unscoped finder matches two.
+      final selectable = find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(SelectableText),
+      );
       expect(selectable, findsOneWidget);
       expect(
         tester.widget<SelectableText>(selectable).data,
