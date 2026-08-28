@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
+import 'package:sharedinbox/core/models/notification_rule.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -17,6 +18,7 @@ import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
+import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
@@ -31,6 +33,7 @@ import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/encrypted_report_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
+import 'package:sharedinbox/core/services/notification_dispatcher.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/services/server_capabilities_service.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
@@ -52,6 +55,7 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
@@ -308,7 +312,40 @@ final syncNowProvider = Provider<bool Function(String accountId)>((ref) {
   return ref.watch(syncManagerProvider).syncNow;
 });
 
+final notificationRuleRepositoryProvider =
+    Provider<NotificationRuleRepository>((ref) {
+  return NotificationRuleRepositoryImpl(ref.watch(dbProvider));
+});
+
+/// Reactive list of the notification rules configured for one account.
+final notificationRulesProvider = StreamProvider.autoDispose
+    .family<List<NotificationRule>, String>((ref, accountId) {
+  return ref.watch(notificationRuleRepositoryProvider).watchRules(accountId);
+});
+
+/// Evaluates each account's notification rules after a sync and fires one OS
+/// notification per matching new message. Default behaviour is silent.
+final notificationDispatcherProvider = Provider<NotificationDispatcher>((ref) {
+  return NotificationDispatcher(
+    rules: ref.watch(notificationRuleRepositoryProvider),
+    accounts: ref.watch(accountRepositoryProvider),
+    show: ({
+      required String accountId,
+      required String emailId,
+      required String title,
+      required String body,
+    }) =>
+        showNewMailNotification(
+      title: title,
+      body: body,
+      id: emailId.hashCode & 0x7FFFFFFF,
+      payload: '$accountId|$emailId',
+    ),
+  );
+});
+
 final syncManagerProvider = Provider<AccountSyncManager>((ref) {
+  final dispatcher = ref.watch(notificationDispatcherProvider);
   final manager = AccountSyncManager(
     ref.watch(accountRepositoryProvider),
     ref.watch(mailboxRepositoryProvider),
@@ -318,7 +355,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
     notes: ref.watch(noteRepositoryProvider),
-    onNewMail: showNewMailNotification,
+    onNewMail: dispatcher.dispatchForAccount,
   );
   ref.onDispose(manager.dispose);
   return manager;

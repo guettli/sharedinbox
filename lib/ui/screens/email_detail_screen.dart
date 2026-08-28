@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/note.dart';
@@ -313,6 +314,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 child: Text('Find similar emails'),
               ),
               const PopupMenuItem(
+                value: 'notify_sender',
+                child: Text('Notify me for mail from this sender'),
+              ),
+              const PopupMenuItem(
                 value: 'select_text',
                 child: Text('Select text'),
               ),
@@ -355,6 +360,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 unawaited(
                   context.push('/search', extra: similarFilterFor(header)),
                 );
+              } else if (value == 'notify_sender' && header != null) {
+                await _notifyForSender(context, header);
               } else if (value == 'select_text' && body != null) {
                 _showSelectText(context, body);
               } else if (value == 'mark_unread') {
@@ -1301,6 +1308,47 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
 
     if (context.mounted) _navigateTo(context, header, nextEmail);
+  }
+
+  /// Creates a `From is` notification rule for this mail's sender on its
+  /// account and turns notifications on if they were off, so future mail from
+  /// the sender pops up. Confirms with an undoable snackbar.
+  Future<void> _notifyForSender(BuildContext context, Email header) async {
+    if (header.from.isEmpty) return;
+    final sender = header.from.first.email;
+    if (sender.isEmpty) return;
+
+    final accountRepo = ref.read(accountRepositoryProvider);
+    final ruleRepo = ref.read(notificationRuleRepositoryProvider);
+    final account = await accountRepo.getAccount(header.accountId);
+    if (account == null) return;
+
+    if (!account.notificationsEnabled) {
+      await ruleRepo.markBaseline(header.accountId);
+      await accountRepo.updateAccount(
+        account.copyWith(notificationsEnabled: true),
+      );
+    }
+    final filter = FilterGroup(
+      operator: FilterOperator.and_,
+      children: [
+        FilterLeaf(
+          field: FilterField.from_,
+          comparison: FilterComparison.is_,
+          value: sender,
+        ),
+      ],
+    );
+    final ruleId = await ruleRepo.addRule(header.accountId, filter);
+
+    if (!context.mounted) return;
+    context.showAppSnackBar(
+      'You will be notified for mail from $sender',
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () => ruleRepo.deleteRule(ruleId),
+      ),
+    );
   }
 
   Future<void> _snooze(BuildContext context, Email header) async {

@@ -30,6 +30,7 @@ import 'package:sharedinbox/ui/screens/force_resync_screen.dart';
 import 'package:sharedinbox/ui/screens/mail_debug_markdown_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
+import 'package:sharedinbox/ui/screens/notifications_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
@@ -172,6 +173,12 @@ final router = GoRouter(
               builder: (ctx, state) => AccountCompareScreen(
                 accountIdA: state.pathParameters['accountId']!,
                 accountIdB: state.pathParameters['otherId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/notifications',
+              builder: (ctx, state) => NotificationsScreen(
+                accountId: state.pathParameters['accountId']!,
               ),
             ),
             GoRoute(

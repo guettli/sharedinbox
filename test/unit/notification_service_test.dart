@@ -20,8 +20,12 @@ void main() {
   );
 
   test('showNewMailNotification completes without throwing', () async {
-    // Platform.isAndroid is false in tests, so this returns early without
-    // touching the plugin.  Ensures the guard path is exercised.
-    await expectLater(showNewMailNotification('test@example.com'), completes);
+    // _initialized stays false in tests (initNotifications swallows the
+    // missing-plugin error), so this returns early without touching the
+    // plugin.  Ensures the guard path is exercised.
+    await expectLater(
+      showNewMailNotification(title: 'Alice', body: 'Subject'),
+      completes,
+    );
   });
 }

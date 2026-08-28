@@ -262,3 +262,4 @@ test/
 - **Search** — IMAP server-side search (subject + body); results shown inline, no navigation change
 - **Offline-first** — all reads come from local Drift/SQLite DB; network only for sync and send
 - **UnifiedPush** — opt-in real-time push without proprietary services. Pick any installed distributor under **Settings → UnifiedPush** and point a [relay](server/uprelay/README.md) at the resulting endpoint URL.
+- **Notifications** — silent by default. Per account, turn on **Notifications** and add rules (a VIP sender, a subject keyword, or a full filter) so only the mail you care about pops up. Android and Linux.

@@ -42,6 +42,11 @@ class Account {
   /// account. Empty means no signature.
   final String signature;
 
+  /// Master switch for new-mail notifications on this account. Off by default,
+  /// so a fresh install (and every existing account after the update) stays
+  /// silent until the user opts in and adds at least one rule.
+  final bool notificationsEnabled;
+
   const Account({
     required this.id,
     required this.displayName,
@@ -61,6 +66,7 @@ class Account {
     this.jmapUrl,
     this.verbose = false,
     this.signature = '',
+    this.notificationsEnabled = false,
   });
 
   Account copyWith({
@@ -82,6 +88,7 @@ class Account {
     String? jmapUrl,
     bool? verbose,
     String? signature,
+    bool? notificationsEnabled,
   }) {
     return Account(
       id: id ?? this.id,
@@ -102,6 +109,7 @@ class Account {
       jmapUrl: jmapUrl ?? this.jmapUrl,
       verbose: verbose ?? this.verbose,
       signature: signature ?? this.signature,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
     );
   }
 
@@ -128,6 +136,7 @@ class Account {
       jmapUrl: json['jmapUrl'] as String?,
       verbose: json['verbose'] as bool? ?? false,
       signature: json['signature'] as String? ?? '',
+      notificationsEnabled: json['notificationsEnabled'] as bool? ?? false,
     );
   }
 
@@ -151,6 +160,7 @@ class Account {
       'jmapUrl': jmapUrl,
       'verbose': verbose,
       'signature': signature,
+      'notificationsEnabled': notificationsEnabled,
     };
   }
 

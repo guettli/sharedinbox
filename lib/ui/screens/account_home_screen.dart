@@ -164,6 +164,12 @@ class _AccountHomeBody extends ConsumerWidget {
           ),
         ),
         ListTile(
+          leading: const Icon(Icons.notifications_outlined),
+          title: const Text('Notifications'),
+          subtitle: const Text('Choose which new mail pops up'),
+          onTap: () => context.push('/accounts/${account.id}/notifications'),
+        ),
+        ListTile(
           leading: const Icon(Icons.send),
           title: const Text('Send accounts'),
           onTap: () =>

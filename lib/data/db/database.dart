@@ -53,6 +53,12 @@ class Accounts extends Table {
   // null instead of tripping the generated mapper's null-check. Read back as
   // '' via [AccountRepositoryImpl].
   TextColumn get signature => text().nullable()();
+  // Added in schema v56: master switch for per-account new-mail notifications.
+  // Nullable (read back as false) for the same migration-safety reason as
+  // [signature] above — a data migration that maps the Accounts dataclass at an
+  // earlier schema version must see an absent column as null, not trip the
+  // generated mapper's null-check.
+  BoolColumn get notificationsEnabled => boolean().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -390,6 +396,38 @@ class LocalSieveApplied extends Table {
   Set<Column> get primaryKey => {accountId, messageId};
 }
 
+/// Per-account "pop up for these mails" rules. Mail on an account fires a
+/// notification when it matches ANY of that account's rules (OR-combined). The
+/// filter is stored as JSON ([FilterGroup]) in [expressionJson].
+// Added in schema v56.
+@DataClassName('NotificationRuleRow')
+class NotificationRules extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // Optional human label; null means the UI renders a summary of the filter.
+  TextColumn get name => text().nullable()();
+  // JSON-encoded FilterGroup (see lib/core/filter/filter_json.dart).
+  TextColumn get expressionJson => text()();
+  DateTimeColumn get createdAt => dateTime()();
+}
+
+/// Bookkeeping so each new message pops up at most once. A row means the
+/// message has already been considered for a notification (matched or not). No
+/// foreign key on [emailId] so the record survives a force-resync that deletes
+/// and re-inserts the same message.
+// Added in schema v56.
+@DataClassName('NotifiedEmailRow')
+class NotifiedEmails extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get emailId => text()();
+  DateTimeColumn get notifiedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, emailId};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -550,6 +588,8 @@ class UserPreferences extends Table {
     AppLogs,
     Outbox,
     AttachmentFiles,
+    NotificationRules,
+    NotifiedEmails,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1203,6 +1243,14 @@ class AppDatabase extends _$AppDatabase {
                 "UPDATE threads SET preview = NULL WHERE preview = '0>'",
               );
             }
+          }
+          if (from < 56) {
+            // Per-account new-mail notification rules (#272). Brand-new tables
+            // start empty and notifications_enabled defaults to null (read as
+            // false), so existing installs stay silent until the user opts in.
+            await m.createTable(notificationRules);
+            await m.createTable(notifiedEmails);
+            await m.addColumn(accounts, accounts.notificationsEnabled);
           }
         },
       );

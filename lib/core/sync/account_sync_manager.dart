@@ -44,7 +44,10 @@ String syncErrorMessage(Object e) {
   return e.toString();
 }
 
-typedef OnNewMailCallback = Future<void> Function(String accountEmail);
+/// Invoked once per completed sync cycle with the account id, after new mail
+/// has been stored locally. Wired to the notification dispatcher, which decides
+/// whether any of the account's rules should pop up.
+typedef OnNewMailCallback = Future<void> Function(String accountId);
 
 /// Coarse-grained phase of a [AccountSyncManager.forceResync] run. The UI
 /// uses this to pick the right message/spinner while the operation runs.
@@ -187,6 +190,7 @@ class AccountSyncManager {
               _appLogger,
               _drafts,
               _notes,
+              _onNewMail,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
@@ -597,6 +601,7 @@ class AccountSyncManager {
           _appLogger,
           _drafts,
           _notes,
+          _onNewMail,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
@@ -884,6 +889,9 @@ class _AccountSync implements _SyncLoop {
       );
     }
     await _emails.applySieveRules(account.id);
+    // Fire notifications for any newly stored mail that matches the account's
+    // rules. Runs unawaited so a notification failure never aborts the cycle.
+    unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
     return _SyncStats(
       emailsFetched: emailResult.fetched,
@@ -927,7 +935,6 @@ class _AccountSync implements _SyncLoop {
       await client.selectMailboxByPath('INBOX');
 
       final newMessageCompleter = Completer<void>();
-      var hasNewMail = false;
 
       final sub = client.eventBus
           .on<imap.ImapEvent>()
@@ -936,10 +943,6 @@ class _AccountSync implements _SyncLoop {
                 e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
           )
           .listen((e) {
-        if (e is imap.ImapMessagesExistEvent &&
-            e.newMessagesExists > e.oldMessagesExists) {
-          hasNewMail = true;
-        }
         if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
       });
 
@@ -961,9 +964,9 @@ class _AccountSync implements _SyncLoop {
       await client.idleDone();
       await sub.cancel();
 
-      if (hasNewMail) {
-        unawaited(_onNewMail?.call(account.email));
-      }
+      // New mail detected during IDLE wakes the loop, which runs a full sync
+      // (storing the messages) and then fires notifications from _sync(). We do
+      // not notify here because the envelopes are not fetched yet.
     } finally {
       await client.logout();
       _idleClient = null;
@@ -983,7 +986,8 @@ class _JmapAccountSync implements _SyncLoop {
     this._syncLog,
     this._appLogger,
     this._drafts,
-    this._notes, {
+    this._notes,
+    this._onNewMail, {
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
   })  : _onSyncStart = onSyncStart,
@@ -997,6 +1001,7 @@ class _JmapAccountSync implements _SyncLoop {
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
+  final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
 
@@ -1220,6 +1225,9 @@ class _JmapAccountSync implements _SyncLoop {
       );
     }
     await _emails.applySieveRules(account.id);
+    // Fire notifications for any newly stored mail that matches the account's
+    // rules. Runs unawaited so a notification failure never aborts the cycle.
+    unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
     return _SyncStats(
       emailsFetched: emailResult.fetched,

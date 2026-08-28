@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:sharedinbox/core/filter/filter_matcher.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -20,6 +21,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 import 'package:workmanager/workmanager.dart';
@@ -191,12 +193,89 @@ Future<void> _checkAccount(
       if (lastUidNext != null &&
           currentUidNext != null &&
           currentUidNext > lastUidNext) {
-        await showNewMailNotification(account.email);
+        await _notifyForNewMail(db, account, client, lastUidNext);
       }
     } finally {
       await client.logout();
     }
   } catch (_) {}
+}
+
+/// Fetches the envelopes of the messages that arrived since the last check and
+/// fires a notification for each one that matches the account's rules. Default
+/// behaviour is silent: nothing fires unless the master switch is on and a rule
+/// matches. Also records the considered messages so the foreground dispatcher
+/// does not notify a second time when the app next syncs.
+Future<void> _notifyForNewMail(
+  AppDatabase db,
+  model.Account account,
+  imap.ImapClient client,
+  int fromUid,
+) async {
+  if (!account.notificationsEnabled) return;
+  final ruleRepo = NotificationRuleRepositoryImpl(db);
+  final rules = await ruleRepo.listRules(account.id);
+  if (rules.isEmpty) return;
+
+  await client.selectMailboxByPath('INBOX');
+  final search =
+      await client.uidSearchMessages(searchCriteria: 'UID $fromUid:*');
+  final uids = search.matchingSequence?.toList() ?? [];
+  if (uids.isEmpty) return;
+
+  final fetch = await client.uidFetchMessages(
+    imap.MessageSequence.fromIds(uids, isUid: true),
+    '(UID ENVELOPE)',
+  );
+
+  final consideredIds = <String>[];
+  for (final msg in fetch.messages) {
+    final uid = msg.uid;
+    final envelope = msg.envelope;
+    if (uid == null || envelope == null) continue;
+    final emailId = '${account.id}:INBOX:$uid';
+    consideredIds.add(emailId);
+    if (rules
+        .any((r) => matchesFilter(r.filter, _matchableFromEnvelope(msg)))) {
+      await showNewMailNotification(
+        title: _envelopeTitle(msg),
+        body: _envelopeBody(msg),
+        id: emailId.hashCode & 0x7FFFFFFF,
+        payload: '${account.id}|$emailId',
+      );
+    }
+  }
+  await ruleRepo.markNotified(account.id, consideredIds);
+}
+
+MatchableMessage _matchableFromEnvelope(imap.MimeMessage msg) {
+  final env = msg.envelope;
+  MatchAddress conv(imap.MailAddress a) =>
+      MatchAddress(name: a.personalName ?? '', email: a.email);
+  List<MatchAddress> list(List<imap.MailAddress>? l) =>
+      [for (final a in l ?? const <imap.MailAddress>[]) conv(a)];
+  return MatchableMessage(
+    from: list(env?.from),
+    to: list(env?.to),
+    cc: list(env?.cc),
+    subject: env?.subject ?? '',
+    folder: 'INBOX',
+  );
+}
+
+String _envelopeTitle(imap.MimeMessage msg) {
+  final from = msg.envelope?.from;
+  if (from != null && from.isNotEmpty) {
+    final name = from.first.personalName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    if (from.first.email.isNotEmpty) return from.first.email;
+  }
+  return 'New mail';
+}
+
+String _envelopeBody(imap.MimeMessage msg) {
+  final subject = msg.envelope?.subject?.trim();
+  return (subject != null && subject.isNotEmpty) ? subject : '(no subject)';
 }
 
 int? _parseUidNext(String? state) {

@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/received_header.dart';
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/router.dart' show SieveEditPrefill;
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -315,6 +317,11 @@ Future<void> _showHeaderActions(
             title: const Text('Create local email filter'),
             onTap: () => Navigator.pop(ctx, _HeaderAction.localFilter),
           ),
+          ListTile(
+            leading: const Icon(Icons.notifications_active_outlined),
+            title: const Text('Create local filter … and notify me'),
+            onTap: () => Navigator.pop(ctx, _HeaderAction.notify),
+          ),
         ],
       ),
     ),
@@ -340,6 +347,14 @@ Future<void> _showHeaderActions(
   // up the router before popping because `context` is deactivated once
   // the dialog route is gone.
   final router = GoRouter.of(context);
+  // Only the "notify" action needs the provider container / messenger, so look
+  // them up lazily — the other actions run in contexts (e.g. widget tests)
+  // without a ProviderScope ancestor.
+  final container = choice == _HeaderAction.notify
+      ? ProviderScope.containerOf(context, listen: false)
+      : null;
+  final messenger =
+      choice == _HeaderAction.notify ? ScaffoldMessenger.of(context) : null;
   Navigator.of(context).pop();
 
   switch (choice) {
@@ -359,6 +374,20 @@ Future<void> _showHeaderActions(
           extra: SieveEditPrefill(filter: filter, name: suggestedName),
         ),
       );
+    case _HeaderAction.notify:
+      final ruleRepo = container!.read(notificationRuleRepositoryProvider);
+      final accountRepo = container.read(accountRepositoryProvider);
+      final account = await accountRepo.getAccount(accountId);
+      if (account != null && !account.notificationsEnabled) {
+        await ruleRepo.markBaseline(accountId);
+        await accountRepo.updateAccount(
+          account.copyWith(notificationsEnabled: true),
+        );
+      }
+      await ruleRepo.addRule(accountId, filter, name: suggestedName);
+      messenger!.showSnackBar(
+        const SnackBar(content: Text('Notification rule created')),
+      );
   }
 }
 
@@ -368,7 +397,7 @@ String _suggestFilterName(EmailHeader h) {
   return '${h.name}: $shortV';
 }
 
-enum _HeaderAction { search, remoteFilter, localFilter }
+enum _HeaderAction { search, remoteFilter, localFilter, notify }
 
 String _formatDuration(Duration d) {
   if (d.inSeconds < 60) return '${d.inSeconds}s';
