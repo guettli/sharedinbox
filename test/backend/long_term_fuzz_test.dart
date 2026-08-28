@@ -75,10 +75,17 @@ Future<AccountComparisonResult> _syncUntilIdentical(
   String jmapAccountId,
   EmailRepositoryImpl emailRepo,
   MailboxRepositoryImpl mailboxRepo, {
-  int maxRounds = 5,
+  int maxRounds = 8,
 }) async {
   late AccountComparisonResult result;
   for (var round = 0; round < maxRounds; round++) {
+    // Back off before re-syncing so Stalwart has wall-clock time to propagate
+    // the mutation across its IMAP/JMAP views. Hammering rounds back-to-back
+    // only re-observes the same stale HIGHESTMODSEQ; the cross-protocol bump
+    // can lag the change by a tick or two.
+    if (round > 0) {
+      await Future<void>.delayed(Duration(milliseconds: 500 * round));
+    }
     await _syncAllMailboxes(db, jmapAccountId, emailRepo, mailboxRepo);
     await _syncAllMailboxes(db, imapAccountId, emailRepo, mailboxRepo);
     result = await AccountComparison(db).compare(imapAccountId, jmapAccountId);
