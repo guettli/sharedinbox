@@ -19,7 +19,30 @@ void Function(String payload)? onNotificationTap;
 /// and iOS fall through to a no-op until their backends are added.
 bool get notificationsSupported => Platform.isAndroid || Platform.isLinux;
 
+/// Whether a D-Bus session bus is reachable for the Linux notification backend.
+///
+/// `flutter_local_notifications` connects to the session bus when the Linux
+/// backend is initialized. In a headless environment (CI, a login shell with no
+/// desktop session) that connection fails asynchronously — the rejected future
+/// escapes our synchronous try/catch and surfaces to `FlutterError.onError`,
+/// crashing app boot. Only initialize the Linux backend when a bus is present.
+bool _linuxSessionBusAvailable() {
+  final env = Platform.environment;
+  final addr = env['DBUS_SESSION_BUS_ADDRESS'];
+  if (addr != null && addr.trim().isNotEmpty) return true;
+  final runtimeDir = env['XDG_RUNTIME_DIR'];
+  if (runtimeDir != null && runtimeDir.isNotEmpty) {
+    return File('$runtimeDir/bus').existsSync();
+  }
+  return false;
+}
+
 Future<void> initNotifications() async {
+  if (Platform.isLinux && !_linuxSessionBusAvailable()) {
+    // No session bus: leave notifications disabled rather than let the D-Bus
+    // connect fail on a detached future and take down startup.
+    return;
+  }
   try {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const linux = LinuxInitializationSettings(defaultActionName: 'Open');
