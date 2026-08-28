@@ -6,29 +6,12 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/services/notification_dispatcher.dart';
-import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 
+import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-
-class _MapSecureStorage implements SecureStorage {
-  final _map = <String, String>{};
-  @override
-  Future<void> write({required String key, required String? value}) async {
-    if (value == null) {
-      _map.remove(key);
-    } else {
-      _map[key] = value;
-    }
-  }
-
-  @override
-  Future<String?> read({required String key}) async => _map[key];
-  @override
-  Future<void> delete({required String key}) async => _map.remove(key);
-}
 
 FilterGroup _subjectContains(String text) => FilterGroup(
       operator: FilterOperator.and_,
@@ -114,7 +97,7 @@ void main() {
     Future<void> setup({required bool enabled}) async {
       db = openTestDatabase();
       addTearDown(db.close);
-      accounts = AccountRepositoryImpl(db, _MapSecureStorage());
+      accounts = AccountRepositoryImpl(db, MapSecureStorage());
       rules = NotificationRuleRepositoryImpl(db);
       fired = [];
       dispatcher = NotificationDispatcher(
