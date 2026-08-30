@@ -853,6 +853,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ),
       );
     }
+    // Resolve the containing folder's human-readable path the same way the
+    // list tile does (#288), so the header can show it next to the date (#693).
+    final mailbox = ref
+        .watch(mailboxByPathProvider((email.accountId, email.mailboxPath)))
+        .value;
+    final folderLabel = mailbox?.displayPath ?? email.mailboxPath;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -874,9 +880,26 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           style: Theme.of(ctx).textTheme.bodySmall,
         ),
         if (email.sentAt != null)
-          Text(
-            _dateFmt.format(email.sentAt!),
-            style: Theme.of(ctx).textTheme.bodySmall,
+          Row(
+            children: [
+              Text(
+                _dateFmt.format(email.sentAt!),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              if (folderLabel.isNotEmpty) ...[
+                const SizedBox(width: AppSpacing.sm),
+                Flexible(
+                  child: Text(
+                    folderLabel,
+                    style: Theme.of(ctx)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: Theme.of(ctx).hintColor),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ],
           ),
         _buildThreadStrip(ctx, email),
         if (email.listUnsubscribeHeader != null)
