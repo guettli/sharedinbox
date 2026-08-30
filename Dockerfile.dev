@@ -41,7 +41,7 @@ RUN curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin v3.4
 # Dagger CLI — how all Flutter/Dart/build/test work actually runs (against the
 # remote engine, not this host). The pin must equal the engine version;
 # Renovate keeps it in sync (see renovate.json customManager).
-RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
+RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.9 BIN_DIR=/usr/local/bin sh
 
 # pre-commit (project git hooks).
 RUN pip install --break-system-packages --no-cache-dir pre-commit==4.5.1
