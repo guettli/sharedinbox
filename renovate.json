@@ -87,6 +87,15 @@
       "matchStrings": ["acpx@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
       "depNameTemplate": "acpx",
       "datasourceTemplate": "npm"
+    },
+    {
+      "description": "prek (pre-commit-compatible static binary) baked into the dev container. Nothing else guards this pin, so keep the manager here to stop it drifting.",
+      "customType": "regex",
+      "fileMatch": ["^Dockerfile\\.dev$"],
+      "matchStrings": ["prek/releases/download/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)/"],
+      "depNameTemplate": "j178/prek",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
     }
   ]
 }
