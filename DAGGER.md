@@ -132,6 +132,16 @@ account (`PLAY_STORE_CONFIG_JSON`), the Firebase Test Lab service account
 (`FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY`), and the tokens used by the pipeline
 (`GITHUB_TOKEN`, `AGENTLOOP_OTEL_TOKEN`).
 
+On **pushes to `main`** the `Full Project Check` job exports Dagger's OTEL
+traces to the persistent agentloop collector
+(`otel-collector.agentloop.svc.cluster.local:4318`, authed with
+`AGENTLOOP_OTEL_TOKEN`), tagged `service.name=sharedinbox-ci` with
+`git.sha` / `git.ref` / `ci.run_id` / `ci.run_attempt`, so CI wall-time can be
+compared commit-to-commit (#649). Pull-request runs export nothing. This
+replaced the old local `ci/otel-receiver.py`, which wrote a per-run
+`build/task-check-timings.json` artifact — timing now lives in the collector,
+for main only.
+
 Inside the Dagger module all sensitive credentials are passed as `dagger.Secret`
 (never as plain strings), so values never appear in Dagger logs or get cached in
 the engine.
