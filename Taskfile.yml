@@ -275,7 +275,7 @@ tasks:
       - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   check-dagger:
-    desc: Run full check suite via Dagger (with OTEL timing report if python3 is available)
+    desc: Run full check suite via Dagger
     cmds:
       - |
         DAGGER_OUT=$(mktemp)
@@ -307,41 +307,13 @@ tasks:
             fi
           done
         }
-        if ! command -v python3 >/dev/null 2>&1; then
-          retry_dagger dagger call --progress=plain -q -m ci --source=. check
-          RC=$?
-          rm -f "$DAGGER_OUT" "$RC_FILE"
-          exit $RC
-        fi
-        PORTFILE=$(mktemp)
-        # Emit per-span timings as JSON so CI can upload them as an artefact
-        # (see .github/workflows/ci.yml). Path is overridable via env for tests.
-        TIMINGS_OUT="${TASK_CHECK_TIMINGS_OUT:-build/task-check-timings.json}"
-        mkdir -p "$(dirname "$TIMINGS_OUT")"
-        python3 ci/otel-receiver.py --port-file="$PORTFILE" --output-file="$TIMINGS_OUT" &
-        RECV_PID=$!
-        cleanup() {
-          rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
-        }
-        trap cleanup EXIT
-        until [ -s "$PORTFILE" ]; do
-          sleep 0.05
-          if ! kill -0 "$RECV_PID" 2>/dev/null; then
-            echo "$(_ts) otel-receiver.py died before writing port file; falling back to plain run" >&2
-            retry_dagger dagger call --progress=plain -q -m ci --source=. check
-            RC=$?
-            rm -f "$PORTFILE" "$DAGGER_OUT" "$RC_FILE"
-            exit $RC
-          fi
-        done
-        PORT=$(cat "$PORTFILE")
-        retry_dagger env \
-          OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$PORT" \
-          OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
-          dagger call --progress=plain -q -m ci --source=. check
+        # OTEL export is controlled entirely by the caller's environment: run
+        # nothing extra here. Locally OTEL_EXPORTER_OTLP_* is unset, so Dagger
+        # exports nowhere; on pushes to main, CI sets it to the agentloop
+        # collector (see .github/workflows/ci.yml). No local receiver.
+        retry_dagger dagger call --progress=plain -q -m ci --source=. check
         RC=$?
-        curl -sf "http://127.0.0.1:$PORT/shutdown" >/dev/null 2>&1 || true
-        wait "$RECV_PID" 2>/dev/null || true
+        rm -f "$DAGGER_OUT" "$RC_FILE"
         exit $RC
 
   dagger-prune:

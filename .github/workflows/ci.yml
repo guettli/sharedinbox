@@ -88,19 +88,19 @@ jobs:
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
+      # Export Dagger's OTEL traces to the persistent agentloop collector ONLY
+      # on pushes to main, so CI wall-time is comparable commit-to-commit (#649).
+      # Setting the vars into $GITHUB_ENV (rather than step-level env) means on
+      # PRs they stay unset and Dagger exports nowhere. AGENTLOOP_OTEL_TOKEN was
+      # put into $GITHUB_ENV by the earlier "Setup Dagger Remote Engine" step.
+      - name: Enable OTEL export (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          {
+            echo "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.agentloop.svc.cluster.local:4318"
+            echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer $AGENTLOOP_OTEL_TOKEN"
+            echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
+            echo "OTEL_RESOURCE_ATTRIBUTES=service.name=sharedinbox-ci,git.sha=$GITHUB_SHA,git.ref=$GITHUB_REF_NAME,ci.run_id=$GITHUB_RUN_ID,ci.run_attempt=$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_ENV"
       - name: Run Full Check Suite
-        env:
-          OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.agentloop.svc.cluster.local:4318
-          OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer ${{ env.AGENTLOOP_OTEL_TOKEN }}
-          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
         run: task check-dagger
-      # Publish per-subtask timings as an artefact so we can inspect where the
-      # wall-time is spent (see issue #335). Uploaded even on failure — a slow
-      # step that times out is exactly the case we want to inspect.
-      - name: Upload task check timings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: task-check-timings
-          path: build/task-check-timings.json
-          if-no-files-found: ignore
