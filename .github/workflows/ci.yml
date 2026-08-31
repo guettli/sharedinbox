@@ -88,19 +88,26 @@ jobs:
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
-      # Export Dagger's OTEL traces to the persistent agentloop collector ONLY
-      # on pushes to main, so CI wall-time is comparable commit-to-commit (#649).
-      # Setting the vars into $GITHUB_ENV (rather than step-level env) means on
-      # PRs they stay unset and Dagger exports nowhere. AGENTLOOP_OTEL_TOKEN was
-      # put into $GITHUB_ENV by the earlier "Setup Dagger Remote Engine" step.
-      - name: Enable OTEL export (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Export Dagger's OTEL traces to the persistent agentloop collector on
+      # every run that has the collector token — pushes to main AND pull
+      # requests. PR runs are the cold-cache case (6-13 min); main pushes are
+      # near-warm (~1 min), so tracing only main measured the fast path and left
+      # the slow one blind (#649, #693). Each span carries git.ref and ci.event,
+      # so main-only wall-time stays queryable commit-to-commit — filter on
+      # `ci.event = 'push' AND git.ref = 'main'`.
+      #
+      # The gate is the token, not the branch: AGENTLOOP_OTEL_TOKEN is put into
+      # $GITHUB_ENV by the earlier "Setup Dagger Remote Engine" step, and is
+      # empty on fork PRs (no secrets). Empty -> skip, so we never export with a
+      # bearer the tenantauth collector would reject.
+      - name: Enable OTEL export (when collector token is available)
+        if: env.AGENTLOOP_OTEL_TOKEN != ''
         run: |
           {
             echo "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.agentloop.svc.cluster.local:4318"
             echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer $AGENTLOOP_OTEL_TOKEN"
             echo "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
-            echo "OTEL_RESOURCE_ATTRIBUTES=service.name=sharedinbox-ci,git.sha=$GITHUB_SHA,git.ref=$GITHUB_REF_NAME,ci.run_id=$GITHUB_RUN_ID,ci.run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "OTEL_RESOURCE_ATTRIBUTES=service.name=sharedinbox-ci,git.sha=$GITHUB_SHA,git.ref=$GITHUB_REF_NAME,ci.event=$GITHUB_EVENT_NAME,ci.run_id=$GITHUB_RUN_ID,ci.run_attempt=$GITHUB_RUN_ATTEMPT"
           } >> "$GITHUB_ENV"
       - name: Run Full Check Suite
         run: task check-dagger
