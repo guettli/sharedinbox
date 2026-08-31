@@ -3,16 +3,16 @@
 //
 // Architecture
 //
-//	  Mail server (IMAP IDLE / sieve hook)
-//	          │
-//	          ▼
-//	  ┌────────────────┐    POST /trigger     ┌──────────────────────┐
-//	  │   This relay   │ ───────────────────► │  Distributor on the  │
-//	  │  (stateless)   │                      │   device (ntfy, …)   │
-//	  └────────────────┘ ◄─────────────────── │                      │
-//	          ▲          POST /register       └──────────────────────┘
-//	          │
-//	   SharedInbox app
+//	Mail server (IMAP IDLE / sieve hook)
+//	        │
+//	        ▼
+//	┌────────────────┐    POST /trigger     ┌──────────────────────┐
+//	│   This relay   │ ───────────────────► │  Distributor on the  │
+//	│  (stateless)   │                      │   device (ntfy, …)   │
+//	└────────────────┘ ◄─────────────────── │                      │
+//	        ▲          POST /register       └──────────────────────┘
+//	        │
+//	 SharedInbox app
 //
 // Endpoints:
 //
@@ -54,10 +54,10 @@ type Registration struct {
 }
 
 type store struct {
-	mu        sync.Mutex
-	path      string
-	entries   map[string]Registration // keyed by account_id
-	httpClnt  *http.Client
+	mu       sync.Mutex
+	path     string
+	entries  map[string]Registration // keyed by account_id
+	httpClnt *http.Client
 }
 
 func newStore(path string) (*store, error) {
