@@ -656,6 +656,47 @@ func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// goFmtImage is the Go toolchain used by the gofmt gate. Pinned so the check
+// does not depend on a contributor's local Go version — gofmt output changes
+// between Go releases (e.g. doc-comment reformatting landed in 1.19). Kept >=
+// every module's go directive (root go.mod: 1.22, ci/go.mod: 1.26).
+const goFmtImage = "golang:1.26-bookworm"
+
+// goFmtSrc is the hand-written Go the gofmt gate checks: the ci Dagger module
+// and the server binaries. Dagger's generated code is never committed and we
+// don't want the gate to fail on a file no contributor can hand-fix, so it is
+// excluded wherever it lands — the `*.gen.go` files (e.g. ci/dagger.gen.go) and
+// the whole ci/internal client tree (see ci/.gitignore). The vendored Hugo
+// theme under website/ is third-party and simply not selected.
+func (m *Ci) goFmtSrc() *dagger.Directory {
+	return m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"ci/", "server/"},
+		Exclude: []string{"ci/internal/", "**/*.gen.go"},
+	})
+}
+
+// CheckGoFormat fails if any committed Go file is not gofmt-formatted. Until
+// this gate existed, CI checked only Dart (dart format), so the Go code silently
+// drifted out of gofmt-clean state (issue #731). Runs gofmt in the pinned
+// goFmtImage for a version-stable result.
+func (m *Ci) CheckGoFormat(ctx context.Context) (string, error) {
+	return dag.Container().
+		From(goFmtImage).
+		WithDirectory("/src", m.goFmtSrc()).
+		WithWorkdir("/src").
+		WithExec([]string{"/bin/sh", "-c",
+			// `|| exit 1` catches gofmt's own non-zero exit (an unparseable Go
+			// file, which it reports on stderr and omits from stdout) so a
+			// broken file cannot slip through as "no diff"; the -n test then
+			// catches files that parse but are not formatted.
+			`unformatted="$(gofmt -l .)" || { echo "ERROR: gofmt failed (unparseable Go?)"; exit 1; }; ` +
+				`if [ -n "$unformatted" ]; then ` +
+				`echo "ERROR: these Go files are not gofmt-formatted (run: gofmt -w <file>):"; ` +
+				`echo "$unformatted"; exit 1; ` +
+				`fi; echo "Go format check passed."`}).
+		Stdout(ctx)
+}
+
 // Format runs dart format check.
 func (m *Ci) Format(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
@@ -852,6 +893,12 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	fastEg.Go(func() error {
 		return timedCheck(&timingsMu, &timings, "structural", "duplication", func() error {
 			_, err := m.Duplication(ctx)
+			return err
+		})
+	})
+	fastEg.Go(func() error {
+		return timedCheck(&timingsMu, &timings, "structural", "goformat", func() error {
+			_, err := m.CheckGoFormat(ctx)
 			return err
 		})
 	})
@@ -1308,9 +1355,9 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 
 // FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
 // release using the Play Developer API. Returns a Directory containing the
-// APKs and a ``versionCode`` text file with the resolved alpha versionCode.
+// APKs and a "versionCode" text file with the resolved alpha versionCode.
 // When Play has not finished generating split APKs within the poll window,
-// the returned directory contains a ``PENDING`` marker (and ``versionCode``)
+// the returned directory contains a "PENDING" marker (and "versionCode")
 // instead of APKs — the wrapper (scripts/run_firebase_test.sh) reads the
 // marker and skips the Firebase Test Lab attempt with a ::notice::. Any
 // other failure (auth, network, Play API 5xx) still propagates and fails
