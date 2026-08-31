@@ -78,8 +78,8 @@ the hood. The commands you need:
 
 | Command | What it runs (on the Dagger engine) |
 |---|---|
-| `task check` | The full gate (format + analyze + generated + backend tests) — run before finishing |
-| `task check-fast` | Fast subset (format, analyze, layer/hygiene checks) |
+| `task check-fast` | Fast subset (format, analyze, layer/hygiene checks) — **run this before finishing** |
+| `task check` | The full gate (format + analyze + generated + backend tests + integration) — slow; CI runs it for you (see note) |
 | `task analyze` | `dart analyze --fatal-infos` |
 | `task test-backend` | Backend/unit tests |
 | `task integration-ui` | UI integration tests (Xvfb, headless) |
@@ -89,6 +89,13 @@ the hood. The commands you need:
 Notes:
 - These are **the same checks CI runs** (`Full Project Check`), so a green
   `task check` locally means CI will pass.
+- **Don't run the full `task check` just to finish.** It compiles Flutter and
+  runs the integration suite on the remote engine and can take longer than an
+  agent run's budget. Run `task check-fast` (format + analyze + layer/hygiene),
+  then open the PR: the CI gate runs the full `Full Project Check` on it and,
+  if anything fails, feeds the logs back so you can push a fix. Reach for the
+  full `task check` locally only when a change plausibly affects the build or
+  integration/backend tests and you want to confirm before pushing.
 - The **local-only** tasks (`task test`, `task run`, `task build-linux`, …) use
   a local Flutter SDK + nix shell and will **not** work here — use the Dagger
   targets above instead.
