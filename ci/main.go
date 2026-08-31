@@ -5,10 +5,56 @@ import (
 	"dagger/ci/internal/dagger"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 )
+
+// checkTiming is one check's wall-clock cost, recorded by timedCheck.
+type checkTiming struct {
+	phase string
+	name  string
+	dur   time.Duration
+	ok    bool
+}
+
+// timedCheck runs fn and records its wall-time under (phase, name).
+//
+// Per-check wall-times are the numbers CI could not previously see. GitHub's UI
+// shows only the single opaque "Run Full Check Suite" step, and Dagger's OTEL
+// spans for the actual work are unlabeled ("resume withExec" / "Container.stdout"),
+// so a slow check is invisible in a trace. Recording it here makes the breakdown
+// show up in EVERY run's log — PRs included, which is exactly the cold-cache case
+// the main-only OTEL export (see .github/workflows/ci.yml, issue #649) never
+// measures.
+func timedCheck(mu *sync.Mutex, out *[]checkTiming, phase, name string, fn func() error) error {
+	start := time.Now()
+	err := fn()
+	mu.Lock()
+	*out = append(*out, checkTiming{phase: phase, name: name, dur: time.Since(start), ok: err == nil})
+	mu.Unlock()
+	return err
+}
+
+// formatCheckTimings renders the per-check breakdown as a table sorted slowest
+// first. Checks inside a phase run in parallel, so a phase's wall-time is its
+// slowest member — that member is the one to optimise.
+func formatCheckTimings(timings []checkTiming) string {
+	sort.SliceStable(timings, func(i, j int) bool { return timings[i].dur > timings[j].dur })
+	b := &strings.Builder{}
+	fmt.Fprintf(b, "\n=== Per-check wall-times (slowest first) ===\n")
+	for _, t := range timings {
+		status := "ok"
+		if !t.ok {
+			status = "FAIL"
+		}
+		fmt.Fprintf(b, "%8.1fs  %-6s  %-16s %s\n", t.dur.Seconds(), status, t.phase, t.name)
+	}
+	return b.String()
+}
 
 // patchAabScript patches android:versionCode in an AAB's compiled manifest proto.
 // It strips META-INF/ (old signature) and repacks the ZIP. No external dependencies.
@@ -782,21 +828,35 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
+	// Per-check wall-times, filled by timedCheck. Printed as a table at the end
+	// (and on failure) so every run's log shows which check dominated — the
+	// attribution neither GitHub's single "Run Full Check Suite" step nor the
+	// unlabeled Dagger exec spans can give. See timedCheck's doc comment.
+	var timingsMu sync.Mutex
+	var timings []checkTiming
+
 	// Run cheap structural checks in parallel for faster fail detection.
 	var fastEg errgroup.Group
 	fastEg.Go(func() error {
-		_, err := m.CheckHygiene(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "structural", "hygiene", func() error {
+			_, err := m.CheckHygiene(ctx)
+			return err
+		})
 	})
 	fastEg.Go(func() error {
-		_, err := m.CheckLayers(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "structural", "layers", func() error {
+			_, err := m.CheckLayers(ctx)
+			return err
+		})
 	})
 	fastEg.Go(func() error {
-		_, err := m.Duplication(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "structural", "duplication", func() error {
+			_, err := m.Duplication(ctx)
+			return err
+		})
 	})
 	if err := fastEg.Wait(); err != nil {
+		fmt.Println(formatCheckTimings(timings))
 		return "", err
 	}
 
@@ -805,27 +865,36 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	var analyze, mocks, coverage string
 	var checkEg errgroup.Group
 	checkEg.Go(func() error {
-		setup := m.setup(m.checkSrc())
-		_, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "analysis", "format", func() error {
+			setup := m.setup(m.checkSrc())
+			_, err := setup.WithExec([]string{"dart", "format", "--output=none", "--set-exit-if-changed", "lib", "test"}).Stdout(ctx)
+			return err
+		})
 	})
 	checkEg.Go(func() error {
-		setup := m.setup(m.checkSrc())
-		var err error
-		analyze, err = setup.WithExec([]string{"dart", "analyze", "--fatal-infos"}).Stdout(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "analysis", "analyze", func() error {
+			setup := m.setup(m.checkSrc())
+			var err error
+			analyze, err = setup.WithExec([]string{"dart", "analyze", "--fatal-infos"}).Stdout(ctx)
+			return err
+		})
 	})
 	checkEg.Go(func() error {
-		var err error
-		mocks, err = m.CheckGenerated(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "analysis", "generated", func() error {
+			var err error
+			mocks, err = m.CheckGenerated(ctx)
+			return err
+		})
 	})
 	checkEg.Go(func() error {
-		var err error
-		coverage, err = m.Coverage(ctx)
-		return err
+		return timedCheck(&timingsMu, &timings, "analysis", "coverage", func() error {
+			var err error
+			coverage, err = m.Coverage(ctx)
+			return err
+		})
 	})
 	if err := checkEg.Wait(); err != nil {
+		fmt.Println(formatCheckTimings(timings))
 		return "", err
 	}
 
@@ -835,20 +904,25 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	var testBackend, testIntegration string
 	var eg errgroup.Group
 	eg.Go(func() error {
-		var e error
-		testBackend, e = m.TestBackend(ctx)
-		return e
+		return timedCheck(&timingsMu, &timings, "tests", "backend", func() error {
+			var e error
+			testBackend, e = m.TestBackend(ctx)
+			return e
+		})
 	})
 	eg.Go(func() error {
-		var e error
-		testIntegration, e = m.TestIntegration(ctx)
-		return e
+		return timedCheck(&timingsMu, &timings, "tests", "integration", func() error {
+			var e error
+			testIntegration, e = m.TestIntegration(ctx)
+			return e
+		})
 	})
 	if err := eg.Wait(); err != nil {
+		fmt.Println(formatCheckTimings(timings))
 		return "", err
 	}
 
-	return fmt.Sprintf("All checks passed!\n\nAnalysis:\n%s\n\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", analyze, mocks, coverage, testBackend, testIntegration), nil
+	return fmt.Sprintf("All checks passed!\n%s\nAnalysis:\n%s\n\n%s\n\n%s\n\nBackend Tests:\n%s\n\nIntegration Tests:\n%s\n", formatCheckTimings(timings), analyze, mocks, coverage, testBackend, testIntegration), nil
 }
 
 // GenerateBuildHistory scans the remote server and produces Hugo content.
