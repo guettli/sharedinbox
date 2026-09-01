@@ -50,6 +50,7 @@ class AccountRepositoryImpl implements AccountRepository {
             manageSieveSsl: Value(account.manageSieveSsl),
             manageSieveAvailable: Value(account.manageSieveAvailable),
             signature: Value(account.signature),
+            notificationsEnabled: Value(account.notificationsEnabled),
           ),
         );
     await _storage.write(key: _passwordKey(account.id), value: password);
@@ -79,6 +80,7 @@ class AccountRepositoryImpl implements AccountRepository {
         manageSieveSsl: Value(account.manageSieveSsl),
         manageSieveAvailable: Value(account.manageSieveAvailable),
         signature: Value(account.signature),
+        notificationsEnabled: Value(account.notificationsEnabled),
       ),
     );
     if (password != null) {
@@ -122,5 +124,6 @@ class AccountRepositoryImpl implements AccountRepository {
         jmapUrl: row.jmapUrl,
         verbose: row.verbose,
         signature: row.signature ?? '',
+        notificationsEnabled: row.notificationsEnabled ?? false,
       );
 }

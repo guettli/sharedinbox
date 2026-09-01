@@ -135,8 +135,14 @@ Future<DbProbeResult?> _safeProbe() async {
 
 /// Completes app startup once the DB is known to be openable.
 Future<void> _bootApp(List<Override> overrides) async {
-  if (Platform.isAndroid) {
+  if (notificationsSupported) {
     await initNotifications();
+    // Tapping a new-mail notification brings the app to the inbox. The payload
+    // ("accountId|emailId") is available for a future deep-link to the exact
+    // message.
+    onNotificationTap = (_) => router.go('/inbox');
+  }
+  if (Platform.isAndroid) {
     await registerBackgroundSync();
     await _registerPrefetchTaskFromStoredPrefs();
   }

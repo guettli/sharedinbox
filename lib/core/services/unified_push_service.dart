@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
-import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
@@ -172,10 +171,12 @@ class UnifiedPushService {
   }
 
   void _handleMessage(PushMessage message, String instance) {
-    // Empty / opaque wake-up — the relay does not send mail content.
+    // Empty / opaque wake-up — the relay does not send mail content. The kick
+    // triggers a sync; any resulting popups come from the notification
+    // dispatcher (gated by the account's rules), so the wake-up itself is
+    // silent instead of firing a generic "Push wake-up" notification.
     log('UnifiedPush message received for $instance');
     _onPushKick?.call();
-    unawaited(showNewMailNotification('Push wake-up'));
   }
 
   void _emit() {

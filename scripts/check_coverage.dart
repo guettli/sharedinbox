@@ -26,6 +26,7 @@ const _noCode = {
   'lib/core/repositories/undo_repository.dart',
   'lib/core/repositories/search_history_repository.dart',
   'lib/core/repositories/user_preferences_repository.dart',
+  'lib/core/repositories/notification_rule_repository.dart',
   'lib/core/models/undo_action.dart',
   'lib/core/models/user_preferences.dart',
   'lib/core/models/note.dart',
@@ -105,6 +106,10 @@ const _excluded = <String, String>{
   'lib/ui/screens/mailbox_list_screen.dart': 'Widget-only mailbox tree view',
   'lib/ui/screens/message_debug_screen.dart':
       'Widget-only debug UI displaying raw message data',
+  'lib/ui/screens/notifications_screen.dart':
+      'Widget-only per-account notification-rules settings screen; the rule '
+          'matching/serialization logic it drives is unit-tested in '
+          'filter_matcher_test.dart and filter_json_test.dart',
   'lib/ui/screens/outbox_screen.dart': 'Widget-only per-account outbox view',
   'lib/ui/screens/push_settings_screen.dart':
       'Widget-only push notification settings (UnifiedPush plugin)',
