@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import hashlib
 import json
@@ -485,9 +486,19 @@ def main(argv: list[str] | None = None) -> int:
         print("detect_duplication: no changed files in scope")
         return 0
 
+    # The three detectors are independent subprocesses (jscpd/pylint/dupl) that
+    # read the tree and write to separate outputs, so run them concurrently:
+    # wall-time drops from their sum toward their slowest. This check dominates
+    # CI's warm-cache wall-time (issue #733). Findings are sorted and keyed by
+    # content hash downstream, so completion order does not matter; .result()
+    # re-raises, so a runner raising (not a tolerated non-zero tool exit, which
+    # _run already handles) still aborts the run exactly as the serial loop did.
     clones: list[Clone] = []
-    for runner in (run_jscpd, run_pylint, run_dupl):
-        clones.extend(runner(scope))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(runner, scope)
+                   for runner in (run_jscpd, run_pylint, run_dupl)]
+        for future in futures:
+            clones.extend(future.result())
 
     # Persist a full JSON report as a CI artifact regardless of mode.
     (REPORT_DIR / "findings.json").write_text(
