@@ -865,6 +865,11 @@ func (m *Ci) GmailProbe(
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
 				`flutter test test/backend/gmail_inbox_probe_test.dart --reporter expanded --concurrency=1 --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				// The probe's value is seeing what a real mailbox does, so surface the
+				// enough_mail diagnostics (e.g. `fetch: encountered unexpected …`, the
+				// first symptom of #680) even on a passing run — not only when the test
+				// is failed on purpose to dump its buffer (issue #686).
+				`grep -Ei '^fetch:|warning' "$tmp" || true; ` +
 				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		Stdout(ctx)
 }
