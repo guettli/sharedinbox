@@ -48,7 +48,7 @@ RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BI
 # build. Symlinked to the `pre-commit` name on PATH so the agentloop worker
 # preflight (internal/doctor DefaultTools) and Taskfile's `pre-commit
 # install`/`run` keep working unchanged. Renovate tracks the pin (renovate.json).
-RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.0/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
+RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.1/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
       | tar -xz -C /usr/local/bin prek \
     && ln -s prek /usr/local/bin/pre-commit
 
