@@ -62,8 +62,11 @@ void main() {
       expect(htmlToPlain('a &amp; b'), 'a & b');
     });
 
-    test('decodes &lt; and &gt;', () {
-      expect(htmlToPlain('&lt;tag&gt;'), '<tag>');
+    // Since #682 entities are decoded BEFORE tags are stripped, so escaped
+    // markup is treated as markup and removed rather than shown as literal
+    // text — the real fix for previews reading "<tr> <td ...".
+    test('escaped markup is decoded then stripped (#682)', () {
+      expect(htmlToPlain('&lt;tr&gt; &lt;td&gt;cell'), 'cell');
     });
 
     test('decodes &quot;', () {
@@ -76,6 +79,29 @@ void main() {
 
     test('decodes &nbsp; as space', () {
       expect(htmlToPlain('a&nbsp;b'), 'a b');
+    });
+
+    test('decodes decimal numeric entities (#682)', () {
+      expect(htmlToPlain('caf&#233;'), 'café');
+    });
+
+    test('decodes hex numeric entities (#682)', () {
+      expect(htmlToPlain('I &#x2764; you'), 'I \u2764 you');
+    });
+
+    test('drops zero-width preheader padding (#682)', () {
+      // &#847; is U+034F (combining grapheme joiner), &zwnj; is U+200C —
+      // marketing mail pads its preheader with these; they must not survive.
+      expect(htmlToPlain('deal&#847;&zwnj; ends'), 'deal ends');
+    });
+
+    test('leaves &amp; undecoded-into-double (applied last)', () {
+      // &amp;lt; must become "&lt;", not "<": &amp; is decoded last.
+      expect(htmlToPlain('a &amp;lt; b'), 'a &lt; b');
+    });
+
+    test('leaves a malformed numeric entity as written (#682)', () {
+      expect(htmlToPlain('x&#;y'), 'x&#;y');
     });
 
     test('trims surrounding whitespace', () {
