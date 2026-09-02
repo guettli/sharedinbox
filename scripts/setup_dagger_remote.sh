@@ -129,7 +129,7 @@ tunnel_rc=0
 _t0=$SECONDS
 for attempt in $(seq 1 "$TUNNEL_MAX_ATTEMPTS"); do
     tunnel_rc=0
-    timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" || tunnel_rc=$?
+    timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" || tunnel_rc=$?
     if [ "$tunnel_rc" -eq 0 ]; then
         break
     fi
