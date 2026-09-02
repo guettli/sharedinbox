@@ -591,12 +591,12 @@ func (m *Ci) duplicationSrc() *dagger.Directory {
 // needs. Shared between Duplication (gate) and DuplicationBaseline (artifact
 // producer) so the apt/pip/go/npm install layer is cached once per invocation.
 //
-// Uses golang:1.23-bookworm because dupl is installed via `go install` and
-// needs a recent Go toolchain; Debian's packaged Go on python:*-slim was too
-// old for reliable module resolution.
+// Uses the golang image (goToolImage) because dupl is installed via
+// `go install` and needs a recent Go toolchain; Debian's packaged Go on
+// python:*-slim was too old for reliable module resolution.
 func (m *Ci) duplicationBase() *dagger.Container {
 	return dag.Container().
-		From("golang:1.23-bookworm").
+		From(goToolImage).
 		WithExec([]string{"/bin/sh", "-c",
 			"apt-get -qq update && " +
 				"apt-get install -y -qq --no-install-recommends " +
@@ -656,11 +656,16 @@ func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// goFmtImage is the Go toolchain used by the gofmt gate. Pinned so the check
-// does not depend on a contributor's local Go version — gofmt output changes
-// between Go releases (e.g. doc-comment reformatting landed in 1.19). Kept >=
-// every module's go directive (root go.mod: 1.22, ci/go.mod: 1.26).
-const goFmtImage = "golang:1.26-bookworm"
+// goToolImage is the single Go toolchain image for the Go-based checks — the
+// gofmt gate and the dupl detector in duplicationBase. One image (not one per
+// check) so cold runs pull the layer once. Pinned so gofmt output does not
+// depend on a contributor's local Go version (it changes between releases, e.g.
+// doc-comment reformatting landed in 1.19), and kept >= the root go.mod
+// directive (1.27). Note ci/go.mod stays at 1.26: Dagger v0.21.8's SDK caps the
+// module's go directive at 1.26.5, so it cannot move to 1.27 until the
+// lock-stepped engine is upgraded — this image (which only runs tools, never
+// builds the module) is unaffected by that cap.
+const goToolImage = "golang:1.27-bookworm"
 
 // goFmtSrc is the hand-written Go the gofmt gate checks: the ci Dagger module
 // and the server binaries. Dagger's generated code is never committed and we
@@ -678,10 +683,10 @@ func (m *Ci) goFmtSrc() *dagger.Directory {
 // CheckGoFormat fails if any committed Go file is not gofmt-formatted. Until
 // this gate existed, CI checked only Dart (dart format), so the Go code silently
 // drifted out of gofmt-clean state (issue #731). Runs gofmt in the pinned
-// goFmtImage for a version-stable result.
+// goToolImage for a version-stable result.
 func (m *Ci) CheckGoFormat(ctx context.Context) (string, error) {
 	return dag.Container().
-		From(goFmtImage).
+		From(goToolImage).
 		WithDirectory("/src", m.goFmtSrc()).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/sh", "-c",
