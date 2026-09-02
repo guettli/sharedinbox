@@ -21,10 +21,20 @@ set -euo pipefail
 
 PORT=8080
 
-# Already up? (bash /dev/tcp probe — no nc dependency.)
+# Already up? A stale forward-to-nowhere keeps the local port LISTENing after
+# the far end dies (laptop suspend / network change), so a plain /dev/tcp probe
+# reports a dead tunnel as healthy (issue #694). Probe the engine itself: if it
+# answers, we are done; if the port is up but the engine does not, tear the
+# stale tunnel down so the fresh one below can bind the port.
 if (exec 3<>"/dev/tcp/localhost/${PORT}") 2>/dev/null; then
-    echo "dagger tunnel already up on localhost:${PORT}"
-    exit 0
+    exec 3>&- 3<&-
+    if timeout 15 dagger core --help >/dev/null 2>&1; then
+        echo "dagger tunnel already up and engine reachable on localhost:${PORT}"
+        exit 0
+    fi
+    echo "localhost:${PORT} is listening but the engine did not answer — tearing down the stale tunnel." >&2
+    pkill -f "ssh.*-L ${PORT}:/run/dagger/engine.sock" 2>/dev/null || true
+    sleep 1
 fi
 
 : "${DAGGER_ENGINE_HOST:?not set — expected from the agentloop-repo-sharedinbox-secrets Secret}"
@@ -43,6 +53,8 @@ ssh -i ~/.ssh/dagger_key \
     -o StrictHostKeyChecking=no \
     -o BatchMode=yes \
     -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
     -f -N -L "${PORT}:/run/dagger/engine.sock" "dagger@${DAGGER_ENGINE_HOST}"
 
 # Verify the CLI can actually reach the engine over the tunnel (also catches a
