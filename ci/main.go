@@ -926,9 +926,13 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	// Run format, analyze, generated-code check, and coverage in parallel —
-	// they all share the same setup base and have no dependencies on each other.
-	var analyze, mocks, coverage string
+	// Run the fast analysis checks (format, analyze, generated-code) in
+	// parallel — they share the setup base and are quick. Coverage is
+	// deliberately NOT here: it runs the unit+widget suite (minutes), so
+	// grouping it with format/analyze would make a one-line lint error wait on
+	// it. Keeping this phase fast means such errors fail here (~1-2 min cold)
+	// before the heavy phase below ever starts (fail-fast, #729).
+	var analyze, mocks string
 	var checkEg errgroup.Group
 	checkEg.Go(func() error {
 		return timedCheck(&timingsMu, &timings, "analysis", "format", func() error {
@@ -952,23 +956,28 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 			return err
 		})
 	})
-	checkEg.Go(func() error {
-		return timedCheck(&timingsMu, &timings, "analysis", "coverage", func() error {
-			var err error
-			coverage, err = m.Coverage(ctx)
-			return err
-		})
-	})
 	if err := checkEg.Wait(); err != nil {
 		fmt.Println(formatCheckTimings(timings))
 		return "", err
 	}
 
-	// Use errgroup.Group (not WithContext) so a failing test does not cancel its
+	// Heavy phase: coverage (unit+widget under coverage) plus the backend and
+	// integration suites, all in parallel. It runs only after every fast check
+	// above has passed. Coverage lives here rather than in its own earlier
+	// phase so it overlaps the test suites instead of running before them —
+	// removing a whole test-phase of wall-time from a passing run.
+	// errgroup.Group (not WithContext) so a failing test does not cancel its
 	// sibling via context — which would surface as "context canceled" in dagger
 	// output and trigger spurious retries in check-dagger.
-	var testBackend, testIntegration string
+	var coverage, testBackend, testIntegration string
 	var eg errgroup.Group
+	eg.Go(func() error {
+		return timedCheck(&timingsMu, &timings, "tests", "coverage", func() error {
+			var e error
+			coverage, e = m.Coverage(ctx)
+			return e
+		})
+	})
 	eg.Go(func() error {
 		return timedCheck(&timingsMu, &timings, "tests", "backend", func() error {
 			var e error
