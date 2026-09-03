@@ -1,0 +1,21 @@
+name: Fuzz (nightly)
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  fuzz-backend:
+    name: Long-term sync fuzz (backend)
+    runs-on: sharedinbox-arc
+    timeout-minutes: 60
+    if: github.server_url == 'https://github.com'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
+      - name: Run long-term sync fuzz
+        run: task test-fuzz

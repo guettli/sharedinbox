@@ -836,6 +836,15 @@ func (m *Ci) ChaosMonkeyBackend(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// TestFuzz runs the long-running IMAP/JMAP cross-protocol fuzz test. It is
+// nightly-tagged (so it stays out of the blocking per-PR check — see #747) and
+// therefore needs its own runner, exactly like ChaosMonkeyBackend.
+func (m *Ci) TestFuzz(ctx context.Context) (string, error) {
+	return m.WithStalwart(m.setup(m.backendSrc())).
+		WithExec([]string{"flutter", "test", "test/backend/long_term_fuzz_test.dart", "--reporter", "expanded", "--concurrency=1", "--no-pub", "--tags=nightly"}).
+		Stdout(ctx)
+}
+
 // GmailProbe runs the read-only Gmail inbox decode probe
 // (test/backend/gmail_inbox_probe_test.dart) against a LIVE Gmail account. It
 // walks INBOX newest-first through the app's real sync + decode path and stops
