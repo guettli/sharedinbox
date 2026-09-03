@@ -771,6 +771,13 @@ tasks:
     cmds:
       - timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. chaos-monkey-backend
 
+  test-fuzz:
+    desc: Long-running IMAP/JMAP cross-protocol fuzz test (nightly, via Dagger, headless)
+    # Sized like chaos-monkey-backend: Stalwart startup + many sync rounds with
+    # convergence backoff can exceed the default 600s budget, so wrap generously.
+    cmds:
+      - timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. test-fuzz
+
   check:
     desc: Full check suite — unit tests first, then integration (merges coverage), then gate
     deps: [analyze, build-linux, test]

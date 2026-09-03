@@ -1,6 +1,15 @@
 // Long-running fuzz test against a live Stalwart server: emits progress to
 // stdout so a stuck cycle is visible in the test runner output.
+//
+// Tagged `nightly` so it does NOT run in the blocking per-PR backend suite
+// (which passes --exclude-tags=nightly): it is a long-running cross-protocol
+// fuzz whose convergence check is sensitive to Stalwart propagation lag under
+// CI engine load, so it belongs on the nightly runner (like chaos_monkey), not
+// the PR critical path. See #747.
 // ignore_for_file: avoid_print
+
+@Tags(['nightly'])
+library;
 
 import 'dart:io';
 
@@ -75,16 +84,20 @@ Future<AccountComparisonResult> _syncUntilIdentical(
   String jmapAccountId,
   EmailRepositoryImpl emailRepo,
   MailboxRepositoryImpl mailboxRepo, {
-  int maxRounds = 8,
+  int maxRounds = 16,
 }) async {
   late AccountComparisonResult result;
   for (var round = 0; round < maxRounds; round++) {
     // Back off before re-syncing so Stalwart has wall-clock time to propagate
     // the mutation across its IMAP/JMAP views. Hammering rounds back-to-back
     // only re-observes the same stale HIGHESTMODSEQ; the cross-protocol bump
-    // can lag the change by a tick or two.
+    // can lag the change by a tick or two. The per-round delay is capped so a
+    // generous round count (convergence lag grows under CI engine load, #747)
+    // stays well inside the test's 5-min timeout: 16 rounds ~= 27s of backoff.
     if (round > 0) {
-      await Future<void>.delayed(Duration(milliseconds: 500 * round));
+      await Future<void>.delayed(
+        Duration(milliseconds: (500 * round).clamp(0, 2000)),
+      );
     }
     await _syncAllMailboxes(db, jmapAccountId, emailRepo, mailboxRepo);
     await _syncAllMailboxes(db, imapAccountId, emailRepo, mailboxRepo);
