@@ -34,10 +34,12 @@ void main() {
 
   setUpAll(() {
     configureSqliteForTests();
-    configurePackageInfoForTests();
     env = StalwartEnv.fromPlatform();
     user = pickPoolUser(env: env);
     account = user.imapAccount(id: 'imap-offline', env: env);
+    // Sending reads the app version via package_info_plus (outbox User-Agent
+    // header); prime it with a deterministic value for the package:test suite.
+    configurePackageInfoForTests();
     cacheDir = Directory.systemTemp.createTempSync('outbox_imap_test_');
   });
 
