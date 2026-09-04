@@ -147,10 +147,7 @@ Future<List<String>> _pendingChangeTypes(_Repos r) async {
 }
 
 void main() {
-  setUpAll(() {
-    configureSqliteForTests();
-    configurePackageInfoForTests();
-  });
+  setUpAll(configureSqliteForTests);
 
   group('enqueueSend self-detection', () {
     test('creates a virtual inbox message for a mail to self', () async {

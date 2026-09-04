@@ -42,12 +42,7 @@ Future<void> _seedAccount(AppDatabase db) async {
 }
 
 void main() {
-  setUpAll(() {
-    configureSqliteForTests();
-    // enqueue() reads the app version via package_info_plus to stamp the
-    // outgoing User-Agent header; feed it a deterministic value under test.
-    configurePackageInfoForTests();
-  });
+  setUpAll(configureSqliteForTests);
 
   group('OutboxRepositoryImpl', () {
     test('enqueue inserts a pending row with an envelope', () async {
@@ -75,7 +70,7 @@ void main() {
     test('enqueue stamps a User-Agent header with the app version', () async {
       final db = openTestDatabase();
       await _seedAccount(db);
-      final repo = OutboxRepositoryImpl(db);
+      final repo = OutboxRepositoryImpl(db, appVersion: testAppVersion);
 
       await repo.enqueue(_accountId, _makeDraft());
 

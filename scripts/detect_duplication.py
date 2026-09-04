@@ -519,11 +519,16 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("\nNEW duplicated code detected (not present in baseline):\n\n")
             sys.stderr.write(format_findings(new_clones))
             sys.stderr.write(
-                "\nOptions:\n"
-                "  1. Refactor the duplicate away (preferred).\n"
-                "  2. If the duplication is intentional and unavoidable, "
-                "     rerun `task duplication-baseline` and explain the addition "
-                "     in your PR description.\n"
+                "\nHow to resolve — do NOT reorder, reword, or move lines to slip\n"
+                "under the detector's threshold; that leaves the duplication in place\n"
+                "and only hides it from this check:\n"
+                "  1. Refactor so the duplicated code is REUSED, not repeated:\n"
+                "     extract it into a shared function/method/helper (or a base\n"
+                "     class, or a shared setUp helper for tests) and call that from\n"
+                "     every occurrence. This is almost always the right fix.\n"
+                "  2. Only if the duplication is genuinely intentional and cannot\n"
+                "     be shared, rerun `task duplication-baseline` to accept it and\n"
+                "     explain why in your PR description.\n"
             )
             return 1
         print(f"detect_duplication: {len(clones)} known clones, no new duplicates")
