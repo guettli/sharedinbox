@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
@@ -146,8 +147,17 @@ Future<void> _bootApp(List<Override> overrides) async {
     await registerBackgroundSync();
     await _registerPrefetchTaskFromStoredPrefs();
   }
+  // Resolve the app version once here (not in the data layer) and inject it so
+  // the outbox can stamp the `User-Agent` header. See appVersionProvider.
+  final appVersion = (await PackageInfo.fromPlatform()).version;
   runApp(
-    ProviderScope(overrides: overrides, child: const SharedInboxApp()),
+    ProviderScope(
+      overrides: [
+        appVersionProvider.overrideWithValue(appVersion),
+        ...overrides,
+      ],
+      child: const SharedInboxApp(),
+    ),
   );
 }
 

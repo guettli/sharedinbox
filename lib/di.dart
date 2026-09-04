@@ -138,8 +138,17 @@ final draftRepositoryProvider = Provider<DraftRepository>((ref) {
   );
 });
 
+/// App version (from `package_info_plus`) used to stamp the outgoing
+/// `User-Agent` header. Overridden once at startup in `main()._bootApp` with
+/// the real platform value; the `'dev'` default keeps widget/unit tests that
+/// build a bare [ProviderScope] working without a platform channel.
+final appVersionProvider = Provider<String>((ref) => 'dev');
+
 final outboxRepositoryProvider = Provider<OutboxRepository>((ref) {
-  return OutboxRepositoryImpl(ref.watch(dbProvider));
+  return OutboxRepositoryImpl(
+    ref.watch(dbProvider),
+    appVersion: ref.watch(appVersionProvider),
+  );
 });
 
 /// Live list of every queued outbox row across all accounts, ordered oldest

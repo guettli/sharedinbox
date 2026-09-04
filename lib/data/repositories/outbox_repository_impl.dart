@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
-import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/outbox_message.dart';
@@ -16,14 +15,19 @@ import 'package:sharedinbox/data/db/database.dart';
 const _backoffSeconds = [30, 120, 600, 3600];
 
 class OutboxRepositoryImpl implements OutboxRepository {
-  OutboxRepositoryImpl(this._db);
+  OutboxRepositoryImpl(this._db, {String appVersion = 'dev'})
+      : _appVersion = appVersion;
 
   final AppDatabase _db;
 
+  /// App version stamped into the outgoing `User-Agent` header. Injected so
+  /// the data layer never reaches for the `package_info_plus` platform plugin
+  /// (production wires the real value in `di.dart`; tests pass a literal).
+  final String _appVersion;
+
   @override
   Future<int> enqueue(String accountId, model.EmailDraft draft) async {
-    final appVersion = (await PackageInfo.fromPlatform()).version;
-    final builder = _buildMime(draft, appVersion);
+    final builder = _buildMime(draft, _appVersion);
     final mime = builder.buildMimeMessage().renderMessage();
     final mimeBase64 = base64.encode(utf8.encode(mime));
     final envelope = jsonEncode({
