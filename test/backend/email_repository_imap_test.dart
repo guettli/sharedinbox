@@ -37,6 +37,7 @@ void main() {
 
   setUpAll(() {
     configureSqliteForTests();
+    configurePackageInfoForTests();
     env = StalwartEnv.fromPlatform();
     user = pickPoolUser(env: env);
     account = user.imapAccount(id: 'test', env: env);

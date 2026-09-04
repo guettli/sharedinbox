@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/outbox_message.dart';
@@ -21,7 +22,8 @@ class OutboxRepositoryImpl implements OutboxRepository {
 
   @override
   Future<int> enqueue(String accountId, model.EmailDraft draft) async {
-    final builder = _buildMime(draft);
+    final appVersion = (await PackageInfo.fromPlatform()).version;
+    final builder = _buildMime(draft, appVersion);
     final mime = builder.buildMimeMessage().renderMessage();
     final mimeBase64 = base64.encode(utf8.encode(mime));
     final envelope = jsonEncode({
@@ -203,12 +205,13 @@ OutboxMessage _rowToMessage(OutboxRow row) {
   );
 }
 
-imap.MessageBuilder _buildMime(model.EmailDraft draft) {
+imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
   return imap.MessageBuilder()
     ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
     ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
     ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
     ..subject = draft.subject
     ..messageId = draft.messageId
-    ..text = draft.body;
+    ..text = draft.body
+    ..addHeader('User-Agent', 'sharedinbox/$appVersion');
 }

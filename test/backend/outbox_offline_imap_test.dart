@@ -34,6 +34,7 @@ void main() {
 
   setUpAll(() {
     configureSqliteForTests();
+    configurePackageInfoForTests();
     env = StalwartEnv.fromPlatform();
     user = pickPoolUser(env: env);
     account = user.imapAccount(id: 'imap-offline', env: env);

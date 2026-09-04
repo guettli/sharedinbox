@@ -56,6 +56,7 @@ void main() {
 
   setUpAll(() {
     configureSqliteForTests();
+    configurePackageInfoForTests();
     env = StalwartEnv.fromPlatform();
     user = pickPoolUser(env: env);
     account = user.jmapAccount(id: 'jmap-offline', env: env);

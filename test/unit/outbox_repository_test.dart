@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,7 +42,12 @@ Future<void> _seedAccount(AppDatabase db) async {
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
+  setUpAll(() {
+    configureSqliteForTests();
+    // enqueue() reads the app version via package_info_plus to stamp the
+    // outgoing User-Agent header; feed it a deterministic value under test.
+    configurePackageInfoForTests();
+  });
 
   group('OutboxRepositoryImpl', () {
     test('enqueue inserts a pending row with an envelope', () async {
@@ -63,6 +70,18 @@ void main() {
       // MIME is pre-rendered so the queued payload doesn't depend on the
       // draft being readable at flush time.
       expect(rows.first.mimeBase64, isNotEmpty);
+    });
+
+    test('enqueue stamps a User-Agent header with the app version', () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+
+      await repo.enqueue(_accountId, _makeDraft());
+
+      final rows = await db.select(db.outbox).get();
+      final mime = utf8.decode(base64.decode(rows.first.mimeBase64));
+      expect(mime, contains('User-Agent: sharedinbox/$testAppVersion'));
     });
 
     test(
