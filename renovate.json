@@ -96,6 +96,23 @@
       "depNameTemplate": "j178/prek",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "description": "grpcurl query CLI baked into the worker image (agentloop worker basic-tools contract, issue #1132). A single static binary fetched by ARG pin; nothing else guards it, so keep the manager here to stop it drifting.",
+      "customType": "regex",
+      "fileMatch": ["^Dockerfile\\.dev$"],
+      "matchStrings": ["GRPCURL_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "fullstorydev/grpcurl",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "description": "clickhouse-client query CLI baked into the worker image (agentloop worker basic-tools contract, issue #1132). Tracked against the clickhouse-server image tags on Docker Hub, whose versions match the packages.clickhouse.com tgz filenames.",
+      "customType": "regex",
+      "fileMatch": ["^Dockerfile\\.dev$"],
+      "matchStrings": ["CLICKHOUSE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "clickhouse/clickhouse-server",
+      "datasourceTemplate": "docker"
     }
   ]
 }

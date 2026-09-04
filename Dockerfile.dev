@@ -12,10 +12,13 @@
 FROM ubuntu:24.04
 
 # Base CLI tools. agentloop's worker preflight requires a baseline set on PATH
-# (agentloop internal/doctor DefaultTools: awk curl fd find gh grep gzip jq ls
-# pre-commit rg sed ssh tar). Ubuntu provides awk/find/grep/gzip/ls/sed/tar;
-# the rest are installed here. fd-find ships its binary as `fdfind`, so symlink
-# it to the `fd` name the preflight looks for; gh needs GitHub's apt repo.
+# (agentloop internal/doctor DefaultTools: awk clickhouse-client curl fd find gh
+# grep grpcurl gzip jq ls prek|pre-commit rg sed ssh tar). Ubuntu provides
+# awk/find/grep/gzip/ls/sed/tar; the rest are installed here or further down.
+# fd-find ships its binary as `fdfind`, so symlink it to the `fd` name the
+# preflight looks for; gh needs GitHub's apt repo. clickhouse-client and grpcurl
+# are static-binary fetches in their own step below; prek satisfies the
+# `prek|pre-commit` alternative (see the prek step below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
@@ -34,6 +37,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# clickhouse-client and grpcurl are the query CLIs the agent uses to read the
+# production observability stack live (agentloop issue #1132, PR #1276):
+# clickhouse-client speaks the native protocol to otelhouse's ClickHouse (logs +
+# traces) and grpcurl drives Parca's ConnectRPC profile API. VictoriaMetrics
+# needs no extra client — curl reaches its Prometheus HTTP API. Both are enforced
+# by agentloop's worker preflight (internal/doctor DefaultTools), so a missing
+# one is a loud preflight failure, not a silent ENOENT mid-run. Single static
+# binaries at a pinned version; Renovate tracks the pins (renovate.json). The
+# ClickHouse package ships one multi-call binary that dispatches on argv[0], so
+# `clickhouse-client` is a symlink to it.
+ARG GRPCURL_VERSION=1.9.3
+ARG CLICKHOUSE_VERSION=24.8.14.39
+RUN set -eux; \
+    deb_arch="$(dpkg --print-architecture)"; \
+    case "$deb_arch" in \
+        amd64) grpc_arch=x86_64 ;; \
+        arm64) grpc_arch=arm64 ;; \
+        *) echo "unsupported arch: $deb_arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_${grpc_arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin grpcurl; \
+    curl -fsSL "https://packages.clickhouse.com/tgz/stable/clickhouse-common-static-${CLICKHOUSE_VERSION}-${deb_arch}.tgz" \
+        | tar -xz -C /tmp "clickhouse-common-static-${CLICKHOUSE_VERSION}/usr/bin/clickhouse"; \
+    mv "/tmp/clickhouse-common-static-${CLICKHOUSE_VERSION}/usr/bin/clickhouse" /usr/local/bin/clickhouse; \
+    rm -rf "/tmp/clickhouse-common-static-${CLICKHOUSE_VERSION}"; \
+    ln -s /usr/local/bin/clickhouse /usr/local/bin/clickhouse-client; \
+    chmod +x /usr/local/bin/grpcurl /usr/local/bin/clickhouse; \
+    grpcurl --version; \
+    clickhouse-client --version
 
 # Task runner — the agent drives everything through `task <target>`.
 RUN curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin v3.48.0
