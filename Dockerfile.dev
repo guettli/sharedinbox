@@ -85,7 +85,7 @@ RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BI
 # (prek-<arch>-unknown-linux-gnu/prek), so --strip-components=1 drops that
 # leading dir and lands the bare `prek` in /usr/local/bin. Extracting a
 # top-level `prek` member instead fails with "tar: prek: Not found in archive".
-RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.1/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
+RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.2/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
       | tar -xz -C /usr/local/bin --strip-components=1 \
     && ln -s prek /usr/local/bin/pre-commit
 
