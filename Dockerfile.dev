@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # binaries at a pinned version; Renovate tracks the pins (renovate.json). The
 # ClickHouse package ships one multi-call binary that dispatches on argv[0], so
 # `clickhouse-client` is a symlink to it.
-ARG GRPCURL_VERSION=1.9.3
+ARG GRPCURL_VERSION=1.9.4
 ARG CLICKHOUSE_VERSION=24.8.14.39
 RUN set -eux; \
     deb_arch="$(dpkg --print-architecture)"; \
