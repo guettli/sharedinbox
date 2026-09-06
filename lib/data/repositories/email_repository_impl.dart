@@ -3197,36 +3197,6 @@ class EmailRepositoryImpl implements EmailRepository {
         );
   }
 
-  Future<String?> _loadLatestJmapState(String accountId) async {
-    final rows = await (_db.select(_db.syncStates)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                (t.resourceType.equals('Email') |
-                    t.resourceType.like('JMAP:Email:%')),
-          ))
-        .get();
-    if (rows.isEmpty) return null;
-    rows.sort((a, b) => b.syncedAt.compareTo(a.syncedAt));
-    return rows.first.state;
-  }
-
-  Future<void> _updateAllJmapStates(String accountId, String newState) async {
-    await (_db.update(_db.syncStates)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                (t.resourceType.equals('Email') |
-                    t.resourceType.like('JMAP:Email:%')),
-          ))
-        .write(
-      SyncStatesCompanion(
-        state: Value(newState),
-        syncedAt: Value(DateTime.now()),
-      ),
-    );
-  }
-
   // ── JMAP push ────────────────────────────────────────────────────────────
 
   /// Expands the RFC 8620 §7.3 `eventSourceUrl` URI template.
@@ -3499,26 +3469,6 @@ class EmailRepositoryImpl implements EmailRepository {
       throw JmapException('$expectedMethod error: ${err['type']}');
     }
     return triple[1] as Map<String, dynamic>;
-  }
-
-  /// Recognises the RFC 8620 §5.3 `stateMismatch` method-level error
-  /// (`["error", {"type": "stateMismatch"}, ...]`) at [index] and rethrows it
-  /// as [JmapStateMismatchException].
-  ///
-  /// A stateMismatch means the `ifInState` token we sent with an `Email/set`
-  /// was stale (some other change advanced the account's Email state first).
-  /// It arrives as a method-level error, which [_responseArgs] would otherwise
-  /// turn into a generic [JmapException]; detecting it here keeps the
-  /// reset-state-and-retry handler in [_flushPendingChangesJmap] reachable.
-  void _throwIfJmapStateMismatch(List<dynamic> responses, int index) {
-    if (index >= responses.length) return;
-    final triple = responses[index] as List<dynamic>;
-    if (triple.isNotEmpty && triple[0] == 'error' && triple.length > 1) {
-      final err = triple[1];
-      if (err is Map<String, dynamic> && err['type'] == 'stateMismatch') {
-        throw const JmapStateMismatchException();
-      }
-    }
   }
 
   String _encodeJmapAddresses(dynamic addressList) {
@@ -4809,47 +4759,24 @@ class EmailRepositoryImpl implements EmailRepository {
       password: password,
     );
 
-    final ifInState = await _loadSyncState(account.id, 'Email') ??
-        await _loadLatestJmapState(account.id);
     var applied = 0;
 
     for (final row in rows) {
       try {
-        final newState = await _applyPendingChangeJmap(
-          jmap,
-          row,
-          ifInState: ifInState,
-        );
+        // Pending-change `Email/set`s deliberately omit `ifInState`: each patch
+        // targets a single email's own `mailboxIds`/`keywords`, so it is safe
+        // to apply regardless of unrelated concurrent changes. Sending
+        // `ifInState` made a routine move fail with `stateMismatch` whenever
+        // the account's Email state had moved on (issue #746). We also leave
+        // the Email checkpoint untouched — the next `Email/changes` sync
+        // reconciles this mutation together with any concurrent server changes
+        // (re-applying our own change is idempotent).
+        await _applyPendingChangeJmap(jmap, row);
         await (_db.delete(
           _db.pendingChanges,
         )..where((t) => t.id.equals(row.id)))
             .go();
         applied++;
-        // Keep our checkpoint in sync with whatever the server returned.
-        if (newState != null) {
-          await _saveSyncState(account.id, 'Email', newState);
-          await _updateAllJmapStates(account.id, newState);
-        }
-      } on JmapStateMismatchException {
-        // Server rejected the mutation because our state token is stale.
-        // Drop the cached state so the next sync cycle does a full re-fetch,
-        // after which this change will be retried with a fresh token.
-        await (_db.delete(_db.syncStates)
-              ..where(
-                (t) =>
-                    t.accountId.equals(account.id) &
-                    (t.resourceType.equals('Email') |
-                        t.resourceType.like('JMAP:Email:%')),
-              ))
-            .go();
-        await _recordChangeError(
-          row,
-          'The mailbox changed on the server since this was queued '
-          '(stateMismatch); it will be re-applied automatically after the '
-          'next sync.',
-        );
-        // State is now stale for all remaining rows too; stop processing.
-        break;
       } on JmapSetItemException catch (e) {
         // Permanent per-item rejection (e.g. notFound, forbidden) — discard
         // the change so the queue doesn't grow unboundedly.
@@ -5117,16 +5044,19 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// Applies a single pending change to the JMAP server.
   ///
-  /// Returns the `newState` from the server's `Email/set` response so the
-  /// caller can keep the local checkpoint in sync.
+  /// The `Email/set` calls intentionally omit `ifInState`: each is a targeted
+  /// patch to one email's own `mailboxIds`/`keywords`, safe to apply without an
+  /// optimistic-concurrency precondition, so a routine move never fails with
+  /// `stateMismatch` because the account state moved on (issue #746). The
+  /// caller does not advance the local checkpoint from the result — the next
+  /// `Email/changes` sync reconciles this mutation with any concurrent changes.
   ///
-  /// Throws [JmapStateMismatchException] when the server rejects the request
-  /// because [ifInState] is stale (RFC 8620 §5.3 `stateMismatch`).
-  Future<String?> _applyPendingChangeJmap(
+  /// Throws [JmapSetItemException] on a permanent per-item rejection
+  /// (`notUpdated`/`notDestroyed`), or [JmapException] on any other error.
+  Future<void> _applyPendingChangeJmap(
     JmapClient jmap,
-    PendingChangeRow row, {
-    String? ifInState,
-  }) async {
+    PendingChangeRow row,
+  ) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     // Extract the JMAP email ID from the DB id (format: "accountId:jmapId").
     final jmapEmailId = row.resourceId.contains(':')
@@ -5135,7 +5065,6 @@ class EmailRepositoryImpl implements EmailRepository {
 
     Map<String, dynamic> setArgs(Map<String, dynamic> extra) => {
           'accountId': jmap.accountId,
-          if (ifInState != null) 'ifInState': ifInState,
           ...extra,
         };
 
@@ -5282,17 +5211,8 @@ class EmailRepositoryImpl implements EmailRepository {
         ]);
 
       default:
-        return null;
+        return;
     }
-
-    // A `stateMismatch` is returned as a *method-level* error triple
-    // (`["error", {"type": "stateMismatch"}, "0"]`, RFC 8620 §5.3), so it has
-    // to be recognised before `_responseArgs` collapses every method-level
-    // error into a generic `JmapException('Email/set error: stateMismatch')`.
-    // Surfacing the typed exception lets `_flushPendingChangesJmap` reset the
-    // cached state and retry the change after a re-sync instead of parking it
-    // with an opaque error the user cannot act on (issue #746).
-    _throwIfJmapStateMismatch(responses, 0);
 
     final result = _responseArgs(responses, 0, 'Email/set');
 
@@ -5313,8 +5233,6 @@ class EmailRepositoryImpl implements EmailRepository {
         err['description'] as String?,
       );
     }
-
-    return result['newState'] as String?;
   }
 
   @override

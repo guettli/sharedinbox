@@ -323,7 +323,7 @@ void main() {
           resourceId: 'acc-1:e42',
           payload: '{"src":"INBOX","dest":"Junk"}',
           attempts: 2,
-          lastError: 'Email/set error: stateMismatch',
+          lastError: 'JmapException: Email/set error: forbidden',
         ),
       );
 
@@ -332,7 +332,10 @@ void main() {
       expect(report, contains('Resource:   Email acc-1:e42'));
       expect(report, contains('Attempts:   2'));
       expect(report, contains('"dest": "Junk"'));
-      expect(report, contains('Last error: Email/set error: stateMismatch'));
+      expect(
+        report,
+        contains('Last error: JmapException: Email/set error: forbidden'),
+      );
     });
 
     test('shows "(none)" when there is no error and "(empty)" payload', () {
