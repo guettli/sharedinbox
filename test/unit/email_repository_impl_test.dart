@@ -5395,14 +5395,16 @@ void main() {
               200,
             );
           }
-          // Server responds with stateMismatch error inside Email/set
+          // A stale ifInState is rejected as a *method-level* error
+          // (`["error", {"type":"stateMismatch"}, ...]`, RFC 8620 §5.3) — the
+          // shape real servers send and the shape issue #746 hit.
           return http.Response(
             jsonEncode({
               'sessionState': 's1',
               'methodResponses': [
                 [
-                  'Email/set',
-                  {'accountId': 'acct1', 'type': 'stateMismatch'},
+                  'error',
+                  {'type': 'stateMismatch'},
                   '0',
                 ],
               ],
@@ -5440,6 +5442,84 @@ void main() {
         // Change should still be present but with attempt count bumped
         final changes = await r.db.select(r.db.pendingChanges).get();
         expect(changes.first.attempts, 1);
+
+        // The recorded error is the friendly retry message, not the raw
+        // `JmapException: Email/set error: stateMismatch` the method-level
+        // error used to surface before it was routed to the retry path (#746).
+        expect(changes.first.lastError, contains('stateMismatch'));
+        expect(changes.first.lastError, isNot(contains('JmapException')));
+      },
+    );
+
+    test(
+      'move rejected with stateMismatch is kept for retry, not surfaced raw '
+      '(#746)',
+      () async {
+        // Reproduces the exact issue: moving a mail to junk/another folder
+        // returns a method-level stateMismatch. It must reset the cached state
+        // and keep the change queued for an automatic retry rather than
+        // parking it with a raw `JmapException: Email/set error: stateMismatch`.
+        final client = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(
+              jsonEncode({
+                'apiUrl': 'https://jmap.example.com/api/',
+                'accounts': {'acct1': {}},
+                'primaryAccounts': {
+                  'urn:ietf:params:jmap:core': 'acct1',
+                  'urn:ietf:params:jmap:mail': 'acct1',
+                },
+                'capabilities': {},
+                'username': 'alice@example.com',
+                'state': 'sess1',
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'sessionState': 's1',
+              'methodResponses': [
+                [
+                  'error',
+                  {'type': 'stateMismatch'},
+                  '0',
+                ],
+              ],
+            }),
+            200,
+          );
+        });
+
+        final r = _makeRepos(httpClient: client);
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                state: 'est1',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                resourceId: 'jmap-1:e1',
+                changeType: 'move',
+                payload: '{"src":"mbx1","dest":"mbxJunk"}',
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+        final changes = await r.db.select(r.db.pendingChanges).get();
+        expect(changes, hasLength(1), reason: 'move must be kept for retry');
+        expect(changes.first.attempts, 1);
+        expect(changes.first.lastError, contains('stateMismatch'));
+        expect(changes.first.lastError, isNot(contains('JmapException')));
+        expect(await r.db.select(r.db.syncStates).get(), isEmpty);
       },
     );
 

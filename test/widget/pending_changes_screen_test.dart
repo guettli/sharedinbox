@@ -271,20 +271,74 @@ void main() {
     expect(openedRoute, '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42');
   });
 
-  testWidgets('tapping the error shows the whole message in a dialog',
+  testWidgets('tapping the error opens the copyable detail dialog',
       (tester) async {
     const longError = 'MOVE failed: the server rejected the request because '
         'the destination mailbox is read-only and cannot accept appended '
         'messages under the current ACL. Contact your administrator.';
-    final repo = _StubbedQueue([_pc(lastError: longError)]);
+    final repo = _StubbedQueue([
+      _pc(
+        kind: 'move',
+        payload: '{"src":"INBOX","dest":"Junk"}',
+        lastError: longError,
+      ),
+    ]);
     await pump(tester, repo: repo);
 
-    expect(find.text('Tap to view full error'), findsOneWidget);
+    expect(find.text('Tap for details'), findsOneWidget);
 
-    await tester.tap(find.text('Tap to view full error'));
+    await tester.tap(find.text('Tap for details'));
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(AlertDialog, 'Last error'), findsOneWidget);
-    expect(find.text(longError), findsOneWidget);
+    // The dialog is a full technical report: id, decoded payload and resource
+    // id, so users can file a good bug report. Assert on strings unique to the
+    // report (the truncated error and raw id also appear in the tile).
+    expect(find.widgetWithText(AlertDialog, 'Change details'), findsOneWidget);
+    expect(find.textContaining('Pending change #1'), findsOneWidget);
+    expect(find.textContaining('"dest": "Junk"'), findsOneWidget);
+    expect(find.textContaining('Resource:   Email acc-1:42'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Copy'), findsOneWidget);
+  });
+
+  testWidgets('tapping a row without an error still opens details',
+      (tester) async {
+    final repo = _StubbedQueue([
+      _pc(kind: 'move', payload: '{"src":"INBOX","dest":"Archive"}'),
+    ]);
+    await pump(tester, repo: repo);
+
+    await tester.tap(find.text('Move: INBOX → Archive'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(AlertDialog, 'Change details'), findsOneWidget);
+    expect(find.textContaining('Last error: (none)'), findsOneWidget);
+  });
+
+  group('changeReport', () {
+    test('renders every stored field and pretty-prints the JSON payload', () {
+      final report = changeReport(
+        _pc(
+          id: 7,
+          kind: 'move',
+          resourceId: 'acc-1:e42',
+          payload: '{"src":"INBOX","dest":"Junk"}',
+          attempts: 2,
+          lastError: 'Email/set error: stateMismatch',
+        ),
+      );
+
+      expect(report, contains('Pending change #7'));
+      expect(report, contains('Kind:       move (Move)'));
+      expect(report, contains('Resource:   Email acc-1:e42'));
+      expect(report, contains('Attempts:   2'));
+      expect(report, contains('"dest": "Junk"'));
+      expect(report, contains('Last error: Email/set error: stateMismatch'));
+    });
+
+    test('shows "(none)" when there is no error and "(empty)" payload', () {
+      final report = changeReport(_pc(payload: ''));
+      expect(report, contains('Payload:    (empty)'));
+      expect(report, contains('Last error: (none)'));
+    });
   });
 }

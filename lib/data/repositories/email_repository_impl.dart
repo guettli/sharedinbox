@@ -3501,6 +3501,26 @@ class EmailRepositoryImpl implements EmailRepository {
     return triple[1] as Map<String, dynamic>;
   }
 
+  /// Recognises the RFC 8620 §5.3 `stateMismatch` method-level error
+  /// (`["error", {"type": "stateMismatch"}, ...]`) at [index] and rethrows it
+  /// as [JmapStateMismatchException].
+  ///
+  /// A stateMismatch means the `ifInState` token we sent with an `Email/set`
+  /// was stale (some other change advanced the account's Email state first).
+  /// It arrives as a method-level error, which [_responseArgs] would otherwise
+  /// turn into a generic [JmapException]; detecting it here keeps the
+  /// reset-state-and-retry handler in [_flushPendingChangesJmap] reachable.
+  void _throwIfJmapStateMismatch(List<dynamic> responses, int index) {
+    if (index >= responses.length) return;
+    final triple = responses[index] as List<dynamic>;
+    if (triple.isNotEmpty && triple[0] == 'error' && triple.length > 1) {
+      final err = triple[1];
+      if (err is Map<String, dynamic> && err['type'] == 'stateMismatch') {
+        throw const JmapStateMismatchException();
+      }
+    }
+  }
+
   String _encodeJmapAddresses(dynamic addressList) {
     if (addressList == null) return '[]';
     final list = addressList as List<dynamic>;
@@ -4824,7 +4844,9 @@ class EmailRepositoryImpl implements EmailRepository {
             .go();
         await _recordChangeError(
           row,
-          'stateMismatch — will retry after re-sync',
+          'The mailbox changed on the server since this was queued '
+          '(stateMismatch); it will be re-applied automatically after the '
+          'next sync.',
         );
         // State is now stale for all remaining rows too; stop processing.
         break;
@@ -5263,13 +5285,16 @@ class EmailRepositoryImpl implements EmailRepository {
         return null;
     }
 
-    final result = _responseArgs(responses, 0, 'Email/set');
+    // A `stateMismatch` is returned as a *method-level* error triple
+    // (`["error", {"type": "stateMismatch"}, "0"]`, RFC 8620 §5.3), so it has
+    // to be recognised before `_responseArgs` collapses every method-level
+    // error into a generic `JmapException('Email/set error: stateMismatch')`.
+    // Surfacing the typed exception lets `_flushPendingChangesJmap` reset the
+    // cached state and retry the change after a re-sync instead of parking it
+    // with an opaque error the user cannot act on (issue #746).
+    _throwIfJmapStateMismatch(responses, 0);
 
-    // stateMismatch is returned as a top-level error in the Email/set response
-    // (not the per-method error handled by _responseArgs).
-    if (result['type'] == 'stateMismatch') {
-      throw const JmapStateMismatchException();
-    }
+    final result = _responseArgs(responses, 0, 'Email/set');
 
     // Check for per-item rejection (notUpdated / notDestroyed).
     final notUpdated = result['notUpdated'] as Map<String, dynamic>?;

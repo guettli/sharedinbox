@@ -21,7 +21,9 @@ final _dateFmt = DateFormat('MMM d, HH:mm');
 
 /// Global list of the outbound queue (`pending_changes`) across all accounts,
 /// grouped by account. Each row shows the concrete mutation, the affected
-/// email (subject and sender), age, attempt count, and last error. Actions:
+/// email (subject and sender), age, attempt count, and last error. Tapping a
+/// row opens a copyable detail view (all stored fields plus the decoded
+/// payload) for filing bug reports. Actions:
 ///
 ///  * **Retry now** — resets the row's attempt/error state and asks the sync
 ///    manager to flush the account immediately.
@@ -151,6 +153,7 @@ class PendingChangeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return ListTile(
+      onTap: () => _showChangeDetails(context, change),
       leading: Icon(
         change.hasError ? Icons.error : Icons.sync,
         color: change.hasError ? theme.colorScheme.error : null,
@@ -170,7 +173,7 @@ class PendingChangeTile extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.xs),
               child: InkWell(
-                onTap: () => _showErrorDetails(context, change.lastError!),
+                onTap: () => _showChangeDetails(context, change),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -181,7 +184,7 @@ class PendingChangeTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      'Tap to view full error',
+                      'Tap for details',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.error,
                         decoration: TextDecoration.underline,
@@ -209,21 +212,26 @@ class PendingChangeTile extends StatelessWidget {
   }
 }
 
-/// Opens a dialog showing the complete [error] text (the inline row truncates
-/// it to two lines), with a Copy action so long server errors can be quoted in
-/// a bug report.
-Future<void> _showErrorDetails(BuildContext context, String error) {
+/// Opens a dialog with the full technical detail of [change] — every field the
+/// sync layer stores, the pretty-printed protocol payload, and the complete
+/// last error. The text is selectable and a single **Copy** action yields a
+/// ready-to-paste block for a bug report (issue #746).
+Future<void> _showChangeDetails(BuildContext context, PendingChange change) {
+  final report = changeReport(change);
   return showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('Last error'),
+      title: const Text('Change details'),
       content: SingleChildScrollView(
-        child: SelectableText(error),
+        child: SelectableText(
+          report,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: error));
+            await Clipboard.setData(ClipboardData(text: report));
             if (dialogContext.mounted) {
               dialogContext.showAppSnackBar('Copied to clipboard');
             }
@@ -237,6 +245,34 @@ Future<void> _showErrorDetails(BuildContext context, String error) {
       ],
     ),
   );
+}
+
+/// Builds the plain-text detail block shown by [_showChangeDetails] and copied
+/// into bug reports. Pure (no `BuildContext`) so it can be unit-tested and so
+/// the exact wording stays stable for the people pasting it into issues.
+String changeReport(PendingChange change) {
+  return (StringBuffer()
+        ..writeln('Pending change #${change.id}')
+        ..writeln('Account:    ${change.accountId}')
+        ..writeln('Kind:       ${change.kind} (${kindLabel(change.kind)})')
+        ..writeln('Summary:    ${describeChange(change)}')
+        ..writeln('Resource:   ${change.resourceType} ${change.resourceId}')
+        ..writeln('Queued:     ${change.createdAt.toUtc().toIso8601String()}')
+        ..writeln('Attempts:   ${change.attempts}')
+        ..writeln('Payload:    ${_prettyPayload(change.payload)}')
+        ..write('Last error: ${change.lastError ?? '(none)'}'))
+      .toString();
+}
+
+/// Pretty-prints the protocol-specific JSON [payload] for the detail view.
+/// Falls back to the raw string when it isn't valid JSON.
+String _prettyPayload(String payload) {
+  if (payload.isEmpty) return '(empty)';
+  try {
+    return const JsonEncoder.withIndent('  ').convert(jsonDecode(payload));
+  } catch (_) {
+    return payload;
+  }
 }
 
 /// Human-readable label for the `change_type` column stored in the DB.
