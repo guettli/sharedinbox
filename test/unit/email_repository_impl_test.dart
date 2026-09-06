@@ -5307,7 +5307,8 @@ void main() {
       expect(changes.first.lastError, isNotNull);
     });
 
-    test('passes ifInState when sync_state exists', () async {
+    test('Email/set omits ifInState and leaves the checkpoint untouched (#746)',
+        () async {
       late Map<String, dynamic> capturedBody;
       final client = MockClient((req) async {
         if (req.url.path.contains('well-known')) {
@@ -5368,16 +5369,26 @@ void main() {
       final firstCall =
           (capturedBody['methodCalls'] as List<dynamic>).first as List<dynamic>;
       final args = firstCall[1] as Map<String, dynamic>;
-      expect(args['ifInState'], 'est1');
+      // No ifInState precondition — that is what made a routine move fail with
+      // stateMismatch when the account state had moved on (issue #746).
+      expect(args.containsKey('ifInState'), isFalse);
 
-      // newState returned by server should update our checkpoint
+      // The set's newState ('est2') is NOT adopted as our checkpoint (that was
+      // only safe with ifInState); it stays at 'est1' and the next
+      // Email/changes sync reconciles this mutation with concurrent changes.
       final states = await r.db.select(r.db.syncStates).get();
-      expect(states.first.state, 'est2');
+      expect(states.single.state, 'est1');
     });
 
     test(
-      'stateMismatch clears sync state and marks change as failed',
+      'a move goes out without ifInState even with a cached checkpoint (#746)',
       () async {
+        // The regression, on the exact change type from the issue: a queued
+        // move used to send the cached Email state as ifInState and fail with
+        // stateMismatch when an unrelated change had advanced it. It must now
+        // carry no precondition and apply cleanly. (Capturing the body makes
+        // this fail on the pre-refactor code, which sent ifInState='est1'.)
+        late Map<String, dynamic> capturedBody;
         final client = MockClient((req) async {
           if (req.url.path.contains('well-known')) {
             return http.Response(
@@ -5395,94 +5406,14 @@ void main() {
               200,
             );
           }
-          // A stale ifInState is rejected as a *method-level* error
-          // (`["error", {"type":"stateMismatch"}, ...]`, RFC 8620 §5.3) — the
-          // shape real servers send and the shape issue #746 hit.
+          capturedBody = jsonDecode(req.body) as Map<String, dynamic>;
           return http.Response(
             jsonEncode({
               'sessionState': 's1',
               'methodResponses': [
                 [
-                  'error',
-                  {'type': 'stateMismatch'},
-                  '0',
-                ],
-              ],
-            }),
-            200,
-          );
-        });
-
-        final r = _makeRepos(httpClient: client);
-        await r.accounts.addAccount(_jmapAccount, 'pw');
-        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
-              SyncStatesCompanion.insert(
-                accountId: 'jmap-1',
-                resourceType: 'Email',
-                state: 'est1',
-                syncedAt: DateTime.now(),
-              ),
-            );
-        await r.db.into(r.db.pendingChanges).insert(
-              PendingChangesCompanion.insert(
-                accountId: 'jmap-1',
-                resourceType: 'Email',
-                resourceId: 'jmap-1:e1',
-                changeType: 'flag_seen',
-                payload: '{"seen":true}',
-                createdAt: DateTime.now(),
-              ),
-            );
-
-        await r.emails.flushPendingChanges('jmap-1', 'pw');
-
-        // Sync state should be cleared so next cycle does a full re-sync
-        expect(await r.db.select(r.db.syncStates).get(), isEmpty);
-
-        // Change should still be present but with attempt count bumped
-        final changes = await r.db.select(r.db.pendingChanges).get();
-        expect(changes.first.attempts, 1);
-
-        // The recorded error is the friendly retry message, not the raw
-        // `JmapException: Email/set error: stateMismatch` the method-level
-        // error used to surface before it was routed to the retry path (#746).
-        expect(changes.first.lastError, contains('stateMismatch'));
-        expect(changes.first.lastError, isNot(contains('JmapException')));
-      },
-    );
-
-    test(
-      'move rejected with stateMismatch is kept for retry, not surfaced raw '
-      '(#746)',
-      () async {
-        // Reproduces the exact issue: moving a mail to junk/another folder
-        // returns a method-level stateMismatch. It must reset the cached state
-        // and keep the change queued for an automatic retry rather than
-        // parking it with a raw `JmapException: Email/set error: stateMismatch`.
-        final client = MockClient((req) async {
-          if (req.url.path.contains('well-known')) {
-            return http.Response(
-              jsonEncode({
-                'apiUrl': 'https://jmap.example.com/api/',
-                'accounts': {'acct1': {}},
-                'primaryAccounts': {
-                  'urn:ietf:params:jmap:core': 'acct1',
-                  'urn:ietf:params:jmap:mail': 'acct1',
-                },
-                'capabilities': {},
-                'username': 'alice@example.com',
-                'state': 'sess1',
-              }),
-              200,
-            );
-          }
-          return http.Response(
-            jsonEncode({
-              'sessionState': 's1',
-              'methodResponses': [
-                [
-                  'error',
-                  {'type': 'stateMismatch'},
+                  'Email/set',
+                  {'accountId': 'acct1', 'updated': {}},
                   '0',
                 ],
               ],
@@ -5514,12 +5445,17 @@ void main() {
 
         await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-        final changes = await r.db.select(r.db.pendingChanges).get();
-        expect(changes, hasLength(1), reason: 'move must be kept for retry');
-        expect(changes.first.attempts, 1);
-        expect(changes.first.lastError, contains('stateMismatch'));
-        expect(changes.first.lastError, isNot(contains('JmapException')));
-        expect(await r.db.select(r.db.syncStates).get(), isEmpty);
+        // The move's Email/set carried no ifInState precondition...
+        final setArgs = ((capturedBody['methodCalls'] as List<dynamic>).first
+            as List<dynamic>)[1] as Map<String, dynamic>;
+        expect(setArgs.containsKey('ifInState'), isFalse);
+        // ...applied and removed from the queue (never parked with an error)...
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // ...and the checkpoint is left untouched for the next sync.
+        expect(
+          (await r.db.select(r.db.syncStates).get()).single.state,
+          'est1',
+        );
       },
     );
 

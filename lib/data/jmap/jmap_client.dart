@@ -271,15 +271,6 @@ class JmapException implements Exception {
   String toString() => 'JmapException: $message';
 }
 
-/// Thrown when the server rejects an `Email/set` because our `ifInState`
-/// token no longer matches the server's current state (RFC 8620 §5.3).
-class JmapStateMismatchException implements Exception {
-  const JmapStateMismatchException();
-
-  @override
-  String toString() => 'JmapStateMismatchException: state token is stale';
-}
-
 /// Thrown when an individual email update or destroy inside an `Email/set`
 /// is rejected by the server (RFC 8620 §5.3 `notUpdated` / `notDestroyed`).
 ///
