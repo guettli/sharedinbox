@@ -96,7 +96,7 @@ http.Client _jmapServer() {
         methodResponses.add([
           'error',
           {'type': 'unknownMethod'},
-          callId
+          callId,
         ]);
         continue;
       }
@@ -201,6 +201,8 @@ void main() {
     // report: "Cannot download 3031055133.pdf: missing part ID".
     final path = await r.emails.downloadAttachment(emailId, attachment);
     expect(
-        await File(path).readAsBytes(), equals(Uint8List.fromList(_pdfBytes)));
+      await File(path).readAsBytes(),
+      equals(Uint8List.fromList(_pdfBytes)),
+    );
   });
 }
