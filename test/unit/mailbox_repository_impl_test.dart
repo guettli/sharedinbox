@@ -1248,6 +1248,44 @@ void main() {
       );
     });
 
+    group('syncMailboxes IMAP maps All Mail to the "all" role (#691)', () {
+      test('folder with the \\All special-use flag gets role "all"', () async {
+        final db = openTestDatabase();
+        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+        final mailboxes = MailboxRepositoryImpl(
+          db,
+          accounts,
+          imapConnect: (_, __, ___) async => _AllMailImapClient(),
+        );
+        await accounts.addAccount(_account, 'pw');
+
+        await mailboxes.syncMailboxes('acc-1');
+
+        final all = await mailboxes.findMailboxByRole('acc-1', 'all');
+        expect(all, isNotNull);
+        expect(all!.path, '[Gmail]/All Mail');
+      });
+
+      test('folder named "All Mail" without the flag also gets role "all"',
+          () async {
+        final db = openTestDatabase();
+        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+        final mailboxes = MailboxRepositoryImpl(
+          db,
+          accounts,
+          imapConnect: (_, __, ___) async =>
+              _AllMailImapClient(withFlag: false),
+        );
+        await accounts.addAccount(_account, 'pw');
+
+        await mailboxes.syncMailboxes('acc-1');
+
+        final all = await mailboxes.findMailboxByRole('acc-1', 'all');
+        expect(all, isNotNull);
+        expect(all!.path, '[Gmail]/All Mail');
+      });
+    });
+
     group('rename / delete / move (JMAP)', () {
       Future<
           ({
@@ -1509,6 +1547,48 @@ class _InboxOnlyImapClient extends SnoozeSpyImapClient {
           encodedPath: 'INBOX',
           pathSeparator: '/',
           flags: const [imap.MailboxFlag.inbox],
+        ),
+      ];
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox mailbox,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      mailbox;
+
+  @override
+  Future<dynamic> logout() async {}
+}
+
+/// Fake IMAP client that lists INBOX plus Gmail's "All Mail" folder. With
+/// [withFlag] the folder carries the RFC 6154 `\All` special-use flag;
+/// otherwise it is recognised only by its leaf name. Used by the #691 tests.
+class _AllMailImapClient extends SnoozeSpyImapClient {
+  _AllMailImapClient({this.withFlag = true});
+
+  final bool withFlag;
+
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [
+        imap.Mailbox(
+          encodedName: 'INBOX',
+          encodedPath: 'INBOX',
+          pathSeparator: '/',
+          flags: const [imap.MailboxFlag.inbox],
+        ),
+        imap.Mailbox(
+          encodedName: 'All Mail',
+          encodedPath: '[Gmail]/All Mail',
+          pathSeparator: '/',
+          flags: withFlag ? const [imap.MailboxFlag.all] : const [],
         ),
       ];
 

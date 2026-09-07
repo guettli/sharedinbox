@@ -67,7 +67,7 @@ start()
 [forever loop]
   ├─ flushPendingChanges()   ← drain outbound queue first
   ├─ syncMailboxes()         ← detect new/removed mailboxes
-  ├─ for each mailbox:
+  ├─ for each mailbox:        ← skips "All Mail"-style duplicate folders
   │    syncEmails()          ← incremental: fetch only UIDs > lastUid
   │                             deletion reconciliation: remove rows
   │                             whose UID is absent from the server
@@ -80,6 +80,12 @@ start()
 **Incremental sync checkpoint** — `sync_state` table stores `(accountId, mailbox, lastUid, uidValidity)`.
 On each run, only UIDs greater than `lastUid` are fetched. If `uidValidity` changes the full
 folder is re-scanned and the checkpoint is reset.
+
+**Duplicate-folder skip** — Gmail's "All Mail" folder holds a copy of every message
+in every other folder. The per-mailbox email loop skips any folder with the `all` role
+(RFC 6154 `\All` special-use flag on IMAP, RFC 8621 `all` role on JMAP) so messages are
+downloaded once from their real folder rather than a second time from All Mail (#691). The
+folder is still listed and can be synced on demand via an explicit single-folder resync.
 
 **Mailbox deletion reconciliation** — mailboxes absent from `LIST` (IMAP) or the
 `Mailbox/get` response (JMAP full sync) are removed locally, along with their cached

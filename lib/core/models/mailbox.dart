@@ -99,6 +99,12 @@ class Mailbox {
   }
 }
 
+/// True for folders excluded from automatic email sync because their contents
+/// duplicate other folders — currently Gmail's "All Mail" (RFC 6154 `\All` /
+/// RFC 8621 `all` role). Syncing them would download every message a second
+/// time, once here and once from the folder it actually lives in (#691).
+bool isDuplicateOfOtherFolders(Mailbox m) => m.role == 'all';
+
 /// Returns the human-readable path for [rawPath] from [mailboxes], falling
 /// back to [rawPath] itself when the mailbox is not in the local cache (e.g.
 /// deleted on the server since the row that stored [rawPath] was recorded).

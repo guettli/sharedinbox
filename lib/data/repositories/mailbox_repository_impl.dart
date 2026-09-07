@@ -530,6 +530,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     if (mb.isJunk) {
       return 'junk';
     }
+    // Gmail's "All Mail" carries the RFC 6154 \All flag; there is no
+    // enough_mail getter for it, so test the flag directly (#691).
+    if (mb.hasFlag(imap.MailboxFlag.all)) {
+      return 'all';
+    }
 
     // Name-based fallback for servers that do not support special-use flags
     final name = mb.name.toLowerCase();
@@ -553,6 +558,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
     if (name == 'junk' || name == 'junk mail' || name == 'spam') {
       return 'junk';
+    }
+    if (name == 'all mail') {
+      return 'all';
     }
 
     return null;

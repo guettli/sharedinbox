@@ -18,6 +18,17 @@ Password**:
 
 App Passwords are unavailable if a Google Workspace admin has disabled them.
 
+## The "All Mail" folder
+
+Gmail exposes an **All Mail** folder (IMAP `[Gmail]/All Mail`) that holds a copy
+of every message in every other folder. SharedInbox skips it during automatic
+sync so each message is downloaded once from its real folder rather than a second
+time from All Mail (#691). Detection is role-based — the folder carries the
+RFC 6154 `\All` special-use flag (mapped to the `all` role) — so it also covers
+localized Gmail names and any non-Gmail server that advertises an `all`-role
+folder. The folder still appears in the folder list and can be synced on demand
+via an explicit single-folder resync. See [SYNC.md](SYNC.md).
+
 ## Integration options considered
 
 Only server auto-fill (above) is implemented so far. The remaining options are
