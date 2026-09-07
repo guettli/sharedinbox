@@ -84,6 +84,37 @@ void main() {
       expect(ts, DateTime.utc(2024, 1, 1, 12));
     });
 
+    test('parses Go-style timestamp without a semicolon', () {
+      // SendGrid hops omit the `;` and stamp a Go-style timestamp with a
+      // monotonic-clock suffix.
+      final ts = parseReceivedTimestamp(
+        'by filterdrecv-abc with SMTP id xyz '
+        '2026-07-15 12:31:15.463485615 +0000 UTC m=+481743.475438064',
+      );
+      expect(ts, DateTime.utc(2026, 7, 15, 12, 31, 15));
+    });
+
+    test('parses ISO-8601 timestamp with explicit offset', () {
+      final ts = parseReceivedTimestamp(
+        'by mx; 2026-07-15 12:31:15 +0200',
+      );
+      expect(ts, DateTime.utc(2026, 7, 15, 10, 31, 15));
+    });
+
+    test('parses ISO-8601 timestamp with named zone', () {
+      final ts = parseReceivedTimestamp(
+        'by mx; 2026-07-15T12:31:15 UTC',
+      );
+      expect(ts, DateTime.utc(2026, 7, 15, 12, 31, 15));
+    });
+
+    test('parses RFC 5322 date embedded in a value without a semicolon', () {
+      final ts = parseReceivedTimestamp(
+        'by mx.example.com Mon, 1 Jan 2024 12:00:00 +0000',
+      );
+      expect(ts, DateTime.utc(2024, 1, 1, 12));
+    });
+
     test('returns null when no date follows the semicolon', () {
       expect(parseReceivedTimestamp('by mx.example.com'), isNull);
     });
