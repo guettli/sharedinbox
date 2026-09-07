@@ -79,16 +79,44 @@ rm -f ~/.ssh/dagger_key
 echo "$DAGGER_SSH_KEY" > ~/.ssh/dagger_key
 chmod 600 ~/.ssh/dagger_key
 
-# Populate known_hosts for the Dagger engine. ssh-keyscan must succeed — we
-# used to fall through to StrictHostKeyChecking=no on the tunnel and silently
-# accept whatever host key was presented, which defeats host verification and
-# masks a real infra problem (DNS, firewall, engine down). See issue #372.
-_t0=$SECONDS
+# Populate known_hosts for the Dagger engine. ssh-keyscan must ultimately
+# succeed — we used to fall through to StrictHostKeyChecking=no on the tunnel
+# and silently accept whatever host key was presented, which defeats host
+# verification and masks a real infra problem (DNS, firewall, engine down).
+# See issue #372.
+#
+# The same brief (~2-minute) engine-host blips that the tunnel and verify blocks
+# below already retry through also strand ssh-keyscan: a single miss used to fail
+# the whole job, and an immediate re-run of the failed job tends to land in the
+# same outage window (see issue #770). Retry a handful of times so a transient
+# blip does not fail the job, with a budget mirroring the tunnel block. A genuine
+# misconfiguration (wrong host, DNS, sshd down) keeps failing on every attempt,
+# so the extra latency on a real problem is negligible.
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-5}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-15}"
 scan_rc=0
-scan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
-_elapsed=$(( SECONDS - _t0 ))
+scan_err=""
+_elapsed=0
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    scan_rc=0
+    _t0=$SECONDS
+    # A failed ssh-keyscan writes no keys, so appending straight to known_hosts
+    # is safe: only the single successful attempt (we break right after)
+    # contributes host keys, and no partial junk survives from the misses.
+    scan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+    _elapsed=$(( SECONDS - _t0 ))
+    if [ "$scan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} for ${DAGGER_ENGINE_HOST} failed (rc=${scan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
 if [ "$scan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${_elapsed}s (rc=${scan_rc})."
+    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (last attempt ${_elapsed}s, rc=${scan_rc})."
     if [ -n "$scan_err" ]; then
         printf '%s\n' "$scan_err" | sed 's/^/::error::  /'
     fi
