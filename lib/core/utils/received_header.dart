@@ -48,13 +48,7 @@ DateTime? _parseRfc5322(String s) {
   } else if (year < 1000) {
     year += 1900;
   }
-  final hour = int.parse(match.group(4)!);
-  final minute = int.parse(match.group(5)!);
-  final second = int.parse(match.group(6) ?? '0');
-  final offsetMinutes = _zoneOffsetMinutes(match.group(7));
-
-  return DateTime.utc(year, month, day, hour, minute, second)
-      .subtract(Duration(minutes: offsetMinutes));
+  return _utcFromTimeGroups(year, month, day, match);
 }
 
 /// ISO-8601 / Go date-time: `YYYY-MM-DD[ T]HH:MM[:SS][.fff] [±HHMM|zone-name]`.
@@ -70,6 +64,13 @@ DateTime? _parseIso8601(String s) {
   final year = int.parse(match.group(1)!);
   final month = int.parse(match.group(2)!);
   final day = int.parse(match.group(3)!);
+  return _utcFromTimeGroups(year, month, day, match);
+}
+
+/// Builds a UTC [DateTime] from the shared time groups of both date layouts:
+/// group 4 = hour, 5 = minute, 6 = optional second, 7 = optional zone. The
+/// parsed offset is subtracted so the result is a true UTC instant.
+DateTime _utcFromTimeGroups(int year, int month, int day, RegExpMatch match) {
   final hour = int.parse(match.group(4)!);
   final minute = int.parse(match.group(5)!);
   final second = int.parse(match.group(6) ?? '0');
