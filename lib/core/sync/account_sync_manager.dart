@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
+import 'package:sharedinbox/core/models/mailbox.dart'
+    show isDuplicateOfOtherFolders;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -357,6 +359,11 @@ class AccountSyncManager {
 
       for (var i = 0; i < mailboxes.length; i++) {
         final mailbox = mailboxes[i];
+        // Skip folders whose contents duplicate other folders (Gmail All Mail)
+        // so we don't download every message twice (#691). An explicit
+        // single-folder resync (forceResyncMailbox) is left unguarded so the
+        // user can still force All Mail on demand.
+        if (isDuplicateOfOtherFolders(mailbox)) continue;
         emit(
           ForceResyncProgress(
             phase: ForceResyncPhase.syncingEmails,
@@ -874,6 +881,9 @@ class _AccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      // Skip folders whose contents duplicate other folders (Gmail All Mail)
+      // so we don't download every message twice (#691).
+      if (isDuplicateOfOtherFolders(mailbox)) continue;
       final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;
@@ -1210,6 +1220,9 @@ class _JmapAccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      // Skip folders whose contents duplicate other folders (Gmail All Mail)
+      // so we don't download every message twice (#691).
+      if (isDuplicateOfOtherFolders(mailbox)) continue;
       final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;

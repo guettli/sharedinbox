@@ -16,6 +16,7 @@ import 'package:test/test.dart';
 
 @GenerateMocks([AccountRepository, MailboxRepository, EmailRepository])
 import 'account_sync_manager_test.mocks.dart';
+import 'fake_imap.dart' show SnoozeSpyImapClient;
 
 void main() {
   late MockAccountRepository accounts;
@@ -152,6 +153,49 @@ void main() {
     expect(protocolLog!.length, lessThan(64 * 1024));
     // The most recent lines (the failing command) survive the trimming.
     expect(protocolLog, contains('BAD Could not parse command'));
+
+    m.dispose();
+  });
+
+  // Regression test for issue #691: Gmail's "All Mail" folder holds a copy of
+  // every message, so the per-mailbox sync loop must skip any folder with the
+  // "all" role while still syncing the others — otherwise every email is
+  // downloaded twice.
+  test('IMAP sync skips the All Mail folder but syncs the others (#691)',
+      () async {
+    final emails = _RecordingEmailRepository();
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      _MailboxRepositoryWithAllMail(),
+      emails,
+      imapConnect: (_, __, ___) async => _IdleImapClient(),
+      syncLog: FakeSyncLogRepository(),
+    );
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+
+    expect(emails.syncedPaths, contains('INBOX'));
+    expect(emails.syncedPaths, isNot(contains('all-mail')));
+
+    m.dispose();
+  });
+
+  test('JMAP sync skips the All Mail folder but syncs the others (#691)',
+      () async {
+    final emails = _RecordingEmailRepository();
+    final m = AccountSyncManager(
+      _JmapOkAccountRepository(),
+      _MailboxRepositoryWithAllMail(),
+      emails,
+      syncLog: FakeSyncLogRepository(),
+    );
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+
+    expect(emails.syncedPaths, contains('INBOX'));
+    expect(emails.syncedPaths, isNot(contains('all-mail')));
 
     m.dispose();
   });
@@ -297,6 +341,82 @@ class FakeEmailRepository implements EmailRepository {
     String scriptContent,
   ) async =>
       0;
+}
+
+/// Email repository that records the mailbox path of every [syncEmails] call so
+/// a test can assert which folders were (and weren't) synced. Used by the #691
+/// All Mail skip tests.
+class _RecordingEmailRepository extends FakeEmailRepository {
+  final syncedPaths = <String>[];
+
+  @override
+  Future<SyncEmailsResult> syncEmails(String a, String m) async {
+    syncedPaths.add(m);
+    return SyncEmailsResult.zero;
+  }
+}
+
+/// A well-behaved JMAP account repository with a single account, so the JMAP
+/// sync loop runs. Mirrors [_OkAccountRepository] but for [AccountType.jmap].
+class _JmapOkAccountRepository implements AccountRepository {
+  static const _account = Account(
+    id: '1',
+    displayName: 'Test',
+    email: 'test@example.com',
+    type: AccountType.jmap,
+    jmapUrl: 'https://jmap.example.com/.well-known/jmap',
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    switch (invocation.memberName) {
+      case #observeAccounts:
+        return Stream.value([_account]);
+      case #getAccount:
+        return Future.value(_account);
+      case #getPassword:
+        return Future.value('secret123');
+      default:
+        return Future<void>.value();
+    }
+  }
+}
+
+/// Mailbox repository returning INBOX plus an "All Mail" folder carrying the
+/// `all` role, so the sync loop's duplicate-folder skip (#691) can be exercised.
+class _MailboxRepositoryWithAllMail extends FakeMailboxRepositoryWithInbox {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        const Mailbox(
+          id: '1:INBOX',
+          accountId: '1',
+          path: 'INBOX',
+          name: 'INBOX',
+          unreadCount: 0,
+          totalCount: 0,
+          role: 'inbox',
+        ),
+        const Mailbox(
+          id: '1:all-mail',
+          accountId: '1',
+          path: 'all-mail',
+          name: 'All Mail',
+          unreadCount: 0,
+          totalCount: 0,
+          role: 'all',
+        ),
+      ]);
+}
+
+/// Fake IMAP client whose IDLE is a no-op that blocks on the loop's stop signal
+/// (via the never-firing event bus), so the IMAP loop completes exactly one sync
+/// cycle and then waits quietly until the test disposes the manager.
+class _IdleImapClient extends SnoozeSpyImapClient {
+  @override
+  Future<void> idleStart() async {}
+
+  @override
+  Future<void> idleDone() async {}
 }
 
 class _Log {
