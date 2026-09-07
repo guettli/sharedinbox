@@ -7,7 +7,11 @@ plugins {
 
 android {
     namespace = "de.sharedinbox.mua"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_secure_storage's AAR metadata requires callers to compile against
+    // Android SDK 37 or later; flutter.compileSdkVersion still resolves to 36, so
+    // :app:checkReleaseAarMetadata fails the release build (#736). Pin to the
+    // higher of the two so a future Flutter bump past 37 is still honoured.
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
