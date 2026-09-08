@@ -1384,14 +1384,22 @@ func withGoCache(c *dagger.Container) *dagger.Container {
 // FetchPlayStoreApks downloads the split APKs of the most recent alpha-track
 // release using the Play Developer API. Returns a Directory containing the
 // APKs and a "versionCode" text file with the resolved alpha versionCode.
-// When Play has not finished generating split APKs within the poll window,
-// the returned directory contains a "PENDING" marker (and "versionCode")
-// instead of APKs — the wrapper (scripts/run_firebase_test.sh) reads the
-// marker and skips the Firebase Test Lab attempt with a ::notice::. Any
-// other failure (auth, network, Play API 5xx) still propagates and fails
-// loudly. See #414 for why we no longer treat Play-side delay as a red
-// build. Runs in a Python container so the runner host does not need
-// google-auth / requests installed (matches the UploadToPlayStore pattern).
+// When Play has not finished generating split APKs, the returned directory
+// contains a "PENDING" marker (and "versionCode") instead of APKs — the
+// wrapper (scripts/run_firebase_test.sh) reads the marker and skips the
+// Firebase Test Lab attempt with a ::notice::. Any other failure (auth,
+// network, Play API 5xx) still propagates and fails loudly. See #414 for why
+// we no longer treat Play-side delay as a red build. Runs in a Python
+// container so the runner host does not need google-auth / requests installed
+// (matches the UploadToPlayStore pattern).
+//
+// Each exec does exactly ONE Play readiness check (PLAY_APKS_POLL_TIMEOUT_SECONDS=0)
+// and returns immediately — ready → download the APKs, not ready → drop a
+// PENDING marker. The long-horizon waiting lives entirely in the wrapper's
+// retry loop, which re-checks across fresh execs. Polling inside the exec would
+// hold the shared Dagger engine idle for the whole generation window (which can
+// exceed an hour) on top of the wrapper's own sleep — engine time reclaimed for
+// a wait that does not need the engine (see #657, #432).
 func (m *Ci) FetchPlayStoreApks(
 	playStoreConfig *dagger.Secret,
 	// cacheBuster forces the fetch to re-run instead of returning a cached
@@ -1413,6 +1421,10 @@ func (m *Ci) FetchPlayStoreApks(
 		WithExec([]string{"pip", "install", "--cache-dir", "/tmp/pip-cache", "google-auth", "requests"}).
 		WithFile("/src/scripts/fetch_playstore_apks.py", scriptSource.File("scripts/fetch_playstore_apks.py")).
 		WithSecretVariable("PLAY_STORE_CONFIG_JSON", playStoreConfig).
+		// One Play readiness check per exec, then return (ready → download,
+		// not ready → PENDING). The wrapper's retry loop owns the waiting, so
+		// the engine is never held idle polling Play (see #657).
+		WithEnvVariable("PLAY_APKS_POLL_TIMEOUT_SECONDS", "0").
 		// Changing env var busts the exec cache key so each retry re-runs.
 		WithEnvVariable("FETCH_CACHE_BUSTER", cacheBuster).
 		WithWorkdir("/src").

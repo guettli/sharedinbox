@@ -132,35 +132,24 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # #432), and no amount of Python-side dest-dir re-creation could fix it because
 # the export failure is at the buildkit layer.
 #
-# Instead, poll from HERE: each attempt is a short-lived Dagger fetch (the
-# Python script polls Play only briefly, then drops a PENDING marker), and we
-# retry across FRESH execs until Play catches up or the overall budget elapses.
-# No single exec idles long enough to be reclaimed. On the final give-up we
-# skip with a ::notice:: so the workflow stays green and no issue is filed —
-# the next scheduled cron tick retries.
+# Instead, poll from HERE: each attempt is a short-lived Dagger fetch that does
+# exactly ONE Play readiness check and returns (ready → download the split APKs,
+# not ready → drop a PENDING marker). ci/main.go pins the exec's inner poll to a
+# single check (PLAY_APKS_POLL_TIMEOUT_SECONDS=0), so the shared engine is never
+# held idle waiting on Play — the sleep below is now the SOLE wait. We retry
+# across FRESH execs until Play catches up or the overall budget elapses. This
+# reclaims the ~4h/day of engine time that per-attempt inner polling used to
+# burn on pure waiting (see #657); the total patience and retry cadence are
+# unchanged. On the final give-up we skip with a ::notice:: so the workflow
+# stays green and no issue is filed — the next scheduled cron tick retries.
 #
-# The per-attempt timeout must exceed the Python script's internal poll budget
-# (`_POLL_TIMEOUT_SECONDS`, default 300s in scripts/fetch_playstore_apks.py)
-# plus time to download the split APKs; otherwise a short Play-side delay is
-# killed here with a bare "fetch failed" (see #396, #398).
-FETCH_ATTEMPT_TIMEOUT_SECONDS=900
-FETCH_MIN_BUFFER_SECONDS=300
+# The per-attempt timeout only has to cover container startup (pip is
+# cache-warmed), one Play check and the split-APK download — no inner poll to
+# outlast anymore. 600s leaves comfortable headroom for a slow download while
+# still killing a genuinely wedged exec promptly (see #396, #398).
+FETCH_ATTEMPT_TIMEOUT_SECONDS=600
 FETCH_TOTAL_BUDGET_SECONDS=5400
 FETCH_RETRY_INTERVAL_SECONDS=60
-INTERNAL_POLL_SECONDS=$(python3 -c '
-import re, sys
-with open("scripts/fetch_playstore_apks.py") as f:
-    m = re.search(r"PLAY_APKS_POLL_TIMEOUT_SECONDS[^,]+,\s*\"(\d+)\"", f.read())
-sys.stdout.write(m.group(1) if m else "")
-')
-if [ -z "$INTERNAL_POLL_SECONDS" ]; then
-    echo "ERROR: could not parse _POLL_TIMEOUT_SECONDS default from scripts/fetch_playstore_apks.py" >&2
-    exit 1
-fi
-if [ "$FETCH_ATTEMPT_TIMEOUT_SECONDS" -lt "$((INTERNAL_POLL_SECONDS + FETCH_MIN_BUFFER_SECONDS))" ]; then
-    echo "ERROR: per-attempt fetch timeout ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s must exceed inner poll ${INTERNAL_POLL_SECONDS}s + ${FETCH_MIN_BUFFER_SECONDS}s buffer (see #396, #398)" >&2
-    exit 1
-fi
 
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
