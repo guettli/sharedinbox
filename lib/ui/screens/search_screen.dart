@@ -45,6 +45,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// result set arrives so a stale set never silently filters a later query.
   final Set<String> _hiddenAccountIds = {};
 
+  /// Account a global search is scoped to (null = all accounts). Only used
+  /// when [SearchScreen.accountId] is null; a per-account search screen always
+  /// searches its own account. Unlike [_hiddenAccountIds] this re-scopes the
+  /// query itself, so the search runs against a single account in the DB.
+  String? _selectedAccountId;
+
+  /// The account every query in this screen should run against: the fixed
+  /// per-account scope when present, otherwise the user-picked global scope.
+  String? get _effectiveAccountId => widget.accountId ?? _selectedAccountId;
+
   // Advanced (structured) search state.
   bool _advancedMode = false;
   FilterGroup _filterGroup = FilterGroup.empty();
@@ -98,6 +108,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     });
   }
 
+  /// Re-scope a global search to a single account (or back to all accounts).
+  /// Re-runs whatever search is currently active so results reflect the new
+  /// scope immediately, mirroring how toggling advanced mode re-queries.
+  void _onAccountScopeChanged(String? accountId) {
+    if (accountId == _selectedAccountId) return;
+    setState(() => _selectedAccountId = accountId);
+    if (_advancedMode) {
+      if (!_filterGroup.isEmpty) unawaited(_searchStructured());
+    } else {
+      final query = _ctrl.text.trim();
+      if (query.length >= 3) unawaited(_search(query));
+    }
+  }
+
   void _onChanged(String value) {
     _debounce?.cancel();
     if (value.trim().length < 3) {
@@ -146,8 +170,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       // (To/Cc) that FTS does not index. Merge + dedup so a single message
       // list surfaces every match.
       final (globalHits, addressHits) = await (
-        emailRepo.searchEmailsGlobal(widget.accountId, query),
-        emailRepo.getEmailsByAddress(widget.accountId, query),
+        emailRepo.searchEmailsGlobal(_effectiveAccountId, query),
+        emailRepo.getEmailsByAddress(_effectiveAccountId, query),
       ).wait;
 
       final seen = <String>{};
@@ -186,7 +210,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     try {
       final emails = await ref
           .read(emailRepositoryProvider)
-          .searchEmailsStructured(widget.accountId, _filterGroup);
+          .searchEmailsStructured(_effectiveAccountId, _filterGroup);
       if (mounted) {
         setState(() {
           _results = emails;
@@ -264,7 +288,54 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               onAfterAction: _onAfterBatchAction,
             )
           : null,
-      body: _buildBody(),
+      body: Column(
+        children: [
+          _buildAccountScopeSelector(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  /// Dropdown that scopes a global search to a single account. Shown only for
+  /// global search ([SearchScreen.accountId] == null) when the user has two or
+  /// more accounts; a single-account user has nothing to choose between, and a
+  /// per-account search screen is already locked to its account. Applies to
+  /// both simple and advanced search.
+  Widget _buildAccountScopeSelector() {
+    if (widget.accountId != null) return const SizedBox.shrink();
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    if (accounts.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        0,
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.filter_list, size: 20),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: DropdownButton<String?>(
+              isExpanded: true,
+              value: _selectedAccountId,
+              items: [
+                const DropdownMenuItem<String?>(
+                  child: Text('All accounts'),
+                ),
+                for (final a in accounts)
+                  DropdownMenuItem<String?>(
+                    value: a.id,
+                    child: Text(accountDisplayLabel(a, a.id)),
+                  ),
+              ],
+              onChanged: _onAccountScopeChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -373,7 +444,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         children: [
           FilterBuilderWidget(
             initialValue: _filterGroup,
-            accountId: widget.accountId,
+            accountId: _effectiveAccountId,
             onChanged: (g) => setState(() {
               _filterGroup = g;
               _results = null;

@@ -529,12 +529,18 @@ class FakeEmailRepository implements EmailRepository {
     return _searchResults;
   }
 
+  /// Every accountId passed to [searchEmailsGlobal], in call order, so tests
+  /// can assert what account a search was scoped to (null = all accounts).
+  final List<String?> searchGlobalAccountIds = [];
+
   @override
   Future<List<Email>> searchEmailsGlobal(
     String? accountId,
     String query,
-  ) async =>
-      _searchResults;
+  ) async {
+    searchGlobalAccountIds.add(accountId);
+    return _searchResults;
+  }
 
   /// Every filter passed to [searchEmailsStructured] in call order, so tests
   /// can assert that the UI produced the expected [FilterGroup].
