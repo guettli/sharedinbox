@@ -3,10 +3,10 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 
 /// Builds the [FilterGroup] that powers "Find similar emails" — matches every
-/// message from the same primary sender whose normalised subject contains the
-/// seed's normalised subject. Falls back to from-only when the subject is
-/// empty after normalisation (e.g. seed has no subject), and to subject-only
-/// when the seed has no `from` address.
+/// message whose `from` contains the seed's primary sender address and whose
+/// normalised subject contains the seed's normalised subject. Falls back to
+/// from-only when the subject is empty after normalisation (e.g. seed has no
+/// subject), and to subject-only when the seed has no `from` address.
 FilterGroup similarFilterFor(Email seed) {
   final children = <FilterNode>[];
 
@@ -14,7 +14,7 @@ FilterGroup similarFilterFor(Email seed) {
     children.add(
       FilterLeaf(
         field: FilterField.from_,
-        comparison: FilterComparison.is_,
+        comparison: FilterComparison.contains,
         value: seed.from.first.email,
       ),
     );
