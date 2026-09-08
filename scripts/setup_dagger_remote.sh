@@ -83,12 +83,37 @@ chmod 600 ~/.ssh/dagger_key
 # used to fall through to StrictHostKeyChecking=no on the tunnel and silently
 # accept whatever host key was presented, which defeats host verification and
 # masks a real infra problem (DNS, firewall, engine down). See issue #372.
-_t0=$SECONDS
+#
+# Retry on transient failure. The engine host is periodically unreachable from
+# the runner for ~2 minutes and recovers on a later run (issues #241, #243,
+# #772). Because ssh-keyscan runs *before* the retry-protected tunnel and verify
+# blocks below, a blip during this scan would otherwise fail the whole job
+# before those retries ever get a chance. Budget mirrors the tunnel block
+# (≈3 min total): auth/config errors are not a factor here, so the extra latency
+# on a genuine outage is just what it costs to wait the engine back into service.
+KEYSCAN_TIMEOUT_S="${DAGGER_KEYSCAN_TIMEOUT_S:-30}"
+KEYSCAN_MAX_ATTEMPTS="${DAGGER_KEYSCAN_MAX_ATTEMPTS:-5}"
+KEYSCAN_RETRY_WAIT_S="${DAGGER_KEYSCAN_RETRY_WAIT_S:-15}"
 scan_rc=0
-scan_err=$(timeout 30 ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+scan_err=""
+_t0=$SECONDS
+for attempt in $(seq 1 "$KEYSCAN_MAX_ATTEMPTS"); do
+    scan_rc=0
+    # A failed scan prints nothing to stdout (no keys found), so known_hosts is
+    # not polluted by the retried attempts — only a successful scan appends.
+    scan_err=$(timeout "$KEYSCAN_TIMEOUT_S" ssh-keyscan -H "$DAGGER_ENGINE_HOST" 2>&1 >> ~/.ssh/known_hosts) || scan_rc=$?
+    if [ "$scan_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -eq "$KEYSCAN_MAX_ATTEMPTS" ]; then
+        break
+    fi
+    echo "::warning::ssh-keyscan attempt ${attempt}/${KEYSCAN_MAX_ATTEMPTS} failed (rc=${scan_rc}); retrying in ${KEYSCAN_RETRY_WAIT_S}s..."
+    sleep "$KEYSCAN_RETRY_WAIT_S"
+done
 _elapsed=$(( SECONDS - _t0 ))
 if [ "$scan_rc" -ne 0 ]; then
-    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${_elapsed}s (rc=${scan_rc})."
+    echo "::error::ssh-keyscan for ${DAGGER_ENGINE_HOST} failed after ${KEYSCAN_MAX_ATTEMPTS} attempts (last rc=${scan_rc}, ${_elapsed}s)."
     if [ -n "$scan_err" ]; then
         printf '%s\n' "$scan_err" | sed 's/^/::error::  /'
     fi
