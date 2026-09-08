@@ -179,7 +179,72 @@ void main() {
 
       expect(find.text('Attachments'), findsOneWidget);
       expect(find.text('report.pdf'), findsOneWidget);
+      // A non-image attachment keeps the plain download tile — no inline
+      // preview affordance.
+      expect(find.byIcon(Icons.attach_file), findsOneWidget);
+      expect(find.text('Show image'), findsNothing);
     });
+
+    testWidgets('image attachment offers an inline "Show image" preview', (
+      tester,
+    ) async {
+      final email = testEmail(hasAttachment: true);
+      const body = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'Please review.',
+        attachments: [
+          EmailAttachment(
+            filename: 'photo.png',
+            contentType: 'image/png',
+            size: 40960,
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(body: body, email: email),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('photo.png'), findsOneWidget);
+      // Displayable images get the image icon and a tap-to-load button rather
+      // than the bare attach_file tile.
+      expect(find.byIcon(Icons.image_outlined), findsOneWidget);
+      expect(find.text('Show image'), findsOneWidget);
+    });
+
+    testWidgets(
+      'AVIF attachment falls back to the download tile (no inline preview)',
+      (tester) async {
+        final email = testEmail(hasAttachment: true);
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Please review.',
+          attachments: [
+            EmailAttachment(
+              filename: 'photo.avif',
+              contentType: 'image/avif',
+              size: 40960,
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body, email: email),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('photo.avif'), findsOneWidget);
+        // Flutter can't decode AVIF, so it stays a plain download tile.
+        expect(find.byIcon(Icons.attach_file), findsOneWidget);
+        expect(find.text('Show image'), findsNothing);
+      },
+    );
 
     testWidgets(
       'shows a partial-decode notice with a raw-source link and keeps the '
