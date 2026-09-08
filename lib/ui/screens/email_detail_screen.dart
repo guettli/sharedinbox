@@ -462,6 +462,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         if (header != null) ...[_buildHeader(ctx, header), const Divider()],
+        if (header?.messageId != null) _buildNotesSection(ctx, header!),
         if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
         if (hasHtml) ...[
           if (!effectiveLoadImages)
@@ -521,7 +522,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             body.textBody ?? '',
             style: Theme.of(ctx).textTheme.bodyMedium,
           ),
-        if (header?.messageId != null) _buildNotesSection(ctx, header!),
         if (body.attachments.isNotEmpty) ...[
           const Divider(),
           Padding(
@@ -742,7 +742,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Divider(),
         Row(
           children: [
             Padding(
@@ -782,6 +781,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             );
           },
         ),
+        const Divider(),
       ],
     );
   }
