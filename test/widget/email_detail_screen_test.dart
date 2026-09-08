@@ -1158,6 +1158,30 @@ void main() {
     );
 
     testWidgets(
+      'unsubscribe chip renders for a bare URI without angle brackets',
+      (tester) async {
+        // eBay-style header that omits the RFC-required angle brackets — only
+        // parses via the bare-token fallback (#698).
+        final email = testEmail(
+          listUnsubscribeHeader: 'https://www.ebay.com/uns?id=abc',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(
+              body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+              email: email,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unsubscribe'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'tapping unsubscribe shows confirmation dialog; Cancel dismisses it',
       (tester) async {
         final email = testEmail(

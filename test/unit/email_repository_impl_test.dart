@@ -7563,6 +7563,65 @@ void main() {
           .getSingle();
       expect(emailRow.preview, 'Existing preview');
     });
+
+    test('getEmailBody backfills a null List-Unsubscribe header (#698)',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _UnsubscribeBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      // A row synced before we captured the header (or where sync missed it):
+      // list_unsubscribe_header is NULL even though the mail carries the header.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingle();
+      expect(
+        emailRow.listUnsubscribeHeader,
+        '<https://example.com/u>, <mailto:unsub@example.com>',
+      );
+    });
+
+    test('getEmailBody leaves an existing List-Unsubscribe header untouched',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _UnsubscribeBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              listUnsubscribeHeader:
+                  const Value('<mailto:existing@example.com>'),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final emailRow = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals('acc-1:INBOX:1')))
+          .getSingle();
+      expect(emailRow.listUnsubscribeHeader, '<mailto:existing@example.com>');
+    });
   });
 
   group('getEmailBody identity guard (#616)', () {
@@ -8290,6 +8349,39 @@ class _PreviewBodyImapClient extends FakeImapClient {
       'Content-Type: text/plain; charset=UTF-8\r\n'
       '\r\n'
       'Backfilled preview body.\r\n';
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+      );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
+    return imap.FetchImapResult([msg], null);
+  }
+}
+
+/// Serves a body carrying a List-Unsubscribe header so we can exercise the
+/// opportunistic header backfill on body fetch (#698).
+class _UnsubscribeBodyImapClient extends FakeImapClient {
+  static const String _kRawMime = 'MIME-Version: 1.0\r\n'
+      'Content-Type: text/plain; charset=UTF-8\r\n'
+      'List-Unsubscribe: <https://example.com/u>, <mailto:unsub@example.com>\r\n'
+      '\r\n'
+      'Body with an unsubscribe header.\r\n';
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(

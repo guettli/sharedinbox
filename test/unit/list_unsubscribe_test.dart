@@ -85,5 +85,49 @@ void main() {
       expect(uris, hasLength(1));
       expect(uris.single.scheme, 'https');
     });
+
+    test('parses an eBay-style https + mailto pair', () {
+      final uris = parseListUnsubscribeUris(
+        '<https://www.ebay.com/uns?id=abc>, '
+        '<mailto:unsubscribe@reply.ebay.com>',
+      );
+      expect(uris.map((u) => u.scheme).toList(), ['https', 'mailto']);
+    });
+
+    test('falls back to a bare https URI without angle brackets', () {
+      final uris = parseListUnsubscribeUris('https://www.ebay.com/uns?id=abc');
+      expect(uris, hasLength(1));
+      expect(uris.single.scheme, 'https');
+      expect(uris.single.host, 'www.ebay.com');
+    });
+
+    test('falls back to a bare mailto URI without angle brackets', () {
+      final uris = parseListUnsubscribeUris('mailto:unsub@example.com');
+      expect(uris, hasLength(1));
+      expect(uris.single.scheme, 'mailto');
+      expect(uris.single.path, 'unsub@example.com');
+    });
+
+    test('falls back to bare comma-separated URIs', () {
+      final uris = parseListUnsubscribeUris(
+        'mailto:unsub@example.com, https://example.com/u',
+      );
+      expect(uris.map((u) => u.scheme).toList(), ['mailto', 'https']);
+    });
+
+    test('parses a folded multi-line header', () {
+      final uris = parseListUnsubscribeUris(
+        '<https://example.com/u>,\r\n <mailto:unsub@example.com>',
+      );
+      expect(uris.map((u) => u.scheme).toList(), ['https', 'mailto']);
+    });
+
+    test('prefers bracketed URIs over the bare-token fallback', () {
+      // When brackets yield a usable URI, the fallback must not run and pull in
+      // extra bare tokens, so the result stays exactly the bracketed set.
+      final uris = parseListUnsubscribeUris('<https://example.com/u>');
+      expect(uris, hasLength(1));
+      expect(uris.single.host, 'example.com');
+    });
   });
 }
