@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +31,7 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/foldable_quote_text.dart';
+import 'package:sharedinbox/ui/widgets/image_viewer_screen.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -58,6 +60,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _isFlagged = false;
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
+
+  /// Local file paths of image attachments the user has chosen to preview,
+  /// keyed by filename. Populated on demand by [_showImage] so images aren't
+  /// fetched until asked for (mobile data), and re-used across rebuilds.
+  final Map<String, String> _imagePaths = {};
 
   /// Fallback nav resolved from `observeEmails(mailbox)` when [widget.nav]
   /// is null (deep links, notifications). Cached per emailId so the buttons
@@ -531,24 +538,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               style: Theme.of(ctx).textTheme.titleSmall,
             ),
           ),
-          for (final att in body.attachments)
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.attach_file),
-              title: Text(att.filename),
-              subtitle: Text('${att.contentType} • ${fmtSize(att.size)}'),
-              trailing: _downloading.contains(att.filename)
-                  ? const SizedBox(
-                      width: AppIconSize.lg,
-                      height: AppIconSize.lg,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.download),
-                      tooltip: 'Download and open',
-                      onPressed: () => _downloadAndOpen(att),
-                    ),
-            ),
+          for (final att in body.attachments) _buildAttachment(ctx, att),
         ],
       ],
     );
@@ -710,6 +700,119 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } else {
       context.pop();
     }
+  }
+
+  /// Renders one attachment row. Image attachments Flutter can decode get an
+  /// inline preview (fetched on tap); everything else keeps the plain
+  /// download-and-open tile.
+  Widget _buildAttachment(BuildContext ctx, EmailAttachment att) {
+    final downloading = _downloading.contains(att.filename);
+    final downloadTrailing = downloading
+        ? const SizedBox(
+            width: AppIconSize.lg,
+            height: AppIconSize.lg,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'Download and open',
+            onPressed: () => _downloadAndOpen(att),
+          );
+
+    if (!isDisplayableImage(att.contentType)) {
+      return ListTile(
+        dense: true,
+        leading: const Icon(Icons.attach_file),
+        title: Text(att.filename),
+        subtitle: Text('${att.contentType} • ${fmtSize(att.size)}'),
+        trailing: downloadTrailing,
+      );
+    }
+
+    final path = _imagePaths[att.filename];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.image_outlined),
+          title: Text(att.filename),
+          subtitle: Text('${att.contentType} • ${fmtSize(att.size)}'),
+          trailing: downloadTrailing,
+        ),
+        if (path != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: GestureDetector(
+              onTap: () => _openImageViewer(att, path),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: Image.file(
+                  File(path),
+                  fit: BoxFit.contain,
+                  alignment: Alignment.centerLeft,
+                  errorBuilder: (context, error, stack) => Text(
+                    'This image could not be displayed.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.only(
+              left: AppSpacing.lg,
+              bottom: AppSpacing.sm,
+            ),
+            child: OutlinedButton.icon(
+              icon: downloading
+                  ? const SizedBox(
+                      width: AppIconSize.sm,
+                      height: AppIconSize.sm,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.visibility, size: AppIconSize.sm),
+              label: const Text('Show image'),
+              onPressed: downloading ? null : () => _showImage(att),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Downloads an image attachment's bytes and reveals its inline preview.
+  Future<void> _showImage(EmailAttachment att) async {
+    setState(() => _downloading.add(att.filename));
+    try {
+      final path = await ref
+          .read(emailRepositoryProvider)
+          .downloadAttachment(widget.emailId, att);
+      if (!mounted) return;
+      setState(() => _imagePaths[att.filename] = path);
+    } catch (e, stack) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Loading image failed: $e',
+        level: AppLogLevel.error,
+        event: 'email.attachment.open_failed',
+        emailId: widget.emailId,
+        data: {'filename': att.filename},
+        error: e,
+        stack: stack,
+      );
+    } finally {
+      if (mounted) setState(() => _downloading.remove(att.filename));
+    }
+  }
+
+  void _openImageViewer(EmailAttachment att, String path) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => ImageViewerScreen(path: path, filename: att.filename),
+      ),
+    );
   }
 
   Future<void> _downloadAndOpen(EmailAttachment att) async {

@@ -24,4 +24,33 @@ void main() {
       expect(fmtSize(1024 * 1024 * 1024), '1.0 GB');
     });
   });
+
+  group('isDisplayableImage', () {
+    test('accepts formats Flutter can decode natively', () {
+      expect(isDisplayableImage('image/png'), isTrue);
+      expect(isDisplayableImage('image/jpeg'), isTrue);
+      expect(isDisplayableImage('image/jpg'), isTrue);
+      expect(isDisplayableImage('image/gif'), isTrue);
+      expect(isDisplayableImage('image/webp'), isTrue);
+      expect(isDisplayableImage('image/bmp'), isTrue);
+    });
+
+    test('is case-insensitive and tolerates MIME parameters', () {
+      expect(isDisplayableImage('IMAGE/PNG'), isTrue);
+      expect(isDisplayableImage('image/jpeg; name=photo.jpg'), isTrue);
+      expect(isDisplayableImage('  image/png  '), isTrue);
+    });
+
+    test('rejects image formats Flutter cannot decode', () {
+      expect(isDisplayableImage('image/avif'), isFalse);
+      expect(isDisplayableImage('image/heic'), isFalse);
+      expect(isDisplayableImage('image/heif'), isFalse);
+    });
+
+    test('rejects non-image content types', () {
+      expect(isDisplayableImage('application/pdf'), isFalse);
+      expect(isDisplayableImage('text/plain'), isFalse);
+      expect(isDisplayableImage(''), isFalse);
+    });
+  });
 }
