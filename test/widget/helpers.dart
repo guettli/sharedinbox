@@ -529,12 +529,24 @@ class FakeEmailRepository implements EmailRepository {
     return _searchResults;
   }
 
+  /// Records the scope arguments of the most recent [searchEmailsGlobal] call
+  /// so scope-chip tests can assert on them.
+  String? lastGlobalAccountId;
+  String? lastGlobalMailboxPath;
+  bool? lastGlobalIncludeJunkTrash;
+
   @override
   Future<List<Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async =>
-      _searchResults;
+    String query, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async {
+    lastGlobalAccountId = accountId;
+    lastGlobalMailboxPath = mailboxPath;
+    lastGlobalIncludeJunkTrash = includeJunkTrash;
+    return _searchResults;
+  }
 
   /// Every filter passed to [searchEmailsStructured] in call order, so tests
   /// can assert that the UI produced the expected [FilterGroup].
@@ -543,8 +555,10 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async {
     structuredSearchCalls.add(filter);
     return List.of(_structuredSearchResults);
   }
@@ -552,8 +566,10 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async =>
+    String address, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
       List.of(_byAddressResults);
 
   @override

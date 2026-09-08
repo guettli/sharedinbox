@@ -6034,30 +6034,50 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async {
+    String query, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
 
-    final sql = accountId != null
-        ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
-        : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
-    final variables = accountId != null
-        ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
-        : [Variable<String>(ftsQuery)];
+    final extraConditions = StringBuffer();
+    final extraVars = <Variable<String>>[];
+    if (accountId != null) {
+      extraConditions.write(' AND e.account_id = ?');
+      extraVars.add(Variable<String>(accountId));
+    }
+    if (mailboxPath != null) {
+      extraConditions.write(' AND e.mailbox_path = ?');
+      extraVars.add(Variable<String>(mailboxPath));
+    }
+    if (!includeJunkTrash) extraConditions.write(_junkTrashExclusionSql);
 
-    final queryRows = await _db
-        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
+    final sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
+        ' WHERE email_fts MATCH ?$extraConditions'
+        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+
+    final queryRows = await _db.customSelect(
+      sql,
+      variables: [Variable<String>(ftsQuery), ...extraVars],
+      readsFrom: {_db.emails, _db.mailboxes},
+    ).get();
     final emailRows = await Future.wait(
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
 
-    final noteRows = await _searchEmailsByNotes(accountId, null, query);
-    final bodyRows = await _searchEmailsByBody(accountId, null, query);
+    final noteRows = await _searchEmailsByNotes(
+      accountId,
+      mailboxPath,
+      query,
+      includeJunkTrash: includeJunkTrash,
+    );
+    final bodyRows = await _searchEmailsByBody(
+      accountId,
+      mailboxPath,
+      query,
+      includeJunkTrash: includeJunkTrash,
+    );
 
     final seen = <String>{};
     final merged = <model.Email>[];
@@ -6077,8 +6097,9 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<List<model.Email>> _searchEmailsByBody(
     String? accountId,
     String? mailboxPath,
-    String query,
-  ) =>
+    String query, {
+    bool includeJunkTrash = false,
+  }) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_body_fts f'
             ' JOIN email_bodies b ON b.rowid = f.rowid'
@@ -6088,6 +6109,7 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        includeJunkTrash: includeJunkTrash,
       );
 
   /// Returns emails whose associated notes match [query] via the
@@ -6096,8 +6118,9 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<List<model.Email>> _searchEmailsByNotes(
     String? accountId,
     String? mailboxPath,
-    String query,
-  ) =>
+    String query, {
+    bool includeJunkTrash = false,
+  }) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_notes_fts f'
             ' JOIN email_notes n ON n.rowid = f.rowid'
@@ -6108,6 +6131,7 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        includeJunkTrash: includeJunkTrash,
       );
 
   /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
@@ -6123,6 +6147,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String? accountId,
     required String? mailboxPath,
     required String query,
+    bool includeJunkTrash = false,
   }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
@@ -6137,6 +6162,7 @@ class EmailRepositoryImpl implements EmailRepository {
       extraConditions.write(' AND e.mailbox_path = ?');
       extraVars.add(Variable<String>(mailboxPath));
     }
+    if (!includeJunkTrash) extraConditions.write(_junkTrashExclusionSql);
 
     final sql = 'SELECT DISTINCT e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
@@ -6146,7 +6172,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .customSelect(
           sql,
           variables: [Variable<String>(ftsQuery), ...extraVars],
-          readsFrom: readsFrom,
+          readsFrom: {...readsFrom, if (!includeJunkTrash) _db.mailboxes},
         )
         .get();
     final emailRows =
@@ -6157,13 +6183,17 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async {
     final rows = await (_db.select(_db.emails)
           ..where((t) {
-            final fe = _filterGroup(filter, t);
-            if (accountId == null) return fe;
-            return t.accountId.equals(accountId) & fe;
+            var fe = _filterGroup(filter, t);
+            if (accountId != null) fe = t.accountId.equals(accountId) & fe;
+            if (mailboxPath != null) fe = t.mailboxPath.equals(mailboxPath) & fe;
+            if (!includeJunkTrash) fe = fe & _notInJunkOrTrash(t);
+            return fe;
           })
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
@@ -6306,6 +6336,28 @@ class EmailRepositoryImpl implements EmailRepository {
     return buf.toString();
   }
 
+  /// Raw-SQL predicate (for the FTS `customSelect` paths) that drops emails
+  /// living in a folder whose role is `junk` or `trash`. Assumes the `emails`
+  /// row is aliased `e`. Folders not yet synced (no `mailboxes` row) are left
+  /// in — only known junk/trash folders are excluded.
+  static const _junkTrashExclusionSql =
+      ' AND NOT EXISTS (SELECT 1 FROM mailboxes m'
+      ' WHERE m.account_id = e.account_id AND m.path = e.mailbox_path'
+      " AND m.role IN ('junk', 'trash'))";
+
+  /// Drift equivalent of [_junkTrashExclusionSql] for the query-builder paths
+  /// (`searchEmailsStructured`, `getEmailsByAddress`).
+  Expression<bool> _notInJunkOrTrash($EmailsTable e) {
+    final sub = _db.selectOnly(_db.mailboxes)
+      ..addColumns([_db.mailboxes.path])
+      ..where(
+        _db.mailboxes.accountId.equalsExp(e.accountId) &
+            _db.mailboxes.path.equalsExp(e.mailboxPath) &
+            _db.mailboxes.role.isIn(const ['junk', 'trash']),
+      );
+    return notExistsQuery(sub);
+  }
+
   /// Converts a user query string into an FTS5 match expression.
   /// Each whitespace-separated word becomes a prefix term (word*) so that
   /// partial words still match. Special FTS5 characters are stripped.
@@ -6322,8 +6374,10 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async {
+    String address, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async {
     final pattern = '%${address.toLowerCase()}%';
     final rows = await (_db.select(_db.emails)
           ..where((t) {
@@ -6331,6 +6385,10 @@ class EmailRepositoryImpl implements EmailRepository {
             if (accountId != null) {
               condition = t.accountId.equals(accountId);
             }
+            if (mailboxPath != null) {
+              condition = condition & t.mailboxPath.equals(mailboxPath);
+            }
+            if (!includeJunkTrash) condition = condition & _notInJunkOrTrash(t);
             condition = condition &
                 (t.fromJson.like(pattern) |
                     t.toAddresses.like(pattern) |
@@ -6442,8 +6500,20 @@ class EmailRepositoryImpl implements EmailRepository {
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
 
-    final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
-    final bodyRows = await _searchEmailsByBody(accountId, mailboxPath, query);
+    // Explicit single-folder search: keep junk/trash results so searching
+    // from inside Trash or Junk still works.
+    final noteRows = await _searchEmailsByNotes(
+      accountId,
+      mailboxPath,
+      query,
+      includeJunkTrash: true,
+    );
+    final bodyRows = await _searchEmailsByBody(
+      accountId,
+      mailboxPath,
+      query,
+      includeJunkTrash: true,
+    );
 
     final seen = <String>{};
     final merged = <model.Email>[];

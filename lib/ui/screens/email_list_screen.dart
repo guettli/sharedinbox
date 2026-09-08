@@ -6,11 +6,11 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/search_scope.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -35,6 +35,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   List<Email>? _searchResults;
   bool _searchLoading = false;
   bool get _searching => _searchController.text.isNotEmpty;
+
+  // Search scope. The folder view's search defaults to every account and folder
+  // (junk/trash excluded); the scope chips narrow it to this account or the
+  // current folder, and the toggle brings junk/trash back in.
+  SearchScope _scope = SearchScope.all;
+  bool _includeJunkTrash = false;
 
   // Error banner — tracks the last error message that the user dismissed.
   String? _dismissedError;
@@ -106,12 +112,40 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final generation = ++_searchGeneration;
     setState(() => _searchLoading = true);
     try {
-      final results = await ref
-          .read(emailRepositoryProvider)
-          .searchEmails(widget.accountId, widget.mailboxPath, q);
+      final repo = ref.read(emailRepositoryProvider);
+      final accountId = _scope.accountIdFor(widget.accountId);
+      final mailboxPath = _scope.mailboxPathFor(widget.mailboxPath);
+      final includeJunkTrash =
+          _includeJunkTrash || _scope.alwaysIncludesJunkTrash;
+
+      // `searchEmailsGlobal` matches subject/preview/From/body/notes via FTS;
+      // `getEmailsByAddress` catches To/Cc recipients FTS does not index.
+      // Merge + dedup into one message list, newest first.
+      final (globalHits, addressHits) = await (
+        repo.searchEmailsGlobal(
+          accountId,
+          q,
+          mailboxPath: mailboxPath,
+          includeJunkTrash: includeJunkTrash,
+        ),
+        repo.getEmailsByAddress(
+          accountId,
+          q,
+          mailboxPath: mailboxPath,
+          includeJunkTrash: includeJunkTrash,
+        ),
+      ).wait;
+
+      final seen = <String>{};
+      final merged = <Email>[];
+      for (final e in [...globalHits, ...addressHits]) {
+        if (seen.add(e.id)) merged.add(e);
+      }
+      merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+
       if (mounted && generation == _searchGeneration) {
         setState(() {
-          _searchResults = results;
+          _searchResults = merged;
           _lastSettledQuery = q;
         });
       }
@@ -124,6 +158,25 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   void _onSearchChanged(String value) {
     if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
+  }
+
+  void _onScopeChanged(SearchScope scope) {
+    setState(() {
+      _scope = scope;
+      // Force a re-run even though the query text is unchanged.
+      _lastSettledQuery = null;
+    });
+    final q = _searchController.text.trim();
+    if (q.isNotEmpty) unawaited(_runSearch(q));
+  }
+
+  void _onIncludeJunkTrashChanged(bool value) {
+    setState(() {
+      _includeJunkTrash = value;
+      _lastSettledQuery = null;
+    });
+    final q = _searchController.text.trim();
+    if (q.isNotEmpty) unawaited(_runSearch(q));
   }
 
   /// Watches the cached mailbox for the current folder and, if it disappears
@@ -357,6 +410,53 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Widget _buildSearchBody() {
+    return Column(
+      children: [
+        _buildScopeBar(),
+        Expanded(child: _buildSearchResults()),
+      ],
+    );
+  }
+
+  /// Scope chips shown above the search results: a mutually-exclusive selector
+  /// (all accounts / this account / this folder) plus an independent
+  /// "trash & junk" toggle that stacks on top of it.
+  Widget _buildScopeBar() {
+    const scopes = [
+      SearchScope.all,
+      SearchScope.currentAccount,
+      SearchScope.currentFolder,
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        0,
+      ),
+      child: Wrap(
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.xs,
+        children: [
+          for (final scope in scopes)
+            ChoiceChip(
+              label: Text(scope.label),
+              selected: _scope == scope,
+              onSelected: (v) {
+                if (v) _onScopeChanged(scope);
+              },
+            ),
+          FilterChip(
+            label: const Text('Trash & junk'),
+            selected: _includeJunkTrash,
+            onSelected: _onIncludeJunkTrashChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchResults() {
     if (_searchLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -367,17 +467,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return const Center(child: Text('No results'));
     }
     final results = _searchResults!;
-    final threads = results.map(EmailThread.fromEmail).toList();
+    // Results can span accounts and folders, so surface where each hit lives
+    // and let EmailThreadList's default navigation open it in the right place.
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    final accountNames = {
+      for (final a in accounts) a.id: accountDisplayLabel(a, a.id),
+    };
     return EmailThreadList(
       controller: _selection,
-      items: threads,
+      items: results.map(EmailThread.fromEmail).toList(),
       enableSwipe: false,
-      onTap: (t) => unawaited(
-        _openSearchResultAndRefresh(
-          t.latestEmailId,
-          EmailDetailNav.fromEmails(results),
-        ),
-      ),
+      showLocationLabel: true,
+      accountNames: accountNames,
     );
   }
 
@@ -439,37 +540,6 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         onLoadMore: () => setState(() => _limit += _pageSize),
       ),
     );
-  }
-
-  Future<void> _openSearchResultAndRefresh(
-    String emailId,
-    EmailDetailNav nav,
-  ) async {
-    await context.push(
-      '/accounts/${widget.accountId}/mailboxes'
-      '/${Uri.encodeComponent(widget.mailboxPath)}'
-      '/emails/${Uri.encodeComponent(emailId)}',
-      extra: nav,
-    );
-    await _refreshSearchAndPopIfEmpty();
-  }
-
-  Future<void> _refreshSearchAndPopIfEmpty() async {
-    if (!mounted || !_searching) return;
-    final query = _searchController.text.trim();
-    final remaining = await ref
-        .read(emailRepositoryProvider)
-        .searchEmails(widget.accountId, widget.mailboxPath, query);
-    if (!mounted) return;
-    if (remaining.isEmpty) {
-      if (context.canPop()) {
-        context.pop();
-        return;
-      }
-      _searchController.clear();
-      return;
-    }
-    setState(() => _searchResults = remaining);
   }
 
   void _onAfterBatchAction(List<String> actedThreadIds) {

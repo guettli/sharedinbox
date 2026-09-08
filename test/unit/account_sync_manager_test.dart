@@ -230,12 +230,29 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
   @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsStructured(String? a, FilterGroup f) async =>
+  Future<List<Email>> searchEmailsGlobal(
+    String? a,
+    String q, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
       [];
   @override
-  Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
+      [];
+  @override
+  Future<List<Email>> getEmailsByAddress(
+    String? a,
+    String address, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
+      [];
   @override
   Future<List<EmailAddress>> searchAddresses(
     String? a,
