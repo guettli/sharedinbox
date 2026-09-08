@@ -15,7 +15,12 @@ abstract class DraftRepository {
 
   /// Returns the most recent draft for the given reply context (null = new
   /// message), or null if none exists.
-  Future<SavedDraft?> findDraft({String? replyToEmailId});
+  ///
+  /// When [accountId] is non-null, only drafts belonging to that account are
+  /// considered — this keeps each account's new-message draft independent so
+  /// opening compose from a specific inbox never restores another account's
+  /// draft (and clobbers the "From" account with it).
+  Future<SavedDraft?> findDraft({String? replyToEmailId, String? accountId});
 
   /// Returns the draft with [id], or null.
   Future<SavedDraft?> getDraft(int id);

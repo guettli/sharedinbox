@@ -148,9 +148,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   Future<void> _restoreDraft() async {
-    final draft = await ref
-        .read(draftRepositoryProvider)
-        .findDraft(replyToEmailId: widget.replyToEmailId);
+    final draft = await ref.read(draftRepositoryProvider).findDraft(
+          replyToEmailId: widget.replyToEmailId,
+          accountId: widget.accountId,
+        );
     if (draft == null || !mounted) return;
     setState(() {
       _draftRestored = true;

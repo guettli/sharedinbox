@@ -90,12 +90,18 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   @override
-  Future<SavedDraft?> findDraft({String? replyToEmailId}) async {
+  Future<SavedDraft?> findDraft({
+    String? replyToEmailId,
+    String? accountId,
+  }) async {
     final query = _db.select(_db.drafts);
     if (replyToEmailId == null) {
       query.where((t) => t.replyToEmailId.isNull());
     } else {
       query.where((t) => t.replyToEmailId.equals(replyToEmailId));
+    }
+    if (accountId != null) {
+      query.where((t) => t.accountId.equals(accountId));
     }
     query.orderBy([(t) => OrderingTerm.desc(t.id)]);
     query.limit(1);
