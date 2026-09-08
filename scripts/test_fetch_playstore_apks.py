@@ -288,6 +288,41 @@ class TestPollGeneratedApks(unittest.TestCase):
                         )
         self.assertIn("42", str(ctx.exception))
 
+    def test_zero_timeout_does_a_single_check_then_times_out(self):
+        """Regression for #657: in CI the Dagger exec runs with
+        ``PLAY_APKS_POLL_TIMEOUT_SECONDS=0`` so each attempt does exactly ONE
+        Play readiness check and returns immediately (→ PENDING when Play is not
+        ready), leaving all the waiting to the bash wrapper instead of holding
+        the shared engine idle. A timeout of 0 must therefore call
+        ``_list_generated_apks`` once and raise TimeoutError without sleeping."""
+        session = MagicMock()
+        with patch.object(fetch_playstore_apks, "_POLL_TIMEOUT_SECONDS", 0):
+            with patch(
+                "fetch_playstore_apks._list_generated_apks", return_value=None
+            ) as list_apks:
+                with patch("fetch_playstore_apks.time.sleep") as sleep:
+                    with self.assertRaises(TimeoutError):
+                        fetch_playstore_apks._poll_generated_apks(
+                            session, "pkg", 42
+                        )
+        list_apks.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_zero_timeout_returns_listing_when_ready(self):
+        """With a 0 timeout the single check still returns the listing when Play
+        is already ready — the ready path is unaffected by the short poll."""
+        session = MagicMock()
+        listing = {"generatedApks": [{"key": "v"}]}
+        with patch.object(fetch_playstore_apks, "_POLL_TIMEOUT_SECONDS", 0):
+            with patch(
+                "fetch_playstore_apks._list_generated_apks", return_value=listing
+            ) as list_apks:
+                result = fetch_playstore_apks._poll_generated_apks(
+                    session, "pkg", 42
+                )
+        self.assertIs(result, listing)
+        list_apks.assert_called_once()
+
     def test_retries_through_transient_connection_error(self):
         """Regression for #455: a dropped/reset connection to the Play API on one
         polling GET (surfaced by requests as ``ConnectionError``, e.g. from a

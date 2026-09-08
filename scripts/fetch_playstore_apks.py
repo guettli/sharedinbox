@@ -38,17 +38,19 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 # How long a *single* fetch attempt polls for Play to finish generating split
 # APKs before giving up and dropping a PENDING marker. Generation typically
 # takes minutes but occasionally an hour or more after an AAB upload (see #402,
-# #409). This is kept deliberately SHORT: the fetch runs inside a Dagger exec,
-# and an exec that idles for the full generation window is long enough for the
-# Dagger/buildkit engine to garbage-collect its snapshot — which made both the
-# marker writes (FileNotFoundError) and the final ``Directory.export`` ("commit
-# output … snapshot does not exist") fail, turning a benign Play-side delay
-# into a red build and a spurious "Firebase Tests failed" issue (see #422, #424,
-# #425, #432). The long-horizon waiting now lives in the bash wrapper
-# (scripts/run_firebase_test.sh), which retries this short fetch across *fresh*
-# execs until Play catches up, so no single exec idles long enough to be
-# reclaimed. The wrapper's per-attempt timeout must stay ≥ this + margin — see
-# the guard there. Overridable via env vars for testing.
+# #409). In CI this is pinned to 0 — the Dagger exec (see ci/main.go, which
+# sets PLAY_APKS_POLL_TIMEOUT_SECONDS=0) does exactly ONE Play readiness check
+# and returns immediately, so the shared engine is never held idle polling
+# Play. The long-horizon waiting lives entirely in the bash wrapper
+# (scripts/run_firebase_test.sh), which retries this fetch across *fresh* execs
+# until Play catches up. An exec that idled inside the poll for the full
+# generation window used to hold the engine for hours of pure waiting (~4h/day,
+# see #657) and was long enough for the Dagger/buildkit engine to garbage-collect
+# its snapshot — which made both the marker writes (FileNotFoundError) and the
+# final ``Directory.export`` ("commit output … snapshot does not exist") fail,
+# turning a benign Play-side delay into a red build and a spurious "Firebase
+# Tests failed" issue (see #422, #424, #425, #432). Overridable via env vars for
+# testing; the non-CI default keeps a short in-process poll for ad-hoc runs.
 _POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "300"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
