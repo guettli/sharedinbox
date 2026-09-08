@@ -65,6 +65,12 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_ci_monitor.sh'
         pass_filenames: false
         files: ^scripts/(ci-monitor|test_ci_monitor)\.sh$
+      - id: setup-dagger-remote-tests
+        name: setup_dagger_remote retry-block unit tests
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_setup_dagger_remote.sh'
+        pass_filenames: false
+        files: ^scripts/(setup_dagger_remote|test_setup_dagger_remote)\.sh$
       - id: duplication-orchestrator-tests
         name: duplication orchestrator unit tests
         language: system
