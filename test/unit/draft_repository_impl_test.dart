@@ -122,6 +122,55 @@ void main() {
       },
     );
 
+    test(
+      'findDraft scopes new-message lookup to the given accountId',
+      () async {
+        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
+        final imapDraft = await repo.saveDraft(
+          accountId: 'imap-1',
+          toText: 'a@example.com',
+          ccText: '',
+          subjectText: 'IMAP draft',
+          bodyText: '',
+        );
+        // A newer draft under the other account must NOT be returned when the
+        // lookup is scoped to the IMAP account.
+        final jmapDraft = await repo.saveDraft(
+          accountId: 'jmap-1',
+          toText: 'b@example.com',
+          ccText: '',
+          subjectText: 'JMAP draft',
+          bodyText: '',
+        );
+
+        final imapFound = await repo.findDraft(accountId: 'imap-1');
+        expect(imapFound?.id, imapDraft.id);
+        expect(imapFound?.subjectText, 'IMAP draft');
+
+        final jmapFound = await repo.findDraft(accountId: 'jmap-1');
+        expect(jmapFound?.id, jmapDraft.id);
+
+        // Without an accountId, the most recent draft overall is returned.
+        final anyFound = await repo.findDraft();
+        expect(anyFound?.id, jmapDraft.id);
+      },
+    );
+
+    test(
+      'findDraft returns null when no draft matches the given accountId',
+      () async {
+        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
+        await repo.saveDraft(
+          accountId: 'jmap-1',
+          toText: 'b@example.com',
+          ccText: '',
+          subjectText: 'JMAP draft',
+          bodyText: '',
+        );
+        expect(await repo.findDraft(accountId: 'imap-1'), isNull);
+      },
+    );
+
     test('deleteDraft removes the row', () async {
       final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
       final draft = await repo.saveDraft(

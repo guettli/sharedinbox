@@ -150,8 +150,12 @@ class FakeDraftRepository implements DraftRepository {
   }
 
   @override
-  Future<SavedDraft?> findDraft({String? replyToEmailId}) async {
+  Future<SavedDraft?> findDraft({
+    String? replyToEmailId,
+    String? accountId,
+  }) async {
     final matches = _drafts.values.where((d) {
+      if (accountId != null && d.accountId != accountId) return false;
       if (replyToEmailId == null) return d.replyToEmailId == null;
       return d.replyToEmailId == replyToEmailId;
     }).toList()

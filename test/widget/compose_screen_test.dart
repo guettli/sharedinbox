@@ -264,6 +264,62 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets(
+      'keeps From matching the inbox account and ignores another '
+      "account's new-message draft (#753)",
+      (tester) async {
+        // Same address reachable via two accounts (IMAP + JMAP), distinct ids.
+        const imapAccount = Account(
+          id: 'imap-1',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        const jmapAccount = Account(
+          id: 'jmap-1',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        );
+        // A new-message draft left behind by a previous JMAP compose.
+        final fakeDrafts = FakeDraftRepository();
+        await fakeDrafts.saveDraft(
+          accountId: 'jmap-1',
+          toText: 'carol@example.com',
+          ccText: '',
+          subjectText: 'JMAP draft',
+          bodyText: 'from jmap',
+        );
+
+        await tester.pumpWidget(
+          _buildDirect(
+            // Compose opened from the IMAP inbox.
+            screen: const ComposeScreen(accountId: 'imap-1'),
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([imapAccount, jmapAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+              draftRepositoryProvider.overrideWithValue(fakeDrafts),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // From stays on the IMAP account; the JMAP draft is not restored.
+        final dropdown = tester.widget<DropdownButtonFormField<String>>(
+          find.byType(DropdownButtonFormField<String>),
+        );
+        expect(dropdown.initialValue, 'imap-1');
+        expect(find.widgetWithText(TextFormField, 'JMAP draft'), findsNothing);
+      },
+    );
   });
 }
 
