@@ -31,6 +31,14 @@ abstract class EmailRepository {
     String threadId,
   );
 
+  /// Returns every email belonging to [threadId] across all folders of
+  /// [accountId] (oldest first), so a conversation spanning Inbox, Sent and
+  /// Archive is gathered as one thread (#754).
+  Stream<List<Email>> observeThreadAcrossFolders(
+    String accountId,
+    String threadId,
+  );
+
   Future<Email?> getEmail(String emailId);
 
   /// Returns the body for [emailId], using the local cache when fresh.

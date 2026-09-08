@@ -152,6 +152,22 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Stream<List<_i2.Email>>);
 
   @override
+  _i4.Stream<List<_i2.Email>> observeThreadAcrossFolders(
+    String? accountId,
+    String? threadId,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #observeThreadAcrossFolders,
+          [
+            accountId,
+            threadId,
+          ],
+        ),
+        returnValue: _i4.Stream<List<_i2.Email>>.empty(),
+      ) as _i4.Stream<List<_i2.Email>>);
+
+  @override
   _i4.Future<_i2.Email?> getEmail(String? emailId) => (super.noSuchMethod(
         Invocation.method(
           #getEmail,

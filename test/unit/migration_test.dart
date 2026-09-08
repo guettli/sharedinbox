@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 56);
+      expect(db.schemaVersion, 57);
       await db.close();
     });
 
@@ -192,6 +192,7 @@ void main() {
           'mailboxes_account_id', // v25
           'threads_latest_date', // v25
           'emails_server_email_id', // v53
+          'emails_account_thread', // v57
         ]),
       );
 
