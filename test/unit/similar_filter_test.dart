@@ -25,7 +25,7 @@ Email _seed({
 
 void main() {
   group('similarFilterFor', () {
-    test('returns from-is + subject-contains for typical seed', () {
+    test('returns from-contains + subject-contains for typical seed', () {
       final seed = _seed(
         subject: 'Re: Big sale!! ',
         from: const [EmailAddress(name: 'Spam', email: 'spammer@example.com')],
@@ -37,7 +37,7 @@ void main() {
 
       final fromLeaf = group.children[0] as FilterLeaf;
       expect(fromLeaf.field, FilterField.from_);
-      expect(fromLeaf.comparison, FilterComparison.is_);
+      expect(fromLeaf.comparison, FilterComparison.contains);
       expect(fromLeaf.value, 'spammer@example.com');
 
       final subjLeaf = group.children[1] as FilterLeaf;
