@@ -219,6 +219,32 @@ void main() {
     });
   });
 
+  group('isDuplicateOfOtherFolders', () {
+    Mailbox withRole(String? role) => Mailbox(
+          id: 'a1:box',
+          accountId: 'a1',
+          path: 'box',
+          name: 'box',
+          unreadCount: 0,
+          totalCount: 0,
+          role: role,
+        );
+
+    test('true for the "all" role (Gmail All Mail)', () {
+      // Gmail's "All Mail" is tagged with the RFC 6154 \All flag / RFC 8621
+      // "all" role. Its contents duplicate every other folder, so it must be
+      // skipped during automatic sync (#691).
+      expect(isDuplicateOfOtherFolders(withRole('all')), isTrue);
+    });
+
+    test('false for ordinary folders and other roles', () {
+      expect(isDuplicateOfOtherFolders(withRole(null)), isFalse);
+      expect(isDuplicateOfOtherFolders(withRole('inbox')), isFalse);
+      expect(isDuplicateOfOtherFolders(withRole('archive')), isFalse);
+      expect(isDuplicateOfOtherFolders(withRole('trash')), isFalse);
+    });
+  });
+
   group('resolveMailboxDisplayPath', () {
     const jmapMailbox = Mailbox(
       id: 'j1:a',

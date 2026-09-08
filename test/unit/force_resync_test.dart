@@ -46,6 +46,18 @@ const _inbox = Mailbox(
   role: 'inbox',
 );
 
+// Gmail's "All Mail" — role "all" duplicates every other folder, so automatic
+// resync must skip it to avoid downloading everything twice (#691).
+const _allMail = Mailbox(
+  id: '$_accountId:[Gmail]/All Mail',
+  accountId: _accountId,
+  path: '[Gmail]/All Mail',
+  name: 'All Mail',
+  unreadCount: 0,
+  totalCount: 0,
+  role: 'all',
+);
+
 /// One-stop rig — the two tests below only differ in how they stub
 /// `syncEmails`, so we build fresh mocks in each test and hand them back
 /// as a record. Keeps the setup local (and short) instead of hoisting
@@ -233,5 +245,49 @@ void main() {
         await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
     expect(snapshots.last.phase, ForceResyncPhase.failed);
     expect(snapshots.last.error, contains('permission denied'));
+  });
+
+  test('forceResync skips Gmail All Mail but syncs other folders (#691)',
+      () async {
+    final rig = makeRig();
+    when(rig.mailboxes.observeMailboxes(_accountId))
+        .thenAnswer((_) => Stream.value(const [_inbox, _allMail]));
+    when(rig.emails.clearMailboxForResync(_accountId, _allMail.path))
+        .thenAnswer((_) async {});
+    when(rig.emails.syncEmails(_accountId, _inbox.path))
+        .thenAnswer((_) async => SyncEmailsResult.zero);
+    when(rig.emails.syncEmails(_accountId, _allMail.path))
+        .thenAnswer((_) async => SyncEmailsResult.zero);
+
+    final snapshots = await rig.manager.forceResync(_accountId).toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.complete);
+    // All Mail duplicates every other folder — it must never be fetched.
+    verifyNever(rig.emails.syncEmails(_accountId, _allMail.path));
+    verify(rig.emails.syncEmails(_accountId, _inbox.path))
+        .called(greaterThanOrEqualTo(1));
+    // Only the non-skipped folder shows up in the per-mailbox stats.
+    expect(snapshots.last.mailboxStats.map((s) => s.mailboxName), ['INBOX']);
+  });
+
+  test('forceResyncMailbox still honors an explicit All Mail request (#691)',
+      () async {
+    // Skipping is only for the automatic all-folders loop; an explicit
+    // per-folder resync of All Mail is a deliberate user action and must run.
+    final rig = makeRig();
+    when(rig.mailboxes.observeMailboxes(_accountId))
+        .thenAnswer((_) => Stream.value(const [_inbox, _allMail]));
+    when(rig.emails.clearMailboxForResync(_accountId, _allMail.path))
+        .thenAnswer((_) async {});
+    when(rig.emails.syncEmails(_accountId, _allMail.path))
+        .thenAnswer((_) async => SyncEmailsResult.zero);
+
+    final snapshots = await rig.manager
+        .forceResyncMailbox(_accountId, _allMail.path)
+        .toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.complete);
+    verify(rig.emails.syncEmails(_accountId, _allMail.path))
+        .called(greaterThanOrEqualTo(1));
   });
 }

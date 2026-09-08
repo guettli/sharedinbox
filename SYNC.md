@@ -81,6 +81,13 @@ start()
 On each run, only UIDs greater than `lastUid` are fetched. If `uidValidity` changes the full
 folder is re-scanned and the checkpoint is reset.
 
+**Duplicate-folder skip** — folders whose contents duplicate every other folder are excluded
+from the per-mailbox loop, so their messages are not downloaded a second time (#691). Currently
+this is Gmail's "All Mail" (RFC 6154 `\All` special-use / RFC 8621 `all` role), detected via
+`isDuplicateOfOtherFolders` (`lib/core/models/mailbox.dart`). The same guard runs in the IMAP
+loop, the JMAP loop, and the force-resync-all loop; an explicit single-folder resync of All Mail
+is still honored. The folder itself stays in the list with its server counts.
+
 **Mailbox deletion reconciliation** — mailboxes absent from `LIST` (IMAP) or the
 `Mailbox/get` response (JMAP full sync) are removed locally, along with their cached
 emails, threads, IMAP sync checkpoint and any queued pending changes that referenced them.
