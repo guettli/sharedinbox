@@ -792,6 +792,11 @@ Widget buildApp({
         ],
       ),
       GoRoute(
+        path: '/search',
+        builder: (ctx, state) =>
+            SearchScreen(initialFilter: state.extra as FilterGroup?),
+      ),
+      GoRoute(
         path: '/compose',
         builder: (ctx, state) {
           final extra = state.extra as Map<String, dynamic>?;
