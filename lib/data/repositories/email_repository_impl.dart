@@ -982,7 +982,19 @@ class EmailRepositoryImpl implements EmailRepository {
           ],
           'fetchHTMLBodyValues': true,
           'fetchTextBodyValues': true,
-          'bodyProperties': ['partId', 'type', 'name', 'size', 'subParts'],
+          // `blobId` is required to download attachments: it is the id passed
+          // to the JMAP downloadUrl. A spec-compliant server returns only the
+          // body properties listed here (RFC 8621 §4.1.4), so omitting it left
+          // every attachment with an empty part id and the download failed with
+          // "missing part ID" (#762).
+          'bodyProperties': [
+            'partId',
+            'blobId',
+            'type',
+            'name',
+            'size',
+            'subParts',
+          ],
         },
         '0',
       ],
