@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
+import 'package:sharedinbox/core/models/mailbox.dart'
+    show isDuplicateOfOtherFolders;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -357,6 +359,9 @@ class AccountSyncManager {
 
       for (var i = 0; i < mailboxes.length; i++) {
         final mailbox = mailboxes[i];
+        // Skip folders that just duplicate other folders (Gmail's "All Mail"),
+        // otherwise every message is downloaded twice (#691).
+        if (isDuplicateOfOtherFolders(mailbox)) continue;
         emit(
           ForceResyncProgress(
             phase: ForceResyncPhase.syncingEmails,
@@ -874,6 +879,9 @@ class _AccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      // Skip folders that just duplicate other folders (Gmail's "All Mail"),
+      // otherwise every message is downloaded twice (#691).
+      if (isDuplicateOfOtherFolders(mailbox)) continue;
       final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;
@@ -1210,6 +1218,9 @@ class _JmapAccountSync implements _SyncLoop {
     final mailboxStats = <MailboxSyncStats>[];
     for (final mailbox in mailboxes) {
       if (!_running) break;
+      // Skip folders that just duplicate other folders (Gmail's "All Mail"),
+      // otherwise every message is downloaded twice (#691).
+      if (isDuplicateOfOtherFolders(mailbox)) continue;
       final mailboxStart = DateTime.now();
       final r = await _emails.syncEmails(account.id, mailbox.path);
       emailResult += r;

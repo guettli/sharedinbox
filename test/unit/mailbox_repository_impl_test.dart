@@ -1248,6 +1248,30 @@ void main() {
       );
     });
 
+    group('syncMailboxes IMAP maps Gmail All Mail to the "all" role', () {
+      test(
+        'a folder carrying the \\All special-use flag gets role "all"',
+        () async {
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => _AllMailImapClient(),
+          );
+          await accounts.addAccount(_account, 'pw');
+
+          await mailboxes.syncMailboxes('acc-1');
+
+          // The \All flag must be mapped to the "all" role so both protocols
+          // have one signal to skip Gmail's All Mail during sync (#691).
+          final found = await mailboxes.findMailboxByRole('acc-1', 'all');
+          expect(found, isNotNull);
+          expect(found!.name, 'All Mail');
+        },
+      );
+    });
+
     group('rename / delete / move (JMAP)', () {
       Future<
           ({
@@ -1540,6 +1564,37 @@ class _PlainArchiveImapClient extends SnoozeSpyImapClient {
           encodedPath: 'Archive',
           pathSeparator: '/',
           flags: [], // No \Archive special-use flag
+        ),
+      ];
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox mailbox,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      mailbox;
+
+  @override
+  Future<dynamic> logout() async {}
+}
+
+/// Fake IMAP client that lists Gmail's "All Mail" carrying the RFC 6154 \All
+/// special-use flag (as Gmail advertises it), and logs out cleanly.
+class _AllMailImapClient extends SnoozeSpyImapClient {
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      [
+        imap.Mailbox(
+          encodedName: 'All Mail',
+          encodedPath: '[Gmail]/All Mail',
+          pathSeparator: '/',
+          flags: const [imap.MailboxFlag.all],
         ),
       ];
 

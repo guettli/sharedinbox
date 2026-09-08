@@ -18,6 +18,16 @@ Password**:
 
 App Passwords are unavailable if a Google Workspace admin has disabled them.
 
+## "All Mail" is skipped during sync
+
+Gmail exposes an **All Mail** folder that holds a copy of every message in every
+other folder. SharedInbox excludes it from automatic email sync so each message
+is downloaded only once instead of twice (#691) — it is detected by its
+RFC 6154 `\All` special-use flag (mapped to the RFC 8621 `all` role). The folder
+still appears in the folder list with its server counts, and an explicit
+per-folder re-sync of All Mail is still honored. See [SYNC.md](SYNC.md) for how
+the sync loops apply the skip.
+
 ## Integration options considered
 
 Only server auto-fill (above) is implemented so far. The remaining options are

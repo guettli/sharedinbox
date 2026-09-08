@@ -115,6 +115,13 @@ String resolveMailboxDisplayPath(List<Mailbox> mailboxes, String rawPath) {
   return rawPath;
 }
 
+/// True for folders whose contents duplicate other folders, so syncing them
+/// would download every message a second time. Currently Gmail's "All Mail"
+/// (RFC 6154 `\All` special-use / RFC 8621 `all` role), which holds a copy of
+/// every message in every other folder. Such folders are excluded from
+/// automatic email sync (#691).
+bool isDuplicateOfOtherFolders(Mailbox mailbox) => mailbox.role == 'all';
+
 /// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by
 /// [Mailbox.displayPath], so JMAP mailboxes sort by their human-readable path
 /// rather than by their opaque server ID.

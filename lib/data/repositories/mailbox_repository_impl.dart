@@ -530,6 +530,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     if (mb.isJunk) {
       return 'junk';
     }
+    // Gmail's "All Mail" carries the RFC 6154 \All special-use flag. It holds a
+    // copy of every message in every other folder, so we tag it with the JMAP
+    // "all" role (RFC 8621) to give both protocols one signal to skip it during
+    // automatic sync and avoid downloading everything twice (#691).
+    if (mb.hasFlag(imap.MailboxFlag.all)) {
+      return 'all';
+    }
 
     // Name-based fallback for servers that do not support special-use flags
     final name = mb.name.toLowerCase();
