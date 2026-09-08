@@ -418,6 +418,117 @@ void main() {
     });
   });
 
+  group('SearchScreen account scope', () {
+    const kSecondAccount = Account(
+      id: 'acc-2',
+      displayName: 'Work',
+      email: 'work@example.com',
+      imapHost: 'imap.example.com',
+      smtpHost: 'smtp.example.com',
+    );
+
+    /// Pumps the global search screen (route `/search`, no fixed account) with
+    /// the given accounts and returns the fake email repo so tests can assert
+    /// on the account each query was scoped to.
+    Future<FakeEmailRepository> pumpGlobalSearch(
+      WidgetTester tester, {
+      List<Account> accounts = const [kTestAccount, kSecondAccount],
+    }) async {
+      final emails = FakeEmailRepository(
+        searchResults: [testEmail(subject: 'Some mail')],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository(accounts),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(emails),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      return emails;
+    }
+
+    testWidgets('picker is shown in global search with two or more accounts', (
+      tester,
+    ) async {
+      await pumpGlobalSearch(tester);
+
+      expect(find.byType(DropdownButton<String?>), findsOneWidget);
+      expect(find.text('All accounts'), findsOneWidget);
+    });
+
+    testWidgets('picker is hidden when the user has a single account', (
+      tester,
+    ) async {
+      await pumpGlobalSearch(tester, accounts: const [kTestAccount]);
+
+      expect(find.byType(DropdownButton<String?>), findsNothing);
+    });
+
+    testWidgets('picker is hidden on a per-account search screen', (
+      tester,
+    ) async {
+      // Route carries a fixed account, so there is nothing to scope even
+      // though two accounts exist.
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        accounts: const [kTestAccount, kSecondAccount],
+      );
+
+      expect(find.byType(DropdownButton<String?>), findsNothing);
+    });
+
+    testWidgets('a search defaults to all accounts (null scope)', (
+      tester,
+    ) async {
+      final emails = await pumpGlobalSearch(tester);
+
+      await tester.enterText(find.byType(TextField), 'mail');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(emails.searchGlobalAccountIds, [null]);
+    });
+
+    testWidgets('picking an account scopes the query to that account', (
+      tester,
+    ) async {
+      final emails = await pumpGlobalSearch(tester);
+
+      await tester.enterText(find.byType(TextField), 'mail');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(emails.searchGlobalAccountIds, [null]);
+
+      // Pick "Work" from the account dropdown; the active search re-runs.
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Work').last);
+      await tester.pumpAndSettle();
+
+      expect(emails.searchGlobalAccountIds.last, 'acc-2');
+
+      // Switching back to "All accounts" re-runs against the unscoped query.
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('All accounts').last);
+      await tester.pumpAndSettle();
+
+      expect(emails.searchGlobalAccountIds.last, null);
+    });
+  });
+
   group('SearchScreen recent searches', () {
     testWidgets('shows seeded recent searches when input is empty', (
       tester,
