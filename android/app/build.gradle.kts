@@ -7,7 +7,14 @@ plugins {
 
 android {
     namespace = "de.sharedinbox.mua"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_secure_storage 11.x requires compiling against Android SDK 37,
+    // but the current Flutter's flutter.compileSdkVersion is still 36, so the
+    // release build fails :app:checkReleaseAarMetadata (#736). Pin compileSdk to
+    // the highest requirement explicitly until Flutter's default catches up; the
+    // toolchain container auto-downloads the matching platform. targetSdk stays
+    // on the Flutter default because it governs runtime behaviour, not the
+    // build-time API surface.
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
