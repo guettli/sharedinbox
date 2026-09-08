@@ -909,7 +909,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ],
           ),
         _buildThreadStrip(ctx, email),
-        if (email.listUnsubscribeHeader != null)
+        // Gate on the parsed result, not just header presence, so the detail
+        // view and the chip agree — otherwise a header we can't turn into a URI
+        // renders an invisible chip (#698).
+        if (parseListUnsubscribeUris(email.listUnsubscribeHeader).isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: _UnsubscribeChip(email: email),

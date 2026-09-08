@@ -698,6 +698,22 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
+        // Same opportunistic backfill for the List-Unsubscribe header (#698).
+        // The full message fetched above carries every header, so a row synced
+        // before we captured this field — or one where sync missed it — gets its
+        // Unsubscribe button as soon as the user opens the mail, without a full
+        // account resync. Costs no extra IMAP round trip.
+        if ((emailRow.listUnsubscribeHeader ?? '').isEmpty) {
+          final listUnsubscribe =
+              msg.getHeaderValue('List-Unsubscribe')?.trim();
+          if (listUnsubscribe != null && listUnsubscribe.isNotEmpty) {
+            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+                .write(
+              EmailsCompanion(listUnsubscribeHeader: Value(listUnsubscribe)),
+            );
+          }
+        }
+
         _logBodyLoaded(
           emailId: emailId,
           accountId: emailRow.accountId,
