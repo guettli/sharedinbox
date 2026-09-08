@@ -1,8 +1,13 @@
-/// Parses the RFC 5322 (formerly RFC 2822) timestamp from a `Received:`
-/// header value and returns it as a UTC [DateTime].
+/// Parses the timestamp from a `Received:` header value and returns it as a
+/// UTC [DateTime], or `null` if no timestamp can be found.
 ///
-/// A Received header ends with `; date-time`, e.g.
-/// `by mx.example.com; Mon, 1 Jan 2024 12:00:00 +0530 (IST)`.
+/// A well-formed Received header ends with `; date-time`, e.g.
+/// `by mx.example.com; Mon, 1 Jan 2024 12:00:00 +0530 (IST)`. Some servers
+/// (notably SendGrid) omit the `;` delimiter and/or stamp a Go-style
+/// timestamp such as `2026-07-15 12:31:15.463485615 +0000 UTC m=+481743...`,
+/// so the RFC 5322 date is looked for after the last `;` when present and
+/// otherwise anywhere in the value, and both the RFC 5322 and the ISO-8601 /
+/// Go layouts are attempted.
 ///
 /// Dart's `intl` `DateFormat.parse` does not apply the parsed numeric zone
 /// offset to the resulting instant, so naive parsing yields wrong durations
@@ -10,21 +15,26 @@
 /// reads the offset itself and normalises every timestamp to UTC, so that
 /// subtracting two parsed values gives the real wall-clock delay.
 DateTime? parseReceivedTimestamp(String value) {
+  // Prefer the region after the last `;` (the RFC 5322 date position), but
+  // fall back to the whole value for headers that omit the delimiter.
   final semiIndex = value.lastIndexOf(';');
-  if (semiIndex < 0) return null;
-  var s = value.substring(semiIndex + 1).trim();
+  var s = semiIndex >= 0 ? value.substring(semiIndex + 1) : value;
   // Strip parenthesised comments like (UTC) or (IST).
-  s = s.replaceAll(RegExp(r'\([^)]*\)'), ' ').trim();
-  // Strip leading day-of-week abbreviation like "Mon, ".
-  s = s.replaceFirst(RegExp(r'^[A-Za-z]{2,4},\s*'), '');
+  s = s.replaceAll(RegExp(r'\([^)]*\)'), ' ');
   // Collapse runs of whitespace.
   s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-  // date-time: D[D] Mon YYYY HH:MM:SS[.fff] [±HHMM | zone-name]
+  return _parseRfc5322(s) ?? _parseIso8601(s);
+}
+
+/// RFC 5322 date-time: `[Day, ]D[D] Mon YYYY HH:MM:SS[.fff] [±HHMM|zone-name]`.
+/// Matched unanchored so a leading day-of-week and surrounding text are
+/// tolerated.
+DateTime? _parseRfc5322(String s) {
   final match = RegExp(
-    r'^(\d{1,2}) ([A-Za-z]{3}) (\d{2,4}) '
-    r'(\d{1,2}):(\d{2})(?::(\d{2}))?'
-    r'(?:\s+([+-]\d{4}|[A-Za-z]{1,5}))?$',
+    r'(\d{1,2}) ([A-Za-z]{3}) (\d{2,4}) '
+    r'(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?'
+    r'(?:\s+([+-]\d{4}|[A-Za-z]{1,5}))?',
   ).firstMatch(s);
   if (match == null) return null;
 
@@ -38,6 +48,29 @@ DateTime? parseReceivedTimestamp(String value) {
   } else if (year < 1000) {
     year += 1900;
   }
+  return _utcFromTimeGroups(year, month, day, match);
+}
+
+/// ISO-8601 / Go date-time: `YYYY-MM-DD[ T]HH:MM[:SS][.fff] [±HHMM|zone-name]`.
+/// Trailing noise such as `UTC` or a Go monotonic-clock suffix (`m=+...`) is
+/// ignored. A missing offset is treated as UTC.
+DateTime? _parseIso8601(String s) {
+  final match = RegExp(
+    r'(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?'
+    r'(?:\s*([+-]\d{4}|[A-Za-z]{2,5}))?',
+  ).firstMatch(s);
+  if (match == null) return null;
+
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  return _utcFromTimeGroups(year, month, day, match);
+}
+
+/// Builds a UTC [DateTime] from the shared time groups of both date layouts:
+/// group 4 = hour, 5 = minute, 6 = optional second, 7 = optional zone. The
+/// parsed offset is subtracted so the result is a true UTC instant.
+DateTime _utcFromTimeGroups(int year, int month, int day, RegExpMatch match) {
   final hour = int.parse(match.group(4)!);
   final minute = int.parse(match.group(5)!);
   final second = int.parse(match.group(6) ?? '0');
