@@ -672,10 +672,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             query,
           ],
-          {
-            #mailboxPath: mailboxPath,
-            #includeJunkTrash: includeJunkTrash,
-          },
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);
@@ -694,10 +691,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             filter,
           ],
-          {
-            #mailboxPath: mailboxPath,
-            #includeJunkTrash: includeJunkTrash,
-          },
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);
@@ -716,10 +710,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             address,
           ],
-          {
-            #mailboxPath: mailboxPath,
-            #includeJunkTrash: includeJunkTrash,
-          },
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);

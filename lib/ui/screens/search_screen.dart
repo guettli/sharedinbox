@@ -233,7 +233,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     if (_filterGroup.isEmpty) return;
     setState(() => _loading = true);
     try {
-      final emails = await ref.read(emailRepositoryProvider).searchEmailsStructured(
+      final emails = await ref
+          .read(emailRepositoryProvider)
+          .searchEmailsStructured(
             _scopedAccountId,
             _filterGroup,
             includeJunkTrash: _scopedIncludeJunkTrash,

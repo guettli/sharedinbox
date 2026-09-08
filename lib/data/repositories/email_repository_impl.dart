@@ -6057,11 +6057,13 @@ class EmailRepositoryImpl implements EmailRepository {
         ' WHERE email_fts MATCH ?$extraConditions'
         ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
 
-    final queryRows = await _db.customSelect(
-      sql,
-      variables: [Variable<String>(ftsQuery), ...extraVars],
-      readsFrom: {_db.emails, _db.mailboxes},
-    ).get();
+    final queryRows = await _db
+        .customSelect(
+          sql,
+          variables: [Variable<String>(ftsQuery), ...extraVars],
+          readsFrom: {_db.emails, _db.mailboxes},
+        )
+        .get();
     final emailRows = await Future.wait(
       queryRows.map((r) => _db.emails.mapFromRow(r)),
     );
@@ -6191,7 +6193,9 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where((t) {
             var fe = _filterGroup(filter, t);
             if (accountId != null) fe = t.accountId.equals(accountId) & fe;
-            if (mailboxPath != null) fe = t.mailboxPath.equals(mailboxPath) & fe;
+            if (mailboxPath != null) {
+              fe = t.mailboxPath.equals(mailboxPath) & fe;
+            }
             if (!includeJunkTrash) fe = fe & _notInJunkOrTrash(t);
             return fe;
           })
