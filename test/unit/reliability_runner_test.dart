@@ -186,15 +186,29 @@ class _CountingEmails implements EmailRepository {
   @override
   Future<List<Email>> searchEmails(String a, String m, String q) async => [];
   @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
+  Future<List<Email>> searchEmailsGlobal(
+    String? a,
+    String q, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
+      [];
   @override
   Future<List<Email>> searchEmailsStructured(
     String? a,
-    FilterGroup f,
-  ) async =>
+    FilterGroup f, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
       [];
   @override
-  Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
+  Future<List<Email>> getEmailsByAddress(
+    String? a,
+    String addr, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  }) async =>
+      [];
   @override
   Future<List<EmailAddress>> searchAddresses(
     String? a,

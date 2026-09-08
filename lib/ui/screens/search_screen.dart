@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/search_scope.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -49,11 +50,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   bool _advancedMode = false;
   FilterGroup _filterGroup = FilterGroup.empty();
 
+  // Scope of the search: which accounts/folders it covers, plus whether junk
+  // and trash are included. Defaults to "this account" when the screen was
+  // opened for a specific account, otherwise all accounts — junk/trash always
+  // excluded until the user turns the toggle on.
+  late SearchScope _scope;
+  bool _includeJunkTrash = false;
+
   late final EmailThreadListController _selection;
 
   @override
   void initState() {
     super.initState();
+    _scope = widget.accountId != null
+        ? SearchScope.currentAccount
+        : SearchScope.all;
     _selection = EmailThreadListController()..addListener(_onSelectionChange);
     _focusNode.addListener(() {
       if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
@@ -98,6 +109,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     });
   }
 
+  /// Re-runs whichever search (simple or advanced) is currently active. Called
+  /// after the scope or junk/trash toggle changes so results update in place.
+  void _rerunActiveSearch() {
+    if (_advancedMode) {
+      if (!_filterGroup.isEmpty) unawaited(_searchStructured());
+      return;
+    }
+    final query = _ctrl.text.trim();
+    if (query.length >= 3) unawaited(_search(query));
+  }
+
+  void _onScopeChanged(SearchScope scope) {
+    setState(() => _scope = scope);
+    _rerunActiveSearch();
+  }
+
+  void _onIncludeJunkTrashChanged(bool value) {
+    setState(() => _includeJunkTrash = value);
+    _rerunActiveSearch();
+  }
+
   void _onChanged(String value) {
     _debounce?.cancel();
     if (value.trim().length < 3) {
@@ -136,18 +168,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     unawaited(_search(query));
   }
 
+  /// The account id to pass to the repository for the active [_scope].
+  String? get _scopedAccountId => _scope.accountIdFor(widget.accountId);
+
+  /// Whether junk/trash should be included given the toggle and active scope.
+  bool get _scopedIncludeJunkTrash =>
+      _includeJunkTrash || _scope.alwaysIncludesJunkTrash;
+
   Future<void> _search(String query) async {
     setState(() => _loading = true);
     try {
       final emailRepo = ref.read(emailRepositoryProvider);
+      final accountId = _scopedAccountId;
+      final includeJunkTrash = _scopedIncludeJunkTrash;
 
       // Run both queries in parallel. `searchEmailsGlobal` matches subject,
       // preview and From via FTS; `getEmailsByAddress` catches recipients
       // (To/Cc) that FTS does not index. Merge + dedup so a single message
       // list surfaces every match.
       final (globalHits, addressHits) = await (
-        emailRepo.searchEmailsGlobal(widget.accountId, query),
-        emailRepo.getEmailsByAddress(widget.accountId, query),
+        emailRepo.searchEmailsGlobal(
+          accountId,
+          query,
+          includeJunkTrash: includeJunkTrash,
+        ),
+        emailRepo.getEmailsByAddress(
+          accountId,
+          query,
+          includeJunkTrash: includeJunkTrash,
+        ),
       ).wait;
 
       final seen = <String>{};
@@ -186,7 +235,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     try {
       final emails = await ref
           .read(emailRepositoryProvider)
-          .searchEmailsStructured(widget.accountId, _filterGroup);
+          .searchEmailsStructured(
+            _scopedAccountId,
+            _filterGroup,
+            includeJunkTrash: _scopedIncludeJunkTrash,
+          );
       if (mounted) {
         setState(() {
           _results = emails;
@@ -264,7 +317,51 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               onAfterAction: _onAfterBatchAction,
             )
           : null,
-      body: _buildBody(),
+      body: selecting
+          ? _buildBody()
+          : Column(
+              children: [
+                _buildScopeBar(),
+                Expanded(child: _buildBody()),
+              ],
+            ),
+    );
+  }
+
+  /// Chips that let the user widen or narrow the search. A mutually-exclusive
+  /// scope selector (all accounts / this account) plus an independent
+  /// "trash & junk" toggle that stacks on top of it.
+  Widget _buildScopeBar() {
+    final scopes = [
+      SearchScope.all,
+      if (widget.accountId != null) SearchScope.currentAccount,
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        0,
+      ),
+      child: Wrap(
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.xs,
+        children: [
+          for (final scope in scopes)
+            ChoiceChip(
+              label: Text(scope.label),
+              selected: _scope == scope,
+              onSelected: (v) {
+                if (v) _onScopeChanged(scope);
+              },
+            ),
+          FilterChip(
+            label: const Text('Trash & junk'),
+            selected: _includeJunkTrash,
+            onSelected: _onIncludeJunkTrashChanged,
+          ),
+        ],
+      ),
     );
   }
 

@@ -2210,6 +2210,175 @@ void main() {
       },
     );
 
+    // ── Search scope & junk/trash exclusion (#699) ──────────────────────────
+
+    /// Seeds two accounts, each with an Inbox, a Junk and a Trash folder, and
+    /// one email in each folder. Every email's subject/body/from contain the
+    /// word "widget" so a single query hits all six via every search path.
+    Future<
+        ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails
+        })> seedJunkTrashFixture() async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.accounts.addAccount(
+        _account.copyWith(id: 'acc-2', email: 'bob@example.com'),
+        'pw',
+      );
+
+      Future<void> mailbox(String acc, String path, String? role) =>
+          r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: '$acc:$path',
+                  accountId: acc,
+                  path: path,
+                  name: path,
+                  role: Value(role),
+                ),
+              );
+
+      Future<void> email(String acc, String path, int uid) async {
+        final id = '$acc:$path:$uid';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: acc,
+                mailboxPath: path,
+                uid: uid,
+                messageId: Value('<$id@example.com>'),
+                subject: const Value('Widget subject'),
+                receivedAt: DateTime(2024),
+                fromJson: const Value(
+                  '[{"name":"Widget","email":"widget@example.com"}]',
+                ),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: id,
+                textBody: const Value('body mentions widget too'),
+              ),
+            );
+      }
+
+      for (final acc in ['acc-1', 'acc-2']) {
+        await mailbox(acc, 'INBOX', 'inbox');
+        await mailbox(acc, 'Junk', 'junk');
+        await mailbox(acc, 'Trash', 'trash');
+        await email(acc, 'INBOX', 1);
+        await email(acc, 'Junk', 2);
+        await email(acc, 'Trash', 3);
+      }
+      return r;
+    }
+
+    Set<String> foldersOf(List<Email> emails) =>
+        {for (final e in emails) e.mailboxPath};
+
+    test('searchEmailsGlobal excludes junk & trash by default', () async {
+      final r = await seedJunkTrashFixture();
+      final results = await r.emails.searchEmailsGlobal(null, 'widget');
+      expect(foldersOf(results), {'INBOX'});
+      expect(results, hasLength(2)); // one INBOX hit per account
+    });
+
+    test('searchEmailsGlobal includeJunkTrash returns junk & trash', () async {
+      final r = await seedJunkTrashFixture();
+      final results = await r.emails
+          .searchEmailsGlobal(null, 'widget', includeJunkTrash: true);
+      expect(foldersOf(results), {'INBOX', 'Junk', 'Trash'});
+    });
+
+    test('searchEmailsGlobal mailboxPath limits results to one folder',
+        () async {
+      final r = await seedJunkTrashFixture();
+      // Folder scope must return the Trash folder even though it is trash.
+      final results = await r.emails.searchEmailsGlobal(
+        'acc-1',
+        'widget',
+        mailboxPath: 'Trash',
+        includeJunkTrash: true,
+      );
+      expect(foldersOf(results), {'Trash'});
+      expect(results.every((e) => e.accountId == 'acc-1'), isTrue);
+    });
+
+    test('searchEmailsGlobal note path also excludes junk & trash', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Trash',
+              uid: 1,
+              messageId: const Value('<msg1@example.com>'),
+              subject: const Value('Deleted mail'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'note-1',
+              accountId: 'acc-1',
+              messageId: '<msg1@example.com>',
+              noteText: 'Salamander reminder',
+              serverId: '42',
+              createdAt: DateTime(2024),
+            ),
+          );
+
+      expect(await r.emails.searchEmailsGlobal(null, 'salamander'), isEmpty);
+      expect(
+        await r.emails
+            .searchEmailsGlobal(null, 'salamander', includeJunkTrash: true),
+        hasLength(1),
+      );
+    });
+
+    test('searchEmailsStructured excludes junk & trash by default', () async {
+      final r = await seedJunkTrashFixture();
+      final filter = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.subject,
+            comparison: FilterComparison.contains,
+            value: 'widget',
+          ),
+        ],
+      );
+      final excluded = await r.emails.searchEmailsStructured(null, filter);
+      expect(foldersOf(excluded), {'INBOX'});
+      final included = await r.emails
+          .searchEmailsStructured(null, filter, includeJunkTrash: true);
+      expect(foldersOf(included), {'INBOX', 'Junk', 'Trash'});
+    });
+
+    test('getEmailsByAddress excludes junk & trash by default', () async {
+      final r = await seedJunkTrashFixture();
+      final excluded =
+          await r.emails.getEmailsByAddress(null, 'widget@example.com');
+      expect(foldersOf(excluded), {'INBOX'});
+      final included = await r.emails.getEmailsByAddress(
+        null,
+        'widget@example.com',
+        includeJunkTrash: true,
+      );
+      expect(foldersOf(included), {'INBOX', 'Junk', 'Trash'});
+    });
+
     test(
       'searchAddresses returns results sorted by most recently used',
       () async {

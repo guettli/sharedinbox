@@ -81,17 +81,39 @@ abstract class EmailRepository {
 
   /// Searches the local DB across all mailboxes of [accountId] (or all accounts
   /// if null) by subject, preview, body, and notes. Fast, works offline.
-  Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
+  ///
+  /// When [mailboxPath] is non-null, results are limited to that folder. When
+  /// [includeJunkTrash] is false (the default), messages living in a folder
+  /// whose role is `junk` or `trash` are excluded.
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  });
 
   /// Searches the local DB using a structured [FilterGroup]. Fast, works offline.
+  ///
+  /// See [searchEmailsGlobal] for the meaning of [mailboxPath] and
+  /// [includeJunkTrash].
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  );
+    FilterGroup filter, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  });
 
   /// Returns all locally cached emails in any mailbox of [accountId] (or all
   /// accounts if null) whose from, to, or cc fields contain [address].
-  Future<List<Email>> getEmailsByAddress(String? accountId, String address);
+  ///
+  /// See [searchEmailsGlobal] for the meaning of [mailboxPath] and
+  /// [includeJunkTrash].
+  Future<List<Email>> getEmailsByAddress(
+    String? accountId,
+    String address, {
+    String? mailboxPath,
+    bool includeJunkTrash = false,
+  });
 
   /// Returns unique email addresses from the local cache whose email or display
   /// name contains [query]. Results are deduplicated and capped at [limit].

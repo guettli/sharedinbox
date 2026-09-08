@@ -822,5 +822,36 @@ void main() {
       expect(find.text('Type 3+ characters to search'), findsOneWidget);
       expect(await history.getRecentSearches(), isEmpty);
     });
+
+    testWidgets('scope chips change the account/junk-trash search arguments',
+        (tester) async {
+      final emails = FakeEmailRepository(
+        searchResults: [testEmail(subject: 'Invoice Q3')],
+      );
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        emails: emails,
+      );
+
+      // Opened for a specific account -> default scope is "this account",
+      // junk/trash excluded.
+      await tester.enterText(find.byType(TextField), 'inv');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(emails.lastGlobalAccountId, 'acc-1');
+      expect(emails.lastGlobalIncludeJunkTrash, isFalse);
+
+      // Widen to all accounts.
+      await tester.tap(find.text('All accounts'));
+      await tester.pumpAndSettle();
+      expect(emails.lastGlobalAccountId, isNull);
+      expect(emails.lastGlobalIncludeJunkTrash, isFalse);
+
+      // Bring junk/trash back in.
+      await tester.tap(find.text('Trash & junk'));
+      await tester.pumpAndSettle();
+      expect(emails.lastGlobalIncludeJunkTrash, isTrue);
+    });
   });
 }

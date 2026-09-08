@@ -661,8 +661,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
   @override
   _i5.Future<List<_i3.Email>> searchEmailsGlobal(
     String? accountId,
-    String? query,
-  ) =>
+    String? query, {
+    String? mailboxPath,
+    bool? includeJunkTrash = false,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsGlobal,
@@ -670,6 +672,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             query,
           ],
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);
@@ -677,8 +680,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
   @override
   _i5.Future<List<_i3.Email>> searchEmailsStructured(
     String? accountId,
-    _i10.FilterGroup? filter,
-  ) =>
+    _i10.FilterGroup? filter, {
+    String? mailboxPath,
+    bool? includeJunkTrash = false,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsStructured,
@@ -686,6 +691,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             filter,
           ],
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);
@@ -693,8 +699,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
   @override
   _i5.Future<List<_i3.Email>> getEmailsByAddress(
     String? accountId,
-    String? address,
-  ) =>
+    String? address, {
+    String? mailboxPath,
+    bool? includeJunkTrash = false,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #getEmailsByAddress,
@@ -702,6 +710,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             accountId,
             address,
           ],
+          {#mailboxPath: mailboxPath, #includeJunkTrash: includeJunkTrash},
         ),
         returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i5.Future<List<_i3.Email>>);
