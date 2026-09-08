@@ -444,7 +444,9 @@ void main() {
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository(accounts),
             ),
-            mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
             emailRepositoryProvider.overrideWithValue(emails),
             searchHistoryRepositoryProvider.overrideWithValue(
               FakeSearchHistoryRepository(),
