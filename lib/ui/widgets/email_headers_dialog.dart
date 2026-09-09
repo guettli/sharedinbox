@@ -257,7 +257,7 @@ class _DelayRow extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: 2),
       child: Row(
         children: [
-          Icon(Icons.arrow_downward, size: AppIconSize.sm, color: color),
+          Icon(Icons.arrow_upward, size: AppIconSize.sm, color: color),
           const SizedBox(width: AppSpacing.xs),
           Text(
             _formatDuration(delay),

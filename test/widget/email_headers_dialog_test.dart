@@ -134,4 +134,48 @@ void main() {
     expect(recorder.pushes.first.extra, isA<SieveEditPrefill>());
     expect(find.text('Mail Headers'), findsNothing);
   });
+
+  testWidgets('received-hop delay points upward, following mail flow',
+      (tester) async {
+    // Received headers are newest-first (top = final hop), so the mail flows
+    // upward through the list and the delay arrow must point up — see #795.
+    const received = [
+      EmailHeader(
+        name: 'Received',
+        value: 'by mx2.example.com; Mon, 1 Jan 2024 12:00:30 +0000',
+      ),
+      EmailHeader(
+        name: 'Received',
+        value: 'by mx1.example.com; Mon, 1 Jan 2024 12:00:00 +0000',
+      ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (ctx) => Center(
+              child: TextButton(
+                onPressed: () => showDialog<void>(
+                  context: ctx,
+                  builder: (_) => const EmailHeadersDialog(
+                    headers: received,
+                    accountId: 'acc-1',
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Received (2)'));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.arrow_upward), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_downward), findsNothing);
+  });
 }
