@@ -3,6 +3,8 @@
 // checkNow() silently did nothing because it delegated to _runAll(), which
 // checked the _running flag (only true after start() is called).
 
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -369,7 +371,65 @@ void main() {
       expect(rows.first.lastError, isNull);
       expect(rows.first.isHealthy, isTrue);
     });
+
+    test('names the discrepant folders by display path in the app log',
+        () async {
+      // A JMAP mailbox whose opaque server id ("a") differs from its
+      // hierarchical display path ("Archive/2026").
+      final runner = ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        _JmapMailboxes(),
+        _UnhealthyEmails(),
+        AppLogger(AppLogRepositoryImpl(db)),
+      );
+
+      await runner.checkNow();
+
+      final logs = await db.select(db.appLogs).get();
+      final warn = logs.firstWhere(
+        (l) => l.event == 'sync_health' && l.level == 'warn',
+      );
+      // The message names the folder by its long path, not the opaque id.
+      expect(warn.message, contains('Archive/2026'));
+      expect(warn.message, isNot(contains('discrepancies found in a')));
+      // The structured data keys the per-folder detail by display path too.
+      expect(warn.dataJson, isNotNull);
+      final data = jsonDecode(warn.dataJson!) as Map<String, dynamic>;
+      final folders = data['folders'] as Map<String, dynamic>;
+      expect(folders.keys, contains('Archive/2026'));
+      expect(folders['Archive/2026'], isA<Map<String, dynamic>>());
+    });
   });
+}
+
+/// A mailbox repository returning a single JMAP mailbox whose [Mailbox.path]
+/// (opaque id "a") differs from its [Mailbox.displayPath] ("Archive/2026").
+class _JmapMailboxes extends _FakeMailboxes {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        const Mailbox(
+          id: 'test-account:a',
+          accountId: 'test-account',
+          path: 'a',
+          name: '2026',
+          displayPath: 'Archive/2026',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+      ]);
+}
+
+/// A [_FakeEmails] whose reliability check reports a discrepancy, exercising
+/// the "discrepancies found" logging path.
+class _UnhealthyEmails extends _FakeEmails {
+  @override
+  Future<ReliabilityResult> verifySyncReliability(String a, String m) async =>
+      const ReliabilityResult(
+        missingLocally: ['1'],
+        missingOnServer: [],
+        flagMismatches: [],
+      );
 }
 
 /// A [_FakeEmails] whose reliability check always fails, exercising the

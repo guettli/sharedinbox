@@ -722,20 +722,26 @@ class _AccountSync implements _SyncLoop {
           mailboxStats: stats.mailboxStats,
           protocolLog: capturedLog,
         );
+        final fetchedFolders = _fetchedFoldersLabel(stats.mailboxStats);
         unawaited(
           _appLogger.info(
             'sync.cycle.complete',
             'IMAP sync ok: ${stats.emailsFetched} new, '
-                '${stats.mailboxesSynced} mailboxes',
+                '${stats.mailboxesSynced} mailboxes'
+                '${fetchedFolders != null ? ' — new mail in $fetchedFolders' : ''}',
             accountId: account.id,
             syncLogId: syncLogId == 0 ? null : syncLogId,
             data: {
               'protocol': 'imap',
+              'account': account.email,
+              'host': account.imapHost,
+              'durationMs': DateTime.now().difference(startedAt).inMilliseconds,
               'emailsFetched': stats.emailsFetched,
               'emailsSkipped': stats.emailsSkipped,
               'mailboxesSynced': stats.mailboxesSynced,
               'pendingFlushed': stats.pendingFlushed,
               'bytesTransferred': stats.bytesTransferred,
+              'folders': _folderSyncData(stats.mailboxStats),
             },
           ),
         );
@@ -889,6 +895,7 @@ class _AccountSync implements _SyncLoop {
         MailboxSyncStats(
           mailboxPath: mailbox.path,
           mailboxName: mailbox.name,
+          mailboxDisplayPath: mailbox.displayPath,
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,
@@ -1070,20 +1077,26 @@ class _JmapAccountSync implements _SyncLoop {
           mailboxStats: stats.mailboxStats,
           protocolLog: capturedLog,
         );
+        final fetchedFolders = _fetchedFoldersLabel(stats.mailboxStats);
         unawaited(
           _appLogger.info(
             'sync.cycle.complete',
             'JMAP sync ok: ${stats.emailsFetched} new, '
-                '${stats.mailboxesSynced} mailboxes',
+                '${stats.mailboxesSynced} mailboxes'
+                '${fetchedFolders != null ? ' — new mail in $fetchedFolders' : ''}',
             accountId: account.id,
             syncLogId: syncLogId == 0 ? null : syncLogId,
             data: {
               'protocol': 'jmap',
+              'account': account.email,
+              'host': account.jmapUrl,
+              'durationMs': DateTime.now().difference(startedAt).inMilliseconds,
               'emailsFetched': stats.emailsFetched,
               'emailsSkipped': stats.emailsSkipped,
               'mailboxesSynced': stats.mailboxesSynced,
               'pendingFlushed': stats.pendingFlushed,
               'bytesTransferred': stats.bytesTransferred,
+              'folders': _folderSyncData(stats.mailboxStats),
             },
           ),
         );
@@ -1228,6 +1241,7 @@ class _JmapAccountSync implements _SyncLoop {
         MailboxSyncStats(
           mailboxPath: mailbox.path,
           mailboxName: mailbox.name,
+          mailboxDisplayPath: mailbox.displayPath,
           fetched: r.fetched,
           skipped: r.skipped,
           bytesTransferred: r.bytesTransferred,
@@ -1375,6 +1389,42 @@ class _SyncStats {
   final int pendingFlushed;
   final int bytesTransferred;
   final List<MailboxSyncStats> mailboxStats;
+}
+
+/// Human-readable path for a per-folder stat, preferring the hierarchical
+/// display path and falling back to the leaf name then the raw (possibly
+/// opaque JMAP) path — so the app log never shows a bare "a"/"b"/"c" id.
+String _folderLabel(MailboxSyncStats s) =>
+    s.mailboxDisplayPath ?? s.mailboxName ?? s.mailboxPath;
+
+/// Builds the structured `folders` payload for a `sync.cycle.complete` app-log
+/// entry: one self-describing entry per synced mailbox with its long path and
+/// per-folder counts, so the entry stays readable even if a folder is later
+/// deleted from the local cache.
+List<Map<String, Object?>> _folderSyncData(List<MailboxSyncStats> stats) {
+  return [
+    for (final s in stats)
+      {
+        'path': s.mailboxPath,
+        'name': s.mailboxName,
+        'displayPath': _folderLabel(s),
+        'fetched': s.fetched,
+        'skipped': s.skipped,
+      },
+  ];
+}
+
+/// Names the folders that fetched new mail during a cycle by their long path,
+/// capped at [max] with an "and N more" suffix. Returns null when no folder
+/// fetched anything new, so the caller can omit the fragment entirely.
+String? _fetchedFoldersLabel(List<MailboxSyncStats> stats, {int max = 5}) {
+  final names = [
+    for (final s in stats)
+      if (s.fetched > 0) _folderLabel(s),
+  ];
+  if (names.isEmpty) return null;
+  if (names.length <= max) return names.join(', ');
+  return '${names.take(max).join(', ')} and ${names.length - max} more';
 }
 
 /// A [StringSink] that captures IMAP protocol trace lines, retaining only the

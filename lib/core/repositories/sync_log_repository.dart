@@ -2,6 +2,7 @@ class MailboxSyncStats {
   const MailboxSyncStats({
     required this.mailboxPath,
     this.mailboxName,
+    this.mailboxDisplayPath,
     required this.fetched,
     required this.skipped,
     required this.bytesTransferred,
@@ -13,6 +14,11 @@ class MailboxSyncStats {
   // Human-readable display name; null for pre-v44 rows (renderer falls back
   // to mailboxPath).
   final String? mailboxName;
+  // Hierarchical, human-readable path (e.g. "Archive/2026"). Populated for the
+  // live sync cycle so the app log can name folders by their long path rather
+  // than the opaque JMAP id; not persisted, so it is null for rows read back
+  // from the sync-log table.
+  final String? mailboxDisplayPath;
   final int fetched;
   final int skipped;
   final int bytesTransferred;
