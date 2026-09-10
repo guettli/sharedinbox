@@ -326,6 +326,38 @@ else { keep; }
       expect(cond.headers, containsAll(['From', 'Reply-To']));
       expect(cond.matchType, ':contains');
       expect(cond.keyList, contains('x@y.com'));
+      expect(cond.kind, SieveTestKind.header);
+    });
+
+    test('address test is tagged as an address kind', () {
+      final rules = parser.parse(
+        'if address :is "to" "postmaster@example.com" { fileinto "p"; }',
+      );
+      final cond = rules.first.conditions.first as HeaderCondition;
+      expect(cond.kind, SieveTestKind.address);
+      expect(cond.matchType, ':is');
+      expect(cond.headers, contains('to'));
+      expect(cond.keyList, contains('postmaster@example.com'));
+    });
+
+    test('envelope test is tagged as an envelope kind', () {
+      final rules = parser.parse(
+        'require ["envelope"];\n'
+        'if envelope :is "to" "postmaster@example.com" { fileinto "p"; }',
+      );
+      final cond = rules.first.conditions.first as HeaderCondition;
+      expect(cond.kind, SieveTestKind.envelope);
+      expect(cond.headers, contains('to'));
+    });
+
+    test('address part tag is captured in any order', () {
+      final rules = parser.parse(
+        'if address :domain :is "from" "example.com" { keep; }',
+      );
+      final cond = rules.first.conditions.first as HeaderCondition;
+      expect(cond.kind, SieveTestKind.address);
+      expect(cond.addressPart, ':domain');
+      expect(cond.matchType, ':is');
     });
   });
 }
