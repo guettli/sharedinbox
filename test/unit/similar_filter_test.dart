@@ -84,4 +84,44 @@ void main() {
       expect(group.isEmpty, isTrue);
     });
   });
+
+  group('senderFilterFor', () {
+    test('OR-combines from/to/cc contains on the sender address', () {
+      final seed = _seed(
+        from: const [EmailAddress(name: 'Spam', email: 'spammer@example.com')],
+      );
+      final group = senderFilterFor(seed);
+
+      expect(group.operator, FilterOperator.or_);
+      expect(group.children, hasLength(3));
+
+      final leaves = group.children.cast<FilterLeaf>();
+      expect(
+        leaves.map((l) => l.field),
+        [FilterField.from_, FilterField.to, FilterField.cc],
+      );
+      for (final leaf in leaves) {
+        expect(leaf.comparison, FilterComparison.contains);
+        expect(leaf.value, 'spammer@example.com');
+      }
+    });
+
+    test('uses only the first from address when multiple are present', () {
+      final seed = _seed(
+        from: const [
+          EmailAddress(email: 'first@example.com'),
+          EmailAddress(email: 'second@example.com'),
+        ],
+      );
+      final group = senderFilterFor(seed);
+      for (final leaf in group.children.cast<FilterLeaf>()) {
+        expect(leaf.value, 'first@example.com');
+      }
+    });
+
+    test('returns empty group when seed has no from address', () {
+      final group = senderFilterFor(_seed());
+      expect(group.isEmpty, isTrue);
+    });
+  });
 }

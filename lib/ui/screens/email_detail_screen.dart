@@ -977,12 +977,29 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           style: Theme.of(ctx).textTheme.titleMedium,
         ),
         const SizedBox(height: AppSpacing.xs),
-        Text(
-          email.from.isNotEmpty
-              ? 'From: ${email.from.first}'
-              : 'From: (unknown)',
-          style: Theme.of(ctx).textTheme.bodySmall,
-        ),
+        if (email.from.isNotEmpty)
+          // Tapping the sender opens advanced search pre-filled with a
+          // from/to/cc OR-contains filter on the address, so you can find every
+          // mail involving this correspondent (#796).
+          InkWell(
+            onTap: () => context.push(
+              '/search',
+              extra: senderFilterFor(email),
+            ),
+            child: Text(
+              'From: ${email.from.first}',
+              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.primary,
+                    decoration: TextDecoration.underline,
+                    decorationColor: Theme.of(ctx).colorScheme.primary,
+                  ),
+            ),
+          )
+        else
+          Text(
+            'From: (unknown)',
+            style: Theme.of(ctx).textTheme.bodySmall,
+          ),
         Text(
           email.to.isNotEmpty
               ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
