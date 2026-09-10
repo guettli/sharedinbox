@@ -150,3 +150,26 @@ func TestTriggerEndpointFailure(t *testing.T) {
 		t.Fatalf("expected trigger error on 500 upstream")
 	}
 }
+
+// TestPprofMuxServesDebugEndpoints verifies the dedicated pprof mux answers the
+// /debug/pprof/ routes we register, and that a public route on it 404s — i.e.
+// pprof lives on its own mux, never the public one.
+func TestPprofMuxServesDebugEndpoints(t *testing.T) {
+	mux := pprofMux()
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s on pprof mux: got %d, want 200", path, rec.Code)
+		}
+	}
+
+	// The pprof mux must not answer the relay's public routes.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /healthz on pprof mux: got %d, want 404", rec.Code)
+	}
+}

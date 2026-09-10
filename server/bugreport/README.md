@@ -34,9 +34,20 @@ All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 | `GITHUB_TOKEN` | — | Token with `issues:write` on the target repo. |
 | `GITHUB_REPO` | — | `owner/name` of the repo issues are created in. |
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise. |
+| `BUGREPORT_PPROF_ADDR` | `127.0.0.1:6061` | Listen address for the `net/http/pprof` handlers, served on a **separate** non-public listener. Set to the WireGuard IP (e.g. `10.0.0.1:6061`) so Parca can scrape heap/goroutine/mutex/block profiles; set to `off` to disable. |
 
 When `GITHUB_TOKEN`/`GITHUB_REPO` are unset the encrypted-report endpoint
 responds `503 Service Unavailable`.
+
+## Profiling (pprof)
+
+Go's `net/http/pprof` handlers (heap, goroutine, mutex, block, cpu profile,
+trace) are served on a **separate** listener via `BUGREPORT_PPROF_ADDR`
+(default `127.0.0.1:6061`). They leak the command line, goroutine stacks and
+live heap, and `profile`/`trace` pin a CPU for the profile's whole duration —
+so this listener must never share the public interface. Bind it to the
+WireGuard IP in production so Parca can scrape it; a bind failure only logs and
+never takes the server down.
 
 ## Cryptography
 

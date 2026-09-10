@@ -224,3 +224,25 @@ func TestGithubIssueCreator(t *testing.T) {
 		t.Errorf("body missing label: %q", gotBody)
 	}
 }
+
+// TestPprofMuxServesDebugEndpoints verifies the dedicated pprof mux answers the
+// /debug/pprof/ routes we register, and does not answer the public API — pprof
+// lives on its own mux, never the public one.
+func TestPprofMuxServesDebugEndpoints(t *testing.T) {
+	mux := pprofMux()
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s on pprof mux: got %d, want 200", path, rec.Code)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/report-key", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /api/v1/report-key on pprof mux: got %d, want 404", rec.Code)
+	}
+}
