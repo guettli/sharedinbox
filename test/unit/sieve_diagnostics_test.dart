@@ -37,31 +37,34 @@ if header :contains "from" "boss@example.com" {
       expect(findings.single.message, contains('not active'));
     });
 
-    test('flags a missing target folder', () {
+    void expectSingleMissingFolder({
+      required List<String> fileIntoTargets,
+      required Set<String> existingFolderPaths,
+    }) {
       final findings = diagnoseSieve(
         scriptIsActive: true,
-        fileIntoTargets: const ['Work'],
-        existingFolderPaths: const {'Inbox'},
+        fileIntoTargets: fileIntoTargets,
+        existingFolderPaths: existingFolderPaths,
         inboxMatchCount: 3,
         rules: const [],
       );
       expect(
         findings.where((f) => f.message.contains('"Work"')),
         hasLength(1),
+      );
+    }
+
+    test('flags a missing target folder', () {
+      expectSingleMissingFolder(
+        fileIntoTargets: const ['Work'],
+        existingFolderPaths: const {'Inbox'},
       );
     });
 
     test('does not repeat the same missing folder twice', () {
-      final findings = diagnoseSieve(
-        scriptIsActive: true,
+      expectSingleMissingFolder(
         fileIntoTargets: const ['Work', 'Work'],
         existingFolderPaths: const <String>{},
-        inboxMatchCount: 3,
-        rules: const [],
-      );
-      expect(
-        findings.where((f) => f.message.contains('"Work"')),
-        hasLength(1),
       );
     });
 
