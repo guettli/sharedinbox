@@ -84,7 +84,7 @@ Future<AccountComparisonResult> _syncUntilIdentical(
   String jmapAccountId,
   EmailRepositoryImpl emailRepo,
   MailboxRepositoryImpl mailboxRepo, {
-  int maxRounds = 16,
+  int maxRounds = 32,
 }) async {
   late AccountComparisonResult result;
   for (var round = 0; round < maxRounds; round++) {
@@ -92,8 +92,9 @@ Future<AccountComparisonResult> _syncUntilIdentical(
     // the mutation across its IMAP/JMAP views. Hammering rounds back-to-back
     // only re-observes the same stale HIGHESTMODSEQ; the cross-protocol bump
     // can lag the change by a tick or two. The per-round delay is capped so a
-    // generous round count (convergence lag grows under CI engine load, #747)
-    // stays well inside the test's 5-min timeout: 16 rounds ~= 27s of backoff.
+    // generous round count (convergence lag grows under CI engine load, #747,
+    // and a JMAP mailboxIds move-out was still unpropagated after ~27s in #803)
+    // stays well inside the test's 10-min timeout: 32 rounds ~= 61s of backoff.
     if (round > 0) {
       await Future<void>.delayed(
         Duration(milliseconds: (500 * round).clamp(0, 2000)),
@@ -150,7 +151,7 @@ void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
   test('long term IMAP and JMAP sync fuzzing',
-      timeout: const Timeout(Duration(minutes: 5)), () async {
+      timeout: const Timeout(Duration(minutes: 10)), () async {
     final env = StalwartEnv.fromPlatform();
     final user = pickPoolUser(env: env);
 
