@@ -17,16 +17,7 @@ void main() {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/compose',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(),
         ),
       );
       await tester.pumpAndSettle();
@@ -46,16 +37,7 @@ void main() {
             prefillTo: 'bob@example.com',
             prefillSubject: 'Re: Hello',
           ),
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(),
         ),
       );
       await tester.pumpAndSettle();
@@ -73,16 +55,7 @@ void main() {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/compose',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(),
         ),
       );
       await tester.pumpAndSettle();
@@ -103,16 +76,7 @@ void main() {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/compose',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount, second]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(accounts: const [kTestAccount, second]),
         ),
       );
       await tester.pumpAndSettle();
@@ -134,16 +98,9 @@ void main() {
         await tester.pumpWidget(
           buildApp(
             initialLocation: '/compose',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount, second]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository(),
-              ),
-              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-            ],
+            overrides: _composeOverrides(
+              accounts: const [kTestAccount, second],
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -170,29 +127,12 @@ void main() {
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(),
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kSignedAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(accounts: const [kSignedAccount]),
         ),
       );
       await tester.pumpAndSettle();
 
-      final body = tester.widget<TextField>(
-        find
-            .descendant(
-              of: find.byType(TextFormField),
-              matching: find.byType(TextField),
-            )
-            .last,
-      );
-      expect(body.controller!.text, '\n\nCheers,\nAlice');
+      expect(_bodyText(tester), '\n\nCheers,\nAlice');
     });
 
     testWidgets('inserts the signature above the quoted text on a reply', (
@@ -204,29 +144,12 @@ void main() {
             replyToEmailId: 'e1',
             prefillBody: '> quoted original',
           ),
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kSignedAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
-          ],
+          overrides: _composeOverrides(accounts: const [kSignedAccount]),
         ),
       );
       await tester.pumpAndSettle();
 
-      final body = tester.widget<TextField>(
-        find
-            .descendant(
-              of: find.byType(TextFormField),
-              matching: find.byType(TextField),
-            )
-            .last,
-      );
-      expect(body.controller!.text, 'Cheers,\nAlice\n\n> quoted original');
+      expect(_bodyText(tester), 'Cheers,\nAlice\n\n> quoted original');
     });
 
     testWidgets('restores saved draft when no prefill is provided', (
@@ -242,16 +165,7 @@ void main() {
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(),
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository(),
-            ),
-            emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-            draftRepositoryProvider.overrideWithValue(fakeDrafts),
-          ],
+          overrides: _composeOverrides(drafts: fakeDrafts),
         ),
       );
       await tester.pumpAndSettle();
@@ -299,16 +213,10 @@ void main() {
           _buildDirect(
             // Compose opened from the IMAP inbox.
             screen: const ComposeScreen(accountId: 'imap-1'),
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([imapAccount, jmapAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository(),
-              ),
-              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-              draftRepositoryProvider.overrideWithValue(fakeDrafts),
-            ],
+            overrides: _composeOverrides(
+              accounts: const [imapAccount, jmapAccount],
+              drafts: fakeDrafts,
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -395,6 +303,38 @@ class _RecordingDraftRepository extends FakeDraftRepository {
   }
 }
 
+/// The four repository overrides every compose test needs: an account list, a
+/// draft store, and empty mailbox/email fakes. Vary [accounts] or [drafts] to
+/// change what the screen sees; both default to the single-account, empty-draft
+/// setup most tests want.
+List<Override> _composeOverrides({
+  List<Account> accounts = const [kTestAccount],
+  FakeDraftRepository? drafts,
+}) {
+  return [
+    accountRepositoryProvider.overrideWithValue(
+      FakeAccountRepository(accounts),
+    ),
+    mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+    emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+    draftRepositoryProvider.overrideWithValue(drafts ?? FakeDraftRepository()),
+  ];
+}
+
+/// Reads the compose body text — the last [TextField] nested inside a
+/// [TextFormField] on the screen.
+String _bodyText(WidgetTester tester) {
+  final body = tester.widget<TextField>(
+    find
+        .descendant(
+          of: find.byType(TextFormField),
+          matching: find.byType(TextField),
+        )
+        .last,
+  );
+  return body.controller!.text;
+}
+
 /// Seeds the canonical restored draft the discard tests assert on.
 Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
     drafts.saveDraft(
@@ -437,17 +377,7 @@ Widget _buildRouter({
   required GoRouter router,
   required FakeDraftRepository drafts,
 }) =>
-    _wrap(
-      router: router,
-      overrides: [
-        accountRepositoryProvider.overrideWithValue(
-          FakeAccountRepository([kTestAccount]),
-        ),
-        mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-        emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-        draftRepositoryProvider.overrideWithValue(drafts),
-      ],
-    );
+    _wrap(router: router, overrides: _composeOverrides(drafts: drafts));
 
 /// Builds [screen] inside a minimal GoRouter so [context.pop()] works, without
 /// going through [buildApp]'s full route tree.
