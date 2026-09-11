@@ -320,7 +320,152 @@ void main() {
         expect(find.widgetWithText(TextFormField, 'JMAP draft'), findsNothing);
       },
     );
+
+    testWidgets('discard deletes the restored draft and pops', (tester) async {
+      final fakeDrafts = _RecordingDraftRepository();
+      final saved = await fakeDrafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        subjectText: 'Restored subject',
+        bodyText: 'Draft body',
+      );
+      final router = _homeAndCompose();
+      await tester.pumpWidget(
+        _buildRouter(
+          router: router,
+          drafts: fakeDrafts,
+        ),
+      );
+      await tester.pumpAndSettle();
+      unawaited(router.push('/compose'));
+      await tester.pumpAndSettle();
+
+      // The saved draft has been restored into the fields.
+      expect(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byTooltip('Discard draft'));
+      await tester.pumpAndSettle();
+
+      // Draft is gone and we are back on the home screen.
+      expect(fakeDrafts.deleted, [saved.id]);
+      expect(await fakeDrafts.getDraft(saved.id), isNull);
+      expect(find.text('home'), findsOneWidget);
+      expect(find.text('Compose'), findsNothing);
+    });
+
+    testWidgets('discard with no saved draft just pops', (tester) async {
+      final fakeDrafts = _RecordingDraftRepository();
+      final router = _homeAndCompose();
+      await tester.pumpWidget(
+        _buildRouter(
+          router: router,
+          drafts: fakeDrafts,
+        ),
+      );
+      await tester.pumpAndSettle();
+      unawaited(router.push('/compose'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Discard draft'));
+      await tester.pumpAndSettle();
+
+      // Nothing was saved yet, so nothing is deleted — we simply leave.
+      expect(fakeDrafts.deleted, isEmpty);
+      expect(find.text('home'), findsOneWidget);
+      expect(find.text('Compose'), findsNothing);
+    });
+
+    testWidgets('discard does not let dispose re-save the draft', (
+      tester,
+    ) async {
+      final fakeDrafts = _RecordingDraftRepository();
+      final saved = await fakeDrafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        subjectText: 'Restored subject',
+        bodyText: 'Draft body',
+      );
+      final router = _homeAndCompose();
+      await tester.pumpWidget(
+        _buildRouter(
+          router: router,
+          drafts: fakeDrafts,
+        ),
+      );
+      await tester.pumpAndSettle();
+      unawaited(router.push('/compose'));
+      await tester.pumpAndSettle();
+
+      // Dirty the draft so the dispose flush would otherwise fire.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        'Edited subject',
+      );
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Discard draft'));
+      await tester.pumpAndSettle();
+
+      // The row stays deleted — dispose did not resurrect it.
+      expect(await fakeDrafts.getDraft(saved.id), isNull);
+      expect(await fakeDrafts.findDraft(), isNull);
+    });
   });
+}
+
+/// A [FakeDraftRepository] that records which draft ids were deleted so tests
+/// can assert on the discard flow.
+class _RecordingDraftRepository extends FakeDraftRepository {
+  final List<int> deleted = [];
+
+  @override
+  Future<void> deleteDraft(int id) async {
+    deleted.add(id);
+    return super.deleteDraft(id);
+  }
+}
+
+/// A router with a home screen under a compose route so [context.pop()] has
+/// somewhere to land.
+GoRouter _homeAndCompose() => GoRouter(
+      initialLocation: '/home',
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (ctx, state) =>
+              const Scaffold(body: Center(child: Text('home'))),
+        ),
+        GoRoute(
+          path: '/compose',
+          builder: (ctx, state) => const ComposeScreen(),
+        ),
+      ],
+    );
+
+Widget _buildRouter({
+  required GoRouter router,
+  required FakeDraftRepository drafts,
+}) {
+  return ProviderScope(
+    overrides: [
+      accountRepositoryProvider.overrideWithValue(
+        FakeAccountRepository([kTestAccount]),
+      ),
+      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+      draftRepositoryProvider.overrideWithValue(drafts),
+    ],
+    child: MaterialApp.router(
+      routerConfig: router,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
+      ),
+    ),
+  );
 }
 
 /// Builds [screen] inside a minimal GoRouter so [context.pop()] works, without
