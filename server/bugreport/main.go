@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -465,6 +467,38 @@ func encryptedMailHandler(storageDir string) http.HandlerFunc {
 	}
 }
 
+// startPprof serves net/http/pprof on its own listener at addr and blocks until
+// the process exits. These handlers expose the command line, goroutine stacks
+// and live heap, and profile/trace pin a CPU for their whole duration, so addr
+// MUST be a non-public bind (localhost or the WireGuard address) — never the
+// public listener. Bind failures are logged, not fatal, so a missing WireGuard
+// interface on a dev box never takes the server down.
+func startPprof(addr string) {
+	// No WriteTimeout: a 30s CPU profile or trace legitimately holds the
+	// connection open longer than the public server's 15s write deadline.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           pprofMux(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	log.Printf("pprof listening on %s", addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("pprof server on %s stopped: %v", addr, err)
+	}
+}
+
+// pprofMux builds the mux that startPprof serves. Kept separate so tests can
+// exercise the routing without binding a socket.
+func pprofMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
+
 func main() {
 	port := os.Getenv("BUGREPORT_PORT")
 	if port == "" {
@@ -503,6 +537,17 @@ func main() {
 			apiBase: apiBase,
 			client:  &http.Client{Timeout: 15 * time.Second},
 		}
+	}
+
+	// pprof runs on its own non-public listener (see startPprof). Defaults to
+	// localhost; set BUGREPORT_PPROF_ADDR to the WireGuard IP so Parca can scrape
+	// it, or to "off" to disable it entirely.
+	pprofAddr := os.Getenv("BUGREPORT_PPROF_ADDR")
+	if pprofAddr == "" {
+		pprofAddr = "127.0.0.1:6061"
+	}
+	if pprofAddr != "off" {
+		go startPprof(pprofAddr)
 	}
 
 	mux := http.NewServeMux()
