@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 
@@ -323,22 +324,9 @@ void main() {
 
     testWidgets('discard deletes the restored draft and pops', (tester) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await fakeDrafts.saveDraft(
-        toText: 'carol@example.com',
-        ccText: '',
-        subjectText: 'Restored subject',
-        bodyText: 'Draft body',
-      );
+      final saved = await _seedRestoredDraft(fakeDrafts);
       final router = _homeAndCompose();
-      await tester.pumpWidget(
-        _buildRouter(
-          router: router,
-          drafts: fakeDrafts,
-        ),
-      );
-      await tester.pumpAndSettle();
-      unawaited(router.push('/compose'));
-      await tester.pumpAndSettle();
+      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
 
       // The saved draft has been restored into the fields.
       expect(
@@ -359,15 +347,7 @@ void main() {
     testWidgets('discard with no saved draft just pops', (tester) async {
       final fakeDrafts = _RecordingDraftRepository();
       final router = _homeAndCompose();
-      await tester.pumpWidget(
-        _buildRouter(
-          router: router,
-          drafts: fakeDrafts,
-        ),
-      );
-      await tester.pumpAndSettle();
-      unawaited(router.push('/compose'));
-      await tester.pumpAndSettle();
+      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
 
       await tester.tap(find.byTooltip('Discard draft'));
       await tester.pumpAndSettle();
@@ -382,22 +362,9 @@ void main() {
       tester,
     ) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await fakeDrafts.saveDraft(
-        toText: 'carol@example.com',
-        ccText: '',
-        subjectText: 'Restored subject',
-        bodyText: 'Draft body',
-      );
+      final saved = await _seedRestoredDraft(fakeDrafts);
       final router = _homeAndCompose();
-      await tester.pumpWidget(
-        _buildRouter(
-          router: router,
-          drafts: fakeDrafts,
-        ),
-      );
-      await tester.pumpAndSettle();
-      unawaited(router.push('/compose'));
-      await tester.pumpAndSettle();
+      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
 
       // Dirty the draft so the dispose flush would otherwise fire.
       await tester.enterText(
@@ -426,6 +393,27 @@ class _RecordingDraftRepository extends FakeDraftRepository {
     deleted.add(id);
     return super.deleteDraft(id);
   }
+}
+
+/// Seeds the canonical restored draft the discard tests assert on.
+Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
+    drafts.saveDraft(
+      toText: 'carol@example.com',
+      ccText: '',
+      subjectText: 'Restored subject',
+      bodyText: 'Draft body',
+    );
+
+/// Pumps the compose screen reached from a home route so discard can pop back.
+Future<void> _pumpComposeFromHome(
+  WidgetTester tester, {
+  required GoRouter router,
+  required FakeDraftRepository drafts,
+}) async {
+  await tester.pumpWidget(_buildRouter(router: router, drafts: drafts));
+  await tester.pumpAndSettle();
+  unawaited(router.push('/compose'));
+  await tester.pumpAndSettle();
 }
 
 /// A router with a home screen under a compose route so [context.pop()] has
