@@ -436,36 +436,39 @@ GoRouter _homeAndCompose() => GoRouter(
 Widget _buildRouter({
   required GoRouter router,
   required FakeDraftRepository drafts,
-}) {
-  return ProviderScope(
-    overrides: [
-      accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository([kTestAccount]),
-      ),
-      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-      emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
-      draftRepositoryProvider.overrideWithValue(drafts),
-    ],
-    child: MaterialApp.router(
-      routerConfig: router,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
-    ),
-  );
-}
+}) =>
+    _wrap(
+      router: router,
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+        emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+        draftRepositoryProvider.overrideWithValue(drafts),
+      ],
+    );
 
 /// Builds [screen] inside a minimal GoRouter so [context.pop()] works, without
 /// going through [buildApp]'s full route tree.
 Widget _buildDirect({
   required Widget screen,
   required List<Override> overrides,
+}) =>
+    _wrap(
+      router: GoRouter(
+        initialLocation: '/',
+        routes: [GoRoute(path: '/', builder: (ctx, state) => screen)],
+      ),
+      overrides: overrides,
+    );
+
+/// Wraps [router] in a [ProviderScope] and a themed [MaterialApp.router] —
+/// the shared shell for [_buildRouter] and [_buildDirect].
+Widget _wrap({
+  required GoRouter router,
+  required List<Override> overrides,
 }) {
-  final router = GoRouter(
-    initialLocation: '/',
-    routes: [GoRoute(path: '/', builder: (ctx, state) => screen)],
-  );
   return ProviderScope(
     overrides: overrides,
     child: MaterialApp.router(
