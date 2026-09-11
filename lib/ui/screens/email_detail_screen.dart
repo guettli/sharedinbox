@@ -28,6 +28,7 @@ import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/foldable_quote_text.dart';
@@ -37,9 +38,6 @@ import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
-
-/// Compact date for the inline thread strip — no year, no seconds (#618).
-final _threadLineFmt = DateFormat('EEE, MMM d, HH:mm');
 
 class EmailDetailScreen extends ConsumerStatefulWidget {
   const EmailDetailScreen({super.key, required this.emailId, this.nav});
@@ -1028,7 +1026,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ],
             ],
           ),
-        _buildThreadStrip(ctx, email),
+        ConversationTree(email: email, onTapEmail: _goToNeighbour),
         // Gate on the parsed result, not just header presence, so the detail
         // view and the chip agree — otherwise a header we can't turn into a URI
         // renders an invisible chip (#698).
@@ -1038,75 +1036,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             child: _UnsubscribeChip(email: email),
           ),
       ],
-    );
-  }
-
-  /// One small line per message in this mail's thread, shown below the date.
-  /// Hidden when the mail is not part of a multi-message thread. The current
-  /// mail is highlighted; tapping another line opens that message (#618).
-  Widget _buildThreadStrip(BuildContext ctx, Email email) {
-    final threadId = email.threadId;
-    if (threadId == null) return const SizedBox.shrink();
-
-    final key = (email.accountId, email.mailboxPath, threadId);
-    final emails =
-        ref.watch(threadEmailsProvider(key)).value ?? const <Email>[];
-    if (emails.length < 2) return const SizedBox.shrink();
-
-    final ownEmail = ref
-        .watch(accountByIdProvider(email.accountId))
-        .value
-        ?.email
-        .toLowerCase();
-
-    return Padding(
-      padding: const EdgeInsets.only(top: AppSpacing.sm),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final m in emails)
-            _buildThreadStripLine(
-              ctx,
-              m,
-              ownEmail,
-              isCurrent: m.id == email.id,
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildThreadStripLine(
-    BuildContext ctx,
-    Email m,
-    String? ownEmail, {
-    required bool isCurrent,
-  }) {
-    final fromMe = ownEmail != null &&
-        m.from.isNotEmpty &&
-        m.from.first.email.toLowerCase() == ownEmail;
-    final date = m.sentAt != null ? _threadLineFmt.format(m.sentAt!) : '';
-    final label = '${fromMe ? 'From me' : 'To me'} · $date';
-    final theme = Theme.of(ctx);
-    final style = theme.textTheme.bodySmall?.copyWith(
-      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-      color: isCurrent ? theme.colorScheme.primary : null,
-    );
-
-    return InkWell(
-      onTap: isCurrent
-          ? null
-          : () => _goToNeighbour(
-                EmailDetailNavItem(
-                  accountId: m.accountId,
-                  mailboxPath: m.mailboxPath,
-                  emailId: m.id,
-                ),
-              ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-        child: Text(label, style: style),
-      ),
     );
   }
 

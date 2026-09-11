@@ -900,6 +900,55 @@ void main() {
     });
 
     test(
+      'observeThreadAcrossFolders gathers thread copies from every folder',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+
+        // Same conversation, one copy in INBOX and one in Sent (#754).
+        Future<void> insertEmail(
+          String id,
+          int uid,
+          String mailbox,
+          DateTime sentAt,
+        ) {
+          return r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: id,
+                  accountId: 'acc-1',
+                  mailboxPath: mailbox,
+                  uid: uid,
+                  receivedAt: sentAt,
+                  sentAt: Value(sentAt),
+                  threadId: const Value('tid1'),
+                ),
+              );
+        }
+
+        await insertEmail('acc-1:2', 2, 'Sent', DateTime(2024, 1, 2));
+        await insertEmail('acc-1:1', 1, 'INBOX', DateTime(2024));
+        // A different thread that must not leak in.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:3',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 3,
+                receivedAt: DateTime(2024, 1, 3),
+                threadId: const Value('other'),
+              ),
+            );
+
+        final emails =
+            await r.emails.observeThreadAcrossFolders('acc-1', 'tid1').first;
+
+        // Both folders, ordered oldest first.
+        expect(emails.map((e) => e.id).toList(), ['acc-1:1', 'acc-1:2']);
+        expect(emails.map((e) => e.mailboxPath).toList(), ['INBOX', 'Sent']);
+      },
+    );
+
+    test(
       'observeAllInboxThreads returns starred threads before unstarred',
       () async {
         final r = _makeRepos();

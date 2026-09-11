@@ -418,6 +418,17 @@ class FakeEmailRepository implements EmailRepository {
       Stream.value(_emails.where((e) => e.threadId == threadId).toList());
 
   @override
+  Stream<List<Email>> observeThreadAcrossFolders(
+    String accountId,
+    String threadId,
+  ) =>
+      Stream.value(
+        _emails
+            .where((e) => e.accountId == accountId && e.threadId == threadId)
+            .toList(),
+      );
+
+  @override
   Future<Email?> getEmail(String emailId) async {
     for (final e in _searchResults) {
       if (e.id == emailId) return e;

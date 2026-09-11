@@ -2,11 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
-import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
-import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
@@ -16,6 +13,7 @@ import 'package:test/test.dart';
 
 @GenerateMocks([AccountRepository, MailboxRepository, EmailRepository])
 import 'account_sync_manager_test.mocks.dart';
+import 'helpers/fake_email_repository.dart';
 
 void main() {
   late MockAccountRepository accounts;
@@ -157,147 +155,9 @@ void main() {
   });
 }
 
-class FakeEmailRepository implements EmailRepository {
-  @override
-  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
-      Stream.value([]);
-  @override
-  Stream<List<EmailThread>> observeThreads(
-    String a,
-    String m, {
-    int limit = 50,
-  }) =>
-      Stream.value([]);
-  @override
-  Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
-      Stream.value([]);
-  @override
-  Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
-      Stream.value([]);
-  @override
-  Future<Email?> getEmail(String id) async => null;
-  @override
-  Future<EmailBody> getEmailBody(
-    String id, {
-    bool forceRefresh = false,
-  }) async =>
-      const EmailBody(emailId: '', attachments: []);
-  @override
-  Future<SyncEmailsResult> syncEmails(String a, String m) async =>
-      SyncEmailsResult.zero;
-  @override
-  Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
-  @override
-  Future<void> markAllAsRead(String accountId, String mailboxPath) async {}
-  @override
-  Future<void> moveEmail(String id, String dest) async {}
-
-  @override
-  Future<bool> cancelPendingChange(String id, String type) async => false;
-
-  @override
-  Future<void> snoozeEmail(String emailId, DateTime until) async {}
-
-  @override
-  Future<int> wakeUpEmails(String accountId) async => 0;
-
-  @override
-  Future<void> restoreEmails(List<Email> emails) async {}
-
-  @override
-  Future<Email?> findEmailByMessageId(
-    String accountId,
-    String messageId,
-  ) async =>
-      null;
-
-  @override
-  Future<String?> deleteEmail(String id) async => null;
-  @override
-  Stream<String> get onChangesQueued => const Stream.empty();
-  @override
-  Future<int> flushPendingChanges(String a, String p) async => 0;
-  @override
-  Future<void> sendEmail(String a, EmailDraft d) async {}
-  @override
-  Future<int> enqueueSend(String a, EmailDraft d) async => 0;
-  @override
-  Future<int> flushOutbox(String a, String p) async => 0;
-  @override
-  Future<String> downloadAttachment(String id, EmailAttachment a) async => '';
-  @override
-  Future<String> fetchRawRfc822(String emailId) async => '';
-  @override
-  Future<List<Email>> searchEmails(String a, String m, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsStructured(String? a, FilterGroup f) async =>
-      [];
-  @override
-  Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
-  @override
-  Future<List<EmailAddress>> searchAddresses(
-    String? a,
-    String q, {
-    int limit = 10,
-  }) async =>
-      [];
-  @override
-  Stream<void> watchJmapPush(String a, String p) => const Stream.empty();
-  @override
-  Stream<List<FailedMutation>> observeFailedMutations(String a) =>
-      Stream.value([]);
-  @override
-  Stream<List<PendingChange>> observePendingChanges(String a) =>
-      Stream.value([]);
-  @override
-  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
-  @override
-  Future<void> discardMutation(int id) async {}
-  @override
-  Future<void> retryMutation(int id) async {}
-
-  @override
-  Future<ReliabilityResult> verifySyncReliability(
-    String accountId,
-    String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
-
-  @override
-  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
-      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
-
-  @override
-  Future<int> sweepOrphanThreads(String a, String m) async => 0;
-
-  @override
-  Future<void> clearForResync(String accountId) async {}
-
-  @override
-  Future<void> clearMailboxForResync(
-    String accountId,
-    String mailboxPath,
-  ) async {}
-
-  @override
-  Future<int> applySieveRules(String accountId) async => 0;
-
-  @override
-  Future<int> previewSieveRuleMatches(
-    String accountId,
-    String scriptContent,
-  ) async =>
-      0;
-
-  @override
-  Future<int> applySieveScriptToInbox(
-    String accountId,
-    String scriptContent,
-  ) async =>
-      0;
-}
+/// A pure no-op [EmailRepository]; AccountSyncManager only drives sync, so no
+/// method needs bespoke behaviour here.
+class FakeEmailRepository extends FakeEmailRepositoryBase {}
 
 class _Log {
   _Log({required this.success});

@@ -956,6 +956,13 @@
     {
       "tool": "jscpd",
       "file": "test/backend/account_sync_manager_test.dart",
+      "start_line": 519,
+      "end_line": 585,
+      "key": "c9f0ed730ba6a360"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/account_sync_manager_test.dart",
       "start_line": 548,
       "end_line": 574,
       "key": "88b8b740043139c0"
@@ -1910,6 +1917,13 @@
       "file": "test/unit/reliability_runner_check_now_test.dart",
       "start_line": 59,
       "end_line": 132,
+      "key": "66f81b2628eda4d3"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_check_now_test.dart",
+      "start_line": 59,
+      "end_line": 132,
       "key": "e02528a6ee4f604b"
     },
     {
@@ -1957,6 +1971,13 @@
     {
       "tool": "jscpd",
       "file": "test/unit/reliability_runner_test.dart",
+      "start_line": 48,
+      "end_line": 121,
+      "key": "66f81b2628eda4d3"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_test.dart",
       "start_line": 49,
       "end_line": 122,
       "key": "e02528a6ee4f604b"
@@ -1967,6 +1988,13 @@
       "start_line": 54,
       "end_line": 122,
       "key": "81e79feb32b611ec"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/reliability_runner_test.dart",
+      "start_line": 55,
+      "end_line": 132,
+      "key": "c9f0ed730ba6a360"
     },
     {
       "tool": "jscpd",
