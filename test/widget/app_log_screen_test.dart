@@ -219,84 +219,71 @@ void main() {
     expect(find.textContaining('for-another-message'), findsNothing);
   });
 
-  testWidgets('resolves an opaque mailbox id to its display path', (
-    tester,
-  ) async {
-    final repo = _MemRepo([
-      AppLogEntry(
-        id: 1,
-        createdAt: DateTime(2024, 1, 1, 10),
-        level: AppLogLevel.info,
-        event: 'sync.folder',
-        message: 'synced',
-        accountId: 'acc-1',
-        mailboxPath: 'a', // opaque JMAP server id
-      ),
-    ]);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          appLogRepositoryProvider.overrideWithValue(repo),
-          allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
-          mailboxRepositoryProvider.overrideWithValue(
-            FakeMailboxRepository([
-              const Mailbox(
-                id: 'acc-1:a',
-                accountId: 'acc-1',
-                path: 'a',
-                name: '2026',
-                displayPath: 'Archive/2026',
-                unreadCount: 0,
-                totalCount: 0,
-              ),
-            ]),
+  group('mailbox display path', () {
+    // A sync.folder entry whose mailboxPath is an opaque JMAP server id ("a").
+    _MemRepo syncFolderRepo() => _MemRepo([
+          AppLogEntry(
+            id: 1,
+            createdAt: DateTime(2024, 1, 1, 10),
+            level: AppLogLevel.info,
+            event: 'sync.folder',
+            message: 'synced',
+            accountId: 'acc-1',
+            mailboxPath: 'a',
           ),
-        ],
-        child: const MaterialApp(home: AppLogScreen()),
-      ),
-    );
-    await tester.pumpAndSettle();
+        ]);
 
-    await tester.tap(find.textContaining('sync.folder'));
-    await tester.pumpAndSettle();
+    // Pump the AppLogScreen with the given mailbox cache and open the entry.
+    Future<void> pumpAndOpen(
+      WidgetTester tester,
+      FakeMailboxRepository mailboxRepo,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appLogRepositoryProvider.overrideWithValue(syncFolderRepo()),
+            allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
+            mailboxRepositoryProvider.overrideWithValue(mailboxRepo),
+          ],
+          child: const MaterialApp(home: AppLogScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(Chip, 'mailbox=Archive/2026'), findsOneWidget);
-    expect(find.widgetWithText(Chip, 'mailbox=a'), findsNothing);
-  });
+      await tester.tap(find.textContaining('sync.folder'));
+      await tester.pumpAndSettle();
+    }
 
-  testWidgets('falls back to the raw mailbox path when not cached', (
-    tester,
-  ) async {
-    final repo = _MemRepo([
-      AppLogEntry(
-        id: 1,
-        createdAt: DateTime(2024, 1, 1, 10),
-        level: AppLogLevel.info,
-        event: 'sync.folder',
-        message: 'synced',
-        accountId: 'acc-1',
-        mailboxPath: 'a',
-      ),
-    ]);
+    testWidgets('resolves an opaque mailbox id to its display path', (
+      tester,
+    ) async {
+      await pumpAndOpen(
+        tester,
+        FakeMailboxRepository([
+          const Mailbox(
+            id: 'acc-1:a',
+            accountId: 'acc-1',
+            path: 'a',
+            name: '2026',
+            displayPath: 'Archive/2026',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+        ]),
+      );
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          appLogRepositoryProvider.overrideWithValue(repo),
-          allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
-          // No mailbox with path "a" is cached → resolver returns the raw path.
-          mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-        ],
-        child: const MaterialApp(home: AppLogScreen()),
-      ),
-    );
-    await tester.pumpAndSettle();
+      expect(find.widgetWithText(Chip, 'mailbox=Archive/2026'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'mailbox=a'), findsNothing);
+    });
 
-    await tester.tap(find.textContaining('sync.folder'));
-    await tester.pumpAndSettle();
+    testWidgets('falls back to the raw mailbox path when not cached', (
+      tester,
+    ) async {
+      // No mailbox with path "a" is cached → resolver returns the raw path.
+      await pumpAndOpen(tester, FakeMailboxRepository());
 
-    expect(find.widgetWithText(Chip, 'mailbox=a'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'mailbox=a'), findsOneWidget);
+    });
   });
 
   testWidgets('renders a dedicated stack trace section', (tester) async {
