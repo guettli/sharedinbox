@@ -71,8 +71,7 @@ class _MemRepo extends NoOpAppLogRepository {
         }
       }
       return true;
-    }).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    }).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Stream.value(filtered.take(filter.limit).toList());
   }
 
@@ -144,8 +143,9 @@ void main() {
     expect(find.textContaining('ui.screen.enter'), findsOneWidget);
   });
 
-  testWidgets('AppLogScreen pre-filters by syncLogId when supplied',
-      (tester) async {
+  testWidgets('AppLogScreen pre-filters by syncLogId when supplied', (
+    tester,
+  ) async {
     final repo = _MemRepo([
       AppLogEntry(
         id: 1,
@@ -180,8 +180,9 @@ void main() {
     expect(find.textContaining('unrelated'), findsNothing);
   });
 
-  testWidgets('AppLogScreen pre-filters by emailId when supplied',
-      (tester) async {
+  testWidgets('AppLogScreen pre-filters by emailId when supplied', (
+    tester,
+  ) async {
     final repo = _MemRepo([
       AppLogEntry(
         id: 1,
@@ -222,16 +223,16 @@ void main() {
   group('mailbox display path', () {
     // A sync.folder entry whose mailboxPath is an opaque JMAP server id ("a").
     _MemRepo syncFolderRepo() => _MemRepo([
-          AppLogEntry(
-            id: 1,
-            createdAt: DateTime(2024, 1, 1, 10),
-            level: AppLogLevel.info,
-            event: 'sync.folder',
-            message: 'synced',
-            accountId: 'acc-1',
-            mailboxPath: 'a',
-          ),
-        ]);
+      AppLogEntry(
+        id: 1,
+        createdAt: DateTime(2024, 1, 1, 10),
+        level: AppLogLevel.info,
+        event: 'sync.folder',
+        message: 'synced',
+        accountId: 'acc-1',
+        mailboxPath: 'a',
+      ),
+    ]);
 
     // Pump the AppLogScreen with the given mailbox cache and open the entry.
     Future<void> pumpAndOpen(
@@ -242,7 +243,9 @@ void main() {
         ProviderScope(
           overrides: [
             appLogRepositoryProvider.overrideWithValue(syncFolderRepo()),
-            allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
+            allAccountsProvider.overrideWith(
+              (ref) => Stream.value(<Account>[]),
+            ),
             mailboxRepositoryProvider.overrideWithValue(mailboxRepo),
           ],
           child: const MaterialApp(home: AppLogScreen()),
@@ -356,13 +359,13 @@ void main() {
     }
 
     AppLogEntry entryForEmail(String emailId) => AppLogEntry(
-          id: 1,
-          createdAt: DateTime(2024, 1, 1, 10),
-          level: AppLogLevel.info,
-          event: 'email.trust_image_sender',
-          message: 'Images will be loaded automatically for this sender.',
-          emailId: emailId,
-        );
+      id: 1,
+      createdAt: DateTime(2024, 1, 1, 10),
+      level: AppLogLevel.info,
+      event: 'email.trust_image_sender',
+      message: 'Images will be loaded automatically for this sender.',
+      emailId: emailId,
+    );
 
     testWidgets('renders a tappable link that opens the message', (
       tester,
