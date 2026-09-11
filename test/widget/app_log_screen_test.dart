@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/app_log_screen.dart';
@@ -214,6 +217,111 @@ void main() {
     expect(find.textContaining('email=acc-1:42'), findsOneWidget);
     expect(find.textContaining('for-this-message'), findsOneWidget);
     expect(find.textContaining('for-another-message'), findsNothing);
+  });
+
+  group('mailbox display path', () {
+    // A sync.folder entry whose mailboxPath is an opaque JMAP server id ("a").
+    _MemRepo syncFolderRepo() => _MemRepo([
+          AppLogEntry(
+            id: 1,
+            createdAt: DateTime(2024, 1, 1, 10),
+            level: AppLogLevel.info,
+            event: 'sync.folder',
+            message: 'synced',
+            accountId: 'acc-1',
+            mailboxPath: 'a',
+          ),
+        ]);
+
+    // Pump the AppLogScreen with the given mailbox cache and open the entry.
+    Future<void> pumpAndOpen(
+      WidgetTester tester,
+      FakeMailboxRepository mailboxRepo,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appLogRepositoryProvider.overrideWithValue(syncFolderRepo()),
+            allAccountsProvider
+                .overrideWith((ref) => Stream.value(<Account>[])),
+            mailboxRepositoryProvider.overrideWithValue(mailboxRepo),
+          ],
+          child: const MaterialApp(home: AppLogScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('sync.folder'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('resolves an opaque mailbox id to its display path', (
+      tester,
+    ) async {
+      await pumpAndOpen(
+        tester,
+        FakeMailboxRepository([
+          const Mailbox(
+            id: 'acc-1:a',
+            accountId: 'acc-1',
+            path: 'a',
+            name: '2026',
+            displayPath: 'Archive/2026',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+        ]),
+      );
+
+      expect(find.widgetWithText(Chip, 'mailbox=Archive/2026'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'mailbox=a'), findsNothing);
+    });
+
+    testWidgets('falls back to the raw mailbox path when not cached', (
+      tester,
+    ) async {
+      // No mailbox with path "a" is cached → resolver returns the raw path.
+      await pumpAndOpen(tester, FakeMailboxRepository());
+
+      expect(find.widgetWithText(Chip, 'mailbox=a'), findsOneWidget);
+    });
+  });
+
+  testWidgets('renders a dedicated stack trace section', (tester) async {
+    final repo = _MemRepo([
+      AppLogEntry(
+        id: 1,
+        createdAt: DateTime(2024, 1, 1, 10),
+        level: AppLogLevel.error,
+        event: 'sync.cycle.failed',
+        message: 'boom',
+        dataJson: jsonEncode({
+          'protocol': 'imap',
+          'stack': '#0 doThing\n#1 main',
+        }),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appLogRepositoryProvider.overrideWithValue(repo),
+          allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
+        ],
+        child: const MaterialApp(home: AppLogScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.textContaining('sync.cycle.failed'));
+    await tester.pumpAndSettle();
+
+    // The stack trace gets its own section, separate from the JSON "Data" blob.
+    expect(find.text('Stack trace'), findsOneWidget);
+    expect(find.textContaining('#0 doThing'), findsOneWidget);
+    // The remaining structured fields still render, without the stack in them.
+    expect(find.textContaining('"protocol": "imap"'), findsOneWidget);
+    expect(find.textContaining('"stack"'), findsNothing);
   });
 
   group('email hyperlink', () {

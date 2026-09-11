@@ -287,18 +287,45 @@ class _AppLogTile extends ConsumerWidget {
     };
   }
 
-  String? get _prettyData {
+  /// Splits [AppLogEntry.dataJson] into the stack trace (surfaced as its own
+  /// section) and the remaining structured fields (the "Data" blob), so a trace
+  /// is readable rather than buried inside one JSON string. Both are null when
+  /// absent.
+  ({String? stack, String? data}) get _parsedData {
     final raw = entry.dataJson;
-    if (raw == null || raw.isEmpty) return null;
+    if (raw == null || raw.isEmpty) return (stack: null, data: null);
     try {
       final parsed = jsonDecode(raw);
-      return const JsonEncoder.withIndent('  ').convert(parsed);
+      if (parsed is Map<String, dynamic>) {
+        final stack = parsed.remove('stack')?.toString();
+        final data = parsed.isEmpty
+            ? null
+            : const JsonEncoder.withIndent('  ').convert(parsed);
+        return (stack: stack, data: data);
+      }
+      return (
+        stack: null,
+        data: const JsonEncoder.withIndent('  ').convert(parsed),
+      );
     } catch (_) {
-      return raw;
+      return (stack: null, data: raw);
     }
   }
 
-  String _buildMarkdown() {
+  /// Resolves [AppLogEntry.mailboxPath] to its hierarchical display path for the
+  /// account, so JMAP opaque ids (e.g. "a") render as "Archive/2026". Falls
+  /// back to the raw path when the mailbox is not in the local cache.
+  String? _mailboxLabel(WidgetRef ref) {
+    final rawPath = entry.mailboxPath;
+    final accountId = entry.accountId;
+    if (rawPath == null) return null;
+    if (accountId == null) return rawPath;
+    final mailbox =
+        ref.watch(mailboxByPathProvider((accountId, rawPath))).value;
+    return mailbox?.displayPath ?? rawPath;
+  }
+
+  String _buildMarkdown(String? mailboxLabel) {
     final buf = StringBuffer()
       ..writeln('## ${entry.level.wireName.toUpperCase()} · ${entry.event}')
       ..writeln()
@@ -310,19 +337,28 @@ class _AppLogTile extends ConsumerWidget {
     if (entry.accountId != null) {
       buf.writeln('| Account | ${entry.accountId} |');
     }
-    if (entry.mailboxPath != null) {
-      buf.writeln('| Mailbox | ${entry.mailboxPath} |');
+    if (mailboxLabel != null) {
+      buf.writeln('| Mailbox | $mailboxLabel |');
     }
     if (entry.emailId != null) buf.writeln('| Email | ${entry.emailId} |');
     if (entry.syncLogId != null) {
       buf.writeln('| Sync log | ${entry.syncLogId} |');
     }
-    final data = _prettyData;
-    if (data != null) {
+    final parsed = _parsedData;
+    if (parsed.data != null) {
       buf
         ..writeln()
         ..writeln('```json')
-        ..writeln(data)
+        ..writeln(parsed.data)
+        ..writeln('```');
+    }
+    if (parsed.stack != null) {
+      buf
+        ..writeln()
+        ..writeln('### Stack trace')
+        ..writeln()
+        ..writeln('```')
+        ..writeln(parsed.stack)
         ..writeln('```');
     }
     return buf.toString();
@@ -334,13 +370,14 @@ class _AppLogTile extends ConsumerWidget {
     final theme = Theme.of(context);
     final small = theme.textTheme.bodySmall;
     final muted = small?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final mailboxLabel = _mailboxLabel(ref);
     final badges = <String>[
       if (entry.screen != null) 'screen=${entry.screen}',
       if (entry.accountId != null) 'account=${entry.accountId}',
-      if (entry.mailboxPath != null) 'mailbox=${entry.mailboxPath}',
+      if (mailboxLabel != null) 'mailbox=$mailboxLabel',
       if (entry.syncLogId != null) 'sync=${entry.syncLogId}',
     ];
-    final data = _prettyData;
+    final parsed = _parsedData;
 
     return ExpansionTile(
       leading: Icon(_icon, color: color),
@@ -394,7 +431,7 @@ class _AppLogTile extends ConsumerWidget {
               padding: const EdgeInsets.only(bottom: AppSpacing.xs),
               child: Text(entry.message, style: small),
             ),
-            if (data != null) ...[
+            if (parsed.data != null) ...[
               Padding(
                 padding: const EdgeInsets.only(
                   top: AppSpacing.xs,
@@ -402,22 +439,38 @@ class _AppLogTile extends ConsumerWidget {
                 ),
                 child: Text('Data', style: muted),
               ),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(4),
+              _MonoBlock(text: parsed.data!),
+            ],
+            if (parsed.stack != null) ...[
+              Padding(
+                padding: const EdgeInsets.only(
+                  top: AppSpacing.xs,
+                  bottom: AppSpacing.xs,
                 ),
-                child: Text(
-                  data,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: Colors.greenAccent,
-                  ),
+                child: Row(
+                  children: [
+                    Text('Stack trace', style: muted),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: AppIconSize.sm),
+                      tooltip: 'Copy stack trace',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          ClipboardData(text: parsed.stack!),
+                        );
+                        if (!context.mounted) return;
+                        context.showAppSnackBar(
+                          'Stack trace copied',
+                          event: 'app_log.stack_copied',
+                          duration: const Duration(seconds: 2),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
+              _MonoBlock(text: parsed.stack!),
             ],
             Align(
               alignment: Alignment.centerRight,
@@ -426,7 +479,7 @@ class _AppLogTile extends ConsumerWidget {
                 label: const Text('Copy'),
                 onPressed: () async {
                   await Clipboard.setData(
-                    ClipboardData(text: _buildMarkdown()),
+                    ClipboardData(text: _buildMarkdown(mailboxLabel)),
                   );
                   if (!context.mounted) return;
                   context.showAppSnackBar(
@@ -440,6 +493,34 @@ class _AppLogTile extends ConsumerWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// A full-width monospace block on a dark background, used to render the JSON
+/// "Data" payload and the stack trace of a log entry.
+class _MonoBlock extends StatelessWidget {
+  const _MonoBlock({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 11,
+          fontFamily: 'monospace',
+          color: Colors.greenAccent,
+        ),
+      ),
     );
   }
 }

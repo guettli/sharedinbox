@@ -8,6 +8,15 @@ import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
+/// Joins affected folder display paths for a log message, capped at [max] with
+/// an "and N more" suffix so the message names the folders rather than only
+/// counting them.
+String _foldersLabel(List<String> folders, {int max = 5}) {
+  if (folders.isEmpty) return 'no folders';
+  if (folders.length <= max) return folders.join(', ');
+  return '${folders.take(max).join(', ')} and ${folders.length - max} more';
+}
+
 /// Periodically verifies local state against the server's "ground truth".
 /// Results are stored in the [SyncHealth] table.
 class ReliabilityRunner {
@@ -89,6 +98,10 @@ class ReliabilityRunner {
       var totalMissingOnServer = 0;
       var totalFlagMismatches = 0;
       final details = <String, dynamic>{};
+      // Per-folder discrepancy detail keyed by the human-readable display path
+      // (e.g. "Archive/2026") rather than the opaque JMAP id, for the app log.
+      final folderDetails = <String, dynamic>{};
+      final affectedFolders = <String>[];
 
       for (final mailbox in mailboxes) {
         if (!force && !_running) break;
@@ -100,11 +113,14 @@ class ReliabilityRunner {
           totalMissingLocally += result.missingLocally.length;
           totalMissingOnServer += result.missingOnServer.length;
           totalFlagMismatches += result.flagMismatches.length;
-          details[mailbox.path] = {
+          final folderStat = {
             'missingLocally': result.missingLocally.length,
             'missingOnServer': result.missingOnServer.length,
             'flagMismatches': result.flagMismatches.length,
           };
+          details[mailbox.path] = folderStat;
+          folderDetails[mailbox.displayPath] = folderStat;
+          affectedFolders.add(mailbox.displayPath);
         }
       }
 
@@ -130,14 +146,16 @@ class ReliabilityRunner {
           accountId: accountId,
         );
       } else {
+        final folderLabel = _foldersLabel(affectedFolders);
         await _appLogger.warn(
           'sync_health',
-          'Sync health verified: discrepancies found',
+          'Sync health verified: discrepancies found in $folderLabel',
           accountId: accountId,
           data: {
             'missingLocally': totalMissingLocally,
             'missingOnServer': totalMissingOnServer,
             'flagMismatches': totalFlagMismatches,
+            'folders': folderDetails,
           },
         );
       }
