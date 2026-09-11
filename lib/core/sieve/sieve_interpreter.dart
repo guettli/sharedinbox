@@ -86,13 +86,55 @@ class SieveInterpreter {
   bool _evalHeader(HeaderCondition cond, SieveEmailContext email) {
     for (final header in cond.headers) {
       final values = email.getHeader(header);
-      for (final value in values) {
-        for (final key in cond.keyList) {
-          if (_matchString(value, cond.matchType, key)) return true;
+      for (final rawValue in values) {
+        // `address`/`envelope` tests compare only the address (or a part of
+        // it), not the raw "Display Name <local@domain>" header value.
+        final candidates = cond.kind == SieveTestKind.header
+            ? [rawValue]
+            : _addressCandidates(rawValue, cond.addressPart);
+        for (final value in candidates) {
+          for (final key in cond.keyList) {
+            if (_matchString(value, cond.matchType, key)) return true;
+          }
         }
       }
     }
     return false;
+  }
+
+  /// Extracts the address parts to compare for an `address`/`envelope` test.
+  /// A single header value may hold several comma-separated addresses; each is
+  /// reduced to its `local@domain` (or [addressPart]).
+  List<String> _addressCandidates(String rawValue, String? addressPart) {
+    final result = <String>[];
+    for (final part in rawValue.split(',')) {
+      final email = _extractEmail(part);
+      if (email.isEmpty) continue;
+      switch (addressPart) {
+        case ':localpart':
+        case ':user':
+          final at = email.indexOf('@');
+          result.add(at >= 0 ? email.substring(0, at) : email);
+        case ':domain':
+          final at = email.indexOf('@');
+          if (at >= 0) result.add(email.substring(at + 1));
+        default:
+          result.add(email);
+      }
+    }
+    return result;
+  }
+
+  /// Pulls the bare address out of a header value that may be either
+  /// `local@domain` or `Display Name <local@domain>`.
+  String _extractEmail(String value) {
+    final v = value.trim();
+    final open = v.indexOf('<');
+    final close = v.indexOf('>', open + 1);
+    if (open >= 0 && close > open) {
+      return v.substring(open + 1, close).trim();
+    }
+    return v;
   }
 
   bool _evalSize(SizeCondition cond, SieveEmailContext email) {

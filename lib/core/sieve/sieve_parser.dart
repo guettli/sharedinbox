@@ -6,7 +6,8 @@ import 'package:sharedinbox/core/sieve/sieve_rule.dart';
 ///
 /// Supported commands: require, if, elsif, else, fileinto, keep, discard,
 /// flag, setflag, addflag, stop.
-/// Supported tests: header, address, size, exists, allof, anyof, not, true.
+/// Supported tests: header, address, envelope, size, exists, allof, anyof,
+/// not, true.
 /// Supported match types: :contains, :is, :matches.
 class SieveParser {
   List<SieveRule> parse(String script) {
@@ -174,22 +175,51 @@ class SieveParser {
       return null; // no condition = always matches
     }
 
-    if (word == 'header' || word == 'address') {
+    if (word == 'header' || word == 'address' || word == 'envelope') {
       s.readWord();
-      s.skipWhitespaceAndComments();
-      final matchType = _parseMatchType(s);
-      s.skipWhitespaceAndComments();
-      // Consume optional :comparator "..." tagged argument.
-      if (s.peekTaggedArg() == ':comparator') {
-        s.readWord();
+      final kind = switch (word) {
+        'address' => SieveTestKind.address,
+        'envelope' => SieveTestKind.envelope,
+        _ => SieveTestKind.header,
+      };
+      // Tagged arguments (match type, :comparator, address part) may appear in
+      // any order and any subset before the header/key strings (RFC 5228 §2.6).
+      var matchType = ':is';
+      String? addressPart;
+      while (true) {
         s.skipWhitespaceAndComments();
-        _parseStringOrList(s); // discard comparator value
-        s.skipWhitespaceAndComments();
+        final tag = s.peekTaggedArg();
+        if (tag == null) break;
+        if (tag == ':contains' || tag == ':is' || tag == ':matches') {
+          matchType = tag;
+          s.readWord();
+        } else if (tag == ':comparator') {
+          s.readWord();
+          s.skipWhitespaceAndComments();
+          _parseStringOrList(s); // discard comparator value
+        } else if (tag == ':all' ||
+            tag == ':localpart' ||
+            tag == ':domain' ||
+            tag == ':user' ||
+            tag == ':detail') {
+          addressPart = tag;
+          s.readWord();
+        } else {
+          // Unknown tagged argument — consume it so parsing can continue.
+          s.readWord();
+        }
       }
+      s.skipWhitespaceAndComments();
       final headers = _parseStringOrList(s);
       s.skipWhitespaceAndComments();
       final keys = _parseStringOrList(s);
-      return HeaderCondition(headers, matchType, keys);
+      return HeaderCondition(
+        headers,
+        matchType,
+        keys,
+        kind: kind,
+        addressPart: addressPart,
+      );
     }
 
     if (word == 'exists') {
@@ -212,17 +242,6 @@ class SieveParser {
     // Unknown test — skip to closing paren or brace.
     s.readWord();
     return null;
-  }
-
-  String _parseMatchType(_Scanner s) {
-    s.skipWhitespaceAndComments();
-    final tag = s.peekTaggedArg();
-    if (tag == ':contains' || tag == ':is' || tag == ':matches') {
-      s.readWord();
-      return tag!;
-    }
-    // Default per RFC 5228 is :is.
-    return ':is';
   }
 
   List<String> _parseStringOrList(_Scanner s) {

@@ -100,5 +100,91 @@ if header :contains "from" "boss@example.com" {
         isTrue,
       );
     });
+
+    test('warns about a Delivered-To filter and suggests envelope (#701)', () {
+      final rules = SieveParser().parse(
+        'if header :is "Delivered-To" "postmaster@example.com" '
+        '{ fileinto "postmaster"; }',
+      );
+      final findings = diagnoseSieve(
+        scriptIsActive: true,
+        fileIntoTargets: const ['postmaster'],
+        existingFolderPaths: const {'postmaster'},
+        inboxMatchCount: 0,
+        rules: rules,
+      );
+      final delivery = findings.where(
+        (f) => f.message.contains('Delivered-To'),
+      );
+      expect(delivery, hasLength(1));
+      expect(delivery.single.message, contains('envelope'));
+      // The misleading generic "no messages match" warning is suppressed.
+      expect(
+        findings.where((f) => f.message.contains('nothing to move yet')),
+        isEmpty,
+      );
+    });
+
+    test('does not claim zero matches for an unreadable header', () {
+      final rules = SieveParser().parse(
+        'if header :contains "X-Spam-Flag" "YES" { fileinto "Junk"; }',
+      );
+      final findings = diagnoseSieve(
+        scriptIsActive: true,
+        fileIntoTargets: const ['Junk'],
+        existingFolderPaths: const {'Junk'},
+        inboxMatchCount: 0,
+        rules: rules,
+      );
+      expect(
+        findings.where((f) => f.message.contains('not meaningful')),
+        hasLength(1),
+      );
+      expect(
+        findings.where((f) => f.message.contains('nothing to move yet')),
+        isEmpty,
+      );
+    });
+
+    test('still reports zero matches for a filter it can evaluate', () {
+      final rules = SieveParser().parse(
+        'if header :contains "subject" "invoice" { fileinto "Invoices"; }',
+      );
+      final findings = diagnoseSieve(
+        scriptIsActive: true,
+        fileIntoTargets: const ['Invoices'],
+        existingFolderPaths: const {'Invoices'},
+        inboxMatchCount: 0,
+        rules: rules,
+      );
+      expect(
+        findings.where((f) => f.message.contains('nothing to move yet')),
+        hasLength(1),
+      );
+    });
+
+    test('address recipient test is treated as evaluable', () {
+      final rules = SieveParser().parse(
+        'if address :is "to" "postmaster@example.com" '
+        '{ fileinto "postmaster"; }',
+      );
+      final findings = diagnoseSieve(
+        scriptIsActive: true,
+        fileIntoTargets: const ['postmaster'],
+        existingFolderPaths: const {'postmaster'},
+        inboxMatchCount: 0,
+        rules: rules,
+      );
+      // No "cannot read" note — the preview can derive the To address.
+      expect(
+        findings.where((f) => f.message.contains('cannot read')),
+        isEmpty,
+      );
+      // And a genuine zero count is reported normally.
+      expect(
+        findings.where((f) => f.message.contains('nothing to move yet')),
+        hasLength(1),
+      );
+    });
   });
 }

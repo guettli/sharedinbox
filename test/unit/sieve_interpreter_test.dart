@@ -336,6 +336,110 @@ void main() {
     });
   });
 
+  group('address / envelope tests', () {
+    test('address :is compares the bare address, ignoring display name', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            HeaderCondition(
+              ['to'],
+              ':is',
+              ['postmaster@example.com'],
+              kind: SieveTestKind.address,
+            ),
+          ],
+          actions: [FileIntoAction('postmaster')],
+        ),
+      ];
+      // Plain `header :is` would fail here because of the display name; the
+      // `address` test extracts local@domain and matches.
+      final ctx = interp.execute(
+        rules,
+        _email(to: 'Postmaster <postmaster@example.com>'),
+      );
+      expect(ctx.targetFolders, contains('postmaster'));
+    });
+
+    test('header :is on the same value does NOT match (regression guard)', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            HeaderCondition(['to'], ':is', ['postmaster@example.com']),
+          ],
+          actions: [FileIntoAction('postmaster')],
+        ),
+      ];
+      final ctx = interp.execute(
+        rules,
+        _email(to: 'Postmaster <postmaster@example.com>'),
+      );
+      expect(ctx.targetFolders, isEmpty);
+    });
+
+    test('envelope :is "to" matches the recipient address', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            HeaderCondition(
+              ['to'],
+              ':is',
+              ['postmaster@example.com'],
+              kind: SieveTestKind.envelope,
+            ),
+          ],
+          actions: [FileIntoAction('postmaster')],
+        ),
+      ];
+      final ctx = interp.execute(rules, _email(to: 'postmaster@example.com'));
+      expect(ctx.targetFolders, contains('postmaster'));
+    });
+
+    test(':domain address part matches on the domain only', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            HeaderCondition(
+              ['from'],
+              ':is',
+              ['example.com'],
+              kind: SieveTestKind.address,
+              addressPart: ':domain',
+            ),
+          ],
+          actions: [FileIntoAction('Internal')],
+        ),
+      ];
+      final ctx = interp.execute(rules, _email(from: 'alice@example.com'));
+      expect(ctx.targetFolders, contains('Internal'));
+    });
+
+    test('address test handles multiple comma-separated recipients', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            HeaderCondition(
+              ['to'],
+              ':is',
+              ['postmaster@example.com'],
+              kind: SieveTestKind.address,
+            ),
+          ],
+          actions: [FileIntoAction('postmaster')],
+        ),
+      ];
+      final ctx = interp.execute(
+        rules,
+        _email(to: 'Alice <alice@example.com>, postmaster@example.com'),
+      );
+      expect(ctx.targetFolders, contains('postmaster'));
+    });
+  });
+
   group('implicit keep', () {
     test('keepInInbox stays true when no action changes routing', () {
       final rules = [
