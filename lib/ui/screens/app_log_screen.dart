@@ -321,7 +321,7 @@ class _AppLogTile extends ConsumerWidget {
     if (rawPath == null) return null;
     if (accountId == null) return rawPath;
     final mailbox =
-        ref.watch(mailboxByPathProvider((accountId, rawPath))).valueOrNull;
+        ref.watch(mailboxByPathProvider((accountId, rawPath))).value;
     return mailbox?.displayPath ?? rawPath;
   }
 
