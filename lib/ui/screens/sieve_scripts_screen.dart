@@ -294,6 +294,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
         fileIntoTargets: fileIntoTargets(rules),
         existingFolderPaths: mailboxes.map((m) => m.displayPath).toSet(),
         inboxMatchCount: matchCount,
+        rules: rules,
       );
     } on SieveParseException {
       if (mounted) {
