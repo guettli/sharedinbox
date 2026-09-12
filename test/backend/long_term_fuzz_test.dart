@@ -78,13 +78,22 @@ Future<void> _syncAllMailboxes(
 /// pass). Returns as soon as the two accounts are identical, or the last
 /// comparison result once the rounds are exhausted so a genuine mismatch still
 /// fails the caller's expect() with a full diff.
+///
+/// A JMAP mailbox **move-out** is the slowest case to converge (#803): when an
+/// email's `mailboxIds` drops a folder via JMAP, Stalwart can keep listing the
+/// message in the *source* folder's paired IMAP view (`UID SEARCH ALL`) for
+/// tens of seconds, so the IMAP side's deletion reconcile legitimately holds
+/// the row until the server catches up. This left the two accounts diverged
+/// (`missingInB`) well past the previous ~27s budget, so the round count and
+/// per-round backoff cap below are sized to give that propagation more
+/// wall-clock time while staying inside the test's 5-min timeout.
 Future<AccountComparisonResult> _syncUntilIdentical(
   AppDatabase db,
   String imapAccountId,
   String jmapAccountId,
   EmailRepositoryImpl emailRepo,
   MailboxRepositoryImpl mailboxRepo, {
-  int maxRounds = 16,
+  int maxRounds = 24,
 }) async {
   late AccountComparisonResult result;
   for (var round = 0; round < maxRounds; round++) {
@@ -92,11 +101,13 @@ Future<AccountComparisonResult> _syncUntilIdentical(
     // the mutation across its IMAP/JMAP views. Hammering rounds back-to-back
     // only re-observes the same stale HIGHESTMODSEQ; the cross-protocol bump
     // can lag the change by a tick or two. The per-round delay is capped so a
-    // generous round count (convergence lag grows under CI engine load, #747)
-    // stays well inside the test's 5-min timeout: 16 rounds ~= 27s of backoff.
+    // generous round count (convergence lag grows under CI engine load, #747,
+    // and a JMAP move-out can lag the paired IMAP folder by tens of seconds,
+    // #803) stays well inside the test's 5-min timeout: 24 rounds ~= 65s of
+    // backoff.
     if (round > 0) {
       await Future<void>.delayed(
-        Duration(milliseconds: (500 * round).clamp(0, 2000)),
+        Duration(milliseconds: (500 * round).clamp(0, 3000)),
       );
     }
     await _syncAllMailboxes(db, jmapAccountId, emailRepo, mailboxRepo);
