@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/global_email_search.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 
@@ -163,23 +164,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Future<void> _search(String query) async {
     setState(() => _loading = true);
     try {
-      final emailRepo = ref.read(emailRepositoryProvider);
-
-      // Run both queries in parallel. `searchEmailsGlobal` matches subject,
-      // preview and From via FTS; `getEmailsByAddress` catches recipients
-      // (To/Cc) that FTS does not index. Merge + dedup so a single message
-      // list surfaces every match.
-      final (globalHits, addressHits) = await (
-        emailRepo.searchEmailsGlobal(_effectiveAccountId, query),
-        emailRepo.getEmailsByAddress(_effectiveAccountId, query),
-      ).wait;
-
-      final seen = <String>{};
-      final merged = <Email>[];
-      for (final e in [...globalHits, ...addressHits]) {
-        if (seen.add(e.id)) merged.add(e);
-      }
-      merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+      final merged = await searchEmailsGlobalMerged(
+        ref.read(emailRepositoryProvider),
+        _effectiveAccountId,
+        query,
+      );
 
       if (mounted) {
         setState(() {

@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/global_email_search.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
@@ -35,6 +36,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   List<Email>? _searchResults;
   bool _searchLoading = false;
   bool get _searching => _searchController.text.isNotEmpty;
+
+  // Whether the search is restricted to the current folder. Defaults to true
+  // (the historical, folder-only behaviour); when the user deselects the folder
+  // chip the query broadens to the account-wide global search. Reset to true
+  // whenever the search is cleared so a later query starts folder-scoped again.
+  bool _folderScoped = true;
 
   // Error banner — tracks the last error message that the user dismissed.
   String? _dismissedError;
@@ -71,6 +78,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           _searchResults = null;
           _searchLoading = false;
           _lastSettledQuery = null;
+          _folderScoped = true;
         });
       }
     });
@@ -106,9 +114,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     final generation = ++_searchGeneration;
     setState(() => _searchLoading = true);
     try {
-      final results = await ref
-          .read(emailRepositoryProvider)
-          .searchEmails(widget.accountId, widget.mailboxPath, q);
+      final results = await _runScopedSearch(q);
       if (mounted && generation == _searchGeneration) {
         setState(() {
           _searchResults = results;
@@ -122,8 +128,32 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
   }
 
+  /// Runs the query honouring the current [_folderScoped] setting: the
+  /// folder-only IMAP search, or the shared account-wide global search reused
+  /// from the global search screen.
+  Future<List<Email>> _runScopedSearch(String query) {
+    final repo = ref.read(emailRepositoryProvider);
+    if (_folderScoped) {
+      return repo.searchEmails(widget.accountId, widget.mailboxPath, query);
+    }
+    return searchEmailsGlobalMerged(repo, widget.accountId, query);
+  }
+
   void _onSearchChanged(String value) {
     if (value.trim().isNotEmpty) unawaited(_runSearch(value.trim()));
+  }
+
+  /// Toggle between folder-only and account-wide search, re-running the active
+  /// query so results reflect the new scope immediately.
+  void _onScopeChanged(bool folderScoped) {
+    if (folderScoped == _folderScoped) return;
+    setState(() => _folderScoped = folderScoped);
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+    // The query text is unchanged, so clear the settled marker to force a
+    // re-run under the new scope instead of the short-circuit in _runSearch.
+    _lastSettledQuery = null;
+    unawaited(_runSearch(query));
   }
 
   /// Watches the cached mailbox for the current folder and, if it disappears
@@ -357,6 +387,49 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   Widget _buildSearchBody() {
+    return Column(
+      children: [
+        _buildSearchScopeChip(),
+        Expanded(child: _buildSearchResults()),
+      ],
+    );
+  }
+
+  /// A chip that makes the search scope visible and toggleable, so it is clear
+  /// that few/no results may just mean the search is limited to this folder.
+  /// Selected = folder-only; deselecting broadens to an account-wide search.
+  Widget _buildSearchScopeChip() {
+    // Resolve the human-readable folder name the same way the app bar does.
+    final mailbox = ref
+        .watch(mailboxByPathProvider((widget.accountId, widget.mailboxPath)))
+        .value;
+    final folderName = mailbox?.name ?? widget.mailboxPath;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          AppSpacing.xs,
+          AppSpacing.md,
+          0,
+        ),
+        child: FilterChip(
+          avatar: Icon(
+            _folderScoped ? Icons.folder : Icons.all_inbox,
+            size: 18,
+          ),
+          label: Text(_folderScoped ? folderName : 'All folders'),
+          selected: _folderScoped,
+          onSelected: _searchLoading ? null : _onScopeChanged,
+          tooltip: _folderScoped
+              ? 'Searching only "$folderName" — tap to search all folders'
+              : 'Searching all folders — tap to search only "$folderName"',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchResults() {
     if (_searchLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -368,10 +441,18 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     }
     final results = _searchResults!;
     final threads = results.map(EmailThread.fromEmail).toList();
+    final account = ref.watch(accountByIdProvider(widget.accountId)).value;
     return EmailThreadList(
       controller: _selection,
       items: threads,
       enableSwipe: false,
+      // When broadened beyond this folder, label each hit with its folder so
+      // account-wide results stay identifiable.
+      showLocationLabel: !_folderScoped,
+      accountNames: {
+        if (account != null)
+          widget.accountId: accountDisplayLabel(account, widget.accountId),
+      },
       onTap: (t) => unawaited(
         _openSearchResultAndRefresh(
           t.latestEmailId,
@@ -457,9 +538,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   Future<void> _refreshSearchAndPopIfEmpty() async {
     if (!mounted || !_searching) return;
     final query = _searchController.text.trim();
-    final remaining = await ref
-        .read(emailRepositoryProvider)
-        .searchEmails(widget.accountId, widget.mailboxPath, query);
+    final remaining = await _runScopedSearch(query);
     if (!mounted) return;
     if (remaining.isEmpty) {
       if (context.canPop()) {

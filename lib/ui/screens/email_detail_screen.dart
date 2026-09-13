@@ -59,10 +59,18 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
 
-  /// Local file paths of image attachments the user has chosen to preview,
-  /// keyed by filename. Populated on demand by [_showImage] so images aren't
-  /// fetched until asked for (mobile data), and re-used across rebuilds.
+  /// Local file paths of image attachments' inline previews, keyed by
+  /// filename. Populated by [_showImage] and re-used across rebuilds.
   final Map<String, String> _imagePaths = {};
+
+  /// Filenames whose inline preview fetch has already been kicked off, so the
+  /// auto-load in [_buildAttachment] fires exactly once per image rather than
+  /// on every rebuild.
+  final Set<String> _autoRequestedImages = {};
+
+  /// Filenames whose inline preview fetch failed, so the row offers a Retry
+  /// button instead of silently retrying on the next rebuild.
+  final Set<String> _imageLoadFailed = {};
 
   /// Fallback nav resolved from `observeEmails(mailbox)` when [widget.nav]
   /// is null (deep links, notifications). Cached per emailId so the buttons
@@ -80,6 +88,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       // so no invalidation needed for that path.
       _fallbackNav = null;
       _fallbackNavForEmailId = null;
+      // Inline previews are keyed by filename, so clear them too or a new
+      // message could show the previous one's image under a same-named file.
+      _imagePaths.clear();
+      _autoRequestedImages.clear();
+      _imageLoadFailed.clear();
     }
   }
 
@@ -701,7 +714,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   /// Renders one attachment row. Image attachments Flutter can decode get an
-  /// inline preview (fetched on tap); everything else keeps the plain
+  /// inline preview that loads automatically; everything else keeps the plain
   /// download-and-open tile.
   Widget _buildAttachment(BuildContext ctx, EmailAttachment att) {
     final downloading = _downloading.contains(att.filename);
@@ -728,6 +741,21 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
 
     final path = _imagePaths[att.filename];
+
+    // Auto-load the preview the first time we see a displayable image that
+    // hasn't been fetched yet — the user asked to see images directly rather
+    // than after tapping a button (#802). Guarded so it fires once per image;
+    // a failed fetch surfaces a Retry button instead of looping.
+    if (path == null &&
+        !downloading &&
+        !_autoRequestedImages.contains(att.filename) &&
+        !_imageLoadFailed.contains(att.filename)) {
+      _autoRequestedImages.add(att.filename);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_showImage(att));
+      });
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -757,22 +785,37 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ),
             ),
           )
-        else
+        else if (downloading)
+          Padding(
+            padding: const EdgeInsets.only(
+              left: AppSpacing.lg,
+              bottom: AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: AppIconSize.sm,
+                  height: AppIconSize.sm,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  'Loading image…',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          )
+        else if (_imageLoadFailed.contains(att.filename))
           Padding(
             padding: const EdgeInsets.only(
               left: AppSpacing.lg,
               bottom: AppSpacing.sm,
             ),
             child: OutlinedButton.icon(
-              icon: downloading
-                  ? const SizedBox(
-                      width: AppIconSize.sm,
-                      height: AppIconSize.sm,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.visibility, size: AppIconSize.sm),
-              label: const Text('Show image'),
-              onPressed: downloading ? null : () => _showImage(att),
+              icon: const Icon(Icons.refresh, size: AppIconSize.sm),
+              label: const Text('Retry'),
+              onPressed: () => _showImage(att),
             ),
           ),
       ],
@@ -781,7 +824,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   /// Downloads an image attachment's bytes and reveals its inline preview.
   Future<void> _showImage(EmailAttachment att) async {
-    setState(() => _downloading.add(att.filename));
+    setState(() {
+      _downloading.add(att.filename);
+      _autoRequestedImages.add(att.filename);
+      _imageLoadFailed.remove(att.filename);
+    });
     try {
       final path = await ref
           .read(emailRepositoryProvider)
@@ -790,6 +837,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       setState(() => _imagePaths[att.filename] = path);
     } catch (e, stack) {
       if (!mounted) return;
+      setState(() => _imageLoadFailed.add(att.filename));
       context.showAppSnackBar(
         'Loading image failed: $e',
         level: AppLogLevel.error,
