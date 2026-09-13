@@ -45,6 +45,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/guettli/sharedinbox/server/internal/pprofserver"
 )
 
 // Registration ties one SharedInbox account to its UnifiedPush endpoint.
@@ -250,11 +252,16 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func main() {
 	addr := flag.String("addr", ":8089", "listen address")
 	statePath := flag.String("state", "uprelay-state.json", "path to persistent state file")
+	pprofAddr := flag.String("pprof-addr", "127.0.0.1:6060", "listen address for the pprof/debug endpoint; keep it non-public (localhost or the WireGuard IP), never the public listener. Empty disables it.")
 	flag.Parse()
 
 	s, err := newStore(*statePath)
 	if err != nil {
 		log.Fatalf("load state: %v", err)
+	}
+
+	if *pprofAddr != "" {
+		go pprofserver.Start(*pprofAddr)
 	}
 
 	mux := http.NewServeMux()
