@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/pending_change.dart' as model;
+import 'package:sharedinbox/core/models/send_timing.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -5269,7 +5270,14 @@ class EmailRepositoryImpl implements EmailRepository {
     final password = await _accounts.getPassword(accountId);
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _sendEmailImap(account, password, draft);
+        // Direct (non-queued) send: nothing waited in the outbox, so timing is
+        // collected only to satisfy the phase instrumentation and discarded.
+        await _sendEmailImap(
+          account,
+          password,
+          draft,
+          SendTiming(queuedFor: Duration.zero),
+        );
       case account_model.AccountType.jmap:
         await _sendEmailJmap(account, password, draft);
     }
@@ -5376,6 +5384,11 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<int> flushOutbox(String accountId, String password) async {
     final account = (await _accounts.getAccount(accountId))!;
+    // Per-row timing breakdowns, keyed by outbox row id, so the log observer
+    // can report *why* each send took as long as it did (#801). Scoped to this
+    // flush call rather than an instance field so concurrent per-account
+    // flushes never clobber each other's numbers.
+    final timings = <int, SendTiming>{};
     return _outbox.flush(
       accountId,
       (job) async {
@@ -5388,10 +5401,15 @@ class EmailRepositoryImpl implements EmailRepository {
             );
           }
         }
+        final timing = SendTiming(
+          queuedFor: DateTime.now().difference(job.createdAt),
+        );
+        timings[job.id] = timing;
+        final stopwatch = Stopwatch()..start();
         try {
           switch (account.type) {
             case account_model.AccountType.imap:
-              await _sendEmailImap(account, password, job.draft);
+              await _sendEmailImap(account, password, job.draft, timing);
             case account_model.AccountType.jmap:
               await _sendEmailJmap(account, password, job.draft);
           }
@@ -5409,9 +5427,11 @@ class EmailRepositoryImpl implements EmailRepository {
             throw PermanentSendException('JMAP rejected: ${e.message}');
           }
           rethrow;
+        } finally {
+          timing.total = stopwatch.elapsed;
         }
       },
-      observer: _outboxLogObserver(accountId),
+      observer: _outboxLogObserver(accountId, timings),
     );
   }
 
@@ -5419,7 +5439,10 @@ class EmailRepositoryImpl implements EmailRepository {
   // hits Retry on a queued message actually sees why it did or did not send
   // (previously the failure was only stored in `outbox.lastError` and the
   // log stayed silent — see #323).
-  OutboxFlushObserver? _outboxLogObserver(String accountId) {
+  OutboxFlushObserver? _outboxLogObserver(
+    String accountId,
+    Map<int, SendTiming> timings,
+  ) {
     final logger = _appLogger;
     if (logger == null) return null;
     String describe(OutboxJob job) {
@@ -5454,20 +5477,30 @@ class EmailRepositoryImpl implements EmailRepository {
         );
       },
       onOk: (job) {
+        // Attach the timing breakdown so a user asking "why did sending take so
+        // long?" can read the answer straight off the log entry (#801): how
+        // long the message waited in the queue vs. how long each network leg
+        // took.
+        final timing = timings.remove(job.id);
         unawaited(
           logger.info(
             'outbox.send.ok',
-            'Queued message ${describe(job)} sent',
+            'Queued message ${describe(job)} sent'
+                '${timing == null ? '' : ' — ${timing.summary}'}',
             accountId: accountId,
             emailId: 'outbox:${job.id}',
             data: {
               'outboxRowId': job.id,
               'attempts': job.attempts + 1,
+              if (timing != null) ...timing.toLogData(),
             },
           ),
         );
       },
       onTransient: (job, error, stack, nextAttemptAt) {
+        // Report the timing even on failure — a phase that timed out is exactly
+        // the slow leg the user is hunting for.
+        final timing = timings.remove(job.id);
         unawaited(
           logger.warn(
             'outbox.send.transient_error',
@@ -5479,6 +5512,7 @@ class EmailRepositoryImpl implements EmailRepository {
               'outboxRowId': job.id,
               'attempts': job.attempts + 1,
               'nextAttemptAt': nextAttemptAt.toIso8601String(),
+              if (timing != null) ...timing.toLogData(),
             },
             error: error,
             stack: stack,
@@ -5486,6 +5520,7 @@ class EmailRepositoryImpl implements EmailRepository {
         );
       },
       onPermanent: (job, error) {
+        final timing = timings.remove(job.id);
         unawaited(
           logger.error(
             'outbox.send.permanent_error',
@@ -5495,6 +5530,7 @@ class EmailRepositoryImpl implements EmailRepository {
             data: {
               'outboxRowId': job.id,
               'attempts': job.attempts + 1,
+              if (timing != null) ...timing.toLogData(),
             },
             error: error,
           ),
@@ -5521,6 +5557,7 @@ class EmailRepositoryImpl implements EmailRepository {
     account_model.Account account,
     String password,
     model.EmailDraft draft,
+    SendTiming timing,
   ) async {
     final builder = imap.MessageBuilder()
       ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
@@ -5545,6 +5582,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _effectiveUsername(account),
         password,
       ).timeout(_sendOperationTimeout),
+      timing: timing,
     );
     try {
       await _withPhase(
@@ -5552,6 +5590,7 @@ class EmailRepositoryImpl implements EmailRepository {
         smtpEndpoint,
         () =>
             smtpClient.sendMessage(mimeMessage).timeout(_sendOperationTimeout),
+        timing: timing,
       );
     } finally {
       // Quit is a one-liner over the wire — bound it tightly so a wedged
@@ -5572,8 +5611,10 @@ class EmailRepositoryImpl implements EmailRepository {
         _effectiveUsername(account),
         password,
       ).timeout(_sendOperationTimeout),
+      timing: timing,
     );
     try {
+      final createStopwatch = Stopwatch()..start();
       try {
         await imapClient.createMailbox('Sent').timeout(_sendOperationTimeout);
       } on TimeoutException catch (e) {
@@ -5584,6 +5625,8 @@ class EmailRepositoryImpl implements EmailRepository {
         );
       } catch (_) {
         // Already exists — that's fine.
+      } finally {
+        timing.record('IMAP create Sent folder', createStopwatch.elapsed);
       }
       await _withPhase(
         'IMAP append to Sent folder',
@@ -5594,6 +5637,7 @@ class EmailRepositoryImpl implements EmailRepository {
           flags: [r'\Seen'],
           responseTimeout: _sendOperationTimeout,
         ),
+        timing: timing,
       );
     } finally {
       // Logout is best-effort — bound it so a wedged server can't strand the
@@ -5616,12 +5660,18 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<T> _withPhase<T>(
     String phase,
     String endpoint,
-    Future<T> Function() action,
-  ) async {
+    Future<T> Function() action, {
+    SendTiming? timing,
+  }) async {
+    final stopwatch = Stopwatch()..start();
     try {
       return await action();
     } on TimeoutException catch (e) {
       throw _wrapPhaseError(phase, endpoint, e);
+    } finally {
+      // Record even on timeout/error: a phase that hung is the slow leg the
+      // user is looking for (#801).
+      timing?.record(phase, stopwatch.elapsed);
     }
   }
 

@@ -81,6 +81,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
         draft: draft,
         mimeBytes: mimeBytes,
         attempts: row.attempts,
+        createdAt: row.createdAt,
       );
       _safeNotify(() => observer?.onAttempt?.call(job));
       try {
