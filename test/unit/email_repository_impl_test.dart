@@ -1497,6 +1497,45 @@ void main() {
       expect(results.first.subject, 'foobar baz');
     });
 
+    test('searchEmailsGlobal treats a punctuated query as an adjacent phrase',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // The domain 'foo.com' appears as adjacent tokens in this mail only.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('Welcome to foo.com'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+      // 'foo' and 'com' both occur here, but far apart — the old prefix query
+      // ('foo* com*') wrongly matched this; the phrase query must not (#806).
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:2',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 2,
+              subject: const Value('foo news about a random com thing'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // 'foo.com' only matches the mail where the tokens are adjacent.
+      final domain = await r.emails.searchEmailsGlobal(null, 'foo.com');
+      expect(domain.map((e) => e.id), ['acc-1:1']);
+
+      // 'foo com' keeps the implicit-AND behaviour and matches both mails.
+      final words = await r.emails.searchEmailsGlobal(null, 'foo com');
+      expect(words.map((e) => e.id), containsAll(['acc-1:1', 'acc-1:2']));
+      expect(words, hasLength(2));
+    });
+
     test('searchEmailsGlobal matches a single word only in the body', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
