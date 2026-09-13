@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/guettli/sharedinbox/server/internal/pprofserver"
 )
 
 // BugReport represents the data stored in report.json
@@ -503,6 +505,17 @@ func main() {
 			apiBase: apiBase,
 			client:  &http.Client{Timeout: 15 * time.Second},
 		}
+	}
+
+	// pprof runs on its own non-public listener (see pprofserver.Start).
+	// Defaults to localhost; set BUGREPORT_PPROF_ADDR to the WireGuard IP so
+	// Parca can scrape it, or to "off" to disable it entirely.
+	pprofAddr := os.Getenv("BUGREPORT_PPROF_ADDR")
+	if pprofAddr == "" {
+		pprofAddr = "127.0.0.1:6061"
+	}
+	if pprofAddr != "off" {
+		go pprofserver.Start(pprofAddr)
 	}
 
 	mux := http.NewServeMux()

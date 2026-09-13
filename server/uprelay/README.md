@@ -43,6 +43,17 @@ go run ./server/uprelay -addr :8089 -state /var/lib/uprelay/state.json
 `state.json` is created on first write. Container/k8s users should mount it
 as a volume so registrations survive restarts.
 
+### Profiling (pprof)
+
+The relay exposes Go's `net/http/pprof` handlers (heap, goroutine, mutex,
+block, cpu profile, trace) on a **separate** listener, controlled by
+`-pprof-addr` (default `127.0.0.1:6060`). These handlers leak the command
+line, goroutine stacks and live heap, and `profile`/`trace` pin a CPU for the
+profile's whole duration — so this listener must stay off the public
+interface. In production bind it to the WireGuard IP so Parca can scrape it,
+e.g. `-pprof-addr 10.0.0.1:6060`; pass `-pprof-addr ""` to disable it. A bind
+failure only logs; it never takes the relay down.
+
 ## HTTP API
 
 | Method | Path          | Body                                         | Notes                                      |
