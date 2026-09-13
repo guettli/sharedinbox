@@ -59,6 +59,28 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _loadRemoteImages = false;
   final Set<String> _downloading = {};
 
+  /// Non-null while a destructive or move action (delete, archive, spam, move,
+  /// snooze) is running: holds the label shown over a dimmed message body so
+  /// the user gets immediate feedback that their tap took effect, even though
+  /// deleting/moving and loading the next message can take a few seconds
+  /// (#817). Cleared once the action completes — on success that's the moment
+  /// [_navigateTo] swaps in the next mail.
+  String? _actionInFlight;
+
+  /// Runs [mutation] while dimming the current message body and showing
+  /// [label] over it, so a slow delete/move reads as "in progress" rather than
+  /// a frozen, seemingly-unchanged screen (#817). The dim is cleared in a
+  /// `finally` so a failure surfaces the mail again instead of stranding the
+  /// scrim.
+  Future<T> _runDimmed<T>(String label, Future<T> Function() mutation) async {
+    if (mounted) setState(() => _actionInFlight = label);
+    try {
+      return await mutation();
+    } finally {
+      if (mounted) setState(() => _actionInFlight = null);
+    }
+  }
+
   /// Local file paths of image attachments the user has chosen to preview,
   /// keyed by filename. Populated on demand by [_showImage] so images aren't
   /// fetched until asked for (mobile data), and re-used across rebuilds.
@@ -248,7 +270,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               onPressed: () async {
                 unawaited(HapticFeedback.heavyImpact());
                 final nextEmail = await _getNextEmailIfNeeded(header);
-                final destPath = await repo.deleteEmail(widget.emailId);
+                final destPath = await _runDimmed(
+                  'Deleting…',
+                  () => repo.deleteEmail(widget.emailId),
+                );
 
                 if (header != null) {
                   // Fire-and-forget so the state update (which is applied
@@ -403,19 +428,25 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ),
         ],
       ),
-      body: _wrapWithSwipe(
-        isMobile: isMobile,
-        prev: prevItem,
-        next: nextItem,
-        child: detail.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _buildLoadError(context, e),
-          data: (d) {
-            final trusted = ref.watch(trustedImageSendersProvider).value ??
-                const <String>[];
-            return _buildBody(context, d.$1, d.$2, trusted);
-          },
-        ),
+      body: Stack(
+        children: [
+          _wrapWithSwipe(
+            isMobile: isMobile,
+            prev: prevItem,
+            next: nextItem,
+            child: detail.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _buildLoadError(context, e),
+              data: (d) {
+                final trusted = ref.watch(trustedImageSendersProvider).value ??
+                    const <String>[];
+                return _buildBody(context, d.$1, d.$2, trusted);
+              },
+            ),
+          ),
+          if (_actionInFlight != null)
+            _buildActionScrim(context, _actionInFlight!),
+        ],
       ),
     );
   }
@@ -446,6 +477,31 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         }
       },
       child: child,
+    );
+  }
+
+  /// Semi-transparent scrim drawn over the message body while a destructive or
+  /// move action runs. Grays out the mail the user just acted on and names the
+  /// action in progress, and absorbs taps so the dimmed mail can't be acted on
+  /// twice while the first action is still in flight (#817).
+  Widget _buildActionScrim(BuildContext context, String label) {
+    final theme = Theme.of(context);
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: theme.colorScheme.surface.withValues(alpha: 0.7),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: AppSpacing.md),
+                Text(label, style: theme.textTheme.titleMedium),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1155,9 +1211,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await ref
-        .read(emailRepositoryProvider)
-        .moveEmail(widget.emailId, mailbox.path);
+    await _runDimmed(
+      'Archiving…',
+      () => ref
+          .read(emailRepositoryProvider)
+          .moveEmail(widget.emailId, mailbox.path),
+    );
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1193,9 +1252,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await ref
-        .read(emailRepositoryProvider)
-        .moveEmail(widget.emailId, mailbox.path);
+    await _runDimmed(
+      'Marking as spam…',
+      () => ref
+          .read(emailRepositoryProvider)
+          .moveEmail(widget.emailId, mailbox.path),
+    );
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1234,9 +1296,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await ref
-        .read(emailRepositoryProvider)
-        .moveEmail(widget.emailId, mailbox.path);
+    await _runDimmed(
+      'Moving to Inbox…',
+      () => ref
+          .read(emailRepositoryProvider)
+          .moveEmail(widget.emailId, mailbox.path),
+    );
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1364,9 +1429,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       destination = mailbox.path;
     }
 
-    await ref
-        .read(emailRepositoryProvider)
-        .moveEmail(widget.emailId, destination);
+    await _runDimmed(
+      'Moving…',
+      () => ref
+          .read(emailRepositoryProvider)
+          .moveEmail(widget.emailId, destination),
+    );
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1446,7 +1514,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       originalEmails: [header],
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    await repo.snoozeEmail(widget.emailId, until);
+    await _runDimmed(
+      'Snoozing…',
+      () => repo.snoozeEmail(widget.emailId, until),
+    );
 
     if (context.mounted) {
       context.showAppSnackBar(
