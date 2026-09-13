@@ -56,7 +56,9 @@ void main() {
       final timing = SendTiming(queuedFor: const Duration(seconds: 90))
         ..record('IMAP connect/login', const Duration(milliseconds: 900))
         ..record(
-            'IMAP append to Sent folder', const Duration(milliseconds: 700))
+          'IMAP append to Sent folder',
+          const Duration(milliseconds: 700),
+        )
         ..total = const Duration(milliseconds: 1600);
 
       expect(timing.toLogData(), {
