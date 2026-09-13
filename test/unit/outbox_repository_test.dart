@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:drift/drift.dart' show OrderingTerm;
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
@@ -96,6 +96,29 @@ void main() {
         expect(seen, ['Drain me']);
         final remaining = await db.select(db.outbox).get();
         expect(remaining, isEmpty);
+      },
+    );
+
+    test(
+      'flush hands the sender the row createdAt so it can time the queue wait',
+      () async {
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        final repo = OutboxRepositoryImpl(db);
+        await repo.enqueue(_accountId, _makeDraft());
+
+        // Backdate the queued row so the sender sees a non-trivial wait.
+        final queuedAt = DateTime(2026, 1, 1, 9);
+        await db.update(db.outbox).write(
+              OutboxCompanion(createdAt: Value(queuedAt)),
+            );
+
+        DateTime? seenCreatedAt;
+        await repo.flush(_accountId, (job) async {
+          seenCreatedAt = job.createdAt;
+        });
+
+        expect(seenCreatedAt, queuedAt);
       },
     );
 

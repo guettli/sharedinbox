@@ -105,6 +105,7 @@ class OutboxJob {
     required this.draft,
     required this.mimeBytes,
     required this.attempts,
+    required this.createdAt,
   });
 
   final int id;
@@ -112,4 +113,8 @@ class OutboxJob {
   final EmailDraft draft;
   final List<int> mimeBytes;
   final int attempts;
+
+  /// When the message was first queued. Lets the sender report how long the
+  /// message waited in the outbox before this attempt began (#801).
+  final DateTime createdAt;
 }

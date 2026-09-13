@@ -310,6 +310,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       // Enqueue rather than send-and-await so a flaky network never blocks the
       // UI. The outbox is drained on every sync cycle (see AccountSyncManager).
       await ref.read(emailRepositoryProvider).enqueueSend(_accountId!, draft);
+      // Wake the sync loop so the message goes out now instead of waiting for
+      // the next cycle — an IMAP loop can sit in IDLE for many minutes between
+      // cycles, which is why sending "took several minutes" (#801). Mirrors the
+      // kick the outbox Retry button already does.
+      ref.read(syncNowProvider)(_accountId!);
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on.
       if (_draftId != null) {
