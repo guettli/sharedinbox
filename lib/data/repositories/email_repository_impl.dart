@@ -6307,16 +6307,29 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Converts a user query string into an FTS5 match expression.
-  /// Each whitespace-separated word becomes a prefix term (word*) so that
-  /// partial words still match. Special FTS5 characters are stripped.
+  ///
+  /// The query is first split on whitespace into the chunks the user actually
+  /// typed. A plain chunk (`foo`) becomes a prefix term (`foo*`) so partial
+  /// words still match while typing. A punctuated chunk (`foo.com`) is turned
+  /// into an adjacent phrase (`"foo com" *`): the default `unicode61`
+  /// tokenizer splits on the punctuation on the index side too, so requiring
+  /// the tokens to stay adjacent is the closest FTS5 can get to an exact
+  /// "foo.com" match — and, unlike the old `foo* com*`, it no longer matches
+  /// mails that merely contain `foo` and `com` far apart (#806). The trailing
+  /// `*` keeps prefix matching on the last token (`foo.co` → `"foo co" *`).
+  /// Separate chunks are still combined with FTS5's implicit AND, so
+  /// `foo com` finds mails containing both words anywhere.
   static String _toFtsQuery(String query) {
-    final words = query
-        .trim()
-        .split(RegExp(r'[^\w]+'))
-        .where((w) => w.isNotEmpty)
-        .toList();
-    if (words.isEmpty) return '';
-    return words.map((w) => '$w*').join(' ');
+    final terms = <String>[];
+    for (final chunk in query.trim().split(RegExp(r'\s+'))) {
+      final tokens =
+          chunk.split(RegExp(r'[^\w]+')).where((t) => t.isNotEmpty).toList();
+      if (tokens.isEmpty) continue;
+      terms.add(
+        tokens.length == 1 ? '${tokens.single}*' : '"${tokens.join(' ')}" *',
+      );
+    }
+    return terms.join(' ');
   }
 
   @override
