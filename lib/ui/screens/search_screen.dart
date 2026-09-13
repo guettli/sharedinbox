@@ -20,13 +20,25 @@ final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
 });
 
 class SearchScreen extends ConsumerStatefulWidget {
-  const SearchScreen({super.key, this.accountId, this.initialFilter});
+  const SearchScreen({
+    super.key,
+    this.accountId,
+    this.initialFilter,
+    this.initialQuery,
+  });
   final String? accountId;
 
   /// When non-null, the screen opens in advanced mode with this filter
   /// pre-loaded and runs the structured search immediately. Used by the
   /// "Find similar emails" action.
   final FilterGroup? initialFilter;
+
+  /// When non-empty (and [initialFilter] is not given), the screen opens in
+  /// advanced mode seeded with a single `subject contains <query>` condition
+  /// and runs the structured search immediately. Lets the folder search bar
+  /// hand its typed text off to advanced search as a starting point the user
+  /// can refine.
+  final String? initialQuery;
 
   @override
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
@@ -69,13 +81,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _focusNode.addListener(() {
       if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
     });
-    if (widget.initialFilter != null && !widget.initialFilter!.isEmpty) {
+    final seed = _seedFilter();
+    if (seed != null) {
       _advancedMode = true;
-      _filterGroup = widget.initialFilter!;
+      _filterGroup = seed;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_searchStructured());
       });
     }
+  }
+
+  /// The filter advanced mode should open pre-loaded with, or null to start in
+  /// simple search. [SearchScreen.initialFilter] wins when both are supplied;
+  /// otherwise a non-empty [SearchScreen.initialQuery] becomes a single
+  /// `subject contains <query>` condition.
+  FilterGroup? _seedFilter() {
+    final filter = widget.initialFilter;
+    if (filter != null && !filter.isEmpty) return filter;
+    final query = widget.initialQuery?.trim() ?? '';
+    if (query.isEmpty) return null;
+    return FilterGroup(
+      operator: FilterOperator.and_,
+      children: [
+        FilterLeaf(
+          field: FilterField.subject,
+          comparison: FilterComparison.contains,
+          value: query,
+        ),
+      ],
+    );
   }
 
   @override
