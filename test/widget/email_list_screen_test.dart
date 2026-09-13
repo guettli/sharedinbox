@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/di.dart';
@@ -164,6 +165,87 @@ void main() {
 
       expect(find.text('Found it'), findsOneWidget);
     });
+
+    testWidgets(
+      'tapping Advanced search opens advanced search seeded with the typed '
+      'text',
+      (tester) async {
+        final hit = testEmail(subject: 'Seeded advanced hit');
+        final fakeEmails = FakeEmailRepository(
+          structuredSearchResults: [hit],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeEmails),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(find.byType(TextField), 'quarterly');
+        await tester.pump();
+
+        await tester.tap(find.byIcon(Icons.tune));
+        await tester.pumpAndSettle();
+
+        // We land on advanced search, seeded with a "Subject contains
+        // quarterly" condition that has already run.
+        expect(find.text('Advanced Search'), findsOneWidget);
+        expect(find.widgetWithText(TextField, 'quarterly'), findsOneWidget);
+
+        expect(fakeEmails.structuredSearchCalls, hasLength(1));
+        final leaf =
+            fakeEmails.structuredSearchCalls.first.children.first as FilterLeaf;
+        expect(leaf.field, FilterField.subject);
+        expect(leaf.comparison, FilterComparison.contains);
+        expect(leaf.value, 'quarterly');
+
+        expect(find.text('Seeded advanced hit'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'Advanced search with an empty folder query opens a blank advanced '
+      'search',
+      (tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Nothing typed → advanced search opens blank (simple field showing).
+        await tester.tap(find.byIcon(Icons.tune));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Search emails…'), findsOneWidget);
+        expect(find.text('Advanced Search'), findsNothing);
+      },
+    );
 
     testWidgets(
       'search shows a folder-scope chip named after the current folder',

@@ -308,6 +308,23 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
                   tooltip: 'Clear search',
                   onPressed: () => _searchController.clear(),
                 ),
+              IconButton(
+                icon: const Icon(Icons.tune),
+                tooltip: 'Advanced search',
+                // Hand any text typed here to advanced search as a starting
+                // point (seeded as a subject condition the user can refine).
+                onPressed: () {
+                  final query = _searchController.text.trim();
+                  unawaited(
+                    context.push(
+                      Uri(
+                        path: '/accounts/${widget.accountId}/search',
+                        queryParameters: query.isEmpty ? null : {'q': query},
+                      ).toString(),
+                    ),
+                  );
+                },
+              ),
             ],
             onChanged: _onSearchChanged,
             onSubmitted: (value) {

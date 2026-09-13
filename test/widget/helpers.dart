@@ -757,8 +757,11 @@ Widget buildApp({
           ),
           GoRoute(
             path: ':accountId/search',
-            builder: (ctx, state) =>
-                SearchScreen(accountId: state.pathParameters['accountId']!),
+            builder: (ctx, state) => SearchScreen(
+              accountId: state.pathParameters['accountId']!,
+              initialFilter: state.extra as FilterGroup?,
+              initialQuery: state.uri.queryParameters['q'],
+            ),
           ),
           GoRoute(
             path: ':accountId/emails/by-address/:address',
