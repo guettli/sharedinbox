@@ -121,6 +121,46 @@ void main() {
       },
     );
 
+    testWidgets(
+      'kicks the sync loop after queueing so the message goes out now, not '
+      'on the next cycle (#801)',
+      (tester) async {
+        final kicked = <String>[];
+        final email = FakeEmailRepository();
+        final router = _homeAndCompose();
+        await tester.pumpWidget(
+          _wrap(
+            router: router,
+            overrides: _composeOverrides(
+              email: email,
+              syncNow: (accountId) {
+                kicked.add(accountId);
+                return true;
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        unawaited(router.push('/compose'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com',
+        );
+        await tester.pump();
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pumpAndSettle();
+
+        // The draft was queued and the sync loop was woken with the same
+        // account, so the outbox drains immediately instead of after the next
+        // IDLE cycle.
+        expect(email.sentEmailAccountId, kTestAccount.id);
+        expect(kicked, [kTestAccount.id]);
+      },
+    );
+
     testWidgets('appends the account signature on a new message', (
       tester,
     ) async {
@@ -310,14 +350,17 @@ class _RecordingDraftRepository extends FakeDraftRepository {
 List<Override> _composeOverrides({
   List<Account> accounts = const [kTestAccount],
   FakeDraftRepository? drafts,
+  FakeEmailRepository? email,
+  bool Function(String accountId)? syncNow,
 }) {
   return [
     accountRepositoryProvider.overrideWithValue(
       FakeAccountRepository(accounts),
     ),
     mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
-    emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+    emailRepositoryProvider.overrideWithValue(email ?? FakeEmailRepository()),
     draftRepositoryProvider.overrideWithValue(drafts ?? FakeDraftRepository()),
+    if (syncNow != null) syncNowProvider.overrideWithValue(syncNow),
   ];
 }
 

@@ -165,6 +165,101 @@ void main() {
       expect(find.text('Found it'), findsOneWidget);
     });
 
+    testWidgets(
+      'search shows a folder-scope chip named after the current folder',
+      (tester) async {
+        const mailbox = Mailbox(
+          id: 'acc-1:Work',
+          accountId: 'acc-1',
+          path: 'Work',
+          name: 'Work',
+          unreadCount: 0,
+          totalCount: 0,
+        );
+        final email = testEmail(subject: 'Found it');
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/Work/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([mailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(searchResults: [email]),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'Found');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        // The chip is named after the folder and defaults to folder-only.
+        expect(find.widgetWithText(FilterChip, 'Work'), findsOneWidget);
+        final chip = tester.widget<FilterChip>(find.byType(FilterChip));
+        expect(chip.selected, isTrue);
+        expect(find.text('Found it'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'deselecting the folder chip broadens to an account-wide search',
+      (tester) async {
+        const mailbox = Mailbox(
+          id: 'acc-1:Work',
+          accountId: 'acc-1',
+          path: 'Work',
+          name: 'Work',
+          unreadCount: 0,
+          totalCount: 0,
+        );
+        final email = testEmail(subject: 'Found it');
+        final repo = FakeEmailRepository(
+          searchResults: [email],
+          byAddressResults: [email],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/Work/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository([mailbox]),
+              ),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'Found');
+        await tester.testTextInput.receiveAction(TextInputAction.search);
+        await tester.pumpAndSettle();
+
+        expect(repo.searchGlobalAccountIds, isEmpty);
+
+        // Deselect the folder chip → broaden to the account-wide search.
+        await tester.tap(find.byType(FilterChip));
+        await tester.pumpAndSettle();
+
+        expect(find.widgetWithText(FilterChip, 'All folders'), findsOneWidget);
+        // The shared global search ran, scoped to this account (not all).
+        expect(repo.searchGlobalAccountIds, contains('acc-1'));
+        expect(find.text('Found it'), findsOneWidget);
+      },
+    );
+
     testWidgets('tapping sync button triggers syncEmails', (tester) async {
       await tester.pumpWidget(
         buildApp(
