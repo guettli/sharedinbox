@@ -39,13 +39,14 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/guettli/sharedinbox/server/internal/pprofserver"
 )
 
 // Registration ties one SharedInbox account to its UnifiedPush endpoint.
@@ -248,38 +249,6 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, "ok")
 }
 
-// startPprof serves net/http/pprof on its own listener at addr and blocks until
-// the process exits. These handlers expose the command line, goroutine stacks
-// and live heap, and profile/trace pin a CPU for their whole duration, so addr
-// MUST be a non-public bind (localhost or the WireGuard address) — never the
-// public listener. Bind failures are logged, not fatal, so a missing WireGuard
-// interface on a dev box never takes the relay down.
-func startPprof(addr string) {
-	// No WriteTimeout: a 30s CPU profile or trace legitimately holds the
-	// connection open longer than any request timeout we'd want elsewhere.
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           pprofMux(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	log.Printf("pprof listening on %s", addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("pprof server on %s stopped: %v", addr, err)
-	}
-}
-
-// pprofMux builds the mux that startPprof serves. Kept separate so tests can
-// exercise the routing without binding a socket.
-func pprofMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	return mux
-}
-
 func main() {
 	addr := flag.String("addr", ":8089", "listen address")
 	statePath := flag.String("state", "uprelay-state.json", "path to persistent state file")
@@ -292,7 +261,7 @@ func main() {
 	}
 
 	if *pprofAddr != "" {
-		go startPprof(*pprofAddr)
+		go pprofserver.Start(*pprofAddr)
 	}
 
 	mux := http.NewServeMux()
