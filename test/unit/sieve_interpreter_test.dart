@@ -125,6 +125,80 @@ void main() {
     });
   });
 
+  group('AddressCondition', () {
+    test(':is matches the bare address inside "Name <addr>"', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            AddressCondition(['from'], ':is', ['boss@work.com']),
+          ],
+          actions: [FileIntoAction('Work')],
+        ),
+      ];
+      final ctx = interp.execute(
+        rules,
+        _email(from: 'The Boss <boss@work.com>'),
+      );
+      expect(ctx.targetFolders, contains('Work'));
+    });
+
+    test(':is ignores the display name (address semantics)', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            AddressCondition(['from'], ':is', ['boss']),
+          ],
+          actions: [FileIntoAction('Work')],
+        ),
+      ];
+      final ctx = interp.execute(rules, _email(from: 'boss <ceo@work.com>'));
+      expect(ctx.targetFolders, isEmpty);
+    });
+
+    test('envelope "to" matches the recipient address', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            AddressCondition(
+              ['to'],
+              ':is',
+              ['postmaster@x'],
+              isEnvelope: true,
+            ),
+          ],
+          actions: [FileIntoAction('postmaster')],
+        ),
+      ];
+      final ctx = interp.execute(
+        rules,
+        _email(to: 'Postmaster <postmaster@x>'),
+      );
+      expect(ctx.targetFolders, contains('postmaster'));
+    });
+
+    test(':domain matches only the domain part', () {
+      final rules = [
+        SieveRule(
+          joinType: 'single',
+          conditions: [
+            AddressCondition(
+              ['from'],
+              ':is',
+              ['work.com'],
+              addressPart: ':domain',
+            ),
+          ],
+          actions: [FileIntoAction('Work')],
+        ),
+      ];
+      final ctx = interp.execute(rules, _email(from: 'boss@work.com'));
+      expect(ctx.targetFolders, contains('Work'));
+    });
+  });
+
   group('SizeCondition', () {
     test(':over threshold fires', () {
       final rules = [

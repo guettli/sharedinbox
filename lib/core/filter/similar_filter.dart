@@ -33,3 +33,30 @@ FilterGroup similarFilterFor(Email seed) {
 
   return FilterGroup(operator: FilterOperator.and_, children: children);
 }
+
+/// Builds the [FilterGroup] that powers "search all mail involving this sender"
+/// — the from address of the opened mail matched with `contains` against
+/// `from`, `to` and `cc`, OR-combined so any hop involving the address counts.
+/// Returns an empty group when the seed has no `from` address, since a blank
+/// `contains` would match every mail.
+FilterGroup senderFilterFor(Email seed) {
+  if (seed.from.isEmpty) {
+    return FilterGroup.empty();
+  }
+  final addr = seed.from.first.email;
+  return FilterGroup(
+    operator: FilterOperator.or_,
+    children: [
+      for (final field in const [
+        FilterField.from_,
+        FilterField.to,
+        FilterField.cc,
+      ])
+        FilterLeaf(
+          field: field,
+          comparison: FilterComparison.contains,
+          value: addr,
+        ),
+    ],
+  );
+}

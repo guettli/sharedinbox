@@ -6,9 +6,13 @@ import 'package:sharedinbox/di.dart';
 
 import 'helpers.dart';
 
-// The inline thread strip shown below the date in the mail detail view (#618):
-// one small line per message in the thread, hidden when there is no thread,
-// with the current mail highlighted and each other line tappable.
+// The conversation reply tree shown below the date in the mail detail view
+// (#754, replacing the flat thread strip of #618): one small line per message
+// in the thread, hidden when there is no thread, with the current mail
+// highlighted and each other line tappable. Cross-folder gathering, reply
+// nesting and folder badges are covered in isolation by
+// conversation_tree_test.dart; this test proves the widget is wired into the
+// detail screen and tap-to-navigate works through the real router.
 void main() {
   Email threadEmail({
     required String id,
@@ -81,7 +85,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('EmailDetailScreen thread strip', () {
+  group('EmailDetailScreen conversation tree', () {
     testWidgets('is hidden when the mail is not part of a thread',
         (tester) async {
       final solo = threadEmail(

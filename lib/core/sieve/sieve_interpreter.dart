@@ -79,6 +79,7 @@ class SieveInterpreter {
   bool _evalCondition(SieveCondition cond, SieveEmailContext email) {
     return switch (cond) {
       final HeaderCondition c => _evalHeader(c, email),
+      final AddressCondition c => _evalAddress(c, email),
       final SizeCondition c => _evalSize(c, email),
     };
   }
@@ -93,6 +94,45 @@ class SieveInterpreter {
       }
     }
     return false;
+  }
+
+  bool _evalAddress(AddressCondition cond, SieveEmailContext email) {
+    for (final header in cond.headers) {
+      for (final value in email.getHeader(header)) {
+        for (final addr in _extractAddresses(value)) {
+          final part = _addressPart(addr, cond.addressPart);
+          for (final key in cond.keyList) {
+            if (_matchString(part, cond.matchType, key)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Pulls the bare address(es) out of a header value that may hold one or more
+  /// `Name <local@domain>` (or plain `local@domain`) entries joined by commas.
+  Iterable<String> _extractAddresses(String value) sync* {
+    for (final part in value.split(',')) {
+      final trimmed = part.trim();
+      if (trimmed.isEmpty) continue;
+      final open = trimmed.lastIndexOf('<');
+      final close = trimmed.lastIndexOf('>');
+      if (open != -1 && close > open) {
+        yield trimmed.substring(open + 1, close).trim();
+      } else {
+        yield trimmed;
+      }
+    }
+  }
+
+  String _addressPart(String address, String part) {
+    final at = address.indexOf('@');
+    return switch (part) {
+      ':localpart' => at == -1 ? address : address.substring(0, at),
+      ':domain' => at == -1 ? '' : address.substring(at + 1),
+      _ => address,
+    };
   }
 
   bool _evalSize(SizeCondition cond, SieveEmailContext email) {

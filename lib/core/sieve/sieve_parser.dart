@@ -6,7 +6,8 @@ import 'package:sharedinbox/core/sieve/sieve_rule.dart';
 ///
 /// Supported commands: require, if, elsif, else, fileinto, keep, discard,
 /// flag, setflag, addflag, stop.
-/// Supported tests: header, address, size, exists, allof, anyof, not, true.
+/// Supported tests: header, address, envelope, size, exists, allof, anyof,
+/// not, true.
 /// Supported match types: :contains, :is, :matches.
 class SieveParser {
   List<SieveRule> parse(String script) {
@@ -174,7 +175,7 @@ class SieveParser {
       return null; // no condition = always matches
     }
 
-    if (word == 'header' || word == 'address') {
+    if (word == 'header') {
       s.readWord();
       s.skipWhitespaceAndComments();
       final matchType = _parseMatchType(s);
@@ -190,6 +191,43 @@ class SieveParser {
       s.skipWhitespaceAndComments();
       final keys = _parseStringOrList(s);
       return HeaderCondition(headers, matchType, keys);
+    }
+
+    if (word == 'address' || word == 'envelope') {
+      s.readWord();
+      final isEnvelope = word == 'envelope';
+      // The match-type, address-part and comparator tags may appear in any
+      // order before the header/key strings (RFC 5228 §5.1/§5.7).
+      var matchType = ':is';
+      var addressPart = ':all';
+      while (true) {
+        s.skipWhitespaceAndComments();
+        final tag = s.peekTaggedArg();
+        if (tag == ':contains' || tag == ':is' || tag == ':matches') {
+          matchType = tag!;
+          s.readWord();
+        } else if (tag == ':all' || tag == ':localpart' || tag == ':domain') {
+          addressPart = tag!;
+          s.readWord();
+        } else if (tag == ':comparator') {
+          s.readWord();
+          s.skipWhitespaceAndComments();
+          _parseStringOrList(s); // discard comparator value
+        } else {
+          break;
+        }
+      }
+      s.skipWhitespaceAndComments();
+      final headers = _parseStringOrList(s);
+      s.skipWhitespaceAndComments();
+      final keys = _parseStringOrList(s);
+      return AddressCondition(
+        headers,
+        matchType,
+        keys,
+        addressPart: addressPart,
+        isEnvelope: isEnvelope,
+      );
     }
 
     if (word == 'exists') {

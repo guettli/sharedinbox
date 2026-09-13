@@ -1252,6 +1252,18 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(notifiedEmails);
             await m.addColumn(accounts, accounts.notificationsEnabled);
           }
+          if (from < 57 && await _tableExists(this, 'emails')) {
+            // Index for gathering a thread across every folder of an account
+            // (#754). The pre-existing emails_thread_id index is keyed on
+            // (account_id, mailbox_path, thread_id), which is not a usable
+            // prefix for an (account_id, thread_id) lookup.
+            await m.createIndex(
+              Index(
+                'emails_account_thread',
+                'CREATE INDEX IF NOT EXISTS emails_account_thread ON emails (account_id, thread_id);',
+              ),
+            );
+          }
         },
       );
 

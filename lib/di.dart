@@ -466,14 +466,15 @@ final undoServiceProvider = NotifierProvider<UndoService, List<UndoAction>>(
   UndoService.new,
 );
 
-/// Streams every message in a thread (oldest first). Backs the inline thread
-/// strip in the mail detail view. Key is `(accountId, mailboxPath, threadId)`.
+/// Streams every message in a thread (oldest first) across all folders of the
+/// account, so Inbox, Sent and Archive copies form one conversation (#754).
+/// Backs the reply tree in the mail detail view. Key is `(accountId, threadId)`.
 final threadEmailsProvider = StreamProvider.autoDispose
-    .family<List<Email>, (String, String, String)>((ref, key) {
-  final (accountId, mailboxPath, threadId) = key;
+    .family<List<Email>, (String, String)>((ref, key) {
+  final (accountId, threadId) = key;
   return ref
       .watch(emailRepositoryProvider)
-      .observeEmailsInThread(accountId, mailboxPath, threadId);
+      .observeThreadAcrossFolders(accountId, threadId);
 });
 
 /// Loads email header + body and marks the email as seen.

@@ -6551,6 +6551,26 @@ class EmailRepositoryImpl implements EmailRepository {
         .map((rows) => rows.map(_toModel).toList());
   }
 
+  @override
+  Stream<List<model.Email>> observeThreadAcrossFolders(
+    String accountId,
+    String threadId,
+  ) {
+    // Same as observeEmailsInThread but without the mailboxPath filter, so a
+    // conversation's Inbox, Sent and Archive copies are gathered together
+    // (#754).
+    return (_db.select(_db.emails)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),
+          )
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sentAt),
+            (t) => OrderingTerm.asc(t.receivedAt),
+          ]))
+        .watch()
+        .map((rows) => rows.map(_toModel).toList());
+  }
+
   model.Email _toModel(Email row) {
     List<model.EmailAddress> parseAddresses(String json) {
       final list = jsonDecode(json) as List<dynamic>;

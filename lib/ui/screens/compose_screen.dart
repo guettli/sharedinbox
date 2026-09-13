@@ -338,6 +338,43 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
   }
 
+  /// Throws away the draft: cancels any pending auto-save, deletes the saved
+  /// row (which also tombstones it on the server, see [DraftRepository]) and
+  /// pops the screen. Clearing [_draftDirty] and setting [_suppressAutoSave]
+  /// stops both the [dispose] flush and the field listeners from resurrecting
+  /// the row after we delete it.
+  Future<void> _discard() async {
+    if (_sending) return;
+    _saveTimer?.cancel();
+    _draftDirty = false;
+    _suppressAutoSave = true;
+    final messenger = context.appMessenger();
+    try {
+      if (_draftId != null) {
+        await _draftRepo.deleteDraft(_draftId!);
+      }
+    } catch (e, stack) {
+      if (!mounted) return;
+      messenger.show(
+        'Discard failed: $e',
+        level: AppLogLevel.error,
+        event: 'compose.discard_failed',
+        accountId: _accountId,
+        error: e,
+        stack: stack,
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
+    if (mounted) {
+      messenger.show(
+        'Draft discarded',
+        duration: const Duration(seconds: 3),
+      );
+      context.pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -354,6 +391,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 ),
               ),
             ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Discard draft',
+            onPressed: _sending ? null : _discard,
+          ),
           IconButton(
             icon: const Icon(Icons.attach_file),
             tooltip: 'Add attachment',

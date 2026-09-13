@@ -327,5 +327,47 @@ else { keep; }
       expect(cond.matchType, ':contains');
       expect(cond.keyList, contains('x@y.com'));
     });
+
+    test('address test produces an AddressCondition', () {
+      final rules = parser.parse(
+        'if address :is "from" "x@y.com" { keep; }',
+      );
+      final cond = rules.first.conditions.first as AddressCondition;
+      expect(cond.headers, contains('from'));
+      expect(cond.matchType, ':is');
+      expect(cond.isEnvelope, isFalse);
+      expect(cond.addressPart, ':all');
+      expect(cond.keyList, contains('x@y.com'));
+    });
+
+    test('envelope test is flagged as such and parses address-part tags', () {
+      final rules = parser.parse(
+        'require ["envelope"];\n'
+        'if envelope :domain :is "to" "example.com" { keep; }',
+      );
+      final cond = rules.first.conditions.first as AddressCondition;
+      expect(cond.isEnvelope, isTrue);
+      expect(cond.matchType, ':is');
+      expect(cond.addressPart, ':domain');
+      expect(cond.headers, contains('to'));
+    });
+  });
+
+  group('SieveParser — address / envelope semantics', () {
+    test('address :is matches the bare address, not the display name', () {
+      const script = 'if address :is "from" "boss@work.com" { discard; }';
+      var ctx = run(script, _email(from: 'The Boss <boss@work.com>'));
+      expect(ctx.isCancelled, isTrue);
+
+      ctx = run(script, _email(from: 'The Boss <someone@work.com>'));
+      expect(ctx.isCancelled, isFalse);
+    });
+
+    test('envelope :is "to" matches the recipient address', () {
+      const script = 'require ["envelope"];\n'
+          'if envelope :is "to" "postmaster@x" { discard; }';
+      final ctx = run(script, _email(to: 'Postmaster <postmaster@x>'));
+      expect(ctx.isCancelled, isTrue);
+    });
   });
 }
