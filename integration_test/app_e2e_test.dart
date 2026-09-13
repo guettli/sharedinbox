@@ -101,6 +101,17 @@ Future<void> pumpUntil(
   await tester.pump(const Duration(milliseconds: 300));
 }
 
+/// Taps the AppBar sync button once it is idle.
+///
+/// While a sync is in flight the button renders a CircularProgressIndicator in
+/// place of Icons.sync (see `_buildSyncButton`), so a bare
+/// `tap(find.byIcon(Icons.sync))` races that spinner and finds 0 widgets when a
+/// background sync happens to be running. Wait for the icon to reappear first.
+Future<void> tapSync(WidgetTester tester) async {
+  await pumpUntil(tester, find.byIcon(Icons.sync));
+  await tester.tap(find.byIcon(Icons.sync));
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -319,7 +330,7 @@ void main() {
       // a full per-account sync cycle (flushOutbox + syncMailboxes) so the
       // SMTP send + IMAP APPEND to Sent + Sent-folder discovery all happen.
       _log('sync from INBOX to drain outbox');
-      await tester.tap(find.byIcon(Icons.sync));
+      await tapSync(tester);
 
       // ── Check Sent folder ──────────────────────────────────────────────────
       // The Sent folder is created server-side by the IMAP send, then picked
@@ -346,7 +357,7 @@ void main() {
         }
         // Close drawer, kick another full sync cycle, give it ~5 s.
         await closeDrawerIfOpen();
-        await tester.tap(find.byIcon(Icons.sync));
+        await tapSync(tester);
         for (var i = 0; i < 25; i++) {
           await tester.pump(const Duration(milliseconds: 200));
         }
@@ -356,7 +367,7 @@ void main() {
 
       // Sync Sent folder to fetch the appended message.
       _log('sync Sent');
-      await tester.tap(find.byIcon(Icons.sync));
+      await tapSync(tester);
       await pumpUntil(tester, find.text(subject));
       _log('sync Sent done');
 
@@ -372,7 +383,7 @@ void main() {
       // soon as the DB stream emits after each sync.  Re-tap sync every ~5 s
       // in case Stalwart's local delivery is slightly delayed.
       _log('sync INBOX');
-      await tester.tap(find.byIcon(Icons.sync));
+      await tapSync(tester);
       var tick = 0;
       final inboxDeadline = DateTime.now().add(const Duration(seconds: 60));
       while (!tester.any(find.text(subject))) {
@@ -384,7 +395,7 @@ void main() {
         // Re-tap every ~5 s (25 × 200 ms) in case the first sync fired before
         // the email was delivered.
         if (tick % 25 == 0) {
-          await tester.tap(find.byIcon(Icons.sync));
+          await tapSync(tester);
         }
       }
       await tester.pumpAndSettle();
