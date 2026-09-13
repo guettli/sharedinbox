@@ -185,7 +185,7 @@ void main() {
       expect(find.text('Show image'), findsNothing);
     });
 
-    testWidgets('image attachment offers an inline "Show image" preview', (
+    testWidgets('image attachment auto-loads its inline preview', (
       tester,
     ) async {
       final email = testEmail(hasAttachment: true);
@@ -209,10 +209,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('photo.png'), findsOneWidget);
-      // Displayable images get the image icon and a tap-to-load button rather
-      // than the bare attach_file tile.
       expect(find.byIcon(Icons.image_outlined), findsOneWidget);
-      expect(find.text('Show image'), findsOneWidget);
+      // The user wanted images shown directly (#802): the preview fetches on
+      // its own, so an inline Image.file appears with no "Show image" tap.
+      expect(find.text('Show image'), findsNothing);
+      expect(find.byType(Image), findsOneWidget);
     });
 
     testWidgets(
