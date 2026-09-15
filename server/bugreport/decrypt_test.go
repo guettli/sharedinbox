@@ -8,6 +8,10 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,9 +124,75 @@ func TestDecryptReportTooShort(t *testing.T) {
 	}
 }
 
+// TestDecryptReportBadPrivateKeyLen asserts the private-key length guard fires
+// before any wire parsing (the 100-byte wire is a valid length, so only the
+// short key can be at fault).
 func TestDecryptReportBadPrivateKeyLen(t *testing.T) {
 	if _, err := decryptReport([]byte("short"), nil, make([]byte, 100)); err == nil {
 		t.Fatal("expected private-key length error, got nil")
+	}
+}
+
+// TestDecryptReportWrongPrivateKey: a correctly-sized but unrelated private key
+// must fail at GCM authentication, not silently return garbage.
+func TestDecryptReportWrongPrivateKey(t *testing.T) {
+	keyID, _, pub := newRecipientKey(t)
+	wire := encryptReportForTest(t, keyID, pub, []byte("body"))
+
+	other, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := decryptReport(other.Bytes(), keyID, wire); err == nil {
+		t.Fatal("expected GCM authentication failure with the wrong key, got nil")
+	}
+}
+
+// TestRunDecryptEndToEnd exercises the subcommand entry point: env-provided
+// keypair, a mail.enc file argument, and plaintext written to stdout.
+func TestRunDecryptEndToEnd(t *testing.T) {
+	keyID, priv, pub := newRecipientKey(t)
+	want := []byte("From: x@y.z\r\n\r\nvia runDecrypt")
+	wire := encryptReportForTest(t, keyID, pub, want)
+
+	fullPub := append(append([]byte{}, keyID...), pub...)
+	t.Setenv("REPORT_PRIVATE_KEY", base64.StdEncoding.EncodeToString(priv))
+	t.Setenv("REPORT_PUBLIC_KEY", base64.StdEncoding.EncodeToString(fullPub))
+
+	path := filepath.Join(t.TempDir(), "mail.enc")
+	if err := os.WriteFile(path, wire, 0o600); err != nil {
+		t.Fatalf("write mail.enc: %v", err)
+	}
+
+	// Capture stdout while runDecrypt writes the plaintext.
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	runErr := runDecrypt([]string{path})
+	_ = w.Close()
+	os.Stdout = old
+	if runErr != nil {
+		t.Fatalf("runDecrypt: %v", runErr)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("runDecrypt output mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestRunDecryptMissingEnv: without the key env vars the subcommand errors
+// instead of panicking or producing output.
+func TestRunDecryptMissingEnv(t *testing.T) {
+	t.Setenv("REPORT_PRIVATE_KEY", "")
+	t.Setenv("REPORT_PUBLIC_KEY", "")
+	if err := runDecrypt([]string{"-"}); err == nil {
+		t.Fatal("expected error when key env vars are unset, got nil")
 	}
 }
 

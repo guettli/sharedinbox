@@ -478,10 +478,11 @@ func encryptedMailHandler(storageDir string) http.HandlerFunc {
 // ECIES wire sizes (bytes), matching the app's on-device encryption in
 // lib/core/services/share_encryption_service.dart.
 const (
-	reportKeyIDLen  = 16
-	reportPubKeyLen = 32
-	reportNonceLen  = 12
-	reportMACLen    = 16
+	reportKeyIDLen   = 16
+	reportPubKeyLen  = 32
+	reportPrivKeyLen = 32
+	reportNonceLen   = 12
+	reportMACLen     = 16
 	// reportEncryptionInfo is the HKDF domain-separation label; it must match
 	// the label the app encrypts with (EncryptedReportService.encryptionInfo).
 	reportEncryptionInfo = "sharedinbox-encrypted-report"
@@ -517,8 +518,8 @@ func decryptHint(downloadURL string) string {
 // non-nil it is checked against the identifier embedded in the blob. Returns
 // the original RFC-822 bytes.
 func decryptReport(privateKey, keyID, wire []byte) ([]byte, error) {
-	if len(privateKey) != reportPubKeyLen {
-		return nil, fmt.Errorf("private key must be %d bytes, got %d", reportPubKeyLen, len(privateKey))
+	if len(privateKey) != reportPrivKeyLen {
+		return nil, fmt.Errorf("private key must be %d bytes, got %d", reportPrivKeyLen, len(privateKey))
 	}
 	minLen := reportKeyIDLen + reportPubKeyLen + reportNonceLen + reportMACLen
 	if len(wire) < minLen {
