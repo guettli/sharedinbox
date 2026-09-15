@@ -24,7 +24,7 @@ builds fast; nothing runs a throwaway engine per job.
 
 The engine version is kept in lockstep with the two Dagger CLIs that talk to it
 (the `sharedinbox-arc` runner image and the local dev container). The engine
-runs `github:dagger/nix/v0.21.8#dagger` (pinned in `ansible/p16.yml`); the CLIs
+runs `github:dagger/nix/v0.21.9#dagger` (pinned in `ansible/p16.yml`); the CLIs
 are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
 `scripts/check_dagger_versions.sh` enforces that all three agree — the CLI and
 engine must be the exact same version, there is no fallback when they differ
