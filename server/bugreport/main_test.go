@@ -61,6 +61,53 @@ func encryptedReportBody(t *testing.T, fields map[string]string, mail []byte) (*
 	return buf, mw.FormDataContentType()
 }
 
+// multipartBody builds a multipart body from the given form fields.
+func multipartBody(t *testing.T, fields map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	mw := multipart.NewWriter(buf)
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			t.Fatalf("WriteField: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	return buf, mw.FormDataContentType()
+}
+
+func TestBugReportHandlerDescriptionOptional(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	h := bugReportHandler(dir)
+
+	// An empty description is accepted as long as about_info is present.
+	body, ct := multipartBody(t, map[string]string{"description": "", "about_info": "v1.2.3"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBugReportHandlerRequiresAboutInfo(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	h := bugReportHandler(dir)
+
+	body, ct := multipartBody(t, map[string]string{"description": "it broke"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReportKeyHandler(t *testing.T) {
 	raw := make([]byte, 48)
 	for i := range raw {
@@ -156,7 +203,8 @@ func TestEncryptedReportHandlerValidation(t *testing.T) {
 		mail   []byte
 		want   int
 	}{
-		{"missing description", map[string]string{"about_info": "x"}, []byte("c"), http.StatusBadRequest},
+		// The description is optional; only the encrypted mail is required.
+		{"missing description", map[string]string{"about_info": "x"}, []byte("c"), http.StatusCreated},
 		{"missing mail", map[string]string{"description": "d"}, nil, http.StatusBadRequest},
 	}
 	for _, tc := range cases {
