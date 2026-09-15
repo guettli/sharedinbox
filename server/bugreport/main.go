@@ -176,8 +176,9 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		description := r.FormValue("description")
 		aboutInfo := r.FormValue("about_info")
 
-		if description == "" || aboutInfo == "" {
-			writeJSONError(w, http.StatusBadRequest, "description and about_info are required fields.")
+		// The description is optional; about_info is attached automatically.
+		if aboutInfo == "" {
+			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
 			return
 		}
 
@@ -361,11 +362,8 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
+		// The description is optional; the encrypted mail carries the report.
 		description := r.FormValue("description")
-		if description == "" {
-			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
-			return
-		}
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
 		if len(mailFiles) == 0 {
 			writeJSONError(w, http.StatusBadRequest, "encrypted_mail is a required file.")
@@ -428,8 +426,10 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 func buildIssue(report BugReport, downloadURL string) (title, body string) {
 	title = "Bug report with encrypted mail"
 	var b bytes.Buffer
-	b.WriteString(report.Description)
-	b.WriteString("\n\n---\n\n")
+	if report.Description != "" {
+		b.WriteString(report.Description)
+		b.WriteString("\n\n---\n\n")
+	}
 	b.WriteString("📎 **Encrypted mail:** ")
 	b.WriteString(downloadURL)
 	b.WriteString("\n\n_The attached mail is end-to-end encrypted; only the maintainer can decrypt it._\n")
