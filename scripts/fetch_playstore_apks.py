@@ -71,14 +71,28 @@ _NON_SERVING_RELEASE_STATUSES = frozenset({"draft", "statusUnspecified"})
 # which crashed the whole fetch and filed a spurious "Firebase Tests failed"
 # issue even though the binary was fine and Play was simply still generating.
 # We treat these as transient and keep polling within the deadline, exactly
-# like a "not ready yet" 404. HTTP status errors (4xx/5xx) are deliberately NOT
-# included — those still propagate and fail loudly so a real Play API problem
-# stays visible.
+# like a "not ready yet" 404. Retriable HTTP status codes (see
+# :data:`_RETRIABLE_HTTP_STATUS_CODES`) are handled alongside these; any other
+# HTTP status error — a 4xx misconfiguration — still propagates and fails
+# loudly so a real Play API problem stays visible.
 _TRANSIENT_REQUEST_ERRORS = (
     requests.exceptions.ConnectionError,
     requests.exceptions.ChunkedEncodingError,
     requests.exceptions.Timeout,
 )
+
+# HTTP status codes that mean "Play is momentarily unavailable, retry" rather
+# than "your request is wrong". The observed failure (see #826) was a one-off
+# ``503 Service Unavailable`` on the POST .../edits call that opens an edit to
+# read the alpha track — a transient Google-side outage that crashed the whole
+# fetch and filed a spurious "Firebase Tests failed" issue even though the
+# binary was fine and Play recovered on the very next scheduled run. These are
+# the standard retriable statuses from Google's API design guide (429 rate
+# limiting plus the 5xx server errors); we retry them with the same bounded
+# backoff as a dropped connection. Genuine client errors (4xx other than 429)
+# are deliberately absent, so a real misconfiguration still propagates on the
+# first attempt and stays visible.
+_RETRIABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # How many times to attempt a single Play request that drops its connection
 # transiently, and how long to wait between attempts. Kept small and quick:
@@ -95,28 +109,55 @@ _REQUEST_RETRY_BACKOFF_SECONDS = int(
 )
 
 
+def _is_transient_play_error(exc):
+    """Whether ``exc`` is a transient Play API hiccup worth retrying.
+
+    Two categories count as transient: a connection-level drop
+    (:data:`_TRANSIENT_REQUEST_ERRORS` — the request never got an answer) and
+    an HTTP response carrying a retriable status code
+    (:data:`_RETRIABLE_HTTP_STATUS_CODES`, e.g. a 503 Service Unavailable —
+    see #826). Every other error — an HTTP status error with a non-retriable
+    code (a 4xx misconfiguration) or one carrying no response at all — is a
+    hard problem that must surface, so this returns ``False`` and callers
+    re-raise it on the first attempt.
+    """
+    if isinstance(exc, _TRANSIENT_REQUEST_ERRORS):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = getattr(exc, "response", None)
+        return (
+            response is not None
+            and response.status_code in _RETRIABLE_HTTP_STATUS_CODES
+        )
+    return False
+
+
 def _with_transient_retries(operation, description):
-    """Run ``operation()``, retrying it on a transient Play connection drop.
+    """Run ``operation()``, retrying it on a transient Play API hiccup.
 
     The Play Developer API occasionally closes a connection without a response
     (a ``RemoteDisconnected`` that requests surfaces as ``ConnectionError`` —
-    see :data:`_TRANSIENT_REQUEST_ERRORS`). :func:`_poll_generated_apks`
-    already tolerates that on its GET, but the version-code resolution and the
-    split-APK download run outside that loop, so a single drop there crashed
-    the whole fetch (see #457). Retry the operation a bounded number of times
-    with a short backoff so a one-off blip no longer turns a healthy binary
-    into a red build; if every attempt drops, re-raise the last error so a
-    genuinely broken Play API still fails loudly.
+    see :data:`_TRANSIENT_REQUEST_ERRORS`) or answers a momentarily-unavailable
+    backend with a retriable HTTP status (a 503 Service Unavailable and friends
+    — see :data:`_RETRIABLE_HTTP_STATUS_CODES`, #826).
+    :func:`_poll_generated_apks` already tolerates those on its GET, but the
+    version-code resolution and the split-APK download run outside that loop,
+    so a single blip there crashed the whole fetch (see #457, #826). Retry the
+    operation a bounded number of times with a short backoff so a one-off hiccup
+    no longer turns a healthy binary into a red build; if every attempt fails,
+    re-raise the last error so a genuinely broken Play API still fails loudly.
 
-    HTTP status errors (4xx/5xx) are raised by the operation's own
-    ``raise_for_status`` and are NOT in the transient set, so they propagate on
-    the first attempt and are never retried away.
+    Any other HTTP status error (a 4xx misconfiguration, or one carrying no
+    response) is a hard problem, so :func:`_is_transient_play_error` returns
+    ``False`` for it and it propagates on the first attempt, never retried away.
     """
     last_exc = None
     for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
         try:
             return operation()
-        except _TRANSIENT_REQUEST_ERRORS as exc:
+        except requests.exceptions.RequestException as exc:
+            if not _is_transient_play_error(exc):
+                raise
             last_exc = exc
             if attempt >= _REQUEST_MAX_ATTEMPTS:
                 break
@@ -166,20 +207,24 @@ def _resolve_version_code(session, package, track):
     maximum so a served-but-genuinely-stuck version still surfaces (and skips
     via PENDING) rather than erroring.
     """
-    edit_resp = _with_transient_retries(
-        lambda: session.post(f"{_BASE}/{package}/edits", json={}, timeout=30),
-        "open a Play edit",
-    )
-    edit_resp.raise_for_status()
+    def _open_edit():
+        # raise_for_status must run *inside* the retried operation so a
+        # retriable 503 on this POST is retried rather than propagating (#826).
+        resp = session.post(f"{_BASE}/{package}/edits", json={}, timeout=30)
+        resp.raise_for_status()
+        return resp
+
+    edit_resp = _with_transient_retries(_open_edit, "open a Play edit")
     edit_id = edit_resp.json()["id"]
     try:
-        resp = _with_transient_retries(
-            lambda: session.get(
+        def _read_track():
+            resp = session.get(
                 f"{_BASE}/{package}/edits/{edit_id}/tracks/{track}", timeout=30
-            ),
-            f"read the {track} track",
-        )
-        resp.raise_for_status()
+            )
+            resp.raise_for_status()
+            return resp
+
+        resp = _with_transient_retries(_read_track, f"read the {track} track")
         releases = resp.json().get("releases") or []
     finally:
         try:
@@ -217,19 +262,22 @@ def _poll_generated_apks(session, package, version_code):
     occasionally longer) so waiting inside a single run is cheaper than
     letting the next hourly cron pick it up.
 
-    A transient connection error from Play (a dropped/reset connection, read
-    timeout — see :data:`_TRANSIENT_REQUEST_ERRORS`) is treated like a "not
-    ready yet" 404 and retried within the same deadline rather than crashing
-    the run (see #455). Only if such errors persist past the deadline do we
-    give up — with a :class:`TimeoutError` that names the last one so the
-    cause stays visible in the logs.
+    A transient Play hiccup — a dropped/reset connection or read timeout (see
+    :data:`_TRANSIENT_REQUEST_ERRORS`), or a retriable HTTP status such as a
+    503 Service Unavailable (see :data:`_RETRIABLE_HTTP_STATUS_CODES`, #826) —
+    is treated like a "not ready yet" 404 and retried within the same deadline
+    rather than crashing the run (see #455). Only if such errors persist past
+    the deadline do we give up — with a :class:`TimeoutError` that names the
+    last one so the cause stays visible in the logs.
     """
     deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
     last_transient = None
     while True:
         try:
             listing = _list_generated_apks(session, package, version_code)
-        except _TRANSIENT_REQUEST_ERRORS as exc:
+        except requests.exceptions.RequestException as exc:
+            if not _is_transient_play_error(exc):
+                raise
             last_transient = exc
             listing = None
             reason = (
