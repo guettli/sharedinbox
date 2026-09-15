@@ -70,6 +70,17 @@ only `REPORT_PUBLIC_KEY = base64(keyId[16] || publicKey[32])`.
 
 ### Reading a report
 
-Download `mail.enc` from the issue link and decrypt it with the private key via
-`ShareEncryptionService.decryptBytes(..., info: 'sharedinbox-encrypted-report')`,
-which returns the original `.eml` bytes.
+Each encrypted-report issue carries a **"How to decrypt"** section with a
+ready-to-run command. The `bugreport` binary has a `decrypt` subcommand that
+reads `REPORT_PRIVATE_KEY` + `REPORT_PUBLIC_KEY` from the environment (an
+AgentLoop `sharedinbox` worker already has both) and turns a `mail.enc` blob
+back into the original `.eml`:
+
+```sh
+curl -fsSL '<download URL from the issue>' -o mail.enc
+go run ./server/bugreport decrypt mail.enc > mail.eml   # or: decrypt - < mail.enc
+```
+
+The subcommand implements the same ECIES scheme as the app
+(`ShareEncryptionService.decryptBytes(..., info: 'sharedinbox-encrypted-report')`),
+so a Dart tool with the private key works too.
