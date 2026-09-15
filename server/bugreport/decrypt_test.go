@@ -68,33 +68,33 @@ func encryptReportForTest(t *testing.T, recipientKeyID, recipientPub, plaintext 
 	return bytes.Join([][]byte{recipientKeyID, eph.PublicKey().Bytes(), nonce, ciphertext}, nil)
 }
 
-func TestDecryptReportRoundTrip(t *testing.T) {
+// assertRoundTrip encrypts want to a fresh recipient key, decrypts it back and
+// checks equality. When checkKeyID is true the embedded key ID is verified;
+// when false a nil keyID is passed (the "skip the check" path).
+func assertRoundTrip(t *testing.T, checkKeyID bool, want []byte) {
+	t.Helper()
 	keyID, priv, pub := newRecipientKey(t)
-	want := []byte("From: a@b.c\r\nSubject: bug\r\n\r\nsomething broke\r\n")
-
 	wire := encryptReportForTest(t, keyID, pub, want)
 
-	got, err := decryptReport(priv, keyID, wire)
+	var wantKeyID []byte
+	if checkKeyID {
+		wantKeyID = keyID
+	}
+	got, err := decryptReport(priv, wantKeyID, wire)
 	if err != nil {
-		t.Fatalf("decryptReport: %v", err)
+		t.Fatalf("decryptReport (checkKeyID=%v): %v", checkKeyID, err)
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("round trip mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 
-func TestDecryptReportNilKeyIDSkipsCheck(t *testing.T) {
-	keyID, priv, pub := newRecipientKey(t)
-	want := []byte("hello")
-	wire := encryptReportForTest(t, keyID, pub, want)
+func TestDecryptReportRoundTrip(t *testing.T) {
+	assertRoundTrip(t, true, []byte("From: a@b.c\r\nSubject: bug\r\n\r\nsomething broke\r\n"))
+}
 
-	got, err := decryptReport(priv, nil, wire)
-	if err != nil {
-		t.Fatalf("decryptReport with nil keyID: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+func TestDecryptReportNilKeyIDSkipsCheck(t *testing.T) {
+	assertRoundTrip(t, false, []byte("hello"))
 }
 
 func TestDecryptReportKeyIDMismatch(t *testing.T) {
