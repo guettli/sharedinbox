@@ -36,6 +36,7 @@ import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
+import 'package:sharedinbox/ui/screens/shrink_image_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
@@ -121,6 +122,10 @@ final router = GoRouter(
             GoRoute(
               path: 'push',
               builder: (ctx, state) => const PushSettingsScreen(),
+            ),
+            GoRoute(
+              path: 'shrink-image',
+              builder: (ctx, state) => const ShrinkImageScreen(),
             ),
             GoRoute(
               path: 'trusted-senders',
