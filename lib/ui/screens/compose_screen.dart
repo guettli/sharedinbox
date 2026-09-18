@@ -7,15 +7,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({
@@ -51,6 +55,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool _sending = false;
   final List<_AttachmentInfo> _attachments = [];
   bool _opening = false;
+  // Last shrink settings the user accepted, so re-attaching / adjusting further
+  // images in this compose session starts from the same choices.
+  ImageShrinkSettings _shrinkSettings = ImageShrinkSettings.defaults;
 
   int? _draftId;
   bool _draftDirty = false;
@@ -205,6 +212,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     _toFocus.dispose();
     _ccFocus.dispose();
+    // Drop any temp files created for shrunk attachments.
+    for (final a in _attachments) {
+      if (a.isTemp) unawaited(_deleteTempFile(a.path));
+    }
     // Flush any pending save synchronously — we can't await in dispose, but
     // scheduling a microtask still runs before the isolate exits.
     if (_draftDirty) {
@@ -228,24 +239,95 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (result == null) return;
     final files = result.files.where((f) => f.path != null).toList();
     if (!mounted) return;
-    final newAttachments = <_AttachmentInfo>[];
+    final service = ref.read(imageShrinkServiceProvider);
     for (final file in files) {
       final path = file.path!;
       final stat = await File(path).stat();
-      newAttachments.add(
-        _AttachmentInfo(
-          path: path,
-          filename: file.name,
-          size: stat.size,
-          contentType: _guessMimeType(file.name),
-        ),
+      var info = _AttachmentInfo(
+        path: path,
+        filename: file.name,
+        size: stat.size,
+        contentType: _guessMimeType(file.name),
       );
+      // After attaching an image, offer to shrink it before it goes out.
+      if (service.isShrinkable(info.contentType)) {
+        final shrunk = await _maybeShrink(service, info);
+        if (shrunk != null) info = shrunk;
+      }
+      if (!mounted) return;
+      setState(() => _attachments.add(info));
     }
-    setState(() => _attachments.addAll(newAttachments));
+  }
+
+  /// Shows the shrink dialog for [info] and, if the user accepts, writes the
+  /// re-encoded JPEG to a temp file and returns a replacement attachment.
+  /// Returns null when the user keeps the original or shrinking fails.
+  Future<_AttachmentInfo?> _maybeShrink(
+    ImageShrinkService service,
+    _AttachmentInfo info,
+  ) async {
+    if (!mounted) return null;
+    final result = await ShrinkImageDialog.show(
+      context,
+      path: info.path,
+      service: service,
+      initialSettings: _shrinkSettings,
+    );
+    if (result == null || !mounted) return null;
+    _shrinkSettings = result.settings;
+    try {
+      final dir = await getTemporaryDirectory();
+      final base = p.basenameWithoutExtension(info.filename);
+      final outPath = p.join(
+        dir.path,
+        'shrunk_${DateTime.now().microsecondsSinceEpoch}_$base.jpg',
+      );
+      await File(outPath).writeAsBytes(result.bytes);
+      return _AttachmentInfo(
+        path: outPath,
+        filename: '$base.jpg',
+        size: result.bytes.length,
+        contentType: 'image/jpeg',
+        isTemp: true,
+      );
+    } catch (e, stack) {
+      if (mounted) {
+        context.showAppSnackBar(
+          'Failed to shrink image: $e',
+          level: AppLogLevel.error,
+          event: 'compose.attachment.shrink_failed',
+          error: e,
+          stack: stack,
+          duration: const Duration(seconds: 5),
+        );
+      }
+      return null;
+    }
+  }
+
+  /// Re-opens the shrink dialog for an already-added attachment so the user can
+  /// shrink it (or adjust an earlier shrink).
+  Future<void> _shrinkExisting(int index) async {
+    final service = ref.read(imageShrinkServiceProvider);
+    final current = _attachments[index];
+    final shrunk = await _maybeShrink(service, current);
+    if (shrunk == null || !mounted) return;
+    setState(() => _attachments[index] = shrunk);
+    if (current.isTemp) unawaited(_deleteTempFile(current.path));
+  }
+
+  Future<void> _deleteTempFile(String path) async {
+    try {
+      await File(path).delete();
+    } catch (_) {
+      // Best-effort cleanup — a leftover temp file is harmless.
+    }
   }
 
   void _removeAttachment(int index) {
+    final removed = _attachments[index];
     setState(() => _attachments.removeAt(index));
+    if (removed.isTemp) unawaited(_deleteTempFile(removed.path));
   }
 
   Future<void> _openAttachment(int index) async {
@@ -493,6 +575,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (ref
+                        .read(imageShrinkServiceProvider)
+                        .isShrinkable(_attachments[i].contentType))
+                      IconButton(
+                        icon: const Icon(Icons.compress),
+                        tooltip: 'Shrink',
+                        onPressed: () => _shrinkExisting(i),
+                      ),
                     IconButton(
                       icon: const Icon(Icons.visibility),
                       tooltip: 'Open',
@@ -627,11 +717,16 @@ class _AttachmentInfo {
   final int size;
   final String contentType;
 
+  /// True when [path] points at a temp file we created (a shrunk copy) and are
+  /// responsible for deleting once the attachment is removed or replaced.
+  final bool isTemp;
+
   _AttachmentInfo({
     required this.path,
     required this.filename,
     required this.size,
     required this.contentType,
+    this.isTemp = false,
   });
 }
 

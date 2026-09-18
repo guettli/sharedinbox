@@ -54,6 +54,10 @@ dependencies:
   open_filex: ^4.6.0
   mime: ^2.0.0
 
+  # Pure-Dart image decode/resize/re-encode for shrinking attachments. Works on
+  # every target (incl. Linux/Windows/macOS desktop) unlike native compressors.
+  image: ^4.8.0
+
   # QR code generation for account sharing
   qr_flutter: ^4.1.0
 

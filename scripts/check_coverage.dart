@@ -115,6 +115,10 @@ const _excluded = <String, String>{
       'Widget-only push notification settings (UnifiedPush plugin)',
   'lib/ui/screens/search_screen.dart':
       'Widget-only search UI with async result stream',
+  'lib/ui/screens/shrink_image_screen.dart':
+      'Widget-only tool that file-picks an image, shows the shrink dialog and '
+          'saves via the file picker; the shrink logic is unit-tested in '
+          'image_shrink_service_test.dart',
   'lib/ui/screens/sieve_script_edit_screen.dart':
       'Widget-only Sieve editor — save round-trips through ManageSieve/JMAP',
   'lib/ui/screens/sieve_scripts_screen.dart':
@@ -141,6 +145,9 @@ const _excluded = <String, String>{
       'Wraps mobile_scanner camera plugin — no camera backend on Linux',
   'lib/ui/widgets/secure_email_webview.dart':
       'Wraps webview_flutter plugin — no headless webview backend on Linux',
+  'lib/ui/widgets/shrink_image_dialog.dart':
+      'Widget-only dialog with sliders and a live re-encode preview; the '
+          'underlying shrink logic is unit-tested in image_shrink_service_test.dart',
   'lib/ui/widgets/snooze_picker.dart':
       'Widget-only date/time picker bottom sheet',
   'lib/ui/widgets/thread_tile.dart': 'Widget-only list tile',

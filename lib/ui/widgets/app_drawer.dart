@@ -154,6 +154,14 @@ class AppDrawer extends ConsumerWidget {
                       unawaited(context.push('/accounts/preferences'));
                     },
                   ),
+                  ListTile(
+                    leading: const Icon(Icons.compress),
+                    title: const Text('Shrink image'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      unawaited(context.push('/accounts/shrink-image'));
+                    },
+                  ),
                   const _SentQueueDrawerTile(),
                   const _PendingChangesDrawerTile(),
                   ListTile(
