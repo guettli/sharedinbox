@@ -152,6 +152,30 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
+  /// One-time error SnackBar pointing at the App Log, shared by both load
+  /// failures: a throwing fetch (`hasError`) and a non-throwing body that
+  /// resolved with a `loadError` (#587, #837).
+  void _showLoadFailedSnackBar() {
+    context.showAppSnackBar(
+      'Could not load this message. See the app log for details.',
+      level: AppLogLevel.error,
+      event: 'email.detail.load_failed_snackbar',
+      emailId: widget.emailId,
+      duration: const Duration(seconds: 6),
+      persist: false,
+      action: SnackBarAction(
+        label: 'Show logs',
+        onPressed: () {
+          if (mounted) {
+            unawaited(
+              context.push('/accounts/app-log?emailId=${widget.emailId}'),
+            );
+          }
+        },
+      ),
+    );
+  }
+
   void _goToNeighbour(EmailDetailNavItem target) {
     if (!mounted) return;
     context.go(
@@ -180,24 +204,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         // transition *into* error so a plain rebuild doesn't re-show it, but a
         // Retry that fails again (loading → error) does.
         if (next.hasError && (prev == null || !prev.hasError) && mounted) {
-          context.showAppSnackBar(
-            'Could not load this message. See the app log for details.',
-            level: AppLogLevel.error,
-            event: 'email.detail.load_failed_snackbar',
-            emailId: widget.emailId,
-            duration: const Duration(seconds: 6),
-            persist: false,
-            action: SnackBarAction(
-              label: 'Show logs',
-              onPressed: () {
-                if (mounted) {
-                  unawaited(
-                    context.push('/accounts/app-log?emailId=${widget.emailId}'),
-                  );
-                }
-              },
-            ),
-          );
+          _showLoadFailedSnackBar();
+        }
+        // A body that resolved with a non-null loadError did not throw (e.g. the
+        // Message-ID identity mismatch that returns an empty/stale body, #837),
+        // so the hasError branch above never fires. Surface it the same way, but
+        // only on the transition *into* the failure so rebuilds don't re-show
+        // it — the in-body notice stays put for the rest of the visit.
+        final nextLoadError = next.value?.$2.loadError;
+        final prevLoadError = prev?.value?.$2.loadError;
+        if (nextLoadError != null && prevLoadError == null && mounted) {
+          _showLoadFailedSnackBar();
         }
       },
     );
@@ -538,6 +555,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         if (header != null) ...[_buildHeader(ctx, header), const Divider()],
         if (header?.messageId != null) _buildNotesSection(ctx, header!),
         if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
+        if (body.loadError != null)
+          _buildLoadFailedNotice(ctx, body.loadError!),
         if (hasHtml) ...[
           if (!effectiveLoadImages)
             Align(
@@ -706,6 +725,84 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   ),
                   onPressed: () => unawaited(_showRaw(ctx, header)),
                   child: const Text('View raw source'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Inline banner shown when the body could not be loaded but the fetch did
+  /// not throw — e.g. the Message-ID identity mismatch that skips caching a
+  /// wrong body and returns an empty (or stale) one (#837). Without this the
+  /// user would see headers and a blank body with no error. Offers a retry and
+  /// a jump to the App Log where the underlying error was recorded.
+  Widget _buildLoadFailedNotice(BuildContext ctx, String reason) {
+    final scheme = Theme.of(ctx).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.xs),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_outlined,
+            size: AppIconSize.sm,
+            color: scheme.onErrorContainer,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This message could not be loaded.',
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  reason,
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  children: [
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () =>
+                          ref.invalidate(emailDetailProvider(widget.emailId)),
+                      child: const Text('Retry'),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () => unawaited(
+                        context.push(
+                          '/accounts/app-log?emailId=${widget.emailId}',
+                        ),
+                      ),
+                      child: const Text('Show logs'),
+                    ),
+                  ],
                 ),
               ],
             ),

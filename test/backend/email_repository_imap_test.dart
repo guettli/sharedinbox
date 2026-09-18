@@ -488,6 +488,70 @@ void main() {
     },
   );
 
+  test(
+    'getEmailBody surfaces a loadError when the Message-ID no longer matches '
+    'and cannot be re-resolved (#837)',
+    () async {
+      await appendToInbox('mismatch-empty', body: 'Real body');
+
+      final r = makeRepo();
+      await r.accounts.addAccount(account, user.password);
+      await r.emails.syncEmails('test', 'INBOX');
+
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
+
+      // Corrupt the local row's Message-ID so the body fetched at this UID no
+      // longer matches, and the re-resolve search by this id finds nothing.
+      const corruptId = EmailsCompanion(
+        messageId: Value('bogus-nonexistent@test.invalid'),
+      );
+      await (r.db.update(r.db.emails)..where((t) => t.id.equals(emailId)))
+          .write(corruptId);
+
+      final body = await r.emails.getEmailBody(emailId, forceRefresh: true);
+      // No cached body existed, so the wrong body is not served — the body is
+      // empty but the failure is surfaced rather than silently blank.
+      expect(body.loadError, isNotNull);
+      expect(body.loadError, contains('re-fetched on the next sync'));
+      expect(body.textBody, anyOf(isNull, isEmpty));
+    },
+  );
+
+  test(
+    'getEmailBody flags a stale cached body with loadError on a Message-ID '
+    'mismatch (#837)',
+    () async {
+      await appendToInbox('mismatch-cached', body: 'Cached body content');
+
+      final r = makeRepo();
+      await r.accounts.addAccount(account, user.password);
+      await r.emails.syncEmails('test', 'INBOX');
+
+      final emails = await r.emails.observeEmails('test', 'INBOX').first;
+      final emailId = emails.first.id;
+
+      // Populate the body cache first so the mismatch path has a cache to fall
+      // back on.
+      final cached = await r.emails.getEmailBody(emailId);
+      expect(cached.loadError, isNull);
+      expect(cached.textBody, contains('Cached body content'));
+
+      // Corrupt the Message-ID so the next fetch mismatches and can't re-resolve.
+      const corruptId = EmailsCompanion(
+        messageId: Value('bogus-nonexistent@test.invalid'),
+      );
+      await (r.db.update(r.db.emails)..where((t) => t.id.equals(emailId)))
+          .write(corruptId);
+
+      final body = await r.emails.getEmailBody(emailId, forceRefresh: true);
+      // The possibly-stale cache is still served, but now flagged so the UI
+      // shows the error notice.
+      expect(body.loadError, isNotNull);
+      expect(body.textBody, contains('Cached body content'));
+    },
+  );
+
   test('sendEmail delivers via SMTP and appends copy to Sent folder', () async {
     final subject = 'send-${DateTime.now().millisecondsSinceEpoch}';
     final r = makeRepo();

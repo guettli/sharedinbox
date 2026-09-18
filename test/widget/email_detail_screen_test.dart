@@ -288,6 +288,66 @@ void main() {
     );
 
     testWidgets(
+      'shows a load-failed notice with Retry/Show logs and a SnackBar when the '
+      'body resolves with a loadError (#837)',
+      (tester) async {
+        // A non-throwing fetch that couldn't load the body (e.g. Message-ID
+        // identity mismatch) resolves with loadError set. Headers still render,
+        // but the body area must not be silently blank.
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          attachments: [],
+          loadError: 'This message is no longer at its previous location; the '
+              'correct copy will be re-fetched on the next sync.',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('This message could not be loaded.'), findsOneWidget);
+        expect(
+          find.textContaining('re-fetched on the next sync'),
+          findsWidgets,
+        );
+        expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Show logs'), findsOneWidget);
+        // The same load-failed SnackBar as the throwing path is surfaced.
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'shows no load-failed notice for a normally loaded body (#837)',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'All good.',
+          attachments: [],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('This message could not be loaded.'), findsNothing);
+        expect(find.text('All good.'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'shows a SnackBar pointing at the app log when the body fails to load '
       '(#587)',
       (tester) async {

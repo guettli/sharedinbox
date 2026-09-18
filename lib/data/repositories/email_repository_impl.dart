@@ -892,10 +892,22 @@ class EmailRepositoryImpl implements EmailRepository {
         emailId: emailId,
       ),
     );
+    // Surface the failure to the UI so the detail screen shows an error notice
+    // instead of a silently blank body (#837). Attach it to the stale cache
+    // fallback too, since that content may not match the intended message.
+    const loadError =
+        'This message is no longer at its previous location; the correct copy '
+        'will be re-fetched on the next sync.';
     // Only serve the cache when it belongs to this same message; otherwise
     // return an empty body rather than another message's content.
-    if (cached != null) return _bodyRowToModel(cached);
-    return model.EmailBody(emailId: emailId, attachments: const []);
+    if (cached != null) {
+      return _bodyRowToModel(cached).copyWith(loadError: loadError);
+    }
+    return model.EmailBody(
+      emailId: emailId,
+      attachments: const [],
+      loadError: loadError,
+    );
   }
 
   /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all

@@ -287,6 +287,14 @@ class EmailBody {
   /// not be fully displayed" notice with a link to the raw source (#579).
   final bool decodeFailed;
 
+  /// Human-readable reason the body could not be loaded, or `null` when it
+  /// loaded fine. Set on the silent (non-throwing) fetch outcomes — e.g. the
+  /// Message-ID identity mismatch that skips caching a wrong body (#837) — so
+  /// the detail screen can surface the failure instead of showing a blank
+  /// body with no error. Transient: it describes a live fetch outcome and is
+  /// never persisted, so cached-hit rows always have `loadError == null`.
+  final String? loadError;
+
   const EmailBody({
     required this.emailId,
     this.textBody,
@@ -295,7 +303,19 @@ class EmailBody {
     this.headers = const [],
     this.mimeTree,
     this.decodeFailed = false,
+    this.loadError,
   });
+
+  EmailBody copyWith({String? loadError}) => EmailBody(
+        emailId: emailId,
+        textBody: textBody,
+        htmlBody: htmlBody,
+        attachments: attachments,
+        headers: headers,
+        mimeTree: mimeTree,
+        decodeFailed: decodeFailed,
+        loadError: loadError ?? this.loadError,
+      );
 }
 
 class EmailAttachment {
