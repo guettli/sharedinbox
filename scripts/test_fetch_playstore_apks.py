@@ -15,6 +15,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 import fetch_playstore_apks
 
 
+def _http_error(status):
+    """Build an ``HTTPError`` carrying a response with ``status`` — mirrors what
+    ``requests``' ``raise_for_status`` raises (it always attaches the response)."""
+    from requests.exceptions import HTTPError
+
+    return HTTPError(f"{status} Server Error", response=MagicMock(status_code=status))
+
+
 class TestResolveVersionCode(unittest.TestCase):
     def _session_with_releases(self, releases):
         session = MagicMock()
@@ -134,16 +142,54 @@ class TestWithTransientRetries(unittest.TestCase):
             op.call_count, fetch_playstore_apks._REQUEST_MAX_ATTEMPTS
         )
 
-    def test_http_error_is_not_retried(self):
-        """An HTTP status error is a hard problem, not a transient connection
-        blip — it must propagate on the first attempt, not be retried away."""
+    def test_non_retriable_http_status_is_not_retried(self):
+        """A 4xx client error is a hard problem, not a transient blip — it must
+        propagate on the first attempt, not be retried away."""
         from requests.exceptions import HTTPError
 
-        op = MagicMock(side_effect=HTTPError("500 Server Error"))
+        op = MagicMock(side_effect=_http_error(400))
         with patch("fetch_playstore_apks.time.sleep"):
             with self.assertRaises(HTTPError):
                 fetch_playstore_apks._with_transient_retries(op, "do a thing")
         op.assert_called_once_with()
+
+    def test_response_less_http_error_is_not_retried(self):
+        """An ``HTTPError`` with no attached response carries no status to judge,
+        so it is treated as a hard problem and propagates on the first attempt."""
+        from requests.exceptions import HTTPError
+
+        op = MagicMock(side_effect=HTTPError("boom"))
+        with patch("fetch_playstore_apks.time.sleep"):
+            with self.assertRaises(HTTPError):
+                fetch_playstore_apks._with_transient_retries(op, "do a thing")
+        op.assert_called_once_with()
+
+    def test_retriable_http_status_then_succeeds(self):
+        """Regression for #826: a one-off 503 Service Unavailable on a Play
+        request (here the POST that opens an edit) is a transient Google-side
+        outage — it must be retried, not crash the fetch and file a spurious
+        "Firebase Tests failed" issue."""
+        op = MagicMock(side_effect=[_http_error(503), "ok"])
+        with patch("fetch_playstore_apks.time.sleep") as sleep:
+            result = fetch_playstore_apks._with_transient_retries(
+                op, "open a Play edit"
+            )
+        self.assertEqual(result, "ok")
+        self.assertEqual(op.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_retriable_http_status_reraises_when_persistent(self):
+        """If the retriable status never clears within the bounded attempts we
+        re-raise it so a genuinely down Play API still fails loudly."""
+        from requests.exceptions import HTTPError
+
+        op = MagicMock(side_effect=_http_error(503))
+        with patch("fetch_playstore_apks.time.sleep"):
+            with self.assertRaises(HTTPError):
+                fetch_playstore_apks._with_transient_retries(op, "do a thing")
+        self.assertEqual(
+            op.call_count, fetch_playstore_apks._REQUEST_MAX_ATTEMPTS
+        )
 
 
 class TestResolveVersionCodeTransient(unittest.TestCase):
@@ -171,6 +217,26 @@ class TestResolveVersionCodeTransient(unittest.TestCase):
                 session, "pkg", "alpha"
             )
         self.assertEqual(result, 77)
+        self.assertEqual(session.post.call_count, 2)
+
+    def test_retries_retriable_503_on_edit_creation(self):
+        """Regression for #826: the failing run got a 503 Service Unavailable on
+        the POST .../edits that opens the edit. That transient outage must be
+        retried transparently rather than crashing the whole fetch."""
+        session = MagicMock()
+        edit_resp = MagicMock()
+        edit_resp.json.return_value = {"id": "edit-1"}
+        # First POST answers 503, the retry succeeds.
+        session.post.side_effect = [_http_error(503), edit_resp]
+        track_resp = MagicMock()
+        track_resp.json.return_value = {"releases": [{"versionCodes": ["99"]}]}
+        session.get.return_value = track_resp
+
+        with patch("fetch_playstore_apks.time.sleep"):
+            result = fetch_playstore_apks._resolve_version_code(
+                session, "pkg", "alpha"
+            )
+        self.assertEqual(result, 99)
         self.assertEqual(session.post.call_count, 2)
 
     def test_retries_transient_drop_on_track_read(self):
@@ -370,21 +436,37 @@ class TestPollGeneratedApks(unittest.TestCase):
         self.assertIn("42", str(ctx.exception))
         self.assertIn("Remote end closed connection", str(ctx.exception))
 
-    def test_http_error_still_propagates(self):
-        """An HTTP status error (4xx/5xx) is a hard problem, not a transient
-        connection blip — it must propagate rather than being retried away."""
+    def test_non_retriable_http_error_still_propagates(self):
+        """A 4xx client error is a hard problem, not a transient connection
+        blip — it must propagate rather than being retried away."""
         from requests.exceptions import HTTPError
 
         session = MagicMock()
         with patch(
             "fetch_playstore_apks._list_generated_apks",
-            side_effect=HTTPError("500 Server Error"),
+            side_effect=_http_error(400),
         ):
             with patch("fetch_playstore_apks.time.sleep"):
                 with self.assertRaises(HTTPError):
                     fetch_playstore_apks._poll_generated_apks(
                         session, "pkg", 42
                     )
+
+    def test_retries_through_retriable_503(self):
+        """Regression for #826: a 503 Service Unavailable on a polling GET is a
+        transient Play outage and must be retried within the deadline like a
+        dropped connection, not crash the fetch and file a spurious issue."""
+        session = MagicMock()
+        listing = {"generatedApks": [{"key": "v"}]}
+        with patch(
+            "fetch_playstore_apks._list_generated_apks",
+            side_effect=[_http_error(503), None, listing],
+        ):
+            with patch("fetch_playstore_apks.time.sleep"):
+                result = fetch_playstore_apks._poll_generated_apks(
+                    session, "pkg", 42
+                )
+        self.assertIs(result, listing)
 
 
 def _patches(dest_dir, *, version_code, list_apks, env=None):
