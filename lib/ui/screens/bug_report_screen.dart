@@ -475,25 +475,19 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Description Text Field
+                  // Description Text Field (optional)
                   TextFormField(
                     controller: _descriptionController,
                     autofocus: true,
                     maxLines: 8,
                     minLines: 4,
                     decoration: const InputDecoration(
-                      labelText: 'What went wrong?',
+                      labelText: 'What went wrong? (optional)',
                       alignLabelWithHint: true,
                       border: OutlineInputBorder(),
                       helperText:
                           'Please describe the problem and how to reproduce it.',
                     ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a description.';
-                      }
-                      return null;
-                    },
                   ),
                   const SizedBox(height: AppSpacing.lg),
 

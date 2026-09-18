@@ -224,6 +224,7 @@ final router = GoRouter(
               builder: (ctx, state) => SearchScreen(
                 accountId: state.pathParameters['accountId']!,
                 initialFilter: state.extra as FilterGroup?,
+                initialQuery: state.uri.queryParameters['q'],
               ),
             ),
             GoRoute(

@@ -34,9 +34,20 @@ All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 | `GITHUB_TOKEN` | — | Token with `issues:write` on the target repo. |
 | `GITHUB_REPO` | — | `owner/name` of the repo issues are created in. |
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise. |
+| `BUGREPORT_PPROF_ADDR` | `127.0.0.1:6061` | Listen address for the `net/http/pprof` handlers, served on a **separate** non-public listener. Set to the WireGuard IP (e.g. `10.0.0.1:6061`) so Parca can scrape heap/goroutine/mutex/block profiles; set to `off` to disable. |
 
 When `GITHUB_TOKEN`/`GITHUB_REPO` are unset the encrypted-report endpoint
 responds `503 Service Unavailable`.
+
+## Profiling (pprof)
+
+Go's `net/http/pprof` handlers (heap, goroutine, mutex, block, cpu profile,
+trace) are served on a **separate** listener via `BUGREPORT_PPROF_ADDR`
+(default `127.0.0.1:6061`). They leak the command line, goroutine stacks and
+live heap, and `profile`/`trace` pin a CPU for the profile's whole duration —
+so this listener must never share the public interface. Bind it to the
+WireGuard IP in production so Parca can scrape it; a bind failure only logs and
+never takes the server down.
 
 ## Cryptography
 
@@ -59,6 +70,17 @@ only `REPORT_PUBLIC_KEY = base64(keyId[16] || publicKey[32])`.
 
 ### Reading a report
 
-Download `mail.enc` from the issue link and decrypt it with the private key via
-`ShareEncryptionService.decryptBytes(..., info: 'sharedinbox-encrypted-report')`,
-which returns the original `.eml` bytes.
+Each encrypted-report issue carries a **"How to decrypt"** section with a
+ready-to-run command. The `bugreport` binary has a `decrypt` subcommand that
+reads `REPORT_PRIVATE_KEY` + `REPORT_PUBLIC_KEY` from the environment (an
+AgentLoop `sharedinbox` worker already has both) and turns a `mail.enc` blob
+back into the original `.eml`:
+
+```sh
+curl -fsSL '<download URL from the issue>' -o mail.enc
+go run ./server/bugreport decrypt mail.enc > mail.eml   # or: decrypt - < mail.enc
+```
+
+The subcommand implements the same ECIES scheme as the app
+(`ShareEncryptionService.decryptBytes(..., info: 'sharedinbox-encrypted-report')`),
+so a Dart tool with the private key works too.

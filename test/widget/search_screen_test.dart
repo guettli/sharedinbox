@@ -673,6 +673,100 @@ void main() {
     );
 
     testWidgets(
+      'initialQuery opens advanced mode seeded with a subject condition and '
+      'auto-runs the structured search',
+      (tester) async {
+        final hit = testEmail(subject: 'Invoice Q3');
+        final fakeEmails = FakeEmailRepository(structuredSearchResults: [hit]);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeEmails),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+            child: const MaterialApp(
+              home: SearchScreen(initialQuery: 'invoice'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Advanced mode is open, seeded with a single "Subject contains
+        // invoice" condition, and the structured search has already run.
+        expect(find.text('Advanced Search'), findsOneWidget);
+        expect(find.text('Subject'), findsWidgets);
+        expect(find.widgetWithText(TextField, 'invoice'), findsOneWidget);
+
+        expect(fakeEmails.structuredSearchCalls, hasLength(1));
+        final children = fakeEmails.structuredSearchCalls.first.children;
+        expect(children, hasLength(1));
+        final leaf = children.first as FilterLeaf;
+        expect(leaf.field, FilterField.subject);
+        expect(leaf.comparison, FilterComparison.contains);
+        expect(leaf.value, 'invoice');
+
+        expect(find.text('Invoice Q3'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'initialFilter takes precedence over initialQuery',
+      (tester) async {
+        final hit = testEmail(subject: 'From-side hit');
+        final filter = FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.from_,
+              comparison: FilterComparison.is_,
+              value: 'bob@example.com',
+            ),
+          ],
+        );
+        final fakeEmails = FakeEmailRepository(structuredSearchResults: [hit]);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(fakeEmails),
+              searchHistoryRepositoryProvider.overrideWithValue(
+                FakeSearchHistoryRepository(),
+              ),
+            ],
+            child: MaterialApp(
+              home: SearchScreen(
+                initialFilter: filter,
+                initialQuery: 'invoice',
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(fakeEmails.structuredSearchCalls, hasLength(1));
+        final leaf =
+            fakeEmails.structuredSearchCalls.first.children.first as FilterLeaf;
+        expect(leaf.field, FilterField.from_);
+        expect(leaf.value, 'bob@example.com');
+      },
+    );
+
+    testWidgets(
       'advanced-search result location label shows JMAP folder display path, '
       'never the opaque server id',
       (tester) async {

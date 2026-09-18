@@ -3,9 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,8 +22,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/guettli/sharedinbox/server/internal/pprofserver"
 )
 
 // BugReport represents the data stored in report.json
@@ -174,8 +183,9 @@ func bugReportHandler(storageDir string) http.HandlerFunc {
 		description := r.FormValue("description")
 		aboutInfo := r.FormValue("about_info")
 
-		if description == "" || aboutInfo == "" {
-			writeJSONError(w, http.StatusBadRequest, "description and about_info are required fields.")
+		// The description is optional; about_info is attached automatically.
+		if aboutInfo == "" {
+			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
 			return
 		}
 
@@ -359,11 +369,8 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
+		// The description is optional; the encrypted mail carries the report.
 		description := r.FormValue("description")
-		if description == "" {
-			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
-			return
-		}
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
 		if len(mailFiles) == 0 {
 			writeJSONError(w, http.StatusBadRequest, "encrypted_mail is a required file.")
@@ -426,11 +433,14 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 func buildIssue(report BugReport, downloadURL string) (title, body string) {
 	title = "Bug report with encrypted mail"
 	var b bytes.Buffer
-	b.WriteString(report.Description)
-	b.WriteString("\n\n---\n\n")
+	if report.Description != "" {
+		b.WriteString(report.Description)
+		b.WriteString("\n\n---\n\n")
+	}
 	b.WriteString("📎 **Encrypted mail:** ")
 	b.WriteString(downloadURL)
 	b.WriteString("\n\n_The attached mail is end-to-end encrypted; only the maintainer can decrypt it._\n")
+	b.WriteString(decryptHint(downloadURL))
 	if report.AboutInfo != "" {
 		b.WriteString("\n<details><summary>System info</summary>\n\n")
 		b.WriteString(report.AboutInfo)
@@ -465,7 +475,150 @@ func encryptedMailHandler(storageDir string) http.HandlerFunc {
 	}
 }
 
+// ECIES wire sizes (bytes), matching the app's on-device encryption in
+// lib/core/services/share_encryption_service.dart.
+const (
+	reportKeyIDLen   = 16
+	reportPubKeyLen  = 32
+	reportPrivKeyLen = 32
+	reportNonceLen   = 12
+	reportMACLen     = 16
+	// reportEncryptionInfo is the HKDF domain-separation label; it must match
+	// the label the app encrypts with (EncryptedReportService.encryptionInfo).
+	reportEncryptionInfo = "sharedinbox-encrypted-report"
+)
+
+// decryptHint renders the collapsible block in the public issue that tells the
+// maintainer — or an AgentLoop `sharedinbox` worker, which carries the private
+// key as $REPORT_PRIVATE_KEY — exactly how to turn the encrypted attachment
+// back into the original .eml. It reveals only the (already public) scheme, not
+// any key material.
+func decryptHint(downloadURL string) string {
+	var b bytes.Buffer
+	b.WriteString("\n<details><summary>🔓 How to decrypt (maintainer / agent)</summary>\n\n")
+	b.WriteString("The attachment is ECIES-encrypted to the maintainer's key. Whoever holds the ")
+	b.WriteString("private key can read it — an AgentLoop `sharedinbox` worker has it in the ")
+	b.WriteString("`REPORT_PRIVATE_KEY` env var (with `REPORT_PUBLIC_KEY`). From a checkout of ")
+	b.WriteString("this repo:\n\n")
+	b.WriteString("```sh\n")
+	b.WriteString("curl -fsSL '")
+	b.WriteString(downloadURL)
+	b.WriteString("' -o mail.enc\n")
+	b.WriteString("go run ./server/bugreport decrypt mail.enc > mail.eml\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Scheme: X25519-ECDH + HKDF-SHA256 + AES-256-GCM, HKDF label ")
+	b.WriteString("`" + reportEncryptionInfo + "`; wire `keyId[16]||ephPub[32]||nonce[12]||ciphertext||mac[16]`. ")
+	b.WriteString("See `server/bugreport/README.md`.\n</details>\n")
+	return b.String()
+}
+
+// decryptReport decrypts a mail.enc blob produced by the app's on-device ECIES
+// (X25519-ECDH + HKDF-SHA256 + AES-256-GCM). privateKey is the 32-byte X25519
+// private key; keyID (16 bytes) is the maintainer key identifier — when
+// non-nil it is checked against the identifier embedded in the blob. Returns
+// the original RFC-822 bytes.
+func decryptReport(privateKey, keyID, wire []byte) ([]byte, error) {
+	if len(privateKey) != reportPrivKeyLen {
+		return nil, fmt.Errorf("private key must be %d bytes, got %d", reportPrivKeyLen, len(privateKey))
+	}
+	minLen := reportKeyIDLen + reportPubKeyLen + reportNonceLen + reportMACLen
+	if len(wire) < minLen {
+		return nil, fmt.Errorf("ciphertext too short: %d < %d bytes", len(wire), minLen)
+	}
+
+	embeddedKeyID := wire[:reportKeyIDLen]
+	if keyID != nil && !bytes.Equal(embeddedKeyID, keyID) {
+		return nil, errors.New("key ID mismatch: the blob was encrypted for a different key")
+	}
+	ephPub := wire[reportKeyIDLen : reportKeyIDLen+reportPubKeyLen]
+	nonce := wire[reportKeyIDLen+reportPubKeyLen : reportKeyIDLen+reportPubKeyLen+reportNonceLen]
+	ciphertext := wire[reportKeyIDLen+reportPubKeyLen+reportNonceLen:]
+
+	curve := ecdh.X25519()
+	priv, err := curve.NewPrivateKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+	ephPubKey, err := curve.NewPublicKey(ephPub)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ephemeral public key: %w", err)
+	}
+	shared, err := priv.ECDH(ephPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("ECDH failed: %w", err)
+	}
+
+	// HKDF salt is the embedded key ID — the app derives with nonce=recipientKeyId.
+	aesKey, err := hkdf.Key(sha256.New, shared, embeddedKeyID, reportEncryptionInfo, 32)
+	if err != nil {
+		return nil, fmt.Errorf("HKDF failed: %w", err)
+	}
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("AES-GCM open failed (wrong key or tampered ciphertext): %w", err)
+	}
+	return plaintext, nil
+}
+
+// runDecrypt implements the `decrypt` subcommand the issue points at: it reads
+// REPORT_PRIVATE_KEY + REPORT_PUBLIC_KEY (base64) from the environment,
+// decrypts a mail.enc blob (from a file argument or stdin) and writes the
+// plaintext .eml to stdout.
+func runDecrypt(args []string) error {
+	privB64 := strings.TrimSpace(os.Getenv("REPORT_PRIVATE_KEY"))
+	pubB64 := strings.TrimSpace(os.Getenv("REPORT_PUBLIC_KEY"))
+	if privB64 == "" || pubB64 == "" {
+		return errors.New("set REPORT_PRIVATE_KEY and REPORT_PUBLIC_KEY (base64) in the environment")
+	}
+	priv, err := base64.StdEncoding.DecodeString(privB64)
+	if err != nil {
+		return fmt.Errorf("REPORT_PRIVATE_KEY is not valid base64: %w", err)
+	}
+	pubFull, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil {
+		return fmt.Errorf("REPORT_PUBLIC_KEY is not valid base64: %w", err)
+	}
+	if len(pubFull) != reportKeyIDLen+reportPubKeyLen {
+		return fmt.Errorf("REPORT_PUBLIC_KEY must decode to %d bytes, got %d", reportKeyIDLen+reportPubKeyLen, len(pubFull))
+	}
+	keyID := pubFull[:reportKeyIDLen]
+
+	var wire []byte
+	if len(args) >= 1 && args[0] != "-" {
+		wire, err = os.ReadFile(args[0])
+	} else {
+		wire, err = io.ReadAll(os.Stdin)
+	}
+	if err != nil {
+		return fmt.Errorf("reading ciphertext: %w", err)
+	}
+
+	plaintext, err := decryptReport(priv, keyID, wire)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(plaintext)
+	return err
+}
+
 func main() {
+	// `decrypt` subcommand: offline tool for the maintainer / an AgentLoop
+	// worker to read an encrypted report. No args → run the HTTP server.
+	if len(os.Args) > 1 && os.Args[1] == "decrypt" {
+		if err := runDecrypt(os.Args[2:]); err != nil {
+			log.Fatalf("decrypt: %v", err)
+		}
+		return
+	}
+
 	port := os.Getenv("BUGREPORT_PORT")
 	if port == "" {
 		port = "8090"
@@ -503,6 +656,17 @@ func main() {
 			apiBase: apiBase,
 			client:  &http.Client{Timeout: 15 * time.Second},
 		}
+	}
+
+	// pprof runs on its own non-public listener (see pprofserver.Start).
+	// Defaults to localhost; set BUGREPORT_PPROF_ADDR to the WireGuard IP so
+	// Parca can scrape it, or to "off" to disable it entirely.
+	pprofAddr := os.Getenv("BUGREPORT_PPROF_ADDR")
+	if pprofAddr == "" {
+		pprofAddr = "127.0.0.1:6061"
+	}
+	if pprofAddr != "off" {
+		go pprofserver.Start(pprofAddr)
 	}
 
 	mux := http.NewServeMux()
