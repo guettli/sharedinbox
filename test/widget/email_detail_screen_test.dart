@@ -1648,6 +1648,86 @@ void main() {
       },
     );
 
+    testWidgets(
+      'Delete grays out the message with a progress label while the deletion '
+      'is in flight (#817)',
+      (tester) async {
+        // Two INBOX mails so that after the deletion the screen advances to the
+        // next one (rather than popping the root route in the test router).
+        final inbox1 = Email(
+          id: 'acc-1:1',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 1,
+          subject: 'Doomed message',
+          receivedAt: DateTime(2024, 6, 3),
+          sentAt: DateTime(2024, 6, 3),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final inbox2 = Email(
+          id: 'acc-1:2',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 2,
+          subject: 'The next message',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+        final repo = _GatedDeleteEmailRepository(
+          emails: [inbox1, inbox2],
+          emailBody: const EmailBody(emailId: 'acc-1:1', attachments: []),
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A1',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider
+                  .overrideWithValue(FakeMailboxRepository()),
+              emailRepositoryProvider.overrideWithValue(repo),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Doomed message'), findsOneWidget);
+
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Delete'),
+        );
+        // Pump a single frame — the deletion future is still parked on the gate.
+        await tester.pump();
+
+        // The in-flight scrim names the action and shows a spinner …
+        expect(find.text('Deleting…'), findsOneWidget);
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        // … while the mail it applies to is still on screen (grayed, not gone).
+        expect(find.text('Doomed message'), findsOneWidget);
+
+        // Let the deletion finish: the scrim clears and we advance to the next
+        // message.
+        repo.gate.complete();
+        await tester.pumpAndSettle();
+
+        expect(find.text('Deleting…'), findsNothing);
+        expect(find.text('The next message'), findsOneWidget);
+      },
+    );
+
     group('Prev/Next navigation (#292)', () {
       // The chevron controls are only shown on desktop platforms. Widget
       // tests default to TargetPlatform.android, so each test switches
@@ -1998,4 +2078,19 @@ class _FailingEmailRepository extends FakeEmailRepository {
     bool forceRefresh = false,
   }) async =>
       throw StateError('boom');
+}
+
+/// Email repository whose [deleteEmail] only completes once [gate] is
+/// resolved, so a test can observe the "action in flight" scrim while the
+/// deletion is pending (#817).
+class _GatedDeleteEmailRepository extends FakeEmailRepository {
+  _GatedDeleteEmailRepository({super.emails, super.emailBody});
+
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<String?> deleteEmail(String emailId) async {
+    await gate.future;
+    return null;
+  }
 }
