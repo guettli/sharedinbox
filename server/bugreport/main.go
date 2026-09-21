@@ -332,25 +332,30 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
-		// The encrypted mail (optional) and the encrypted metadata YAML block
-		// (optional: contact email + reported-email details) are each their own
-		// device-encrypted blob, stored and linked but never inlined.
-		var mailURL, metadataURL string
-		if len(mailFiles) > 0 {
-			if err := saveFormFile(mailFiles[0], filepath.Join(reportDir, "mail.enc")); err != nil {
-				log.Printf("Failed to save encrypted mail: %v", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
+		// The encrypted mail and the encrypted metadata YAML block (contact
+		// email + reported-email details) are each an optional single blob,
+		// stored and linked but never inlined. saveSingle stores one and returns
+		// its download URL; on a write error it has already written the 500 and
+		// returns ok=false so the caller stops.
+		saveSingle := func(files []*multipart.FileHeader, name string) (url string, ok bool) {
+			if len(files) == 0 {
+				return "", true
 			}
-			mailURL = blobURL(publicBaseURL, uuidVal, "mail.enc")
+			if err := saveFormFile(files[0], filepath.Join(reportDir, name)); err != nil {
+				log.Printf("Failed to save %s: %v", name, err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return "", false
+			}
+			return blobURL(publicBaseURL, uuidVal, name), true
 		}
-		if len(metaFiles) > 0 {
-			if err := saveFormFile(metaFiles[0], filepath.Join(reportDir, "metadata.enc")); err != nil {
-				log.Printf("Failed to save encrypted metadata: %v", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-			metadataURL = blobURL(publicBaseURL, uuidVal, "metadata.enc")
+
+		mailURL, ok := saveSingle(mailFiles, "mail.enc")
+		if !ok {
+			return
+		}
+		metadataURL, ok := saveSingle(metaFiles, "metadata.enc")
+		if !ok {
+			return
 		}
 
 		// Encrypted screenshots (issue #851): the app encrypts each attached
