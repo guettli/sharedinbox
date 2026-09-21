@@ -17,8 +17,9 @@ It has two flows:
 | --- | --- |
 | `POST /api/v1/bug-reports` | Confidential report (multipart: `description`, `about_info`, optional `email`, `email_data`, `sync_log`, `attachments[]`). Returns `{ "id": "<uuid>" }`. |
 | `GET  /api/v1/report-key` | Returns the maintainer's public key: `{ "keyId", "publicKey", "alg" }` (both keys base64). |
-| `POST /api/v1/encrypted-reports` | Multipart: `description` (required), `encrypted_mail` file (required), optional `about_info`, `sync_log`. Stores the ciphertext, opens a GitHub issue linking to it, and returns `{ "id", "issueUrl", "issueNumber" }`. |
+| `POST /api/v1/encrypted-reports` | Multipart: `description` (optional), `encrypted_mail` file (required), optional `about_info`, `sync_log`, and optional `encrypted_attachments[]` files (encrypted screenshots). Stores the ciphertext(s), opens a GitHub issue linking to each, and returns `{ "id", "issueUrl", "issueNumber" }`. |
 | `GET  /api/v1/encrypted-reports/{id}/mail.enc` | Serves the stored ciphertext so the maintainer can download and decrypt it. |
+| `GET  /api/v1/encrypted-reports/{id}/image_{n}.enc` | Serves a stored encrypted screenshot blob. |
 
 All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 20 MB.
@@ -84,3 +85,16 @@ go run ./server/bugreport decrypt mail.enc > mail.eml   # or: decrypt - < mail.e
 The subcommand implements the same ECIES scheme as the app
 (`ShareEncryptionService.decryptBytes(..., info: 'sharedinbox-encrypted-report')`),
 so a Dart tool with the private key works too.
+
+### Encrypted screenshots
+
+Screenshots attached to an encrypted report are encrypted on the device with the
+**same** ECIES scheme and HKDF label as the mail and uploaded as
+`encrypted_attachments[]`. The server stores each as `image_<n>.enc` and links it
+from the issue. The `decrypt` subcommand is content-agnostic, so a screenshot
+decrypts exactly like the mail:
+
+```sh
+curl -fsSL '<image_n.enc URL from the issue>' -o image_1.enc
+go run ./server/bugreport decrypt image_1.enc > image_1.png
+```

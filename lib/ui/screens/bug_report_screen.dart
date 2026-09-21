@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,12 @@ const _bugReportApiUrl = String.fromEnvironment(
   'BUG_REPORT_API_URL',
   defaultValue: 'https://sharedinbox.de/api/v1/bug-reports',
 );
+
+/// Client-side mirror of the server's `maxEncryptedAttachments`
+/// (server/bugreport/main.go): the encrypted-report endpoint rejects a report
+/// carrying more screenshots than this, so we guard here for a clear message
+/// rather than a generic server error.
+const _maxEncryptedScreenshots = 10;
 
 class BugReportScreen extends ConsumerStatefulWidget {
   const BugReportScreen({super.key, this.emailId});
@@ -183,6 +190,18 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       return;
     }
 
+    if (_includeEncryptedMail &&
+        _attachedEmail != null &&
+        _attachments.length > _maxEncryptedScreenshots) {
+      context.showAppSnackBar(
+        'Please attach at most $_maxEncryptedScreenshots screenshots to an '
+        'encrypted report.',
+        level: AppLogLevel.warn,
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
 
     try {
@@ -197,17 +216,24 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       // Description
       request.fields['description'] = _descriptionController.text;
 
+      // Fetch the maintainer's public key once when we are creating an
+      // encrypted public issue; it is reused to encrypt both the mail and every
+      // attached screenshot.
+      final reportKey =
+          useEncryptedIssue ? await encryptedReports.fetchPublicKey() : null;
+
       if (useEncryptedIssue) {
         // Encrypt the full raw mail on-device to the maintainer's public key
         // and attach the ciphertext. Only the maintainer (who holds the
         // matching private key) can decrypt it, so the mail is never exposed
         // on the public issue tracker.
-        final key = await encryptedReports.fetchPublicKey();
         final rawMail = await ref
             .read(emailRepositoryProvider)
             .fetchRawRfc822(_attachedEmail!.id);
-        final encrypted =
-            await encryptedReports.encryptMail(key, utf8.encode(rawMail));
+        final encrypted = await encryptedReports.encryptMail(
+          reportKey!,
+          utf8.encode(rawMail),
+        );
         request.files.add(
           http.MultipartFile.fromBytes(
             'encrypted_mail',
@@ -262,14 +288,33 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
         request.fields['sync_log'] = _serializeSyncLogs(syncLogs);
       }
 
-      // Attachments
-      for (final file in _attachments) {
-        final multipartFile = await http.MultipartFile.fromPath(
-          'attachments[]',
-          file.path!,
-          filename: file.name,
-        );
-        request.files.add(multipartFile);
+      // Attachments (screenshots). In the encrypted-issue flow each is
+      // encrypted to the maintainer's key exactly like the mail, then uploaded
+      // as `encrypted_attachments[]`, so the plaintext image never reaches the
+      // public issue tracker (issue #851). Otherwise they go as plaintext to
+      // the confidential endpoint.
+      for (var i = 0; i < _attachments.length; i++) {
+        final file = _attachments[i];
+        if (useEncryptedIssue) {
+          final bytes = await File(file.path!).readAsBytes();
+          final encryptedFile =
+              await encryptedReports.encryptAttachment(reportKey!, bytes);
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'encrypted_attachments[]',
+              encryptedFile,
+              filename: 'image_${i + 1}.enc',
+            ),
+          );
+        } else {
+          request.files.add(
+            await http.MultipartFile.fromPath(
+              'attachments[]',
+              file.path!,
+              filename: file.name,
+            ),
+          );
+        }
       }
 
       final streamedResponse = await client.send(request);
