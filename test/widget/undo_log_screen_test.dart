@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:mockito/mockito.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -78,7 +79,54 @@ Widget _buildApp({
   );
 }
 
+UndoAction _moveAction(String id, DateTime timestamp) => UndoAction(
+      id: id,
+      accountId: 'acc-1',
+      type: UndoType.move,
+      emailIds: ['acc-1:42'],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Archive',
+      originalEmails: [_emailWith()],
+      timestamp: timestamp,
+    );
+
 void main() {
+  group('UndoLogScreen day grouping', () {
+    testWidgets('renders one date header per calendar day', (tester) async {
+      // Passed oldest-first to match the persisted invariant; the screen
+      // reverses to newest-first before grouping.
+      final day1 = DateTime(2024, 6, 1, 10);
+      final day2 = DateTime(2024, 6, 2, 9);
+      final history = [
+        _moveAction('u1', day1),
+        _moveAction('u2', day1),
+        _moveAction('u3', day2),
+      ];
+      await tester.pumpWidget(_buildApp(history: history));
+      await tester.pumpAndSettle();
+
+      final fmt = DateFormat.yMMMEd();
+      expect(find.text(fmt.format(day1)), findsOneWidget);
+      expect(find.text(fmt.format(day2)), findsOneWidget);
+    });
+
+    testWidgets('labels the most recent days as Today and Yesterday',
+        (tester) async {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day, 8);
+      final yesterday = today.subtract(const Duration(days: 1));
+      final history = [
+        _moveAction('y1', yesterday),
+        _moveAction('t1', today),
+      ];
+      await tester.pumpWidget(_buildApp(history: history));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Today'), findsOneWidget);
+      expect(find.text('Yesterday'), findsOneWidget);
+    });
+  });
+
   group('UndoLogScreen subtitle', () {
     testWidgets(
       'shows "MOVE to <destination>" for move actions',

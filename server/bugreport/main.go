@@ -29,11 +29,12 @@ import (
 	"github.com/guettli/sharedinbox/server/internal/pprofserver"
 )
 
-// BugReport represents the data stored in report.json
+// BugReport holds the cleartext fields written to report.json and rendered into
+// the public GitHub issue. Private parts of a report (mail, contact email,
+// screenshots) never live here — they are uploaded as separate encrypted blobs.
 type BugReport struct {
 	Description string    `json:"description"`
 	AboutInfo   string    `json:"about_info"`
-	EmailData   string    `json:"email_data,omitempty"`
 	SyncLog     string    `json:"sync_log,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
 }
@@ -41,9 +42,20 @@ type BugReport struct {
 // maxBodySize caps request bodies at 20 MB.
 const maxBodySize = 20 * 1024 * 1024
 
+// maxEncryptedAttachments caps how many encrypted screenshots a single report
+// may carry. The 20 MB body cap already bounds total size; this bounds the file
+// count so a malformed request cannot spray unbounded blobs into the report dir.
+const maxEncryptedAttachments = 10
+
 // uuidRe matches the UUID v4 strings we generate; used to reject path
 // traversal in the encrypted-mail download route.
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// encAttachmentRe matches the encrypted blob names the {id}/{name} download
+// route serves: the screenshots we generate (image_1.enc, image_2.enc, …) and
+// the metadata block (metadata.enc). Used to reject path traversal and
+// filename injection. (mail.enc has its own dedicated route.)
+var encAttachmentRe = regexp.MustCompile(`^(image_[0-9]{1,3}|metadata)\.enc$`)
 
 var (
 	rateLimitMu  sync.Mutex
@@ -171,93 +183,6 @@ func saveFormFile(fileHeader *multipart.FileHeader, destPath string) error {
 	return err
 }
 
-func bugReportHandler(storageDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !preflightPost(w, r) {
-			return
-		}
-		defer func() {
-			_ = r.MultipartForm.RemoveAll()
-		}()
-
-		description := r.FormValue("description")
-		aboutInfo := r.FormValue("about_info")
-
-		// The description is optional; about_info is attached automatically.
-		if aboutInfo == "" {
-			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
-			return
-		}
-
-		email := r.FormValue("email")
-		emailData := r.FormValue("email_data")
-		syncLog := r.FormValue("sync_log")
-
-		uuidVal, err := generateUUID()
-		if err != nil {
-			log.Printf("Failed to generate UUID: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		now := time.Now()
-		timestampStr := now.Format("20060102_150405")
-		dirName := fmt.Sprintf("%s_%s", timestampStr, uuidVal)
-		reportDir := filepath.Join(storageDir, dirName)
-
-		err = os.MkdirAll(reportDir, 0750)
-		if err != nil {
-			log.Printf("Failed to create report directory: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		// Write report.json
-		report := BugReport{
-			Description: description,
-			AboutInfo:   aboutInfo,
-			EmailData:   emailData,
-			SyncLog:     syncLog,
-			Timestamp:   now,
-		}
-
-		if err := writeReportJSON(reportDir, report); err != nil {
-			log.Printf("Failed to write report.json: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		// Write contact email to mail.eml (kept separate from report.json to isolate PII)
-		if email != "" {
-			mailEmlPath := filepath.Join(reportDir, "mail.eml")
-			err = os.WriteFile(mailEmlPath, []byte(email), 0600)
-			if err != nil {
-				log.Printf("Failed to write mail.eml: %v", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		// Save attachments
-		form := r.MultipartForm
-		files := form.File["attachments[]"]
-		for i, fileHeader := range files {
-			// Sanitize filename to avoid directory traversal
-			baseName := filepath.Base(fileHeader.Filename)
-			attachmentName := fmt.Sprintf("attachment_%d_%s", i, baseName)
-			if err := saveFormFile(fileHeader, filepath.Join(reportDir, attachmentName)); err != nil {
-				log.Printf("Failed to save attachment %s: %v", attachmentName, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"id": uuidVal})
-	}
-}
-
 // writeReportJSON writes an indented report.json into reportDir.
 func writeReportJSON(reportDir string, report BugReport) error {
 	f, err := os.OpenFile(filepath.Join(reportDir, "report.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
@@ -369,11 +294,27 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
-		// The description is optional; the encrypted mail carries the report.
+		// about_info is attached automatically by the app and is the floor
+		// against empty issues. Everything private — the mail, the metadata
+		// block and screenshots — is optional, so a general bug report with no
+		// mail is just a public issue with no encrypted attachments (#847).
+		aboutInfo := r.FormValue("about_info")
+		if aboutInfo == "" {
+			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
+			return
+		}
 		description := r.FormValue("description")
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
-		if len(mailFiles) == 0 {
-			writeJSONError(w, http.StatusBadRequest, "encrypted_mail is a required file.")
+		metaFiles := r.MultipartForm.File["encrypted_metadata"]
+
+		// Reject over-cap screenshot counts up front (before writing anything)
+		// so the caller learns the report was not accepted, rather than getting
+		// a success with silently-dropped screenshots (the very surprise #851
+		// is about). Total size is separately bounded by the 20 MB body cap.
+		attFiles := r.MultipartForm.File["encrypted_attachments[]"]
+		if len(attFiles) > maxEncryptedAttachments {
+			writeJSONError(w, http.StatusBadRequest,
+				fmt.Sprintf("Too many screenshots: %d attached, at most %d are allowed.", len(attFiles), maxEncryptedAttachments))
 			return
 		}
 
@@ -391,15 +332,51 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
-		if err := saveFormFile(mailFiles[0], filepath.Join(reportDir, "mail.enc")); err != nil {
-			log.Printf("Failed to save encrypted mail: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		// The encrypted mail and the encrypted metadata YAML block (contact
+		// email + reported-email details) are each an optional single blob,
+		// stored and linked but never inlined. saveSingle stores one and returns
+		// its download URL; on a write error it has already written the 500 and
+		// returns ok=false so the caller stops.
+		saveSingle := func(files []*multipart.FileHeader, name string) (url string, ok bool) {
+			if len(files) == 0 {
+				return "", true
+			}
+			if err := saveFormFile(files[0], filepath.Join(reportDir, name)); err != nil {
+				log.Printf("Failed to save %s: %v", name, err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return "", false
+			}
+			return blobURL(publicBaseURL, uuidVal, name), true
+		}
+
+		mailURL, ok := saveSingle(mailFiles, "mail.enc")
+		if !ok {
 			return
+		}
+		metadataURL, ok := saveSingle(metaFiles, "metadata.enc")
+		if !ok {
+			return
+		}
+
+		// Encrypted screenshots (issue #851): the app encrypts each attached
+		// screenshot to the maintainer's key exactly like the mail and uploads
+		// them under "encrypted_attachments[]". We store each as image_<n>.enc
+		// and link it from the issue; the plaintext image never touches the
+		// server or the public tracker.
+		var attachmentURLs []string
+		for i, fh := range attFiles {
+			name := fmt.Sprintf("image_%d.enc", i+1)
+			if err := saveFormFile(fh, filepath.Join(reportDir, name)); err != nil {
+				log.Printf("Failed to save encrypted screenshot %s: %v", name, err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			attachmentURLs = append(attachmentURLs, blobURL(publicBaseURL, uuidVal, name))
 		}
 
 		report := BugReport{
 			Description: description,
-			AboutInfo:   r.FormValue("about_info"),
+			AboutInfo:   aboutInfo,
 			SyncLog:     r.FormValue("sync_log"),
 			Timestamp:   time.Now(),
 		}
@@ -409,8 +386,7 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			return
 		}
 
-		downloadURL := fmt.Sprintf("%s/api/v1/encrypted-reports/%s/mail.enc", publicBaseURL, uuidVal)
-		title, body := buildIssue(report, downloadURL)
+		title, body := buildIssue(report, mailURL, metadataURL, attachmentURLs)
 		issueURL, number, err := issuer.CreateIssue(r.Context(), title, body)
 		if err != nil {
 			log.Printf("Failed to create GitHub issue: %v", err)
@@ -428,19 +404,47 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 	}
 }
 
-// buildIssue renders the public (cleartext) issue title and body. The mail
-// itself is never inlined — only a link to its encrypted download.
-func buildIssue(report BugReport, downloadURL string) (title, body string) {
-	title = "Bug report with encrypted mail"
+// blobURL builds the public download URL for one stored encrypted blob.
+func blobURL(baseURL, id, filename string) string {
+	return fmt.Sprintf("%s/api/v1/encrypted-reports/%s/%s", baseURL, id, filename)
+}
+
+// buildIssue renders the public (cleartext) issue title and body. Private parts
+// (mail, metadata, screenshots) are never inlined — only links to their
+// encrypted downloads. Each of them is optional: a general no-mail report is
+// just the description plus system info (#847).
+func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []string) (title, body string) {
+	title = "Bug report"
+	if mailURL != "" {
+		title = "Bug report with encrypted mail"
+	}
 	var b bytes.Buffer
 	if report.Description != "" {
 		b.WriteString(report.Description)
 		b.WriteString("\n\n---\n\n")
 	}
-	b.WriteString("📎 **Encrypted mail:** ")
-	b.WriteString(downloadURL)
-	b.WriteString("\n\n_The attached mail is end-to-end encrypted; only the maintainer can decrypt it._\n")
-	b.WriteString(decryptHint(downloadURL))
+	if mailURL != "" {
+		b.WriteString("📎 **Encrypted mail:** ")
+		b.WriteString(mailURL)
+		b.WriteString("\n\n_The attached mail is end-to-end encrypted; only the maintainer can decrypt it._\n")
+	}
+	if metadataURL != "" {
+		b.WriteString("\n📎 **Encrypted metadata (YAML):** ")
+		b.WriteString(metadataURL)
+		b.WriteString("\n\n_Contact email and reported-email details, encrypted to the maintainer's key._\n")
+	}
+	if len(attachmentURLs) > 0 {
+		b.WriteString("\n📎 **Encrypted screenshot(s):**\n\n")
+		for i, u := range attachmentURLs {
+			b.WriteString(fmt.Sprintf("- [screenshot %d](%s)\n", i+1, u))
+		}
+		b.WriteString("\n_Each screenshot is encrypted to the maintainer's key the same way as the mail. Decrypt it exactly like the mail (see \\\"How to decrypt\\\" below), pointing the download at the screenshot's own URL and writing to an image file, e.g. `> screenshot-1.png`._\n")
+	}
+	// The decrypt instructions only make sense when there is something to
+	// decrypt; point the example at whichever blob the report actually has.
+	if example := firstNonEmpty(mailURL, metadataURL, attachmentURLs); example != "" {
+		b.WriteString(decryptHint(example))
+	}
 	if report.AboutInfo != "" {
 		b.WriteString("\n<details><summary>System info</summary>\n\n")
 		b.WriteString(report.AboutInfo)
@@ -449,29 +453,66 @@ func buildIssue(report BugReport, downloadURL string) (title, body string) {
 	return title, b.String()
 }
 
+// firstNonEmpty returns the first non-empty of mail/metadata URLs, else the
+// first screenshot URL, else "".
+func firstNonEmpty(mailURL, metadataURL string, attachmentURLs []string) string {
+	if mailURL != "" {
+		return mailURL
+	}
+	if metadataURL != "" {
+		return metadataURL
+	}
+	if len(attachmentURLs) > 0 {
+		return attachmentURLs[0]
+	}
+	return ""
+}
+
+// serveEncBlob streams a stored encrypted blob (mail.enc or image_<n>.enc) from
+// a report dir. The GET guard and the UUID check are shared; callers pass the
+// already-validated on-disk filename, which is also used for Content-Disposition
+// (so it must never be attacker-controlled — see encryptedAttachmentHandler).
+func serveEncBlob(w http.ResponseWriter, r *http.Request, encDir, id, filename string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !uuidRe.MatchString(id) {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(filepath.Join(encDir, id, filename))
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	_, _ = io.Copy(w, f)
+}
+
 // encryptedMailHandler serves a stored encrypted-mail blob by report id.
 func encryptedMailHandler(storageDir string) http.HandlerFunc {
 	encDir := filepath.Join(storageDir, "encrypted")
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		id := r.PathValue("id")
-		if !uuidRe.MatchString(id) {
+		serveEncBlob(w, r, encDir, r.PathValue("id"), "mail.enc")
+	}
+}
+
+// encryptedAttachmentHandler serves a stored encrypted screenshot blob
+// (image_<n>.enc) by report id. The strict name regex (checked before the
+// blob is opened or reflected into a header) keeps this route free of path
+// traversal and filename injection.
+func encryptedAttachmentHandler(storageDir string) http.HandlerFunc {
+	encDir := filepath.Join(storageDir, "encrypted")
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if !encAttachmentRe.MatchString(name) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		path := filepath.Join(encDir, id, "mail.enc")
-		f, err := os.Open(path)
-		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return
-		}
-		defer f.Close()
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", `attachment; filename="mail.enc"`)
-		_, _ = io.Copy(w, f)
+		serveEncBlob(w, r, encDir, r.PathValue("id"), name)
 	}
 }
 
@@ -670,10 +711,10 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/bug-reports", bugReportHandler(storageDir))
 	mux.HandleFunc("/api/v1/report-key", reportKeyHandler(os.Getenv("REPORT_PUBLIC_KEY")))
 	mux.HandleFunc("/api/v1/encrypted-reports", encryptedReportHandler(storageDir, publicBaseURL, issuer))
 	mux.HandleFunc("GET /api/v1/encrypted-reports/{id}/mail.enc", encryptedMailHandler(storageDir))
+	mux.HandleFunc("GET /api/v1/encrypted-reports/{id}/{name}", encryptedAttachmentHandler(storageDir))
 
 	addr := net.JoinHostPort("0.0.0.0", port)
 	log.Printf("Bug report server starting on %s...", addr)

@@ -114,6 +114,27 @@ void main() {
       await db.close();
     });
 
+    test('getHistory honours a larger limit and returns the newest window',
+        () async {
+      final db = openTestDatabase();
+      final repo = UndoRepositoryImpl(db);
+
+      for (var i = 0; i < 30; i++) {
+        await repo.saveAction(
+          _action('a$i', timestamp: DateTime.utc(2024, 1, i + 1)),
+        );
+      }
+
+      // A limit above the default 10 loads more of the persisted history.
+      final history = await repo.getHistory(limit: 25);
+      expect(history, hasLength(25));
+      // Oldest-first within the newest-25 window (a5..a29), a0..a4 excluded.
+      expect(history.first.id, 'a5');
+      expect(history.last.id, 'a29');
+
+      await db.close();
+    });
+
     test('clearHistory empties the table', () async {
       final db = openTestDatabase();
       final repo = UndoRepositoryImpl(db);

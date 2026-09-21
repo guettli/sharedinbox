@@ -11,6 +11,34 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 final _timeFmt = DateFormat('HH:mm:ss');
+final _dayFmt = DateFormat.yMMMEd();
+
+/// A day header string ("Today", "Yesterday" or an absolute date) so a long
+/// log spanning several days can be told apart at a glance.
+String _dayLabel(DateTime day, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  final diff = today.difference(day).inDays;
+  if (diff == 0) return 'Today';
+  if (diff == 1) return 'Yesterday';
+  return _dayFmt.format(day);
+}
+
+/// Splits [history] (newest first) into a flat list of day-header strings and
+/// the actions that fall under each local calendar day, preserving order.
+List<Object> _groupByDay(List<UndoAction> history, DateTime now) {
+  final items = <Object>[];
+  DateTime? currentDay;
+  for (final action in history) {
+    final local = action.timestamp.toLocal();
+    final day = DateTime(local.year, local.month, local.day);
+    if (currentDay == null || day != currentDay) {
+      currentDay = day;
+      items.add(_dayLabel(day, now));
+    }
+    items.add(action);
+  }
+  return items;
+}
 
 class UndoLogScreen extends ConsumerWidget {
   const UndoLogScreen({super.key});
@@ -18,6 +46,7 @@ class UndoLogScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final history = ref.watch(undoServiceProvider).reversed.toList();
+    final items = _groupByDay(history, DateTime.now());
 
     return Scaffold(
       appBar: AppBar(
@@ -36,9 +65,35 @@ class UndoLogScreen extends ConsumerWidget {
       body: history.isEmpty
           ? const Center(child: Text('No undoable actions in history'))
           : ListView.builder(
-              itemCount: history.length,
-              itemBuilder: (ctx, i) => _UndoActionTile(action: history[i]),
+              itemCount: items.length,
+              itemBuilder: (ctx, i) {
+                final item = items[i];
+                return item is String
+                    ? _DayHeader(label: item)
+                    : _UndoActionTile(action: item as UndoAction);
+              },
             ),
+    );
+  }
+}
+
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        label,
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }

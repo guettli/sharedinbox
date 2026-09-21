@@ -55,7 +55,7 @@ class _UndoShellState extends ConsumerState<UndoShell> {
   Widget build(BuildContext context) {
     ref.listen<List<UndoAction>>(undoServiceProvider, (previous, next) {
       // Detect a *new* action by identity, not list length: once the log hits
-      // its 10-entry cap `pushAction` produces `newList.length == state.length`
+      // its history cap `pushAction` produces `newList.length == state.length`
       // after trim, so a length-based gate would silently swallow every
       // subsequent notification.
       final prevLastId = previous?.lastOrNull?.id;

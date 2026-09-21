@@ -3,7 +3,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 
 class UndoService extends Notifier<List<UndoAction>> {
-  static const int _maxHistory = 10;
+  static const int _maxHistory = 100;
 
   // Resolves once build() has loaded persisted history and reconciled the DB
   // with the in-memory cap.
@@ -12,7 +12,7 @@ class UndoService extends Notifier<List<UndoAction>> {
   @override
   List<UndoAction> build() {
     final repo = ref.read(undoRepositoryProvider);
-    _ready = repo.getHistory().then((history) async {
+    _ready = repo.getHistory(limit: _maxHistory).then((history) async {
       if (ref.mounted) state = history;
       // Reconcile the persisted log with the in-memory cap so an older app
       // version that allowed more entries cannot keep them around forever.

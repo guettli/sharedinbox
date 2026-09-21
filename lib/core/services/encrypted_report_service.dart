@@ -70,11 +70,21 @@ class EncryptedReportService {
 
   /// Encrypts [rawMail] to [key] using ECIES (X25519 + AES-256-GCM). The
   /// returned bytes are the attachment uploaded with the report.
-  Future<Uint8List> encryptMail(ReportKey key, List<int> rawMail) {
+  Future<Uint8List> encryptMail(ReportKey key, List<int> rawMail) =>
+      _encryptTo(key, rawMail);
+
+  /// Encrypts an attachment (e.g. a screenshot) to [key] with the exact same
+  /// ECIES scheme and HKDF label as the mail, so the maintainer decrypts it
+  /// with the identical tooling (`go run ./server/bugreport decrypt`). Keeps
+  /// the plaintext image off the public issue tracker (issue #851).
+  Future<Uint8List> encryptAttachment(ReportKey key, List<int> bytes) =>
+      _encryptTo(key, bytes);
+
+  Future<Uint8List> _encryptTo(ReportKey key, List<int> plaintext) {
     return ShareEncryptionService.encryptBytes(
       recipientKeyId: key.keyId,
       recipientPublicKeyBytes: key.publicKeyBytes,
-      plaintext: rawMail,
+      plaintext: plaintext,
       info: encryptionInfo,
     );
   }

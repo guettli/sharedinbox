@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,7 +40,7 @@ func (f *fakeIssuer) CreateIssue(_ context.Context, title, body string) (string,
 
 // encryptedReportBody builds a multipart body with the given form fields and an
 // encrypted_mail file (when mail is non-empty).
-func encryptedReportBody(t *testing.T, fields map[string]string, mail []byte) (*bytes.Buffer, string) {
+func encryptedReportBody(t *testing.T, fields map[string]string, mail []byte, attachments ...[]byte) (*bytes.Buffer, string) {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	mw := multipart.NewWriter(buf)
@@ -55,57 +58,19 @@ func encryptedReportBody(t *testing.T, fields map[string]string, mail []byte) (*
 			t.Fatalf("write mail: %v", err)
 		}
 	}
-	if err := mw.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-	return buf, mw.FormDataContentType()
-}
-
-// multipartBody builds a multipart body from the given form fields.
-func multipartBody(t *testing.T, fields map[string]string) (*bytes.Buffer, string) {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	mw := multipart.NewWriter(buf)
-	for k, v := range fields {
-		if err := mw.WriteField(k, v); err != nil {
-			t.Fatalf("WriteField: %v", err)
+	for i, a := range attachments {
+		fw, err := mw.CreateFormFile("encrypted_attachments[]", fmt.Sprintf("shot-%d.enc", i+1))
+		if err != nil {
+			t.Fatalf("CreateFormFile attachment: %v", err)
+		}
+		if _, err := fw.Write(a); err != nil {
+			t.Fatalf("write attachment: %v", err)
 		}
 	}
 	if err := mw.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
 	return buf, mw.FormDataContentType()
-}
-
-func TestBugReportHandlerDescriptionOptional(t *testing.T) {
-	resetRateLimit()
-	dir := t.TempDir()
-	h := bugReportHandler(dir)
-
-	// An empty description is accepted as long as about_info is present.
-	body, ct := multipartBody(t, map[string]string{"description": "", "about_info": "v1.2.3"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
-	req.Header.Set("Content-Type", ct)
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestBugReportHandlerRequiresAboutInfo(t *testing.T) {
-	resetRateLimit()
-	dir := t.TempDir()
-	h := bugReportHandler(dir)
-
-	body, ct := multipartBody(t, map[string]string{"description": "it broke"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
-	req.Header.Set("Content-Type", ct)
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
-	}
 }
 
 func TestReportKeyHandler(t *testing.T) {
@@ -203,9 +168,10 @@ func TestEncryptedReportHandlerValidation(t *testing.T) {
 		mail   []byte
 		want   int
 	}{
-		// The description is optional; only the encrypted mail is required.
+		// Description and mail are both optional; about_info is the only floor.
 		{"missing description", map[string]string{"about_info": "x"}, []byte("c"), http.StatusCreated},
-		{"missing mail", map[string]string{"description": "d"}, nil, http.StatusBadRequest},
+		{"no mail is allowed", map[string]string{"description": "d", "about_info": "x"}, nil, http.StatusCreated},
+		{"missing about_info", map[string]string{"description": "d"}, []byte("c"), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -243,6 +209,206 @@ func TestEncryptedMailHandlerRejectsBadID(t *testing.T) {
 	h(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestEncryptedReportHandlerStoresScreenshots(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	issuer := &fakeIssuer{}
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
+
+	body, ct := encryptedReportBody(t,
+		map[string]string{"description": "see the screenshots", "about_info": "v1"},
+		[]byte("mail-cipher"),
+		[]byte("shot-1-cipher"),
+		[]byte("shot-2-cipher"),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	id := resp["id"].(string)
+
+	// Both screenshots are linked from the issue as encrypted downloads, and
+	// the plaintext ciphertext is never inlined.
+	for _, want := range []string{"/image_1.enc", "/image_2.enc", "Encrypted screenshot"} {
+		if !strings.Contains(issuer.body, want) {
+			t.Errorf("issue body missing %q\n---\n%s", want, issuer.body)
+		}
+	}
+	for _, bad := range []string{"shot-1-cipher", "shot-2-cipher"} {
+		if strings.Contains(issuer.body, bad) {
+			t.Errorf("issue body must not inline screenshot ciphertext %q", bad)
+		}
+	}
+
+	// The attachment endpoint serves each stored blob back byte-for-byte.
+	dl := encryptedAttachmentHandler(dir)
+	for name, want := range map[string]string{"image_1.enc": "shot-1-cipher", "image_2.enc": "shot-2-cipher"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/encrypted-reports/"+id+"/"+name, nil)
+		r.SetPathValue("id", id)
+		r.SetPathValue("name", name)
+		w := httptest.NewRecorder()
+		dl(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("download %s status = %d, want 200", name, w.Code)
+		}
+		if got, _ := io.ReadAll(w.Body); string(got) != want {
+			t.Errorf("download %s = %q, want %q", name, string(got), want)
+		}
+	}
+}
+
+// TestEncryptedReportHandlerGeneralNoMail: a general bug report with no mail
+// and no other encrypted parts still opens a public issue (#847 no-mail path),
+// and the issue mentions no encrypted attachments.
+func TestEncryptedReportHandlerGeneralNoMail(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	issuer := &fakeIssuer{}
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
+
+	body, ct := encryptedReportBody(t,
+		map[string]string{"description": "app crashes on start", "about_info": "v1.2.3"},
+		nil,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(issuer.body, "app crashes on start") {
+		t.Errorf("issue body missing description: %q", issuer.body)
+	}
+	for _, bad := range []string{"Encrypted mail", "Encrypted metadata", "Encrypted screenshot", "How to decrypt"} {
+		if strings.Contains(issuer.body, bad) {
+			t.Errorf("no-attachment report should not mention %q: %q", bad, issuer.body)
+		}
+	}
+}
+
+// TestEncryptedReportHandlerStoresMetadata: the encrypted metadata blob is
+// stored, linked in the issue, and downloadable via the {id}/{name} route.
+func TestEncryptedReportHandlerStoresMetadata(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	issuer := &fakeIssuer{}
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
+
+	buf := &bytes.Buffer{}
+	mw := multipart.NewWriter(buf)
+	if err := mw.WriteField("about_info", "v1"); err != nil {
+		t.Fatalf("WriteField: %v", err)
+	}
+	fw, err := mw.CreateFormFile("encrypted_metadata", "metadata.enc")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte("meta-cipher")); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(issuer.body, "/metadata.enc") {
+		t.Errorf("issue body missing metadata link: %q", issuer.body)
+	}
+
+	id := resp["id"].(string)
+	dl := encryptedAttachmentHandler(dir)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/encrypted-reports/"+id+"/metadata.enc", nil)
+	r.SetPathValue("id", id)
+	r.SetPathValue("name", "metadata.enc")
+	w := httptest.NewRecorder()
+	dl(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("download status = %d, want 200", w.Code)
+	}
+	if got, _ := io.ReadAll(w.Body); string(got) != "meta-cipher" {
+		t.Errorf("downloaded metadata = %q", string(got))
+	}
+}
+
+func TestEncryptedReportHandlerRejectsTooManyScreenshots(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", &fakeIssuer{})
+
+	shots := make([][]byte, maxEncryptedAttachments+1)
+	for i := range shots {
+		shots[i] = []byte(fmt.Sprintf("shot-%d", i))
+	}
+	body, ct := encryptedReportBody(t, map[string]string{"description": "too many", "about_info": "v1"}, []byte("mail"), shots...)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	// Nothing should have been persisted for a rejected report.
+	entries, _ := os.ReadDir(filepath.Join(dir, "encrypted"))
+	if len(entries) != 0 {
+		t.Errorf("rejected report left %d dirs on disk, want 0", len(entries))
+	}
+}
+
+func TestEncryptedAttachmentHandlerRejectsNonGET(t *testing.T) {
+	h := encryptedAttachmentHandler(t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	req.SetPathValue("id", "00000000-0000-4000-8000-000000000000")
+	req.SetPathValue("name", "image_1.enc")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestEncryptedAttachmentHandlerRejectsBadNames(t *testing.T) {
+	dir := t.TempDir()
+	h := encryptedAttachmentHandler(dir)
+	id := "00000000-0000-4000-8000-000000000000"
+	cases := []struct {
+		id, name string
+	}{
+		{id, "mail.enc"},             // not an image blob
+		{id, "image_1.png"},          // wrong extension
+		{id, "../../etc/passwd"},     // traversal
+		{"../../etc", "image_1.enc"}, // bad id
+		{id, "image_9999.enc"},       // over the 3-digit bound
+	}
+	for _, tc := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		r.SetPathValue("id", tc.id)
+		r.SetPathValue("name", tc.name)
+		w := httptest.NewRecorder()
+		h(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("id=%q name=%q status = %d, want 404", tc.id, tc.name, w.Code)
+		}
 	}
 }
 

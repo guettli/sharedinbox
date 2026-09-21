@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -18,10 +19,15 @@ import 'package:sharedinbox/ui/utils/about_markdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const _bugReportApiUrl = String.fromEnvironment(
-  'BUG_REPORT_API_URL',
-  defaultValue: 'https://sharedinbox.de/api/v1/bug-reports',
-);
+/// Colour used to outline fields whose contents go into the **public** GitHub
+/// issue, so the user can tell at a glance what will be visible to everyone.
+const _publicColor = Color(0xFFD97706); // amber-600, legible in both themes
+
+/// Client-side mirror of the server's `maxEncryptedAttachments`
+/// (server/bugreport/main.go): the encrypted-report endpoint rejects a report
+/// carrying more screenshots than this, so we guard here for a clear message
+/// rather than a generic server error.
+const _maxEncryptedScreenshots = 10;
 
 class BugReportScreen extends ConsumerStatefulWidget {
   const BugReportScreen({super.key, this.emailId});
@@ -183,57 +189,28 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       return;
     }
 
+    if (_attachments.length > _maxEncryptedScreenshots) {
+      context.showAppSnackBar(
+        'Please attach at most $_maxEncryptedScreenshots screenshots.',
+        level: AppLogLevel.warn,
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
 
     try {
       final client = ref.read(httpClientProvider);
       final encryptedReports = ref.read(encryptedReportServiceProvider);
-      final useEncryptedIssue = _includeEncryptedMail && _attachedEmail != null;
-      final uri = Uri.parse(
-        useEncryptedIssue ? encryptedReports.submitUrl : _bugReportApiUrl,
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse(encryptedReports.submitUrl),
       );
-      final request = http.MultipartRequest('POST', uri);
 
-      // Description
+      // ── Public fields — these appear in cleartext in the GitHub issue. ──
       request.fields['description'] = _descriptionController.text;
 
-      if (useEncryptedIssue) {
-        // Encrypt the full raw mail on-device to the maintainer's public key
-        // and attach the ciphertext. Only the maintainer (who holds the
-        // matching private key) can decrypt it, so the mail is never exposed
-        // on the public issue tracker.
-        final key = await encryptedReports.fetchPublicKey();
-        final rawMail = await ref
-            .read(emailRepositoryProvider)
-            .fetchRawRfc822(_attachedEmail!.id);
-        final encrypted =
-            await encryptedReports.encryptMail(key, utf8.encode(rawMail));
-        request.files.add(
-          http.MultipartFile.fromBytes(
-            'encrypted_mail',
-            encrypted,
-            filename: 'mail.enc',
-          ),
-        );
-      } else if (_attachedEmail != null) {
-        // Email metadata for the confidential report.
-        final emailMap = {
-          'id': _attachedEmail!.id,
-          'subject': _attachedEmail!.subject,
-          'from': _attachedEmail!.from.map((e) => e.toString()).toList(),
-          'date': _attachedEmail!.sentAt?.toIso8601String() ??
-              _attachedEmail!.receivedAt.toIso8601String(),
-          'preview': _attachedEmail!.preview,
-        };
-        request.fields['email_data'] = jsonEncode(emailMap);
-      }
-
-      // Contact Email
-      if (_includeEmail) {
-        request.fields['email'] = _emailController.text;
-      }
-
-      // About Info
       PackageInfo? pkg;
       try {
         pkg = await _packageInfoFuture;
@@ -244,14 +221,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           _accounts.where((a) => a.type == AccountType.jmap).length;
 
       if (!mounted) return;
-      final aboutInfo = buildAboutMarkdown(
+      request.fields['about_info'] = buildAboutMarkdown(
         context: context,
         pkg: pkg,
         imapCount: imapCount,
         jmapCount: jmapCount,
         deviceModel: _deviceModel,
       );
-      request.fields['about_info'] = aboutInfo;
 
       // Sync Log
       if (_includeSyncLog && _selectedAccountId != null) {
@@ -262,14 +238,62 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
         request.fields['sync_log'] = _serializeSyncLogs(syncLogs);
       }
 
-      // Attachments
-      for (final file in _attachments) {
-        final multipartFile = await http.MultipartFile.fromPath(
-          'attachments[]',
-          file.path!,
-          filename: file.name,
-        );
-        request.files.add(multipartFile);
+      // Private parts — encrypted on-device to the maintainer's key so they
+      // never appear on the public issue tracker. Each part is optional, so a
+      // general bug report with no mail is a public issue with no attachments.
+      final attachingMail = _includeEncryptedMail && _attachedEmail != null;
+      final metadataYaml = _buildMetadataYaml(attachingMail: attachingMail);
+
+      if (attachingMail || metadataYaml != null || _attachments.isNotEmpty) {
+        // Fetch the maintainer's public key once; reuse it for every blob.
+        final reportKey = await encryptedReports.fetchPublicKey();
+
+        if (attachingMail) {
+          final rawMail = await ref
+              .read(emailRepositoryProvider)
+              .fetchRawRfc822(_attachedEmail!.id);
+          final encrypted = await encryptedReports.encryptMail(
+            reportKey,
+            utf8.encode(rawMail),
+          );
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'encrypted_mail',
+              encrypted,
+              filename: 'mail.enc',
+            ),
+          );
+        }
+
+        if (metadataYaml != null) {
+          final encrypted = await encryptedReports.encryptAttachment(
+            reportKey,
+            utf8.encode(metadataYaml),
+          );
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'encrypted_metadata',
+              encrypted,
+              filename: 'metadata.enc',
+            ),
+          );
+        }
+
+        // Screenshots are encrypted to the maintainer's key exactly like the
+        // mail and uploaded as `encrypted_attachments[]`, so the plaintext
+        // image never reaches the public issue tracker (issue #851).
+        for (var i = 0; i < _attachments.length; i++) {
+          final bytes = await File(_attachments[i].path!).readAsBytes();
+          final encrypted =
+              await encryptedReports.encryptAttachment(reportKey, bytes);
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'encrypted_attachments[]',
+              encrypted,
+              filename: 'image_${i + 1}.enc',
+            ),
+          );
+        }
       }
 
       final streamedResponse = await client.send(request);
@@ -279,15 +303,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
       if (response.statusCode == 201) {
         final resData = jsonDecode(response.body) as Map<String, dynamic>;
-        if (useEncryptedIssue) {
-          await _onIssueCreated(
-            resData['issueUrl'] as String,
-            issueNumber: (resData['issueNumber'] as num?)?.toInt(),
-            reportId: resData['id'] as String?,
-          );
-        } else {
-          _showSuccessDialog(resData['id'] as String);
-        }
+        await _onIssueCreated(
+          resData['issueUrl'] as String,
+          issueNumber: (resData['issueNumber'] as num?)?.toInt(),
+          reportId: resData['id'] as String?,
+        );
       } else if (response.statusCode == 429) {
         final retryAfter = response.headers['retry-after'] ?? '6';
         context.showAppSnackBar(
@@ -387,25 +407,43 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
     );
   }
 
-  void _showSuccessDialog(String reportId) {
-    unawaited(
-      _showResultDialog(
-        title: 'Bug Report Submitted',
-        content: [
-          const Text('Thank you for helping us improve SharedInbox!'),
-          const SizedBox(height: AppSpacing.md),
-          Text(
-            'Your Report ID is:\n$reportId',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          const Text(
-            'Your report is handled confidentially and has not been posted to the public issue tracker.',
-          ),
-        ],
-      ),
-    );
+  /// Builds the encrypted metadata YAML block carrying the private, non-mail
+  /// details of a report: the optional contact email and — when the full mail
+  /// is *not* attached — the reported email's metadata. Returns null when there
+  /// is nothing private to send. Scalar values are JSON-encoded, which is valid
+  /// YAML and safely escapes any special characters.
+  String? _buildMetadataYaml({required bool attachingMail}) {
+    final lines = <String>[];
+
+    if (_includeEmail && _emailController.text.trim().isNotEmpty) {
+      lines.add('contact_email: ${jsonEncode(_emailController.text.trim())}');
+    }
+
+    // Only include the email's metadata when the full encrypted mail is not
+    // being attached — otherwise the mail already carries everything.
+    if (_attachedEmail != null && !attachingMail) {
+      lines.add('email:');
+      lines.add('  id: ${jsonEncode(_attachedEmail!.id)}');
+      lines.add('  subject: ${jsonEncode(_attachedEmail!.subject ?? '')}');
+      final from = _attachedEmail!.from.map((e) => e.toString()).toList();
+      if (from.isEmpty) {
+        lines.add('  from: []');
+      } else {
+        lines.add('  from:');
+        for (final f in from) {
+          lines.add('    - ${jsonEncode(f)}');
+        }
+      }
+      final date = _attachedEmail!.sentAt?.toIso8601String() ??
+          _attachedEmail!.receivedAt.toIso8601String();
+      lines.add('  date: ${jsonEncode(date)}');
+      if (_attachedEmail!.preview != null) {
+        lines.add('  preview: ${jsonEncode(_attachedEmail!.preview)}');
+      }
+    }
+
+    if (lines.isEmpty) return null;
+    return '${lines.join('\n')}\n';
   }
 
   /// Shows a modal result dialog. The trailing "Close" button dismisses the
@@ -438,6 +476,51 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
     );
   }
 
+  /// The collapsible "System Info" card. Its contents are public (they go into
+  /// the GitHub issue), so the caller wraps it in a [_PublicField].
+  Widget _systemInfoCard(ThemeData theme) {
+    return FutureBuilder<PackageInfo>(
+      future: _packageInfoFuture,
+      builder: (context, snapshot) {
+        final imapCount =
+            _accounts.where((a) => a.type == AccountType.imap).length;
+        final jmapCount =
+            _accounts.where((a) => a.type == AccountType.jmap).length;
+        final aboutMd = buildAboutMarkdown(
+          context: context,
+          pkg: snapshot.data,
+          imapCount: imapCount,
+          jmapCount: jmapCount,
+          deviceModel: _deviceModel,
+        );
+        return Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(
+              color: theme.dividerColor.withValues(alpha: 0.1),
+            ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: ExpansionTile(
+            title: const Text(
+              'System Info (attached automatically)',
+              style: TextStyle(fontSize: 14),
+            ),
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: MarkdownBody(data: aboutMd),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -456,7 +539,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 children: [
-                  // Confidentiality info card
+                  // Privacy legend: what becomes public vs. what is encrypted.
                   Card(
                     elevation: 0,
                     color: theme.colorScheme.secondaryContainer
@@ -470,24 +553,39 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(AppSpacing.lg),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            Icons.lock_outline,
-                            color: theme.colorScheme.secondary,
+                          const Row(
+                            children: [
+                              Icon(Icons.public, color: _publicColor),
+                              SizedBox(width: AppSpacing.lg),
+                              Expanded(
+                                child: Text(
+                                  'This opens a public GitHub issue. Fields with '
+                                  'a dashed amber border are visible to everyone.',
+                                  style: TextStyle(height: 1.3),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: AppSpacing.lg),
-                          Expanded(
-                            child: Text(
-                              _attachedEmail != null && _includeEncryptedMail
-                                  ? 'A public GitHub issue will be created. The '
-                                      'email is encrypted on this device and can '
-                                      'only be read by the maintainer.'
-                                  : 'Your report is handled confidentially and '
-                                      'will not be posted to the public issue '
-                                      'tracker.',
-                              style: const TextStyle(height: 1.3),
-                            ),
+                          const SizedBox(height: AppSpacing.md),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.lock_outline,
+                                color: theme.colorScheme.secondary,
+                              ),
+                              const SizedBox(width: AppSpacing.lg),
+                              const Expanded(
+                                child: Text(
+                                  'Your email, screenshots and contact address '
+                                  'are encrypted on this device — only the '
+                                  'maintainer can read them.',
+                                  style: TextStyle(height: 1.3),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -495,18 +593,20 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Description Text Field (optional)
-                  TextFormField(
-                    controller: _descriptionController,
-                    autofocus: true,
-                    maxLines: 8,
-                    minLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'What went wrong? (optional)',
-                      alignLabelWithHint: true,
-                      border: OutlineInputBorder(),
-                      helperText:
-                          'Please describe the problem and how to reproduce it.',
+                  // Description Text Field (optional) — public.
+                  _PublicField(
+                    child: TextFormField(
+                      controller: _descriptionController,
+                      autofocus: true,
+                      maxLines: 8,
+                      minLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'What went wrong? (optional)',
+                        alignLabelWithHint: true,
+                        border: OutlineInputBorder(),
+                        helperText:
+                            'Please describe the problem and how to reproduce it.',
+                      ),
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
@@ -665,49 +765,8 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                     const SizedBox(height: AppSpacing.md),
                   ],
 
-                  // System info section
-                  FutureBuilder<PackageInfo>(
-                    future: _packageInfoFuture,
-                    builder: (context, snapshot) {
-                      final imapCount = _accounts
-                          .where((a) => a.type == AccountType.imap)
-                          .length;
-                      final jmapCount = _accounts
-                          .where((a) => a.type == AccountType.jmap)
-                          .length;
-                      final aboutMd = buildAboutMarkdown(
-                        context: context,
-                        pkg: snapshot.data,
-                        imapCount: imapCount,
-                        jmapCount: jmapCount,
-                        deviceModel: _deviceModel,
-                      );
-                      return Card(
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          side: BorderSide(
-                            color: theme.dividerColor.withValues(alpha: 0.1),
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: ExpansionTile(
-                          title: const Text(
-                            'System Info (attached automatically)',
-                            style: TextStyle(fontSize: 14),
-                          ),
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(AppSpacing.md),
-                              child: Align(
-                                alignment: Alignment.topLeft,
-                                child: MarkdownBody(data: aboutMd),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                  // System info section — public.
+                  _PublicField(child: _systemInfoCard(theme)),
                   const SizedBox(height: AppSpacing.xxl),
 
                   // Submit Button
@@ -736,4 +795,79 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
             ),
     );
   }
+}
+
+/// Outlines its [child] with a dashed amber border and a "Public" badge, so the
+/// user can see at a glance that the field's contents go into the public GitHub
+/// issue.
+class _PublicField extends StatelessWidget {
+  const _PublicField({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _DashedBorderPainter(color: _publicColor),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.public, size: 16, color: _publicColor),
+                SizedBox(width: AppSpacing.sm),
+                Text(
+                  'Public — shown in the GitHub issue',
+                  style: TextStyle(
+                    color: _publicColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Paints a dashed rounded-rectangle border around the paint area.
+class _DashedBorderPainter extends CustomPainter {
+  _DashedBorderPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(12),
+    );
+    final path = Path()..addRRect(rrect);
+
+    const dashWidth = 6.0;
+    const dashGap = 4.0;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final end = (distance + dashWidth).clamp(0.0, metric.length).toDouble();
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance += dashWidth + dashGap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
