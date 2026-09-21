@@ -280,7 +280,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       if (response.statusCode == 201) {
         final resData = jsonDecode(response.body) as Map<String, dynamic>;
         if (useEncryptedIssue) {
-          await _onIssueCreated(resData['issueUrl'] as String);
+          await _onIssueCreated(
+            resData['issueUrl'] as String,
+            issueNumber: (resData['issueNumber'] as num?)?.toInt(),
+            reportId: resData['id'] as String?,
+          );
         } else {
           _showSuccessDialog(resData['id'] as String);
         }
@@ -329,7 +333,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
     }
   }
 
-  Future<void> _onIssueCreated(String issueUrl) async {
+  Future<void> _onIssueCreated(
+    String issueUrl, {
+    int? issueNumber,
+    String? reportId,
+  }) async {
     // Record the URL in the App Log so the user can find it again later.
     await ref.read(appLoggerProvider).log(
       level: AppLogLevel.info,
@@ -339,6 +347,18 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       emailId: _attachedEmail?.id,
       data: {'issueUrl': issueUrl},
     );
+    // Persist the report so it can be listed in the ChangeLog view. A DB
+    // failure here must never block the success dialog.
+    try {
+      await ref.read(dbProvider).recordBugReport(
+            issueUrl: issueUrl,
+            issueNumber: issueNumber,
+            reportId: reportId,
+            createdAt: DateTime.now(),
+          );
+    } catch (_) {
+      // Best-effort local record; ignore failures.
+    }
     if (!mounted) return;
     await _showResultDialog(
       title: 'Issue Created',
