@@ -73,53 +73,6 @@ func encryptedReportBody(t *testing.T, fields map[string]string, mail []byte, at
 	return buf, mw.FormDataContentType()
 }
 
-// multipartBody builds a multipart body from the given form fields.
-func multipartBody(t *testing.T, fields map[string]string) (*bytes.Buffer, string) {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	mw := multipart.NewWriter(buf)
-	for k, v := range fields {
-		if err := mw.WriteField(k, v); err != nil {
-			t.Fatalf("WriteField: %v", err)
-		}
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-	return buf, mw.FormDataContentType()
-}
-
-func TestBugReportHandlerDescriptionOptional(t *testing.T) {
-	resetRateLimit()
-	dir := t.TempDir()
-	h := bugReportHandler(dir)
-
-	// An empty description is accepted as long as about_info is present.
-	body, ct := multipartBody(t, map[string]string{"description": "", "about_info": "v1.2.3"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
-	req.Header.Set("Content-Type", ct)
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestBugReportHandlerRequiresAboutInfo(t *testing.T) {
-	resetRateLimit()
-	dir := t.TempDir()
-	h := bugReportHandler(dir)
-
-	body, ct := multipartBody(t, map[string]string{"description": "it broke"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bug-reports", body)
-	req.Header.Set("Content-Type", ct)
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestReportKeyHandler(t *testing.T) {
 	raw := make([]byte, 48)
 	for i := range raw {
@@ -215,9 +168,10 @@ func TestEncryptedReportHandlerValidation(t *testing.T) {
 		mail   []byte
 		want   int
 	}{
-		// The description is optional; only the encrypted mail is required.
+		// Description and mail are both optional; about_info is the only floor.
 		{"missing description", map[string]string{"about_info": "x"}, []byte("c"), http.StatusCreated},
-		{"missing mail", map[string]string{"description": "d"}, nil, http.StatusBadRequest},
+		{"no mail is allowed", map[string]string{"description": "d", "about_info": "x"}, nil, http.StatusCreated},
+		{"missing about_info", map[string]string{"description": "d"}, []byte("c"), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,7 +219,7 @@ func TestEncryptedReportHandlerStoresScreenshots(t *testing.T) {
 	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
 
 	body, ct := encryptedReportBody(t,
-		map[string]string{"description": "see the screenshots"},
+		map[string]string{"description": "see the screenshots", "about_info": "v1"},
 		[]byte("mail-cipher"),
 		[]byte("shot-1-cipher"),
 		[]byte("shot-2-cipher"),
@@ -313,6 +267,90 @@ func TestEncryptedReportHandlerStoresScreenshots(t *testing.T) {
 	}
 }
 
+// TestEncryptedReportHandlerGeneralNoMail: a general bug report with no mail
+// and no other encrypted parts still opens a public issue (#847 no-mail path),
+// and the issue mentions no encrypted attachments.
+func TestEncryptedReportHandlerGeneralNoMail(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	issuer := &fakeIssuer{}
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
+
+	body, ct := encryptedReportBody(t,
+		map[string]string{"description": "app crashes on start", "about_info": "v1.2.3"},
+		nil,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(issuer.body, "app crashes on start") {
+		t.Errorf("issue body missing description: %q", issuer.body)
+	}
+	for _, bad := range []string{"Encrypted mail", "Encrypted metadata", "Encrypted screenshot", "How to decrypt"} {
+		if strings.Contains(issuer.body, bad) {
+			t.Errorf("no-attachment report should not mention %q: %q", bad, issuer.body)
+		}
+	}
+}
+
+// TestEncryptedReportHandlerStoresMetadata: the encrypted metadata blob is
+// stored, linked in the issue, and downloadable via the {id}/{name} route.
+func TestEncryptedReportHandlerStoresMetadata(t *testing.T) {
+	resetRateLimit()
+	dir := t.TempDir()
+	issuer := &fakeIssuer{}
+	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
+
+	buf := &bytes.Buffer{}
+	mw := multipart.NewWriter(buf)
+	if err := mw.WriteField("about_info", "v1"); err != nil {
+		t.Fatalf("WriteField: %v", err)
+	}
+	fw, err := mw.CreateFormFile("encrypted_metadata", "metadata.enc")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte("meta-cipher")); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(issuer.body, "/metadata.enc") {
+		t.Errorf("issue body missing metadata link: %q", issuer.body)
+	}
+
+	id := resp["id"].(string)
+	dl := encryptedAttachmentHandler(dir)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/encrypted-reports/"+id+"/metadata.enc", nil)
+	r.SetPathValue("id", id)
+	r.SetPathValue("name", "metadata.enc")
+	w := httptest.NewRecorder()
+	dl(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("download status = %d, want 200", w.Code)
+	}
+	if got, _ := io.ReadAll(w.Body); string(got) != "meta-cipher" {
+		t.Errorf("downloaded metadata = %q", string(got))
+	}
+}
+
 func TestEncryptedReportHandlerRejectsTooManyScreenshots(t *testing.T) {
 	resetRateLimit()
 	dir := t.TempDir()
@@ -322,7 +360,7 @@ func TestEncryptedReportHandlerRejectsTooManyScreenshots(t *testing.T) {
 	for i := range shots {
 		shots[i] = []byte(fmt.Sprintf("shot-%d", i))
 	}
-	body, ct := encryptedReportBody(t, map[string]string{"description": "too many"}, []byte("mail"), shots...)
+	body, ct := encryptedReportBody(t, map[string]string{"description": "too many", "about_info": "v1"}, []byte("mail"), shots...)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
 	req.Header.Set("Content-Type", ct)
 	rec := httptest.NewRecorder()
