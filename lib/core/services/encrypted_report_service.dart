@@ -75,7 +75,7 @@ class EncryptedReportService {
 
   /// Encrypts an attachment (e.g. a screenshot) to [key] with the exact same
   /// ECIES scheme and HKDF label as the mail, so the maintainer decrypts it
-  /// with the identical tooling (`go run ./server/bugreport decrypt`). Keeps
+  /// with the identical tooling (the `bugreport decrypt` binary). Keeps
   /// the plaintext image off the public issue tracker (issue #851).
   Future<Uint8List> encryptAttachment(ReportKey key, List<int> bytes) =>
       _encryptTo(key, bytes);

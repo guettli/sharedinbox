@@ -9,6 +9,25 @@
 # the memory-constrained agentloop worker node — the full Flutter SDK OOM-killed
 # it (envbuilder snapshotting the SDK + `flutter test` compiling on an 8 GB node
 # shared with etcd). See AGENTS.md -> "Toolchain".
+
+# --- Stage: build the `bugreport` binary -----------------------------------
+# The worker ships no Go toolchain (same size/OOM reasons as Flutter above), but
+# every encrypted-report issue carries a "How to decrypt" command the agent must
+# be able to run in place with the maintainer's key ($REPORT_PRIVATE_KEY) — see
+# server/bugreport/main.go decryptHint(). `go run ./server/bugreport decrypt`
+# needs Go, which isn't here, so instead of a ~300 MB toolchain we bake a small
+# static binary from the same source and put it on PATH (matching the static
+# grpcurl/clickhouse fetches below). server/bugreport is stdlib-only, so this
+# build is hermetic and fast. Pin the builder to the same tag the ci module uses
+# for Go (ci/main.go goToolImage); Renovate tracks it (renovate.json).
+FROM golang:1.27-bookworm AS bugreport-build
+WORKDIR /src
+# Only the Go sources are needed; go.mod carries no external requires, so there
+# is nothing to download and the module cache stays cold.
+COPY go.mod ./
+COPY server/ ./server/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/bugreport ./server/bugreport
+
 FROM ubuntu:24.04
 
 # Base CLI tools. agentloop's worker preflight requires a baseline set on PATH
@@ -117,6 +136,13 @@ RUN for t in flutter dart fvm; do \
         'exit 127' \
       > "/usr/local/bin/$t" && chmod 0755 "/usr/local/bin/$t"; \
     done
+
+# Prebuilt `bugreport` binary (compiled in the bugreport-build stage above) so
+# the agent can decrypt encrypted-report attachments in place with the
+# maintainer's key — `bugreport decrypt mail.enc > mail.eml` — without a Go
+# toolchain. A single static binary; see server/bugreport and the "How to
+# decrypt" block decryptHint() renders into each encrypted-report issue.
+COPY --from=bugreport-build /out/bugreport /usr/local/bin/bugreport
 
 # ci user pinned to uid 1000 so the worker OWNS the files it writes into the
 # shared run directory the agentloop daemon (also uid 1000) pre-creates. -o
