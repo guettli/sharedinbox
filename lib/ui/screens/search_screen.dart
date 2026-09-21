@@ -12,6 +12,7 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
+import 'package:sharedinbox/ui/widgets/folder_scope_dialog.dart';
 
 final _searchHistoryProvider = FutureProvider.autoDispose<List<String>>((
   ref,
@@ -57,6 +58,34 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// its mail immediately without re-running the search. Reset whenever a new
   /// result set arrives so a stale set never silently filters a later query.
   final Set<String> _hiddenAccountIds = {};
+
+  /// Folder the current result set is focused on (null = no focus), keyed by
+  /// [_folderKey]. Like [_hiddenAccountIds] this is a pure client-side view
+  /// filter over [_results] — tapping a result's folder name and choosing
+  /// "Only this folder" narrows the visible list without re-running the search
+  /// (#844). Reset with the other view filters whenever a new result set
+  /// arrives.
+  String? _focusedFolderKey;
+
+  /// Folders excluded from the current result set, keyed by [_folderKey]. Same
+  /// client-side lifecycle as [_focusedFolderKey]; multiple exclusions
+  /// accumulate (#844).
+  final Set<String> _excludedFolderKeys = {};
+
+  /// Stable per-folder key. NUL-joins `accountId` and `mailboxPath` so a common
+  /// folder name (e.g. "INBOX") on two accounts stays distinct, and so
+  /// excluding one account's folder never touches another's.
+  String _folderKey(String accountId, String mailboxPath) =>
+      '$accountId\u0000$mailboxPath';
+
+  /// Clears every client-side view filter (hidden accounts, focused/excluded
+  /// folders). Called wherever a fresh result set is about to replace the old
+  /// one so a stale filter never silently narrows a later query.
+  void _resetViewFilters() {
+    _hiddenAccountIds.clear();
+    _focusedFolderKey = null;
+    _excludedFolderKeys.clear();
+  }
 
   /// Account a global search is scoped to (null = all accounts). Only used
   /// when [SearchScreen.accountId] is null; a per-account search screen always
@@ -139,7 +168,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() {
       _advancedMode = !_advancedMode;
       _results = null;
-      _hiddenAccountIds.clear();
+      _resetViewFilters();
     });
   }
 
@@ -162,7 +191,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     if (value.trim().length < 3) {
       setState(() {
         _results = null;
-        _hiddenAccountIds.clear();
+        _resetViewFilters();
       });
       return;
     }
@@ -207,7 +236,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) {
         setState(() {
           _results = merged;
-          _hiddenAccountIds.clear();
+          _resetViewFilters();
           _loading = false;
         });
       }
@@ -237,7 +266,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted) {
         setState(() {
           _results = emails;
-          _hiddenAccountIds.clear();
+          _resetViewFilters();
           _loading = false;
         });
       }
@@ -287,7 +316,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       _ctrl.clear();
                       setState(() {
                         _results = null;
-                        _hiddenAccountIds.clear();
+                        _resetViewFilters();
                       });
                     },
                   ),
@@ -377,28 +406,118 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   /// Results after removing mail from deactivated accounts (see
-  /// [_hiddenAccountIds]).
-  List<Email> get _visibleResults =>
-      _results!.where((e) => !_hiddenAccountIds.contains(e.accountId)).toList();
+  /// [_hiddenAccountIds]) and applying the folder focus/exclusion (#844).
+  List<Email> get _visibleResults => _results!.where((e) {
+        if (_hiddenAccountIds.contains(e.accountId)) return false;
+        final key = _folderKey(e.accountId, e.mailboxPath);
+        if (_excludedFolderKeys.contains(key)) return false;
+        if (_focusedFolderKey != null && key != _focusedFolderKey) return false;
+        return true;
+      }).toList();
 
-  /// The account filter bar stacked above the message list. Only meaningful
-  /// when a result set spans two or more accounts, so an empty box is returned
-  /// otherwise. Deactivating an account is a pure [setState] view filter, so
-  /// the list below rebuilds immediately with no re-query.
+  /// The account and folder filter bars stacked above the message list.
+  /// Deactivating an account or focusing/excluding a folder is a pure
+  /// [setState] view filter, so the list below rebuilds immediately with no
+  /// re-query.
   Widget _buildResultsRegion(List<Email> results) {
     final visible = _visibleResults;
+    final folderFiltered =
+        _focusedFolderKey != null || _excludedFolderKeys.isNotEmpty;
     return Column(
       children: [
         _buildAccountBar(results),
+        _buildFolderFilterBar(),
         Expanded(
           child: visible.isEmpty
-              ? const Center(
-                  child: Text('No accounts selected — tap an account to '
-                      'show its mail'),
+              ? Center(
+                  child: Text(
+                    folderFiltered
+                        ? 'No mail matches the folder filter'
+                        : 'No accounts selected — tap an account to '
+                            'show its mail',
+                  ),
                 )
               : _buildResultsList(visible),
         ),
       ],
+    );
+  }
+
+  /// Handles a tap on a result row's folder name: asks whether to focus on or
+  /// exclude that folder, then applies the choice as a client-side view filter
+  /// over the current results (#844). Focusing the already-focused folder
+  /// clears the focus (toggle); excluding a folder drops it from any active
+  /// focus, and vice versa, so the two never contradict each other.
+  Future<void> _onFolderTap(String accountId, String mailboxPath) async {
+    final folderName = ref
+            .read(mailboxByPathProvider((accountId, mailboxPath)))
+            .value
+            ?.displayPath ??
+        mailboxPath;
+    final choice = await showFolderScopeDialog(
+      context,
+      folderDisplayName: folderName,
+    );
+    if (choice == null || !mounted) return;
+    final key = _folderKey(accountId, mailboxPath);
+    setState(() {
+      switch (choice) {
+        case FolderScopeChoice.focus:
+          _focusedFolderKey = _focusedFolderKey == key ? null : key;
+          _excludedFolderKeys.remove(key);
+        case FolderScopeChoice.exclude:
+          _excludedFolderKeys.add(key);
+          if (_focusedFolderKey == key) _focusedFolderKey = null;
+      }
+    });
+  }
+
+  /// The bar of chips describing the active folder focus/exclusions, each
+  /// clearable via its delete icon. An empty box when no folder filter is
+  /// active. Mirrors [_buildAccountChip]'s idiom (#844).
+  Widget _buildFolderFilterBar() {
+    final chips = <Widget>[
+      if (_focusedFolderKey != null)
+        _buildFolderChip(_focusedFolderKey!, focus: true),
+      for (final key in _excludedFolderKeys)
+        _buildFolderChip(key, focus: false),
+    ];
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        0,
+      ),
+      child: Wrap(
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.xs,
+        children: chips,
+      ),
+    );
+  }
+
+  Widget _buildFolderChip(String key, {required bool focus}) {
+    final sep = key.indexOf('\u0000');
+    final accountId = key.substring(0, sep);
+    final path = key.substring(sep + 1);
+    final name = ref
+            .watch(mailboxByPathProvider((accountId, path)))
+            .value
+            ?.displayPath ??
+        path;
+    return InputChip(
+      label: Text(focus ? 'Only: $name' : 'Excluding: $name'),
+      onDeleted: () => setState(() {
+        if (focus) {
+          _focusedFolderKey = null;
+        } else {
+          _excludedFolderKeys.remove(key);
+        }
+      }),
+      deleteIcon: const Icon(Icons.close, size: 18),
+      deleteButtonTooltipMessage: 'Clear folder filter',
     );
   }
 
@@ -471,7 +590,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             onChanged: (g) => setState(() {
               _filterGroup = g;
               _results = null;
-              _hiddenAccountIds.clear();
+              _resetViewFilters();
             }),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -527,6 +646,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       enableSwipe: false,
       showLocationLabel: true,
       accountNames: accountNames,
+      onFolderTap: _onFolderTap,
     );
   }
 

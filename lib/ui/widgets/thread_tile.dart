@@ -31,6 +31,8 @@ class ThreadTile extends StatelessWidget {
     this.selected = false,
     this.onLongPress,
     this.locationLabel,
+    this.folderLabel,
+    this.onFolderTap,
   });
 
   final EmailThread thread;
@@ -39,8 +41,19 @@ class ThreadTile extends StatelessWidget {
   final bool selected;
   final VoidCallback? onLongPress;
 
-  /// When non-null, appended as an extra subtitle line in primary colour.
+  /// When non-null, appended as an extra subtitle line in primary colour. When
+  /// [folderLabel] is also given it becomes the leading part of that line
+  /// (e.g. the account name), rendered as plain text before the folder.
   final String? locationLabel;
+
+  /// When non-null, rendered after [locationLabel] as the folder part of the
+  /// location line. Underlined and tappable when [onFolderTap] is set, letting
+  /// search results focus/exclude that folder (#844).
+  final String? folderLabel;
+
+  /// Invoked when the user taps [folderLabel]. Null leaves the folder as plain
+  /// (non-interactive) text.
+  final VoidCallback? onFolderTap;
 
   @override
   Widget build(BuildContext context) {
@@ -94,15 +107,8 @@ class ThreadTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall,
             ),
-          if (locationLabel != null)
-            Text(
-              locationLabel!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-            ),
+          if (locationLabel != null || folderLabel != null)
+            _buildLocationLine(context),
         ],
       ),
       trailing: Row(
@@ -120,6 +126,50 @@ class ThreadTile extends StatelessWidget {
       selected: selected,
       onTap: onTap,
       onLongPress: onLongPress,
+    );
+  }
+
+  /// Builds the location subtitle line. A plain [locationLabel] renders as a
+  /// single line; when [folderLabel] is present the account part and the
+  /// folder part sit side by side, and the folder becomes an underlined tap
+  /// target when [onFolderTap] is wired (#844).
+  Widget _buildLocationLine(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+        );
+    if (folderLabel == null) {
+      return Text(
+        locationLabel!,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+    final folderText = Text(
+      folderLabel!,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: onFolderTap == null
+          ? style
+          : style?.copyWith(decoration: TextDecoration.underline),
+    );
+    return Row(
+      children: [
+        if (locationLabel != null)
+          Flexible(
+            child: Text(
+              '$locationLabel • ',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
+          ),
+        Flexible(
+          child: onFolderTap == null
+              ? folderText
+              : InkWell(onTap: onFolderTap, child: folderText),
+        ),
+      ],
     );
   }
 }

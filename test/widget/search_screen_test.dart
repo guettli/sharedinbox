@@ -418,6 +418,153 @@ void main() {
     });
   });
 
+  group('SearchScreen folder filter', () {
+    // Two folders on the same account: INBOX (plain path) and a JMAP-shaped
+    // "Archive" whose opaque server path is "a".
+    const inboxBox = Mailbox(
+      id: 'acc-1:INBOX',
+      accountId: 'acc-1',
+      path: 'INBOX',
+      name: 'INBOX',
+      displayPath: 'INBOX',
+      unreadCount: 0,
+      totalCount: 1,
+    );
+    const archiveBox = Mailbox(
+      id: 'acc-1:a',
+      accountId: 'acc-1',
+      path: 'a',
+      name: 'Archive',
+      displayPath: 'Archive',
+      unreadCount: 0,
+      totalCount: 1,
+    );
+
+    Email mailIn(String path, String id, String subject) => Email(
+          id: id,
+          accountId: 'acc-1',
+          mailboxPath: path,
+          uid: 1,
+          subject: subject,
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: true,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+
+    /// Pumps the search screen with one hit in INBOX and one in Archive, then
+    /// runs a live search so both rows are on screen.
+    Future<void> pumpTwoFolderSearch(WidgetTester tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([inboxBox, archiveBox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(
+                searchResults: [
+                  mailIn('INBOX', 'acc-1:1', 'Inbox mail'),
+                  mailIn('a', 'acc-1:2', 'Archive mail'),
+                ],
+              ),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'mail');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('tapping a folder name opens the focus/exclude dialog', (
+      tester,
+    ) async {
+      await pumpTwoFolderSearch(tester);
+
+      // Both results (and both tappable folder labels) are on screen.
+      expect(find.text('Inbox mail'), findsOneWidget);
+      expect(find.text('Archive mail'), findsOneWidget);
+
+      await tester.tap(find.text('Archive'));
+      await tester.pumpAndSettle();
+
+      // The dialog offers focusing on or excluding the tapped folder.
+      expect(find.text('Only this folder'), findsOneWidget);
+      expect(find.text('Exclude folder'), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget);
+    });
+
+    testWidgets('choosing "Only this folder" narrows the list and shows a chip',
+        (tester) async {
+      await pumpTwoFolderSearch(tester);
+
+      await tester.tap(find.text('Archive'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Only this folder'));
+      await tester.pumpAndSettle();
+
+      // Only the Archive mail survives; a "Only: Archive" chip records it.
+      expect(find.text('Archive mail'), findsOneWidget);
+      expect(find.text('Inbox mail'), findsNothing);
+      expect(find.text('Only: Archive'), findsOneWidget);
+    });
+
+    testWidgets('choosing "Exclude folder" hides that folder\'s mail', (
+      tester,
+    ) async {
+      await pumpTwoFolderSearch(tester);
+
+      await tester.tap(find.text('Archive'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Exclude folder'));
+      await tester.pumpAndSettle();
+
+      // Archive mail is gone; the Inbox hit stays.
+      expect(find.text('Archive mail'), findsNothing);
+      expect(find.text('Inbox mail'), findsOneWidget);
+      expect(find.text('Excluding: Archive'), findsOneWidget);
+    });
+
+    testWidgets('clearing the folder chip restores the full result set', (
+      tester,
+    ) async {
+      await pumpTwoFolderSearch(tester);
+
+      await tester.tap(find.text('Archive'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Only this folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('Inbox mail'), findsNothing);
+
+      // The chip's delete icon clears the focus and brings every hit back.
+      final chip = find.ancestor(
+        of: find.text('Only: Archive'),
+        matching: find.byType(InputChip),
+      );
+      await tester.tap(
+        find.descendant(of: chip, matching: find.byIcon(Icons.close)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inbox mail'), findsOneWidget);
+      expect(find.text('Archive mail'), findsOneWidget);
+      expect(find.text('Only: Archive'), findsNothing);
+    });
+  });
+
   group('SearchScreen account scope', () {
     const kSecondAccount = Account(
       id: 'acc-2',
@@ -833,10 +980,12 @@ void main() {
 
         // The location label must render the account's display name and the
         // human-readable folder display path — never the account id or the
-        // opaque JMAP mailbox id.
-        expect(find.text('Alice • Archive/2026'), findsOneWidget);
-        expect(find.text('acc-1 • Archive/2026'), findsNothing);
-        expect(find.text('acc-1 • a'), findsNothing);
+        // opaque JMAP mailbox id. The line is split into an account part and a
+        // tappable folder part (#844), so the two render as separate widgets.
+        expect(find.text('Alice • '), findsOneWidget);
+        expect(find.text('Archive/2026'), findsOneWidget);
+        expect(find.textContaining('acc-1'), findsNothing);
+        expect(find.text('a'), findsNothing);
       },
     );
 
