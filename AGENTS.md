@@ -63,6 +63,12 @@ loop/merge →  loop/merge-in-process →  loop/merge-done
 pointer back here. The worker node is memory-constrained, so all Flutter/Dart
 work runs through **Dagger on the remote engine**, not on this host.
 
+This is by design: the agentloop acpx worker sessions have **no** local Flutter/Dart
+SDK, but they are Dagger-capable and self-verify by running the **same** checks CI
+runs (`task analyze`, `task test-backend`, `task check-fast`) over the tunnel. A
+local SDK is deliberately not shipped here because it OOM-kills the worker node, so
+the lack of a local Flutter env is not a drawback — the Dagger path covers it.
+
 **First, once per session, open the Dagger tunnel:**
 
 ```
@@ -97,8 +103,8 @@ Notes:
   full `task check` locally only when a change plausibly affects the build or
   integration/backend tests and you want to confirm before pushing.
 - The **local-only** tasks (`task test`, `task run`, `task build-linux`, …) use
-  a local Flutter SDK + nix shell and will **not** work here — use the Dagger
-  targets above instead.
+  a local Flutter SDK and will **not** work here — use the Dagger targets above
+  instead.
 - Requires the Dagger engine to be reachable (`DAGGER_ENGINE_HOST` + SSH key);
   if `dagger` cannot connect, stop and report it rather than working blind.
 
@@ -119,19 +125,23 @@ Notes:
 
 ## Running
 
-Flutter build dependencies (libgtk-3-dev, libepoxy-dev, libsecret-1-dev, etc.) are installed via apt
-— see the Flutter Linux docs. The nix dev shell provides only tools: `task`, `fvm`, `stalwart-mail`.
+The dev environment is container-based (`Dockerfile.dev`, which the
+`.devcontainer` also builds from). Flutter build dependencies (libgtk-3-dev,
+libepoxy-dev, libsecret-1-dev, etc.) are installed via apt — see the Flutter
+Linux docs.
 
-Enter the nix dev shell first: `nix develop`
+`task run` and `task test` below run Flutter/Dart **locally** and therefore need
+a local Flutter SDK. **They do not work on the agentloop acpx worker** (it has no
+local SDK — see the Toolchain section); there, use the Dagger `task`s instead.
 
 ```bash
-# Code generation (must run after schema changes)
+# Code generation (via Dagger — also works on the worker)
 task codegen
 
-# Desktop
+# Desktop (local only)
 task run
 
-# Tests
+# Tests (local only)
 task test
 ```
 
@@ -145,7 +155,8 @@ task test
 ## Continuous Integration (CI)
 
 *   **Strategy:** "Thin CI, Heavy Taskfile".
-*   **Execution:** CI must only invoke `task` commands (e.g., `nix develop --command task check`).
-    All environment setup is handled by Nix (`flake.nix`), and all task orchestration is handled by
-    `Taskfile.yml`.
+*   **Execution:** CI must only invoke `task` commands (e.g., `task check-dagger`).
+    All build/test environment setup is handled by the **Dagger** module in `ci/`
+    (which runs on the remote Dagger engine), and all task orchestration is handled
+    by `Taskfile.yml`.
 * The cli-tool `fj` is available to query/wait for CI.

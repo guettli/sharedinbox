@@ -9,38 +9,12 @@ tasks:
     desc: Run all checks (analyze + unit tests + widget tests + integration, in parallel)
     deps: [check]
 
-  _nix-check:
-    internal: true
-    run: once
-    cmds:
-      - cmd: |
-          if ! nix show-config experimental-features 2>/dev/null | grep -q "nix-command" || ! nix show-config experimental-features 2>/dev/null | grep -q "flakes"; then
-            echo "CRITICAL: Nix experimental features 'nix-command' and 'flakes' must be enabled."
-            echo "Attempting to fix by updating ~/.config/nix/nix.conf ..."
-            mkdir -p ~/.config/nix
-            CONF=~/.config/nix/nix.conf
-            if [ ! -f "$CONF" ]; then
-              echo "experimental-features = nix-command flakes" > "$CONF"
-            elif ! grep -q "experimental-features" "$CONF"; then
-              echo "experimental-features = nix-command flakes" >> "$CONF"
-            elif ! grep -E "experimental-features.*nix-command" "$CONF" || ! grep -E "experimental-features.*flakes" "$CONF"; then
-              echo "Your $CONF already has experimental-features but is missing 'nix-command' or 'flakes'."
-              echo "Please add them manually to the 'experimental-features' line."
-              exit 1
-            fi
-            echo "Local configuration updated. Please re-run your command."
-            exit 1
-          fi
-
   _preflight:
     internal: true
     run: once
-    deps: [_nix-check]
     preconditions:
       - sh: '[ "$(id -u)" != "0" ]'
         msg: "Do not run as root. Use the dedicated dev user (see DEVELOPMENT.md)."
-      - sh: test -n "${IN_NIX_SHELL}"
-        msg: "Not in nix dev shell. Run: nix develop"
     cmds:
       - scripts/silent_on_success.sh pre-commit install
 
@@ -602,8 +576,7 @@ tasks:
   website-dev:
     desc: Run Hugo development server
     cmds:
-      - fvm flutter pub global run # Just a placeholder if nix shell hook isn't active
-      - nix develop --command hugo server --source website -D
+      - hugo server --source website -D
 
   website-build:
     desc: Build the static website (embeds current git hash via HUGO_PARAMS_GITVERSION)
