@@ -93,6 +93,7 @@ class EmailThreadList extends ConsumerStatefulWidget {
     this.showLocationLabel = false,
     this.accountNames = const {},
     this.onTap,
+    this.onFolderTap,
     this.onLoadMore,
     this.emptyMessage = 'No emails',
   }) : assert(
@@ -139,6 +140,12 @@ class EmailThreadList extends ConsumerStatefulWidget {
   /// Optional tap handler. When null, the default navigates to the email or
   /// thread detail route based on `messageCount`.
   final ValueChanged<EmailThread>? onTap;
+
+  /// Invoked when the user taps the folder name in a location label, with the
+  /// tapped thread's `(accountId, mailboxPath)`. Only wired through when
+  /// [showLocationLabel] is true (search results), letting the host focus or
+  /// exclude that folder (#844).
+  final void Function(String accountId, String mailboxPath)? onFolderTap;
 
   /// Notification fired when the user taps "Load more". Hosts that use a
   /// stream can grow their `limit` here.
@@ -249,16 +256,26 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
     final isSelected = widget.controller.isSelected(t);
     final isSelecting = widget.controller.isSelecting;
     final accountName = widget.accountNames[t.accountId];
-    final locationLabel = widget.showLocationLabel
-        ? '${accountName ?? t.accountId} • ${_displayFolder(t.accountId, t.mailboxPath)}'
+    // Search results split the location line into an account part and a
+    // tappable folder part; combined-inbox rows show just the account name.
+    final String? locationLabel = widget.showLocationLabel
+        ? (accountName ?? t.accountId)
         : widget.showAccountLabel
             ? accountName
             : null;
+    final folderLabel = widget.showLocationLabel
+        ? _displayFolder(t.accountId, t.mailboxPath)
+        : null;
+    final onFolderTap = widget.showLocationLabel && widget.onFolderTap != null
+        ? () => widget.onFolderTap!(t.accountId, t.mailboxPath)
+        : null;
 
     final tile = ThreadTile(
       thread: t,
       selected: isSelected,
       locationLabel: locationLabel,
+      folderLabel: folderLabel,
+      onFolderTap: onFolderTap,
       leading: isSelecting
           ? SizedBox(
               width: 40,
