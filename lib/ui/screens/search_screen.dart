@@ -483,6 +483,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         _buildFolderChip(key, focus: false),
     ];
     if (chips.isEmpty) return const SizedBox.shrink();
+    return _buildChipBar(chips);
+  }
+
+  /// Wraps a list of filter chips in the padding/spacing shared by the account
+  /// and folder filter bars.
+  Widget _buildChipBar(List<Widget> chips) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md,
@@ -533,22 +539,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     final accounts = ref.watch(allAccountsProvider).value ?? const [];
     final accountsById = {for (final a in accounts) a.id: a};
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md,
-        AppSpacing.sm,
-        AppSpacing.md,
-        0,
-      ),
-      child: Wrap(
-        spacing: AppSpacing.sm,
-        runSpacing: AppSpacing.xs,
-        children: [
-          for (final id in ids)
-            _buildAccountChip(id, accountDisplayLabel(accountsById[id], id)),
-        ],
-      ),
-    );
+    return _buildChipBar([
+      for (final id in ids)
+        _buildAccountChip(id, accountDisplayLabel(accountsById[id], id)),
+    ]);
   }
 
   Widget _buildAccountChip(String accountId, String label) {
