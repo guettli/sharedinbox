@@ -162,6 +162,30 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// One-shot SnackBar pointing at the App Log, shown when this message's body
+  /// could not be loaded — whether the fetch threw or returned a body flagged
+  /// with a [EmailBody.loadError] (#587, #837).
+  void _showLoadFailedSnackBar() {
+    context.showAppSnackBar(
+      'Could not load this message. See the app log for details.',
+      level: AppLogLevel.error,
+      event: 'email.detail.load_failed_snackbar',
+      emailId: widget.emailId,
+      duration: const Duration(seconds: 6),
+      persist: false,
+      action: SnackBarAction(
+        label: 'Show logs',
+        onPressed: () {
+          if (mounted) {
+            unawaited(
+              context.push('/accounts/app-log?emailId=${widget.emailId}'),
+            );
+          }
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(emailRepositoryProvider);
@@ -180,24 +204,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         // transition *into* error so a plain rebuild doesn't re-show it, but a
         // Retry that fails again (loading → error) does.
         if (next.hasError && (prev == null || !prev.hasError) && mounted) {
-          context.showAppSnackBar(
-            'Could not load this message. See the app log for details.',
-            level: AppLogLevel.error,
-            event: 'email.detail.load_failed_snackbar',
-            emailId: widget.emailId,
-            duration: const Duration(seconds: 6),
-            persist: false,
-            action: SnackBarAction(
-              label: 'Show logs',
-              onPressed: () {
-                if (mounted) {
-                  unawaited(
-                    context.push('/accounts/app-log?emailId=${widget.emailId}'),
-                  );
-                }
-              },
-            ),
-          );
+          _showLoadFailedSnackBar();
+        }
+        // A non-throwing failure (e.g. an IMAP Message-ID mismatch that can't be
+        // self-healed) returns a body carrying a loadError instead of throwing,
+        // so the hasError branch above never fires. Surface it the same way, on
+        // the transition into a load error so a rebuild doesn't re-show it (#837).
+        final nextLoadError = next.value?.$2.loadError;
+        final prevLoadError = prev?.value?.$2.loadError;
+        if (nextLoadError != null && prevLoadError == null && mounted) {
+          _showLoadFailedSnackBar();
         }
       },
     );
@@ -537,6 +553,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       children: [
         if (header != null) ...[_buildHeader(ctx, header), const Divider()],
         if (header?.messageId != null) _buildNotesSection(ctx, header!),
+        if (body.loadError != null)
+          _buildLoadFailedNotice(ctx, body.loadError!),
         if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
         if (hasHtml) ...[
           if (!effectiveLoadImages)
@@ -706,6 +724,76 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   ),
                   onPressed: () => unawaited(_showRaw(ctx, header)),
                   child: const Text('View raw source'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Inline banner shown when the body could not be loaded even though the
+  /// message row (and its headers) exist — e.g. an IMAP Message-ID mismatch
+  /// that couldn't be self-healed, which used to leave the body area silently
+  /// blank (#837). Explains why and offers a retry plus a jump to the App Log
+  /// where the underlying error was recorded.
+  Widget _buildLoadFailedNotice(BuildContext ctx, String reason) {
+    final scheme = Theme.of(ctx).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.xs),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_outlined,
+            size: AppIconSize.sm,
+            color: scheme.onErrorContainer,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  reason,
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  children: [
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () =>
+                          ref.invalidate(emailDetailProvider(widget.emailId)),
+                      child: const Text('Retry'),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () => unawaited(
+                        context.push(
+                          '/accounts/app-log?emailId=${widget.emailId}',
+                        ),
+                      ),
+                      child: const Text('Show logs'),
+                    ),
+                  ],
                 ),
               ],
             ),

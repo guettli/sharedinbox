@@ -7748,6 +7748,9 @@ void main() {
 
       // The package body was never surfaced or cached.
       expect(body.textBody, anyOf(isNull, isEmpty));
+      // The blank body carries a load-failure reason so the detail screen can
+      // tell the user instead of showing a silently empty message (#837).
+      expect(body.loadError, isNotNull);
       final cachedBody = await (r.db.select(r.db.emailBodies)
             ..where((t) => t.emailId.equals('acc-1:Snoozed:6')))
           .getSingleOrNull();
@@ -7759,6 +7762,43 @@ void main() {
           .getSingle();
       expect(row.preview, 'Automatic reply preview');
       expect(row.messageId, rowMessageId);
+    });
+
+    test('serves stale cache with a loadError when the UID is unresolvable',
+        () async {
+      final client = _MismatchedBodyImapClient(
+        correctMessageId: rowMessageId,
+        wrongMessageId: packageMessageId,
+        // The real message can't be located, so the cached copy is served.
+        correctUid: 999,
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Snoozed:6',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 6,
+              receivedAt: DateTime(2024),
+              messageId: const Value(rowMessageId),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:Snoozed:6',
+              textBody: const Value('previously cached body'),
+            ),
+          );
+
+      final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
+
+      // The (possibly stale) cached body is served, still flagged so the UI can
+      // warn the user it may be out of date (#837).
+      expect(body.textBody, 'previously cached body');
+      expect(body.loadError, isNotNull);
     });
 
     test('re-keys the row and caches the correct body when the UID is found',
@@ -7790,8 +7830,10 @@ void main() {
 
       final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
 
-      // The correct body is returned and cached under the re-keyed id.
+      // The correct body is returned and cached under the re-keyed id — a
+      // healed mismatch is not a load failure, so no loadError is set (#837).
       expect(body.textBody, 'Rentenversicherung body');
+      expect(body.loadError, isNull);
       final newRow = await (r.db.select(r.db.emails)
             ..where((t) => t.id.equals('acc-1:INBOX:42')))
           .getSingleOrNull();

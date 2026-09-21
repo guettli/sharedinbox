@@ -892,10 +892,21 @@ class EmailRepositoryImpl implements EmailRepository {
         emailId: emailId,
       ),
     );
-    // Only serve the cache when it belongs to this same message; otherwise
-    // return an empty body rather than another message's content.
-    if (cached != null) return _bodyRowToModel(cached);
-    return model.EmailBody(emailId: emailId, attachments: const []);
+    // The row's (mailbox, uid) no longer identifies this message, so we have no
+    // trustworthy body to show. Flag the load failure so the detail screen can
+    // tell the user instead of leaving a silently blank body (#837): serve the
+    // cache only when it belongs to this same message, otherwise an empty body.
+    const loadError =
+        'This message is no longer at its previous location. It will be '
+        're-fetched on the next sync.';
+    if (cached != null) {
+      return _bodyRowToModel(cached).copyWith(loadError: loadError);
+    }
+    return model.EmailBody(
+      emailId: emailId,
+      attachments: const [],
+      loadError: loadError,
+    );
   }
 
   /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all
