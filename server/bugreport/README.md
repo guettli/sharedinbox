@@ -86,11 +86,18 @@ Each encrypted-report issue carries a **"How to decrypt"** section with a
 ready-to-run command. The `bugreport` binary has a `decrypt` subcommand that
 reads `REPORT_PRIVATE_KEY` + `REPORT_PUBLIC_KEY` from the environment (an
 AgentLoop `sharedinbox` worker already has both) and turns a `mail.enc` blob
-back into the original `.eml`:
+back into the original `.eml`. The worker image ships this binary prebuilt on
+`PATH` (`Dockerfile.dev`), since it carries no Go toolchain:
 
 ```sh
 curl -fsSL '<download URL from the issue>' -o mail.enc
-go run ./server/bugreport decrypt mail.enc > mail.eml   # or: decrypt - < mail.enc
+bugreport decrypt mail.enc > mail.eml   # or: bugreport decrypt - < mail.enc
+```
+
+From a local checkout with Go the source is equivalent:
+
+```sh
+go run ./server/bugreport decrypt mail.enc > mail.eml
 ```
 
 The subcommand implements the same ECIES scheme as the app
@@ -107,5 +114,5 @@ decrypts exactly like the mail:
 
 ```sh
 curl -fsSL '<image_n.enc URL from the issue>' -o image_1.enc
-go run ./server/bugreport decrypt image_1.enc > image_1.png
+bugreport decrypt image_1.enc > image_1.png   # or, from a checkout: go run ./server/bugreport decrypt image_1.enc > image_1.png
 ```
