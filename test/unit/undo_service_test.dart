@@ -426,4 +426,49 @@ void main() {
 
     verify(mockUndoRepo.trim(maxHistory: anyNamed('maxHistory'))).called(1);
   });
+
+  test('keeps well more than ten actions in history', () async {
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    for (var i = 0; i < 50; i++) {
+      await notifier.pushAction(
+        UndoAction(
+          id: 'a$i',
+          accountId: 'acc1',
+          type: UndoType.move,
+          emailIds: ['e$i'],
+          sourceMailboxPath: 'INBOX',
+        ),
+      );
+    }
+
+    // The old cap of 10 would have dropped the earliest 40 entries.
+    expect(container.read(undoServiceProvider), hasLength(50));
+    expect(container.read(undoServiceProvider).first.id, 'a0');
+    expect(container.read(undoServiceProvider).last.id, 'a49');
+  });
+
+  test('caps history at 100 and drops the oldest entries', () async {
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    for (var i = 0; i < 105; i++) {
+      await notifier.pushAction(
+        UndoAction(
+          id: 'a$i',
+          accountId: 'acc1',
+          type: UndoType.move,
+          emailIds: ['e$i'],
+          sourceMailboxPath: 'INBOX',
+        ),
+      );
+    }
+
+    final state = container.read(undoServiceProvider);
+    expect(state, hasLength(100));
+    // Oldest five (a0..a4) trimmed; window is a5..a104.
+    expect(state.first.id, 'a5');
+    expect(state.last.id, 'a104');
+  });
 }
