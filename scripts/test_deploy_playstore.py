@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import deploy_playstore
@@ -402,6 +404,48 @@ class TestUploadDeobfuscationFile(unittest.TestCase):
         self.assertEqual(
             mock_session.post.call_args[1]["data"], b"obfuscated-mapping"
         )
+
+
+class TestRaiseForStatus(unittest.TestCase):
+    def _resp(self, text, error="400 Client Error: Bad Request for url: …"):
+        resp = MagicMock()
+        resp.text = text
+        http_error = requests.HTTPError(error)
+        http_error.response = resp
+        resp.raise_for_status.side_effect = http_error
+        return resp, http_error
+
+    def test_ok_response_does_not_raise(self):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        # Must not raise and must not touch .text needlessly.
+        deploy_playstore._raise_for_status(resp)
+
+    def test_appends_response_body_to_error(self):
+        body = '{"error":{"message":"APK signature is invalid."}}'
+        resp, _ = self._resp(body)
+        with self.assertRaises(requests.HTTPError) as ctx:
+            deploy_playstore._raise_for_status(resp)
+        message = str(ctx.exception)
+        self.assertIn("400 Client Error", message)
+        self.assertIn("APK signature is invalid.", message)
+        # The re-raised error keeps the response attached for callers/logging.
+        self.assertIs(ctx.exception.response, resp)
+
+    def test_empty_body_reraises_original(self):
+        resp, original = self._resp("")
+        with self.assertRaises(requests.HTTPError) as ctx:
+            deploy_playstore._raise_for_status(resp)
+        self.assertIs(ctx.exception, original)
+
+    def test_long_body_is_truncated(self):
+        body = "x" * (deploy_playstore._ERROR_BODY_LIMIT + 500)
+        resp, _ = self._resp(body)
+        with self.assertRaises(requests.HTTPError) as ctx:
+            deploy_playstore._raise_for_status(resp)
+        message = str(ctx.exception)
+        self.assertIn("… (truncated)", message)
+        self.assertNotIn("x" * (deploy_playstore._ERROR_BODY_LIMIT + 1), message)
 
 
 if __name__ == "__main__":

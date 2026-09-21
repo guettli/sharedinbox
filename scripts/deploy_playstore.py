@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import requests
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 
@@ -20,6 +21,33 @@ _MAX_UPLOAD_ATTEMPTS = 3
 # without a matching mapping file breaks Play Console's stack-trace
 # deobfuscation, so the script refuses to deploy when it is missing.
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
+# Cap the response body we splice into an error so a stray HTML/error page can
+# never dump megabytes into the log; Play's JSON error bodies are tiny.
+_ERROR_BODY_LIMIT = 2000
+
+
+def _raise_for_status(resp):
+    """Like ``resp.raise_for_status()`` but include the response body in the error.
+
+    requests' default ``HTTPError`` carries only the status line and URL. The
+    Play Store API explains every rejection in a JSON body (an invalid upload
+    signature, an already-used version code, a malformed bundle …), so dropping
+    it turns an actionable 4xx/5xx into undiagnosable noise — exactly what made
+    a bare ``400 Bad Request`` on the AAB upload impossible to triage. Re-raise
+    with the body appended so the reason lands in the CI log.
+    """
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        body = (resp.text or "").strip()
+        if body:
+            truncated = body[:_ERROR_BODY_LIMIT]
+            if len(body) > _ERROR_BODY_LIMIT:
+                truncated += "… (truncated)"
+            raise requests.HTTPError(
+                f"{exc}: {truncated}", response=exc.response
+            ) from exc
+        raise
 
 
 def _upload_aab_resumable(session, package, edit_id, aab_path):
@@ -38,7 +66,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
         },
         timeout=60,
     )
-    init_resp.raise_for_status()
+    _raise_for_status(init_resp)
     upload_url = init_resp.headers["Location"]
 
     # Step 2: upload the file in a single PUT to the session URI
@@ -52,7 +80,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
             },
             timeout=600,
         )
-    upload_resp.raise_for_status()
+    _raise_for_status(upload_resp)
     return upload_resp.json()
 
 
@@ -82,7 +110,7 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
         },
         timeout=600,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json() if resp.content else {}
 
 
@@ -103,7 +131,7 @@ def main():
     session = AuthorizedSession(creds)
 
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
-    edit_resp.raise_for_status()
+    _raise_for_status(edit_resp)
     edit_id = edit_resp.json()["id"]
 
     last_exc = None
@@ -176,13 +204,13 @@ def main():
             json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
             timeout=30,
         )
-        track_resp.raise_for_status()
+        _raise_for_status(track_resp)
 
     commit_resp = session.post(
         f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
         timeout=30,
     )
-    commit_resp.raise_for_status()
+    _raise_for_status(commit_resp)
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
