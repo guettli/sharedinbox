@@ -18,8 +18,10 @@
 # needs Go, which isn't here, so instead of a ~300 MB toolchain we bake a small
 # static binary from the same source and put it on PATH (matching the static
 # grpcurl/clickhouse fetches below). server/bugreport is stdlib-only, so this
-# build is hermetic and fast. Pin the builder to the same tag the ci module uses
-# for Go (ci/main.go goToolImage); Renovate tracks it (renovate.json).
+# build is hermetic and fast. Keep this tag in step with the ci module's Go
+# image (ci/main.go goToolImage) and go.mod's `go` directive: Renovate's
+# dockerfile manager bumps this `FROM` line, but nothing enforces equality with
+# goToolImage, so re-check both whenever either moves.
 FROM golang:1.27-bookworm AS bugreport-build
 WORKDIR /src
 # Only the Go sources are needed; go.mod carries no external requires, so there
