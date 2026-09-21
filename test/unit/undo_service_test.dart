@@ -8,9 +8,26 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
+import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/di.dart';
 
 import 'undo_service_test.mocks.dart';
+
+/// Pushes [count] distinct move actions (`a0`..`a{count-1}`) onto [notifier],
+/// awaiting each so the in-memory cap and DB trim run per push.
+Future<void> _pushMoveActions(UndoService notifier, int count) async {
+  for (var i = 0; i < count; i++) {
+    await notifier.pushAction(
+      UndoAction(
+        id: 'a$i',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e$i'],
+        sourceMailboxPath: 'INBOX',
+      ),
+    );
+  }
+}
 
 @GenerateMocks([EmailRepository, UndoRepository])
 void main() {
@@ -425,5 +442,30 @@ void main() {
     await notifier.init();
 
     verify(mockUndoRepo.trim(maxHistory: anyNamed('maxHistory'))).called(1);
+  });
+
+  test('keeps well more than ten actions in history', () async {
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    await _pushMoveActions(notifier, 50);
+
+    // The old cap of 10 would have dropped the earliest 40 entries.
+    expect(container.read(undoServiceProvider), hasLength(50));
+    expect(container.read(undoServiceProvider).first.id, 'a0');
+    expect(container.read(undoServiceProvider).last.id, 'a49');
+  });
+
+  test('caps history at 100 and drops the oldest entries', () async {
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+
+    await _pushMoveActions(notifier, 105);
+
+    final state = container.read(undoServiceProvider);
+    expect(state, hasLength(100));
+    // Oldest five (a0..a4) trimmed; window is a5..a104.
+    expect(state.first.id, 'a5');
+    expect(state.last.id, 'a104');
   });
 }
