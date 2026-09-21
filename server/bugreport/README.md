@@ -2,24 +2,35 @@
 
 Small HTTP service that backs the in-app **Report a Bug** screen.
 
-It has two flows:
+There is **one** submission flow (`POST /api/v1/encrypted-reports`): every
+report opens a **public GitHub issue** carrying the cleartext fields
+(`description`, system info). Anything private is encrypted on the device and
+uploaded as separate blobs the issue links to, so only the maintainer (holding
+the private key) can read them:
 
-1. **Confidential reports** (`POST /api/v1/bug-reports`) — stored privately on
-   disk, never published.
-2. **Public issue with an encrypted mail** (`POST /api/v1/encrypted-reports`) —
-   creates a public GitHub issue whose attached email is encrypted on the
-   device so only the maintainer can read it. Used when a user reports a bug
-   *about a specific email* (issue #636).
+- **encrypted mail** (`mail.enc`) — the full `.eml`, when the user reports a bug
+  *about a specific email* and opts to attach it (issue #636).
+- **encrypted metadata** (`metadata.enc`) — a small YAML block with the private
+  non-mail details: the optional contact email and, when the full mail is not
+  attached, the reported email's metadata (#847).
+- **encrypted screenshots** (`image_<n>.enc`) — each screenshot the user adds
+  (issue #851).
+
+Every encrypted part is optional: a general bug report with no email is just a
+public issue with no attachments (#847).
 
 ## Endpoints
 
 | Method & path | Purpose |
 | --- | --- |
-| `POST /api/v1/bug-reports` | Confidential report (multipart: `description`, `about_info`, optional `email`, `email_data`, `sync_log`, `attachments[]`). Returns `{ "id": "<uuid>" }`. |
 | `GET  /api/v1/report-key` | Returns the maintainer's public key: `{ "keyId", "publicKey", "alg" }` (both keys base64). |
-| `POST /api/v1/encrypted-reports` | Multipart: `description` (optional), `encrypted_mail` file (required), optional `about_info`, `sync_log`, and optional `encrypted_attachments[]` files (encrypted screenshots). Stores the ciphertext(s), opens a GitHub issue linking to each, and returns `{ "id", "issueUrl", "issueNumber" }`. |
-| `GET  /api/v1/encrypted-reports/{id}/mail.enc` | Serves the stored ciphertext so the maintainer can download and decrypt it. |
-| `GET  /api/v1/encrypted-reports/{id}/image_{n}.enc` | Serves a stored encrypted screenshot blob. |
+| `POST /api/v1/encrypted-reports` | Multipart. Cleartext fields: `about_info` (required), optional `description`, `sync_log`. Encrypted file parts (all optional): `encrypted_mail`, `encrypted_metadata`, `encrypted_attachments[]` (screenshots). Stores the blobs, opens a public GitHub issue linking to each, and returns `{ "id", "issueUrl", "issueNumber" }`. |
+| `GET  /api/v1/encrypted-reports/{id}/mail.enc` | Serves the stored encrypted mail. |
+| `GET  /api/v1/encrypted-reports/{id}/{name}` | Serves a stored `metadata.enc` or `image_<n>.enc` blob. |
+
+> **Note:** the older confidential endpoint `POST /api/v1/bug-reports` (private
+> on-disk reports) has been removed (#847). Any reports it stored before removal
+> are left untouched on disk under `BUGREPORT_STORAGE_DIR`.
 
 All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 20 MB.

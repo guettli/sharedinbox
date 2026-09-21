@@ -198,7 +198,7 @@ func TestRunDecryptMissingEnv(t *testing.T) {
 
 func TestBuildIssueContainsDecryptHint(t *testing.T) {
 	url := "https://sharedinbox.de/api/v1/encrypted-reports/abc/mail.enc"
-	_, body := buildIssue(BugReport{Description: "boom"}, url, nil)
+	_, body := buildIssue(BugReport{Description: "boom"}, url, "", nil)
 
 	for _, want := range []string{
 		"How to decrypt",
