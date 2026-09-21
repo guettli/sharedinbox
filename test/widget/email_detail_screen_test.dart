@@ -288,6 +288,78 @@ void main() {
     );
 
     testWidgets(
+      'shows a load-failed notice and SnackBar when the body carries a '
+      'loadError (#837)',
+      (tester) async {
+        // The body loaded without throwing but couldn't be resolved (e.g. an
+        // IMAP Message-ID mismatch): headers render, but the body area would be
+        // blank. The screen must surface the reason instead of staying silent.
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          attachments: [],
+          loadError: 'This message is no longer at its previous location. '
+              'It will be re-fetched on the next sync.',
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The inline notice explains the failure and offers Retry + Show logs.
+        // ("Show logs" also appears in the SnackBar action below, so match at
+        // least one rather than exactly one.)
+        expect(
+          find.text('This message is no longer at its previous location. '
+              'It will be re-fetched on the next sync.'),
+          findsOneWidget,
+        );
+        expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Show logs'), findsWidgets);
+        // And the same App Log SnackBar as the throwing path.
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsOneWidget,
+        );
+        expect(
+          find.widgetWithText(SnackBarAction, 'Show logs'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'shows no load-failed notice for a normally loaded body (#837)',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'a body that loaded fine',
+          attachments: [],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('a body that loaded fine'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Show logs'), findsNothing);
+        expect(
+          find.text('Could not load this message. See the app log for '
+              'details.'),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
       'shows a SnackBar pointing at the app log when the body fails to load '
       '(#587)',
       (tester) async {

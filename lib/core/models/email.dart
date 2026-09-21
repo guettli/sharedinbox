@@ -287,6 +287,13 @@ class EmailBody {
   /// not be fully displayed" notice with a link to the raw source (#579).
   final bool decodeFailed;
 
+  /// Human-readable reason the body could not be loaded, or `null` when it
+  /// loaded fine. Set on non-throwing failure paths that would otherwise return
+  /// a silently blank body — e.g. an IMAP Message-ID mismatch that can't be
+  /// self-healed (#837). The UI surfaces it as an inline notice so an empty
+  /// message area is never left unexplained. Transient: never persisted.
+  final String? loadError;
+
   const EmailBody({
     required this.emailId,
     this.textBody,
@@ -295,7 +302,19 @@ class EmailBody {
     this.headers = const [],
     this.mimeTree,
     this.decodeFailed = false,
+    this.loadError,
   });
+
+  EmailBody copyWith({String? loadError}) => EmailBody(
+        emailId: emailId,
+        textBody: textBody,
+        htmlBody: htmlBody,
+        attachments: attachments,
+        headers: headers,
+        mimeTree: mimeTree,
+        decodeFailed: decodeFailed,
+        loadError: loadError ?? this.loadError,
+      );
 }
 
 class EmailAttachment {
