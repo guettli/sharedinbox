@@ -20,8 +20,7 @@ class DebugMessageRef {
 }
 
 /// UI-agnostic snapshot of a message's local state — every column drift stores
-/// for the message, its cached body, any pending outbound mutations, the
-/// account's sync-state tokens, and the most recent sync log entry.
+/// for the message, its cached body, and any pending outbound mutations.
 ///
 /// Assembled once in a background read and passed to the debug UI so the UI
 /// file itself doesn't have to import `lib/data/db/*` (banned by the layer
@@ -31,8 +30,6 @@ class MessageDebugSnapshot {
     required this.email,
     required this.body,
     required this.pending,
-    required this.syncStates,
-    required this.lastSyncLog,
     required this.attachments,
     required this.account,
   });
@@ -40,8 +37,6 @@ class MessageDebugSnapshot {
   final MessageDebugEmail? email;
   final MessageDebugBody? body;
   final List<MessageDebugPending> pending;
-  final List<MessageDebugSyncState> syncStates;
-  final MessageDebugSyncLog? lastSyncLog;
   final List<EmailAttachment> attachments;
 
   /// The account that owns the message, or null when the account row was
@@ -163,32 +158,6 @@ class MessageDebugPending {
   final String payload;
 }
 
-class MessageDebugSyncState {
-  const MessageDebugSyncState({
-    required this.resourceType,
-    required this.state,
-    required this.syncedAt,
-  });
-
-  final String resourceType;
-  final String state;
-  final DateTime syncedAt;
-}
-
-class MessageDebugSyncLog {
-  const MessageDebugSyncLog({
-    required this.result,
-    required this.startedAt,
-    required this.finishedAt,
-    required this.errorMessage,
-  });
-
-  final String result;
-  final DateTime startedAt;
-  final DateTime finishedAt;
-  final String? errorMessage;
-}
-
 /// Reads every local-state artefact needed by the debug view in one pass.
 ///
 /// Split from the UI file so the layer-check in `ci/main.go` (no
@@ -211,14 +180,6 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
         )
         ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
       .get();
-  final syncStates = await (database.select(database.syncStates)
-        ..where((t) => t.accountId.equals(messageRef.accountId)))
-      .get();
-  final lastSyncLog = await (database.select(database.syncLogs)
-        ..where((t) => t.accountId.equals(messageRef.accountId))
-        ..orderBy([(t) => OrderingTerm.desc(t.finishedAt)])
-        ..limit(1))
-      .getSingleOrNull();
   final account = await (database.select(database.accounts)
         ..where((t) => t.id.equals(messageRef.accountId)))
       .getSingleOrNull();
@@ -275,22 +236,6 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
           payload: p.payload,
         ),
     ],
-    syncStates: [
-      for (final s in syncStates)
-        MessageDebugSyncState(
-          resourceType: s.resourceType,
-          state: s.state,
-          syncedAt: s.syncedAt,
-        ),
-    ],
-    lastSyncLog: lastSyncLog == null
-        ? null
-        : MessageDebugSyncLog(
-            result: lastSyncLog.result,
-            startedAt: lastSyncLog.startedAt,
-            finishedAt: lastSyncLog.finishedAt,
-            errorMessage: lastSyncLog.errorMessage,
-          ),
     attachments: attachments,
     account: account == null
         ? null
@@ -416,25 +361,6 @@ String buildMessageDebugMarkdown(
       buf.writeln();
     }
   }
-
-  buf.writeln('## Sync state\n');
-  final syncRows = <(String, String)>[
-    for (final s in snapshot.syncStates)
-      (s.resourceType, '${s.state} (synced ${_fmtTime(s.syncedAt)})'),
-    if (snapshot.lastSyncLog != null)
-      (
-        'lastSyncLog',
-        '${snapshot.lastSyncLog!.result} at '
-            '${_fmtTime(snapshot.lastSyncLog!.startedAt)}'
-            '${snapshot.lastSyncLog!.errorMessage != null ? ' — ${snapshot.lastSyncLog!.errorMessage}' : ''}',
-      ),
-  ];
-  if (syncRows.isEmpty) {
-    buf.writeln('None.');
-  } else {
-    _writeTable(buf, syncRows);
-  }
-  buf.writeln();
 
   if (probe != null) {
     buf.writeln('## Remote state\n');

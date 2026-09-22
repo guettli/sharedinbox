@@ -103,8 +103,6 @@ void main() {
       expect(snapshot.email, isNull);
       expect(snapshot.body, isNull);
       expect(snapshot.pending, isEmpty);
-      expect(snapshot.syncStates, isEmpty);
-      expect(snapshot.lastSyncLog, isNull);
       expect(snapshot.attachments, isEmpty);
     });
 
@@ -243,87 +241,6 @@ void main() {
       expect(snapshot.pending.last.changeType, 'flag_flagged');
       expect(snapshot.pending.last.attempts, 2);
       expect(snapshot.pending.last.lastError, 'boom');
-    });
-
-    test('returns all SyncStates rows for the account', () async {
-      await _seedEmail(db, id: 'acc-1:5', accountId: 'acc-1');
-      await db.into(db.syncStates).insert(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'mailboxes',
-              state: 'state-mbox',
-              syncedAt: DateTime.utc(2026, 6, 1, 10),
-            ),
-          );
-      await db.into(db.syncStates).insert(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-1',
-              resourceType: 'emails',
-              state: 'state-emails',
-              syncedAt: DateTime.utc(2026, 6, 1, 11),
-            ),
-          );
-      // Different account — must be filtered out.
-      await _seedAccount(db, 'acc-2');
-      await db.into(db.syncStates).insert(
-            SyncStatesCompanion.insert(
-              accountId: 'acc-2',
-              resourceType: 'emails',
-              state: 'other',
-              syncedAt: DateTime.utc(2026, 6, 1, 11),
-            ),
-          );
-
-      final snapshot = await loadMessageDebugSnapshot(
-        db,
-        const DebugMessageRef(
-          accountId: 'acc-1',
-          mailboxPath: 'INBOX',
-          emailId: 'acc-1:5',
-        ),
-      );
-
-      final types = snapshot.syncStates.map((s) => s.resourceType).toSet();
-      expect(types, {'mailboxes', 'emails'});
-    });
-
-    test('returns the most recent SyncLogs row for the account', () async {
-      await _seedEmail(db, id: 'acc-1:6', accountId: 'acc-1');
-      await db.into(db.syncLogs).insert(
-            SyncLogsCompanion.insert(
-              accountId: 'acc-1',
-              result: 'ok',
-              startedAt: DateTime.utc(2026, 6, 1, 10),
-              finishedAt: DateTime.utc(2026, 6, 1, 10, 0, 5),
-            ),
-          );
-      await db.into(db.syncLogs).insert(
-            SyncLogsCompanion.insert(
-              accountId: 'acc-1',
-              result: 'error',
-              errorMessage: const Value('timeout'),
-              startedAt: DateTime.utc(2026, 6, 1, 12),
-              finishedAt: DateTime.utc(2026, 6, 1, 12, 0, 30),
-            ),
-          );
-
-      final snapshot = await loadMessageDebugSnapshot(
-        db,
-        const DebugMessageRef(
-          accountId: 'acc-1',
-          mailboxPath: 'INBOX',
-          emailId: 'acc-1:6',
-        ),
-      );
-
-      expect(snapshot.lastSyncLog, isNotNull);
-      expect(snapshot.lastSyncLog!.result, 'error');
-      expect(snapshot.lastSyncLog!.errorMessage, 'timeout');
-      // Drift returns DateTime in local time — compare as an instant.
-      expect(
-        snapshot.lastSyncLog!.finishedAt.toUtc(),
-        DateTime.utc(2026, 6, 1, 12, 0, 30),
-      );
     });
   });
 
@@ -540,8 +457,6 @@ MessageDebugSnapshot _snapshot({
     email: email ?? _email(),
     body: body,
     pending: pending,
-    syncStates: const [],
-    lastSyncLog: null,
     attachments: attachments,
     account: account,
   );
@@ -551,8 +466,6 @@ MessageDebugSnapshot _emptySnapshot() => const MessageDebugSnapshot(
       email: null,
       body: null,
       pending: [],
-      syncStates: [],
-      lastSyncLog: null,
       attachments: [],
       account: null,
     );

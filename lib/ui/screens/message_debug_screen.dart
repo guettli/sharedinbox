@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
@@ -14,8 +13,8 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 final _timeFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
 
 /// Debug view over a set of selected messages. Shows the locally cached
-/// fields, any pending outbound mutations, the account's last sync log entry,
-/// and — when online — the remote server's current view of the same message.
+/// fields, any pending outbound mutations, and — when online — the remote
+/// server's current view of the same message.
 class MessageDebugScreen extends ConsumerStatefulWidget {
   const MessageDebugScreen({super.key, required this.messages});
 
@@ -199,9 +198,6 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
         const SizedBox(height: AppSpacing.sm),
         _sectionLabel(context, 'Pending changes (${snapshot.pending.length})'),
         _pendingList(snapshot.pending),
-        const SizedBox(height: AppSpacing.sm),
-        _sectionLabel(context, 'Sync state'),
-        _syncStateSection(context, snapshot),
         const SizedBox(height: AppSpacing.md),
         _sectionLabel(context, 'Remote state'),
         _remoteSection(context, snapshot),
@@ -304,43 +300,6 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
               ],
             ),
           ),
-      ],
-    );
-  }
-
-  Widget _syncStateSection(
-    BuildContext context,
-    MessageDebugSnapshot snapshot,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _KeyValueTable(
-          rows: [
-            for (final s in snapshot.syncStates)
-              (
-                s.resourceType,
-                '${s.state} (synced ${_timeFmt.format(s.syncedAt.toLocal())})',
-              ),
-            if (snapshot.lastSyncLog != null)
-              (
-                'lastSyncLog',
-                '${snapshot.lastSyncLog!.result} at '
-                    '${_timeFmt.format(snapshot.lastSyncLog!.startedAt.toLocal())}'
-                    '${snapshot.lastSyncLog!.errorMessage != null ? ' — ${snapshot.lastSyncLog!.errorMessage}' : ''}',
-              ),
-          ],
-        ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            icon: const Icon(Icons.article_outlined, size: 18),
-            label: const Text('Open sync log'),
-            onPressed: () => context.push(
-              '/accounts/${widget.messageRef.accountId}/sync-log',
-            ),
-          ),
-        ),
       ],
     );
   }
