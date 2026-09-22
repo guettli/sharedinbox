@@ -547,7 +547,6 @@ func decryptHint(downloadURL string) string {
 	b.WriteString("' -o mail.enc\n")
 	b.WriteString("bugreport decrypt mail.enc > mail.eml\n")
 	b.WriteString("```\n\n")
-	b.WriteString("From a local checkout without that binary, `go run ./server/bugreport decrypt mail.enc > mail.eml` is equivalent.\n\n")
 	b.WriteString("Scheme: X25519-ECDH + HKDF-SHA256 + AES-256-GCM, HKDF label ")
 	b.WriteString("`" + reportEncryptionInfo + "`; wire `keyId[16]||ephPub[32]||nonce[12]||ciphertext||mac[16]`. ")
 	b.WriteString("See `server/bugreport/README.md`.\n</details>\n")

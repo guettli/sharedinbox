@@ -202,7 +202,7 @@ func TestBuildIssueContainsDecryptHint(t *testing.T) {
 
 	for _, want := range []string{
 		"How to decrypt",
-		"go run ./server/bugreport decrypt mail.enc",
+		"bugreport decrypt mail.enc",
 		url,
 		reportEncryptionInfo,
 		"REPORT_PRIVATE_KEY",
@@ -210,5 +210,10 @@ func TestBuildIssueContainsDecryptHint(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("issue body missing %q\n---\n%s", want, body)
 		}
+	}
+	// The worker ships no Go toolchain, so the hint must not send the agent to
+	// `go run` (which fails there); it points at the prebuilt binary instead.
+	if strings.Contains(body, "go run") {
+		t.Errorf("decrypt hint should not mention `go run` (worker has no Go):\n---\n%s", body)
 	}
 }
