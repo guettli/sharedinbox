@@ -63,6 +63,32 @@ void main() {
       expect(email.listUnsubscribeHeader, '<https://x/unsub>');
     });
 
+    test('projects the owning account name and protocol type', () async {
+      await _seedAccount(
+        db,
+        'jmap-acc',
+        displayName: 'Fastmail',
+        accountType: 'jmap',
+      );
+      await _seedEmail(db, id: 'jmap-acc:7', accountId: 'jmap-acc');
+
+      final snapshot = await loadMessageDebugSnapshot(
+        db,
+        const DebugMessageRef(
+          accountId: 'jmap-acc',
+          mailboxPath: 'INBOX',
+          emailId: 'jmap-acc:7',
+        ),
+      );
+
+      final account = snapshot.account!;
+      expect(account.id, 'jmap-acc');
+      expect(account.displayName, 'Fastmail');
+      expect(account.displayLabel, 'Fastmail');
+      expect(account.accountType, 'jmap');
+      expect(account.typeLabel, 'JMAP');
+    });
+
     test('returns email == null when the message id has no local row',
         () async {
       final snapshot = await loadMessageDebugSnapshot(
@@ -314,10 +340,19 @@ void main() {
       expect(md, contains('## Local state'));
       expect(md, contains('| subject | Hello |'));
       expect(md, contains('| messageId | <m1@example.com> |'));
+      expect(md, contains('| accountName | Work Inbox |'));
+      expect(md, contains('| accountType | IMAP |'));
       expect(md, contains('## Body'));
       expect(md, contains('| body | (not cached) |'));
       // No remote section unless a probe is supplied.
       expect(md, isNot(contains('## Remote state')));
+    });
+
+    test('falls back to accountId when the account row is gone', () {
+      final md = buildMessageDebugMarkdown(_snapshot(account: null));
+
+      expect(md, contains('| accountName | acc-1 |'));
+      expect(md, contains('| accountType |  |'));
     });
 
     test('reports cached body byte lengths', () {
@@ -494,6 +529,12 @@ MessageDebugSnapshot _snapshot({
   MessageDebugBody? body,
   List<MessageDebugPending> pending = const [],
   List<EmailAttachment> attachments = const [],
+  MessageDebugAccount? account = const MessageDebugAccount(
+    id: 'acc-1',
+    displayName: 'Work Inbox',
+    email: 'acc-1@example.com',
+    accountType: 'imap',
+  ),
 }) {
   return MessageDebugSnapshot(
     email: email ?? _email(),
@@ -502,6 +543,7 @@ MessageDebugSnapshot _snapshot({
     syncStates: const [],
     lastSyncLog: null,
     attachments: attachments,
+    account: account,
   );
 }
 
@@ -512,13 +554,19 @@ MessageDebugSnapshot _emptySnapshot() => const MessageDebugSnapshot(
       syncStates: [],
       lastSyncLog: null,
       attachments: [],
+      account: null,
     );
 
-Future<void> _seedAccount(AppDatabase db, String id) async {
+Future<void> _seedAccount(
+  AppDatabase db,
+  String id, {
+  String? displayName,
+  String accountType = 'imap',
+}) async {
   await db.into(db.accounts).insert(
         AccountsCompanion.insert(
           id: id,
-          displayName: id,
+          displayName: displayName ?? id,
           email: '$id@example.com',
           imapHost: 'mail.example.com',
           imapPort: 143,
@@ -526,6 +574,7 @@ Future<void> _seedAccount(AppDatabase db, String id) async {
           smtpHost: 'smtp.example.com',
           smtpPort: 25,
           smtpSsl: false,
+          accountType: Value(accountType),
         ),
       );
 }
