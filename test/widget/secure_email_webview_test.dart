@@ -11,6 +11,10 @@ void _expectLightMode(String html) {
   expect(html, contains('color-scheme: light'));
   expect(html, contains('background-color: #ffffff'));
   expect(html, contains('color: #000000'));
+  // The root element carries an opaque light background so emails that don't
+  // paint their own background render on white rather than the dark Scaffold
+  // showing through (issue #861).
+  expect(html, contains('html { background-color: #ffffff'));
 }
 
 Widget _wrap(Widget child) => ProviderScope(
@@ -35,6 +39,20 @@ void main() {
     test('includes email body content', () {
       final html = buildEmailHtml('<p>Test body</p>');
       expect(html, contains('<p>Test body</p>'));
+    });
+
+    test('keeps a light base for a full HTML document with a dark inline body',
+        () {
+      // Newsletters often embed a whole document whose nested <body> carries a
+      // dark inline background; when injected inside our <body> those inline
+      // attributes merge onto our body and would win over the stylesheet. Our
+      // forced light color-scheme and opaque root background still apply so the
+      // body renders readable instead of solid black (issue #861).
+      final html = buildEmailHtml(
+        '<html><head><style>p{color:#fff}</style></head>'
+        '<body style="background-color:#111">Hi</body></html>',
+      );
+      _expectLightMode(html);
     });
 
     test('blocks remote images by default', () {

@@ -38,6 +38,7 @@ String buildEmailHtml(String htmlBody, {bool loadRemoteImages = false}) {
 <meta name="color-scheme" content="light">
 <meta http-equiv="Content-Security-Policy" content="$csp">
 <style>
+html { background-color: #ffffff; }
 body { margin: 0; padding: 0; font-family: sans-serif; word-break: break-word; overflow-x: hidden; color-scheme: light; background-color: #ffffff; color: #000000; }
 img { max-width: 100%; height: auto; }
 a { color: #1976D2; }
@@ -87,7 +88,12 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
     if (!Platform.isLinux) {
       final c = WebViewController();
       unawaited(c.setJavaScriptMode(JavaScriptMode.unrestricted));
-      unawaited(c.setBackgroundColor(Colors.transparent));
+      // Opaque light base so email bodies that don't paint their own
+      // background (e.g. a full HTML document whose nested <body> carries a
+      // dark inline background) fall through to white, not the dark Scaffold
+      // behind a transparent surface — which rendered as a solid black body in
+      // dark mode (issue #861).
+      unawaited(c.setBackgroundColor(Colors.white));
       unawaited(
         c.setNavigationDelegate(
           NavigationDelegate(
