@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -9,6 +10,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -28,16 +30,34 @@ class NoteRepositoryImpl implements NoteRepository {
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     http.Client? httpClient,
+    AppLogger? appLogger,
   })  : _imapConnect = imapConnect,
-        _httpClient = httpClient ?? http.Client();
+        _httpClient = httpClient ?? http.Client(),
+        _appLogger = appLogger;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final http.Client _httpClient;
+  final AppLogger? _appLogger;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
+
+  /// Resolves the local email row id for an RFC Message-ID so note log
+  /// entries surface under that mail in the App Log screen (which filters by
+  /// [AppLogEntry.emailId]). Returns `null` when the mail isn't cached
+  /// locally — logging still works, the entry just won't be scoped to a mail.
+  Future<String?> _emailIdForMessage(String accountId, String messageId) async {
+    final row = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) & t.messageId.equals(messageId),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.id;
+  }
 
   // ── Observe (local cache) ─────────────────────────────────────────────────
 
@@ -86,8 +106,19 @@ class NoteRepositoryImpl implements NoteRepository {
         if (isImapMailboxNotFound(e)) {
           // Notes folder doesn't exist yet — clear any stale checkpoint and
           // drop orphaned local notes so the local cache mirrors reality.
-          await _clearNotesForAccount(account.id);
+          final wiped = await _clearNotesForAccount(
+            account.id,
+            'note.sync.folder_missing_wipe',
+          );
           await _clearNotesCheckpoint(account.id);
+          unawaited(
+            _appLogger?.info(
+              'note.sync.completed',
+              'Note sync: Notes folder not found, cleared local cache',
+              accountId: account.id,
+              data: {'transport': 'imap', 'wiped': wiped},
+            ),
+          );
           return;
         }
         rethrow;
@@ -103,7 +134,10 @@ class NoteRepositoryImpl implements NoteRepository {
         if (storedUidValidity != null) {
           // UID validity churned — the server reassigned UIDs, so every
           // cached serverId is stale. Drop them; the fetch below repopulates.
-          await _clearNotesForAccount(account.id);
+          await _clearNotesForAccount(
+            account.id,
+            'note.sync.uidvalidity_wipe',
+          );
         }
         final allUids = (await client.uidSearchMessages(searchCriteria: 'ALL'))
                 .matchingSequence
@@ -119,12 +153,25 @@ class NoteRepositoryImpl implements NoteRepository {
           }
         }
         // Purge any local rows for this account that aren't in the fetched set.
-        await _pruneNotesForAccountNotIn(account.id, fetchedNoteIds);
+        final pruned =
+            await _pruneNotesForAccountNotIn(account.id, fetchedNoteIds);
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
         await _saveNotesCheckpoint(account.id, {
           'uidValidity': uidValidity,
           'lastUid': maxUid,
         });
+        unawaited(
+          _appLogger?.info(
+            'note.sync.completed',
+            'Note sync (imap full scan) done',
+            accountId: account.id,
+            data: {
+              'transport': 'imap',
+              'fetched': fetchedNoteIds.length,
+              'pruned': pruned,
+            },
+          ),
+        );
         return;
       }
 
@@ -139,11 +186,13 @@ class NoteRepositoryImpl implements NoteRepository {
       // Some IMAP servers return the last-seen UID when nothing is newer;
       // drop anything at or below the checkpoint so we don't refetch.
       final trulyNew = newUids.where((u) => u > lastUid).toList();
+      var fetched = 0;
       if (trulyNew.isNotEmpty) {
         final seq = imap.MessageSequence.fromIds(trulyNew, isUid: true);
         final fetch = await client.uidFetchMessages(seq, '(UID BODY.PEEK[])');
         for (final msg in fetch.messages) {
-          await _upsertNoteFromImapMessage(account.id, msg);
+          final noteId = await _upsertNoteFromImapMessage(account.id, msg);
+          if (noteId != null) fetched++;
         }
       }
 
@@ -153,13 +202,26 @@ class NoteRepositoryImpl implements NoteRepository {
               ?.toList() ??
           [];
       final serverUidStrings = serverUids.map((u) => u.toString()).toSet();
-      await _pruneNotesForAccountByServerId(account.id, serverUidStrings);
+      final pruned =
+          await _pruneNotesForAccountByServerId(account.id, serverUidStrings);
 
       final maxUid = serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
       await _saveNotesCheckpoint(account.id, {
         'uidValidity': uidValidity,
         'lastUid': maxUid,
       });
+      unawaited(
+        _appLogger?.info(
+          'note.sync.completed',
+          'Note sync (imap incremental) done',
+          accountId: account.id,
+          data: {
+            'transport': 'imap',
+            'fetched': fetched,
+            'pruned': pruned,
+          },
+        ),
+      );
     } finally {
       await client.logout();
     }
@@ -181,8 +243,19 @@ class NoteRepositoryImpl implements NoteRepository {
 
     final mailboxId = await _findNotesMailboxJmap(jmap);
     if (mailboxId == null) {
-      await _clearNotesForAccount(account.id);
+      final wiped = await _clearNotesForAccount(
+        account.id,
+        'note.sync.folder_missing_wipe',
+      );
       await _clearNotesCheckpoint(account.id);
+      unawaited(
+        _appLogger?.info(
+          'note.sync.completed',
+          'Note sync: Notes mailbox not found, cleared local cache',
+          accountId: account.id,
+          data: {'transport': 'jmap', 'wiped': wiped},
+        ),
+      );
       return;
     }
 
@@ -276,12 +349,24 @@ class NoteRepositoryImpl implements NoteRepository {
     }
 
     // Purge local rows that weren't observed.
-    await _pruneNotesForAccountNotIn(accountId, fetchedIds);
+    final pruned = await _pruneNotesForAccountNotIn(accountId, fetchedIds);
 
     await _saveNotesCheckpoint(accountId, {
       'queryState': queryState,
       'emailState': emailState,
     });
+    unawaited(
+      _appLogger?.info(
+        'note.sync.completed',
+        'Note sync (jmap full) done',
+        accountId: accountId,
+        data: {
+          'transport': 'jmap',
+          'fetched': fetchedIds.length,
+          'pruned': pruned,
+        },
+      ),
+    );
   }
 
   Future<void> _jmapIncrementalNotesSync(
@@ -369,7 +454,8 @@ class NoteRepositoryImpl implements NoteRepository {
     // Deletions come from two sources: destroyed (globally deleted) and
     // removed-from-query (moved out of the Notes mailbox). Both mean "not a
     // note anymore", so drop from the local cache in either case.
-    for (final jmapId in {...destroyed, ...removed}) {
+    final toRemove = {...destroyed, ...removed};
+    for (final jmapId in toRemove) {
       await _deleteNoteByServerId(accountId, jmapId);
     }
 
@@ -377,6 +463,18 @@ class NoteRepositoryImpl implements NoteRepository {
       'queryState': newQueryState,
       'emailState': newEmailState,
     });
+    unawaited(
+      _appLogger?.info(
+        'note.sync.completed',
+        'Note sync (jmap incremental) done',
+        accountId: accountId,
+        data: {
+          'transport': 'jmap',
+          'fetched': toFetch.length,
+          'removed': toRemove.length,
+        },
+      ),
+    );
   }
 
   static const _noteProperties = [
@@ -397,15 +495,26 @@ class NoteRepositoryImpl implements NoteRepository {
     String text,
   ) async {
     final account = await _accounts.getAccount(accountId);
-    if (account == null) return;
+    if (account == null) {
+      unawaited(
+        _appLogger?.warn(
+          'note.add.no_account',
+          'Cannot add note: account not found',
+          accountId: accountId,
+          data: {'messageId': messageId},
+        ),
+      );
+      return;
+    }
     final password = await _accounts.getPassword(accountId);
     final noteId = _generateId();
+    final emailId = await _emailIdForMessage(accountId, messageId);
 
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _addNoteImap(account, password, messageId, noteId, text);
+        await _addNoteImap(account, password, messageId, noteId, text, emailId);
       case account_model.AccountType.jmap:
-        await _addNoteJmap(account, password, messageId, noteId, text);
+        await _addNoteJmap(account, password, messageId, noteId, text, emailId);
     }
   }
 
@@ -415,6 +524,7 @@ class NoteRepositoryImpl implements NoteRepository {
     String messageId,
     String noteId,
     String text,
+    String? emailId,
   ) async {
     final client = await _imapConnect(
       account,
@@ -455,6 +565,38 @@ class NoteRepositoryImpl implements NoteRepository {
               createdAt: DateTime.now(),
             ),
           );
+
+      unawaited(
+        _appLogger?.info(
+          'note.added',
+          'Note added (imap)',
+          accountId: account.id,
+          emailId: emailId,
+          data: {
+            'noteId': noteId,
+            'messageId': messageId,
+            'serverId': serverId,
+            'transport': 'imap',
+          },
+        ),
+      );
+      if (serverId.isEmpty) {
+        // The server didn't return an APPENDUID (no UIDPLUS), so we cached the
+        // note without its server UID. A later full sync repairs it by matching
+        // the note-id header; until then the prune-by-serverId reconciliation
+        // must not treat this row as an orphan (see
+        // [_pruneNotesForAccountByServerId]).
+        unawaited(
+          _appLogger?.warn(
+            'note.add.no_server_id',
+            'Note appended without an APPENDUID (server lacks UIDPLUS); '
+                'serverId left empty until the next full sync',
+            accountId: account.id,
+            emailId: emailId,
+            data: {'noteId': noteId, 'messageId': messageId},
+          ),
+        );
+      }
     } finally {
       await client.logout();
     }
@@ -466,6 +608,7 @@ class NoteRepositoryImpl implements NoteRepository {
     String messageId,
     String noteId,
     String text,
+    String? emailId,
   ) async {
     final jmapUrl = account.jmapUrl;
     if (jmapUrl == null || jmapUrl.isEmpty) {
@@ -528,6 +671,32 @@ class NoteRepositoryImpl implements NoteRepository {
             createdAt: DateTime.now(),
           ),
         );
+
+    unawaited(
+      _appLogger?.info(
+        'note.added',
+        'Note added (jmap)',
+        accountId: account.id,
+        emailId: emailId,
+        data: {
+          'noteId': noteId,
+          'messageId': messageId,
+          'serverId': jmapEmailId,
+          'transport': 'jmap',
+        },
+      ),
+    );
+    if (jmapEmailId.isEmpty) {
+      unawaited(
+        _appLogger?.warn(
+          'note.add.no_server_id',
+          'JMAP Email/set returned no created id; serverId left empty',
+          accountId: account.id,
+          emailId: emailId,
+          data: {'noteId': noteId, 'messageId': messageId},
+        ),
+      );
+    }
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
@@ -539,10 +708,26 @@ class NoteRepositoryImpl implements NoteRepository {
         .getSingleOrNull();
     if (noteRow == null) return;
 
+    final emailId =
+        await _emailIdForMessage(noteRow.accountId, noteRow.messageId);
+
     final account = await _accounts.getAccount(noteRow.accountId);
     if (account == null) {
       await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteId)))
           .go();
+      unawaited(
+        _appLogger?.warn(
+          'note.deleted',
+          'Note deleted locally only (account missing)',
+          accountId: noteRow.accountId,
+          emailId: emailId,
+          data: {
+            'noteId': noteRow.id,
+            'messageId': noteRow.messageId,
+            'serverId': noteRow.serverId,
+          },
+        ),
+      );
       return;
     }
     final password = await _accounts.getPassword(account.id);
@@ -553,6 +738,21 @@ class NoteRepositoryImpl implements NoteRepository {
       case account_model.AccountType.jmap:
         await _deleteNoteJmap(account, password, noteRow);
     }
+
+    unawaited(
+      _appLogger?.info(
+        'note.deleted',
+        'Note deleted (${account.type.name})',
+        accountId: account.id,
+        emailId: emailId,
+        data: {
+          'noteId': noteRow.id,
+          'messageId': noteRow.messageId,
+          'serverId': noteRow.serverId,
+          'transport': account.type.name,
+        },
+      ),
+    );
   }
 
   Future<void> _deleteNoteImap(
@@ -688,46 +888,96 @@ class NoteRepositoryImpl implements NoteRepository {
 
   // ── DB helpers ────────────────────────────────────────────────────────────
 
-  Future<void> _clearNotesForAccount(String accountId) async {
+  /// Logs (at warn level) that a cached note row was dropped during
+  /// reconciliation, scoped to the mail it belonged to so it shows up in that
+  /// mail's App Log. This is the breadcrumb that makes a "disappearing note"
+  /// visible after the fact.
+  Future<void> _logNoteRemoved(String event, EmailNoteRow row) async {
+    final logger = _appLogger;
+    if (logger == null) return;
+    final emailId = await _emailIdForMessage(row.accountId, row.messageId);
+    await logger.warn(
+      event,
+      'Cached note removed during sync reconciliation',
+      accountId: row.accountId,
+      emailId: emailId,
+      data: {
+        'noteId': row.id,
+        'messageId': row.messageId,
+        'serverId': row.serverId,
+      },
+    );
+  }
+
+  Future<int> _clearNotesForAccount(String accountId, String event) async {
+    final rows = await (_db.select(_db.emailNotes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    for (final row in rows) {
+      await _logNoteRemoved(event, row);
+    }
     await (_db.delete(_db.emailNotes)
           ..where((t) => t.accountId.equals(accountId)))
         .go();
+    return rows.length;
   }
 
-  Future<void> _pruneNotesForAccountNotIn(
+  Future<int> _pruneNotesForAccountNotIn(
     String accountId,
     Set<String> keptNoteIds,
   ) async {
     final rows = await (_db.select(_db.emailNotes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    var removed = 0;
     for (final row in rows) {
       if (!keptNoteIds.contains(row.id)) {
+        await _logNoteRemoved('note.sync.pruned_not_in', row);
         await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
             .go();
+        removed++;
       }
     }
+    return removed;
   }
 
-  Future<void> _pruneNotesForAccountByServerId(
+  Future<int> _pruneNotesForAccountByServerId(
     String accountId,
     Set<String> keptServerIds,
   ) async {
     final rows = await (_db.select(_db.emailNotes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    var removed = 0;
     for (final row in rows) {
+      // A locally-added note on a server without UIDPLUS has an empty serverId
+      // until a full sync repairs it (see [_addNoteImap]). It can never be in
+      // the server UID set, so pruning it here would silently delete the note
+      // the user just added. Skip it — the full scan reconciles it by note-id
+      // header instead.
+      if (row.serverId.isEmpty) continue;
       if (!keptServerIds.contains(row.serverId)) {
+        await _logNoteRemoved('note.sync.pruned_by_server_id', row);
         await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
             .go();
+        removed++;
       }
     }
+    return removed;
   }
 
   Future<void> _deleteNoteByServerId(
     String accountId,
     String serverId,
   ) async {
+    final rows = await (_db.select(_db.emailNotes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.serverId.equals(serverId),
+          ))
+        .get();
+    for (final row in rows) {
+      await _logNoteRemoved('note.sync.pruned_removed', row);
+    }
     await (_db.delete(_db.emailNotes)
           ..where(
             (t) => t.accountId.equals(accountId) & t.serverId.equals(serverId),
