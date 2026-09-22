@@ -4,7 +4,9 @@
 // as the real app) inside a ProviderScope whose repository providers are
 // replaced with lightweight in-memory fakes.  No database or network is used.
 
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -322,6 +324,14 @@ class FakeOutboxRepository implements OutboxRepository {
   Future<void> discard(int id) async {}
 }
 
+/// A minimal but valid 1×1 transparent PNG, used as the default bytes written
+/// by [FakeEmailRepository.downloadAttachment] so inline-image previews pass
+/// the signature sniff.
+final Uint8List _tinyPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk'
+  '+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+);
+
 class FakeEmailRepository implements EmailRepository {
   final List<Email> _emails;
   final Email? _emailDetail;
@@ -349,8 +359,10 @@ class FakeEmailRepository implements EmailRepository {
     List<PendingChange>? pendingChanges,
     List<FailedMutation>? failedMutations,
     String rawRfc822 = '',
+    Uint8List? attachmentBytes,
     this.onSearch,
-  })  : _pendingChanges = pendingChanges ?? const [],
+  })  : attachmentBytes = attachmentBytes ?? _tinyPng,
+        _pendingChanges = pendingChanges ?? const [],
         _failedMutations = failedMutations ?? const [],
         _emails = emails ?? [],
         _emailDetail = emailDetail,
@@ -520,12 +532,21 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<int> flushOutbox(String accountId, String password) async => 0;
 
+  /// Bytes written to disk by [downloadAttachment]. Defaults to a valid 1×1
+  /// PNG so image-preview tests pass the signature sniff in the detail screen;
+  /// override with garbage to exercise the "could not be displayed" fallback.
+  final Uint8List attachmentBytes;
+
   @override
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,
-  ) async =>
-      '/tmp/${attachment.filename}';
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('fake_attachment');
+    final file = File('${dir.path}/${attachment.filename}')
+      ..writeAsBytesSync(attachmentBytes);
+    return file.path;
+  }
 
   @override
   Future<String> fetchRawRfc822(String emailId) async => _rawRfc822;

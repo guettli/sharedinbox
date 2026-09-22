@@ -248,6 +248,62 @@ void main() {
     );
 
     testWidgets(
+      'image attachment with undecodable bytes shows a fallback, not noise '
+      '(#830)',
+      (tester) async {
+        final email = testEmail(hasAttachment: true);
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          textBody: 'Please review.',
+          attachments: [
+            // Declared as JPEG but the decoded bytes are not a real image —
+            // this is the PEARL case that rendered as colour-noise.
+            EmailAttachment(
+              filename: 'pearl.jpg',
+              contentType: 'image/jpeg',
+              size: 40960,
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(
+                FakeEmailRepository(
+                  emailDetail: email,
+                  emailBody: body,
+                  attachmentBytes: Uint8List.fromList(
+                    List<int>.filled(64, 0x7F),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('pearl.jpg'), findsOneWidget);
+        // No inline preview is rendered for bytes we can't trust…
+        expect(find.byType(Image), findsNothing);
+        // …instead the user gets a clear note plus the download-and-open action.
+        expect(
+          find.text('This image could not be displayed. Use download to '
+              'open it.'),
+          findsOneWidget,
+        );
+        expect(find.byTooltip('Download and open'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'shows a partial-decode notice with a raw-source link and keeps the '
       'action bar (#579)',
       (tester) async {
