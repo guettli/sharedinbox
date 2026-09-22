@@ -67,7 +67,8 @@ void main() {
         ),
         'image/png',
       );
-      expect(sniffImageFormat(_bytes([0xFF, 0xD8, 0xFF], pad: 8)), 'image/jpeg');
+      expect(
+          sniffImageFormat(_bytes([0xFF, 0xD8, 0xFF], pad: 8)), 'image/jpeg');
       // "GIF89a"
       expect(
         sniffImageFormat(_bytes([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])),
