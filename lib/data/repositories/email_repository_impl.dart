@@ -5995,7 +5995,18 @@ class EmailRepositoryImpl implements EmailRepository {
           'IMAP server returned no message for UID ${emailRow.uid}.',
         );
       }
-      final part = msg.getPart(attachment.fetchPartId) ?? msg;
+      // Resolve the specific MIME part. Never fall back to `msg` itself: if the
+      // stored fetchPartId no longer resolves, decoding the whole multipart
+      // message and presenting its raw bytes as the attachment yields garbage
+      // (e.g. an "image" that renders as colour-noise, #830). Surface an error
+      // so the caller can offer a Retry / download instead.
+      final part = msg.getPart(attachment.fetchPartId);
+      if (part == null) {
+        throw StateError(
+          'Could not locate part ${attachment.fetchPartId} for '
+          '${attachment.filename}. Open the email again to refresh.',
+        );
+      }
       final bytes = part.decodeContentBinary();
       if (bytes == null) {
         throw StateError('Failed to decode attachment ${attachment.filename}.');

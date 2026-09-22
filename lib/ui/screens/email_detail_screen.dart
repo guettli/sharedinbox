@@ -94,6 +94,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// button instead of silently retrying on the next rebuild.
   final Set<String> _imageLoadFailed = {};
 
+  /// Filenames whose downloaded bytes did not match any image format Flutter
+  /// can decode, despite a displayable declared MIME type. Rendering them would
+  /// show colour-noise rather than throw (#830), so the row shows a "could not
+  /// be displayed" note plus the download-and-open action instead of a preview.
+  /// Distinct from [_imageLoadFailed]: retrying the fetch would produce the same
+  /// bytes, so no Retry button is offered.
+  final Set<String> _imageUnsupported = {};
+
   /// Fallback nav resolved from `observeEmails(mailbox)` when [widget.nav]
   /// is null (deep links, notifications). Cached per emailId so the buttons
   /// don't refetch on every rebuild.
@@ -115,6 +123,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       _imagePaths.clear();
       _autoRequestedImages.clear();
       _imageLoadFailed.clear();
+      _imageUnsupported.clear();
     }
   }
 
@@ -893,7 +902,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (path == null &&
         !downloading &&
         !_autoRequestedImages.contains(att.filename) &&
-        !_imageLoadFailed.contains(att.filename)) {
+        !_imageLoadFailed.contains(att.filename) &&
+        !_imageUnsupported.contains(att.filename)) {
       _autoRequestedImages.add(att.filename);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_showImage(att));
@@ -950,6 +960,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ],
             ),
           )
+        else if (_imageUnsupported.contains(att.filename))
+          Padding(
+            padding: const EdgeInsets.only(
+              left: AppSpacing.lg,
+              bottom: AppSpacing.sm,
+            ),
+            child: Text(
+              'This image could not be displayed. Use download to open it.',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
+          )
         else if (_imageLoadFailed.contains(att.filename))
           Padding(
             padding: const EdgeInsets.only(
@@ -972,12 +993,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       _downloading.add(att.filename);
       _autoRequestedImages.add(att.filename);
       _imageLoadFailed.remove(att.filename);
+      _imageUnsupported.remove(att.filename);
     });
     try {
       final path = await ref
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
       if (!mounted) return;
+      // The declared MIME type got us this far, but the *decoded* bytes may not
+      // actually be a format Flutter can render (mislabelled AVIF/HEIC/SVG, or
+      // raw multipart bytes). Sniffing the on-disk signature closes the hole
+      // where Image.file silently paints colour-noise without throwing (#830).
+      final header = _readFileHeader(path);
+      if (header == null || sniffImageFormat(header) == null) {
+        setState(() => _imageUnsupported.add(att.filename));
+        return;
+      }
       setState(() => _imagePaths[att.filename] = path);
     } catch (e, stack) {
       if (!mounted) return;
@@ -993,6 +1024,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       );
     } finally {
       if (mounted) setState(() => _downloading.remove(att.filename));
+    }
+  }
+
+  /// Reads the leading bytes of [path] for [sniffImageFormat]. Returns `null`
+  /// if the file is missing or unreadable. 16 bytes cover every signature we
+  /// check (the longest, WebP, needs 12). Reads synchronously — only 16 bytes,
+  /// and it runs after the download has already completed.
+  Uint8List? _readFileHeader(String path) {
+    try {
+      final raf = File(path).openSync();
+      try {
+        return raf.readSync(16);
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {
+      return null;
     }
   }
 
