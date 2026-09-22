@@ -3567,6 +3567,22 @@ void main() {
       expect(changes.first.payload, contains('2026-05-10T15:00:00.000'));
     });
 
+    test('snoozeEmail on a missing email id does not throw (#866)', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // The row can vanish between opening the snooze picker and confirming.
+      // snoozeEmail must degrade to a no-op instead of crashing with
+      // "Bad state: No element".
+      await expectLater(
+        r.emails.snoozeEmail('does-not-exist', DateTime(2026, 5, 10, 15)),
+        completes,
+      );
+
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, isEmpty);
+    });
+
     test('wakeUpEmails enqueues unsnooze for expired emails', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');

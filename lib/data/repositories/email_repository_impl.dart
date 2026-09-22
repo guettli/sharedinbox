@@ -4004,7 +4004,14 @@ class EmailRepositoryImpl implements EmailRepository {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
-        .getSingle();
+        .getSingleOrNull();
+    if (row == null) {
+      // The row can disappear between opening the snooze picker and
+      // confirming (concurrent sync move/delete, optimistic move that
+      // reassigned the id). Degrade to a no-op instead of crashing.
+      log('snoozeEmail: email $emailId no longer exists; skipping');
+      return;
+    }
     await _snoozeRow(row, until);
     await _mirrorSnoozeToCounterparts(
       row.accountId,
