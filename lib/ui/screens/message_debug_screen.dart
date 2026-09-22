@@ -230,9 +230,12 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
     if (email == null) {
       return const Text('No local row for this message ID.');
     }
+    final account = snapshot.account;
     final rows = <(String, String)>[
       ('id', email.id),
       ('accountId', email.accountId),
+      ('accountName', account?.displayLabel ?? email.accountId),
+      ('accountType', account?.typeLabel ?? ''),
       ('mailboxPath', email.mailboxPath),
       ('uid', email.uid.toString()),
       ('subject', email.subject ?? ''),

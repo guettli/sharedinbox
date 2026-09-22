@@ -31,12 +31,55 @@ class MessageDebugSnapshot {
     required this.body,
     required this.pending,
     required this.attachments,
+    required this.account,
   });
 
   final MessageDebugEmail? email;
   final MessageDebugBody? body;
   final List<MessageDebugPending> pending;
   final List<EmailAttachment> attachments;
+
+  /// The account that owns the message, or null when the account row was
+  /// removed after the message was cached.
+  final MessageDebugAccount? account;
+}
+
+/// Minimal projection of the message's owning account for the debug view — its
+/// name and protocol type, so a bug report can tell IMAP and JMAP apart.
+class MessageDebugAccount {
+  const MessageDebugAccount({
+    required this.id,
+    required this.displayName,
+    required this.email,
+    required this.accountType,
+  });
+
+  final String id;
+  final String displayName;
+  final String email;
+
+  /// Raw value of the `accountType` column, e.g. `"imap"` or `"jmap"`.
+  final String accountType;
+
+  /// Human-friendly label: [displayName], falling back to [email] then [id].
+  String get displayLabel {
+    if (displayName.isNotEmpty) return displayName;
+    if (email.isNotEmpty) return email;
+    return id;
+  }
+
+  /// The protocol type rendered for display, e.g. `IMAP` / `JMAP`. Falls back
+  /// to the raw stored value when it isn't a known type.
+  String get typeLabel {
+    switch (accountType.toLowerCase()) {
+      case 'imap':
+        return 'IMAP';
+      case 'jmap':
+        return 'JMAP';
+      default:
+        return accountType;
+    }
+  }
 }
 
 class MessageDebugEmail {
@@ -137,6 +180,9 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
         )
         ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
       .get();
+  final account = await (database.select(database.accounts)
+        ..where((t) => t.id.equals(messageRef.accountId)))
+      .getSingleOrNull();
 
   final attachments = <EmailAttachment>[];
   if (body != null) {
@@ -191,6 +237,14 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
         ),
     ],
     attachments: attachments,
+    account: account == null
+        ? null
+        : MessageDebugAccount(
+            id: account.id,
+            displayName: account.displayName,
+            email: account.email,
+            accountType: account.accountType,
+          ),
   );
 }
 
@@ -237,9 +291,12 @@ String buildMessageDebugMarkdown(
   }
 
   buf.writeln('## Local state\n');
+  final account = snapshot.account;
   _writeTable(buf, [
     ('id', email.id),
     ('accountId', email.accountId),
+    ('accountName', account?.displayLabel ?? email.accountId),
+    ('accountType', account?.typeLabel ?? ''),
     ('mailboxPath', email.mailboxPath),
     ('uid', email.uid.toString()),
     ('subject', email.subject ?? ''),
