@@ -83,6 +83,18 @@ void main() {
     });
   });
 
+  group('emailBaseUrl', () {
+    // The email document is loaded with a concrete https origin so Android
+    // WebView fetches allowed remote images instead of refusing subresource
+    // loads from a null/opaque origin (issue #863). The host must stay
+    // non-resolvable so a stray navigation cannot leak to a real server.
+    test('is a valid non-resolvable https origin', () {
+      final uri = Uri.parse(emailBaseUrl);
+      expect(uri.scheme, 'https');
+      expect(uri.host, endsWith('.invalid'));
+    });
+  });
+
   group('emailWebViewGestureRecognizers', () {
     // The WebView needs a long-press recognizer so it wins the gesture arena
     // against the surrounding scroll view; otherwise the long-press that

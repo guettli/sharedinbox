@@ -13,6 +13,19 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+/// Synthetic origin the email document is loaded with.
+///
+/// `loadHtmlString` without a base URL maps to `loadDataWithBaseURL(null, …)`
+/// on Android, which gives the document a null/opaque origin. Several Android
+/// System WebView versions then refuse to fetch remote subresources from such a
+/// document, so allowed remote images (e.g. `https://claude.ai/...png`) never
+/// load even though our CSP permits them (issue #863). Handing the document a
+/// concrete `https:` origin makes those loads behave as normal cross-origin
+/// fetches. The host is deliberately non-resolvable so a stray navigation or
+/// relative-URL fetch cannot leak to a real server.
+@visibleForTesting
+const String emailBaseUrl = 'https://email.invalid/';
+
 /// Builds the full HTML document string for rendering an email body.
 ///
 /// Forces `color-scheme: light` so that emails with black text remain readable
@@ -102,7 +115,7 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
           ),
         ),
       );
-      unawaited(c.loadHtmlString(_buildHtml()));
+      unawaited(c.loadHtmlString(_buildHtml(), baseUrl: emailBaseUrl));
       _controller = c;
     }
   }
@@ -113,7 +126,9 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
     if (old.htmlBody != widget.htmlBody ||
         old.loadRemoteImages != widget.loadRemoteImages) {
       if (_controller != null) {
-        unawaited(_controller!.loadHtmlString(_buildHtml()));
+        unawaited(
+          _controller!.loadHtmlString(_buildHtml(), baseUrl: emailBaseUrl),
+        );
       }
     }
   }
