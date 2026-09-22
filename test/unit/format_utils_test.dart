@@ -108,10 +108,7 @@ void main() {
     test('rejects empty and truncated headers', () {
       expect(sniffImageFormat(Uint8List(0)), isNull);
       // A lone RIFF with no WEBP tag (e.g. a WAV) must not be treated as WebP.
-      expect(
-        sniffImageFormat(_bytes([0x52, 0x49, 0x46, 0x46])),
-        isNull,
-      );
+      expect(sniffImageFormat(_bytes([0x52, 0x49, 0x46, 0x46])), isNull);
       // Truncated PNG signature.
       expect(sniffImageFormat(_bytes([0x89, 0x50])), isNull);
     });
