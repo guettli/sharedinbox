@@ -40,6 +40,7 @@ class BugReportScreen extends ConsumerStatefulWidget {
 
 class _BugReportScreenState extends ConsumerState<BugReportScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _emailController = TextEditingController();
 
@@ -68,6 +69,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
   @override
   void dispose() {
+    _titleController.dispose();
     _descriptionController.dispose();
     _emailController.dispose();
     super.dispose();
@@ -87,11 +89,6 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           _attachedEmail = email;
           _includeEncryptedMail = true;
           _selectedAccountId = email.accountId;
-          final fromStr =
-              email.from.isNotEmpty ? email.from.first.toString() : 'unknown';
-          final subjectStr = email.subject ?? '(no subject)';
-          _descriptionController.text =
-              'Problem with email from $fromStr: "$subjectStr"\n\n';
         }
       }
 
@@ -209,6 +206,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       );
 
       // ── Public fields — these appear in cleartext in the GitHub issue. ──
+      request.fields['title'] = _titleController.text;
       request.fields['description'] = _descriptionController.text;
 
       PackageInfo? pkg;
@@ -573,20 +571,46 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Description Text Field (optional) — public.
+                  // Title Text Field (required) — public.
+                  _PublicField(
+                    child: TextFormField(
+                      controller: _titleController,
+                      autofocus: true,
+                      maxLength: 120,
+                      decoration: const InputDecoration(
+                        labelText: 'Subject',
+                        border: OutlineInputBorder(),
+                        helperText: 'A short summary of the problem.',
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please enter a subject.';
+                        }
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Description Text Field (required) — public.
                   _PublicField(
                     child: TextFormField(
                       controller: _descriptionController,
-                      autofocus: true,
                       maxLines: 8,
                       minLines: 4,
                       decoration: const InputDecoration(
-                        labelText: 'What went wrong? (optional)',
+                        labelText: 'What went wrong?',
                         alignLabelWithHint: true,
                         border: OutlineInputBorder(),
                         helperText:
                             'Please describe the problem and how to reproduce it.',
                       ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please describe what went wrong.';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
