@@ -33,6 +33,7 @@ import (
 // the public GitHub issue. Private parts of a report (mail, contact email,
 // screenshots) never live here — they are uploaded as separate encrypted blobs.
 type BugReport struct {
+	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	AboutInfo   string    `json:"about_info"`
 	SyncLog     string    `json:"sync_log,omitempty"`
@@ -303,7 +304,18 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
 			return
 		}
+		// The public title and description are both required: they carry what the
+		// user wants to report, in cleartext, and must not be auto-filled (#864).
+		title := strings.TrimSpace(r.FormValue("title"))
+		if title == "" {
+			writeJSONError(w, http.StatusBadRequest, "title is a required field.")
+			return
+		}
 		description := r.FormValue("description")
+		if strings.TrimSpace(description) == "" {
+			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
+			return
+		}
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
 		metaFiles := r.MultipartForm.File["encrypted_metadata"]
 
@@ -375,6 +387,7 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 		}
 
 		report := BugReport{
+			Title:       title,
 			Description: description,
 			AboutInfo:   aboutInfo,
 			SyncLog:     r.FormValue("sync_log"),
@@ -414,10 +427,7 @@ func blobURL(baseURL, id, filename string) string {
 // encrypted downloads. Each of them is optional: a general no-mail report is
 // just the description plus system info (#847).
 func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []string) (title, body string) {
-	title = "Bug report"
-	if mailURL != "" {
-		title = "Bug report with encrypted mail"
-	}
+	title = "Bug report: " + report.Title
 	var b bytes.Buffer
 	if report.Description != "" {
 		b.WriteString(report.Description)
