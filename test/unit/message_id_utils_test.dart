@@ -35,11 +35,18 @@ void main() {
       expect(normaliseMessageId('foo@bar>'), 'foo@bar>');
     });
 
-    test('strips only the outermost pair', () {
-      // If a broken sender wrote `<<foo@bar>>`, keep the inner `<foo@bar>` so
-      // the caller can still see the malformation instead of silently double
-      // stripping.
-      expect(normaliseMessageId('<<foo@bar>>'), '<foo@bar>');
+    test('strips all repeated surrounding pairs', () {
+      // Stalwart wraps an already-bracketed id in a second pair on
+      // delivery-status notifications (#859). Fully canonicalising to the
+      // bracket-less form lets it match the single-pair id the IMAP ENVELOPE
+      // and JMAP arrays produce, so the body-load identity check no longer
+      // sees a false mismatch.
+      expect(normaliseMessageId('<<foo@bar>>'), 'foo@bar');
+      expect(normaliseMessageId('<<<a@b>>>'), 'a@b');
+    });
+
+    test('returns null when nested brackets contain nothing', () {
+      expect(normaliseMessageId('<<>>'), isNull);
     });
   });
 
