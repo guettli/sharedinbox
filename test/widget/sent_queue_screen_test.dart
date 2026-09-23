@@ -42,35 +42,72 @@ Widget _wrap({
   );
 }
 
+const _accountA = Account(
+  id: 'acc-1',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'imap.example.com',
+  smtpHost: 'smtp.example.com',
+);
+const _accountB = Account(
+  id: 'acc-2',
+  displayName: 'Bob',
+  email: 'bob@example.com',
+  type: AccountType.jmap,
+  jmapUrl: 'https://jmap.example.com/',
+);
+
+/// A single pending row on [_accountA] used by the retry tests.
+OutboxMessage _pendingPing(int id) => OutboxMessage(
+      id: id,
+      accountId: 'acc-1',
+      subject: 'Ping',
+      to: const ['carol@example.com'],
+      cc: const [],
+      createdAt: DateTime.utc(2026, 3, 4, 9),
+      attempts: 0,
+      status: 'pending',
+    );
+
+/// Pumps [SentQueueScreen] backed by [repo] (and optional [emails]/[accounts])
+/// and settles — the shared setup every test in this file starts from.
+Future<void> _pumpQueue(
+  WidgetTester tester, {
+  required _RecordingOutboxRepository repo,
+  List<Account> accounts = const [_accountA],
+  FakeEmailRepository? emails,
+}) async {
+  await tester.pumpWidget(
+    _wrap(
+      emails: emails,
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository(accounts),
+        ),
+        outboxRepositoryProvider.overrideWithValue(repo),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// Pumps the queue with [repo]/[emails] and taps the Retry button on the row.
+Future<void> _pumpAndTapRetry(
+  WidgetTester tester, {
+  required _RecordingOutboxRepository repo,
+  required FakeEmailRepository emails,
+}) async {
+  await _pumpQueue(tester, repo: repo, emails: emails);
+  await tester.tap(find.byIcon(Icons.refresh));
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  const accountA = Account(
-    id: 'acc-1',
-    displayName: 'Alice',
-    email: 'alice@example.com',
-    imapHost: 'imap.example.com',
-    smtpHost: 'smtp.example.com',
-  );
-  const accountB = Account(
-    id: 'acc-2',
-    displayName: 'Bob',
-    email: 'bob@example.com',
-    type: AccountType.jmap,
-    jmapUrl: 'https://jmap.example.com/',
-  );
+  const accountA = _accountA;
+  const accountB = _accountB;
 
   testWidgets('shows an empty state when nothing is queued', (tester) async {
-    await tester.pumpWidget(
-      _wrap(
-        overrides: [
-          accountRepositoryProvider.overrideWithValue(
-            FakeAccountRepository([accountA]),
-          ),
-          outboxRepositoryProvider
-              .overrideWithValue(_RecordingOutboxRepository()),
-        ],
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpQueue(tester, repo: _RecordingOutboxRepository());
 
     expect(find.text('No messages waiting to be sent.'), findsOneWidget);
   });
@@ -103,17 +140,7 @@ void main() {
       ),
     ]);
 
-    await tester.pumpWidget(
-      _wrap(
-        overrides: [
-          accountRepositoryProvider.overrideWithValue(
-            FakeAccountRepository([accountA, accountB]),
-          ),
-          outboxRepositoryProvider.overrideWithValue(repo),
-        ],
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpQueue(tester, repo: repo, accounts: const [accountA, accountB]);
 
     // Row 1 — IMAP account, pending.
     expect(
@@ -141,36 +168,11 @@ void main() {
     'retry resets the row, sends it now, and shows the sent SnackBar',
     (tester) async {
       final repo = _RecordingOutboxRepository();
-      repo.messages.add(
-        OutboxMessage(
-          id: 42,
-          accountId: 'acc-1',
-          subject: 'Ping',
-          to: const ['carol@example.com'],
-          cc: const [],
-          createdAt: DateTime.utc(2026, 3, 4, 9),
-          attempts: 0,
-          status: 'pending',
-        ),
-      );
+      repo.messages.add(_pendingPing(42));
       final emails = FakeEmailRepository()
         ..sendNowResult = const SendNowResult(SendNowOutcome.sent);
 
-      await tester.pumpWidget(
-        _wrap(
-          emails: emails,
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([accountA]),
-            ),
-            outboxRepositoryProvider.overrideWithValue(repo),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.refresh));
-      await tester.pumpAndSettle();
+      await _pumpAndTapRetry(tester, repo: repo, emails: emails);
       expect(repo.retried, [42]);
       expect(
         emails.sendNowRowIds,
@@ -189,39 +191,14 @@ void main() {
     'retry surfaces the concrete failure reason in the SnackBar',
     (tester) async {
       final repo = _RecordingOutboxRepository();
-      repo.messages.add(
-        OutboxMessage(
-          id: 7,
-          accountId: 'acc-1',
-          subject: 'Ping',
-          to: const ['carol@example.com'],
-          cc: const [],
-          createdAt: DateTime.utc(2026, 3, 4, 9),
-          attempts: 0,
-          status: 'pending',
-        ),
-      );
+      repo.messages.add(_pendingPing(7));
       final emails = FakeEmailRepository()
         ..sendNowResult = const SendNowResult(
           SendNowOutcome.transientFailed,
           message: 'Connection refused',
         );
 
-      await tester.pumpWidget(
-        _wrap(
-          emails: emails,
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([accountA]),
-            ),
-            outboxRepositoryProvider.overrideWithValue(repo),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.refresh));
-      await tester.pumpAndSettle();
+      await _pumpAndTapRetry(tester, repo: repo, emails: emails);
       expect(
         find.text('Send failed, will retry: Connection refused'),
         findsOneWidget,
@@ -236,36 +213,11 @@ void main() {
       // (e.g. no stored password). Retry must still report the failure rather
       // than fail silently — the "nothing happens" the issue complains about.
       final repo = _RecordingOutboxRepository();
-      repo.messages.add(
-        OutboxMessage(
-          id: 11,
-          accountId: 'acc-1',
-          subject: 'Ping',
-          to: const ['carol@example.com'],
-          cc: const [],
-          createdAt: DateTime.utc(2026, 3, 4, 9),
-          attempts: 0,
-          status: 'pending',
-        ),
-      );
+      repo.messages.add(_pendingPing(11));
       final emails = FakeEmailRepository()
         ..sendNowError = StateError('No password stored for account acc-1');
 
-      await tester.pumpWidget(
-        _wrap(
-          emails: emails,
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([accountA]),
-            ),
-            outboxRepositoryProvider.overrideWithValue(repo),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.refresh));
-      await tester.pumpAndSettle();
+      await _pumpAndTapRetry(tester, repo: repo, emails: emails);
       expect(repo.retried, [11]);
       expect(find.textContaining('Send failed:'), findsOneWidget);
     },
@@ -301,17 +253,7 @@ void main() {
         ),
       ]);
 
-      await tester.pumpWidget(
-        _wrap(
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([accountA]),
-            ),
-            outboxRepositoryProvider.overrideWithValue(repo),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpQueue(tester, repo: repo);
 
       expect(
         find.text('Queued — will send on the next sync'),
@@ -343,17 +285,7 @@ void main() {
         ),
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([accountA]),
-            ),
-            outboxRepositoryProvider.overrideWithValue(repo),
-          ],
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpQueue(tester, repo: repo);
 
       await tester.tap(find.textContaining('tap for details'));
       await tester.pumpAndSettle();
@@ -386,17 +318,7 @@ void main() {
       ),
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        overrides: [
-          accountRepositoryProvider.overrideWithValue(
-            FakeAccountRepository([accountA]),
-          ),
-          outboxRepositoryProvider.overrideWithValue(repo),
-        ],
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpQueue(tester, repo: repo);
 
     expect(
       find.text('${'X' * 60}…'),

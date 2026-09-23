@@ -127,25 +127,7 @@ void main() {
       (tester) async {
         final email = FakeEmailRepository()
           ..sendNowResult = const SendNowResult(SendNowOutcome.sent);
-        final router = _homeAndCompose();
-        await tester.pumpWidget(
-          _wrap(
-            router: router,
-            overrides: _composeOverrides(email: email),
-          ),
-        );
-        await tester.pumpAndSettle();
-        unawaited(router.push('/compose'));
-        await tester.pumpAndSettle();
-
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'),
-          'bob@example.com',
-        );
-        await tester.pump();
-
-        await tester.tap(find.byIcon(Icons.send));
-        await tester.pumpAndSettle();
+        await _pumpComposeAndSend(tester, email: email);
 
         // The draft was queued and then sent right away (not left for the next
         // IDLE cycle), and the concrete result is surfaced to the user.
@@ -167,25 +149,7 @@ void main() {
             SendNowOutcome.permanentlyFailed,
             message: 'SMTP rejected: mailbox full',
           );
-        final router = _homeAndCompose();
-        await tester.pumpWidget(
-          _wrap(
-            router: router,
-            overrides: _composeOverrides(email: email),
-          ),
-        );
-        await tester.pumpAndSettle();
-        unawaited(router.push('/compose'));
-        await tester.pumpAndSettle();
-
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'),
-          'bob@example.com',
-        );
-        await tester.pump();
-
-        await tester.tap(find.byIcon(Icons.send));
-        await tester.pumpAndSettle();
+        await _pumpComposeAndSend(tester, email: email);
 
         expect(
           find.text('Send failed: SMTP rejected: mailbox full'),
@@ -419,6 +383,31 @@ Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
       subjectText: 'Restored subject',
       bodyText: 'Draft body',
     );
+
+/// Pumps compose from a home route, fills in a recipient and taps Send —
+/// the shared setup for the direct-send (#755) tests, which differ only in
+/// the [email] fake's configured outcome.
+Future<void> _pumpComposeAndSend(
+  WidgetTester tester, {
+  required FakeEmailRepository email,
+}) async {
+  final router = _homeAndCompose();
+  await tester.pumpWidget(
+    _wrap(router: router, overrides: _composeOverrides(email: email)),
+  );
+  await tester.pumpAndSettle();
+  unawaited(router.push('/compose'));
+  await tester.pumpAndSettle();
+
+  await tester.enterText(
+    find.widgetWithText(TextFormField, 'To'),
+    'bob@example.com',
+  );
+  await tester.pump();
+
+  await tester.tap(find.byIcon(Icons.send));
+  await tester.pumpAndSettle();
+}
 
 /// Pumps the compose screen reached from a home route so discard can pop back.
 Future<void> _pumpComposeFromHome(

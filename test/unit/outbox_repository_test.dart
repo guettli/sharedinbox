@@ -42,6 +42,23 @@ Future<void> _seedAccount(AppDatabase db) async {
       );
 }
 
+/// Seeds a second IMAP account (`acc-2` / Bob) for the multi-account tests.
+Future<void> _seedSecondAccount(AppDatabase db) async {
+  await db.into(db.accounts).insert(
+        AccountsCompanion.insert(
+          id: 'acc-2',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'imap.example.com',
+          imapPort: 993,
+          imapSsl: true,
+          smtpHost: 'smtp.example.com',
+          smtpPort: 587,
+          smtpSsl: true,
+        ),
+      );
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -374,19 +391,7 @@ void main() {
       // block a send for another.
       final db = openTestDatabase();
       await _seedAccount(db);
-      await db.into(db.accounts).insert(
-            AccountsCompanion.insert(
-              id: 'acc-2',
-              displayName: 'Bob',
-              email: 'bob@example.com',
-              imapHost: 'imap.example.com',
-              imapPort: 993,
-              imapSsl: true,
-              smtpHost: 'smtp.example.com',
-              smtpPort: 587,
-              smtpSsl: true,
-            ),
-          );
+      await _seedSecondAccount(db);
       final repo = OutboxRepositoryImpl(db);
       await repo.enqueue(_accountId, _makeDraft(subject: 'A'));
       await repo.enqueue('acc-2', _makeDraft(subject: 'B'));
@@ -550,19 +555,7 @@ void main() {
         () async {
       final db = openTestDatabase();
       await _seedAccount(db);
-      await db.into(db.accounts).insert(
-            AccountsCompanion.insert(
-              id: 'acc-2',
-              displayName: 'Bob',
-              email: 'bob@example.com',
-              imapHost: 'imap.example.com',
-              imapPort: 993,
-              imapSsl: true,
-              smtpHost: 'smtp.example.com',
-              smtpPort: 587,
-              smtpSsl: true,
-            ),
-          );
+      await _seedSecondAccount(db);
       final repo = OutboxRepositoryImpl(db);
 
       await repo.enqueue(_accountId, _makeDraft(subject: 'First'));

@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/data/db/database.dart' show AppDatabase;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -27,7 +28,61 @@ import 'stalwart_harness.dart';
 /// offline device without any production-code changes.
 class _Network {
   bool online = true;
+
+  /// A connect factory matching production's signature that opens a real IMAP
+  /// connection while [online], and throws [SocketException] while offline.
+  Future<ImapClient> connectImap(
+    Account a,
+    String username,
+    String password,
+  ) async {
+    if (!online) {
+      throw const SocketException('test: offline');
+    }
+    final c = ImapClient(
+      defaultResponseTimeout: const Duration(seconds: 20),
+    );
+    await c.connectToServer(a.imapHost, a.imapPort, isSecure: false);
+    await c.login(username, password);
+    return c;
+  }
+
+  /// SMTP counterpart to [connectImap] — real connection while [online],
+  /// [SocketException] while offline.
+  Future<SmtpClient> connectSmtp(
+    Account a,
+    String username,
+    String password,
+  ) async {
+    if (!online) {
+      throw const SocketException('test: offline');
+    }
+    final atIndex = a.email.lastIndexOf('@');
+    final domain = atIndex != -1 ? a.email.substring(atIndex + 1) : a.smtpHost;
+    final c = SmtpClient(domain);
+    await c.connectToServer(a.smtpHost, a.smtpPort, isSecure: false);
+    await c.ehlo();
+    await c.authenticate(username, password);
+    return c;
+  }
 }
+
+/// Builds an [EmailRepositoryImpl] whose IMAP/SMTP connections are gated by
+/// [network] — the shared setup for the offline round-trip tests.
+EmailRepositoryImpl _gatedEmails(
+  AppDatabase db,
+  AccountRepositoryImpl accounts,
+  _Network network,
+  Directory cacheDir,
+) =>
+    EmailRepositoryImpl(
+      db,
+      accounts,
+      imapConnect: network.connectImap,
+      smtpConnect: network.connectSmtp,
+      getCacheDir: () async => cacheDir,
+      outbox: OutboxRepositoryImpl(db),
+    );
 
 void main() {
   late StalwartEnv env;
@@ -65,48 +120,7 @@ void main() {
 
       // Wrap real connect functions in the [_Network] gate. Production code
       // sees the same factory signature; only the test seam toggles offline.
-      Future<ImapClient> gatedImap(
-        Account a,
-        String username,
-        String password,
-      ) async {
-        if (!network.online) {
-          throw const SocketException('test: offline');
-        }
-        final c = ImapClient(
-          defaultResponseTimeout: const Duration(seconds: 20),
-        );
-        await c.connectToServer(a.imapHost, a.imapPort, isSecure: false);
-        await c.login(username, password);
-        return c;
-      }
-
-      Future<SmtpClient> gatedSmtp(
-        Account a,
-        String username,
-        String password,
-      ) async {
-        if (!network.online) {
-          throw const SocketException('test: offline');
-        }
-        final atIndex = a.email.lastIndexOf('@');
-        final domain =
-            atIndex != -1 ? a.email.substring(atIndex + 1) : a.smtpHost;
-        final c = SmtpClient(domain);
-        await c.connectToServer(a.smtpHost, a.smtpPort, isSecure: false);
-        await c.ehlo();
-        await c.authenticate(username, password);
-        return c;
-      }
-
-      final emails = EmailRepositoryImpl(
-        db,
-        accounts,
-        imapConnect: gatedImap,
-        smtpConnect: gatedSmtp,
-        getCacheDir: () async => cacheDir,
-        outbox: OutboxRepositoryImpl(db),
-      );
+      final emails = _gatedEmails(db, accounts, network, cacheDir);
       await accounts.addAccount(account, user.password);
 
       // ── 1. Go offline and enqueue ────────────────────────────────────────
@@ -340,48 +354,7 @@ void main() {
       final accounts = AccountRepositoryImpl(db, storage);
       final network = _Network();
 
-      Future<ImapClient> gatedImap(
-        Account a,
-        String username,
-        String password,
-      ) async {
-        if (!network.online) {
-          throw const SocketException('test: offline');
-        }
-        final c = ImapClient(
-          defaultResponseTimeout: const Duration(seconds: 20),
-        );
-        await c.connectToServer(a.imapHost, a.imapPort, isSecure: false);
-        await c.login(username, password);
-        return c;
-      }
-
-      Future<SmtpClient> gatedSmtp(
-        Account a,
-        String username,
-        String password,
-      ) async {
-        if (!network.online) {
-          throw const SocketException('test: offline');
-        }
-        final atIndex = a.email.lastIndexOf('@');
-        final domain =
-            atIndex != -1 ? a.email.substring(atIndex + 1) : a.smtpHost;
-        final c = SmtpClient(domain);
-        await c.connectToServer(a.smtpHost, a.smtpPort, isSecure: false);
-        await c.ehlo();
-        await c.authenticate(username, password);
-        return c;
-      }
-
-      final emails = EmailRepositoryImpl(
-        db,
-        accounts,
-        imapConnect: gatedImap,
-        smtpConnect: gatedSmtp,
-        getCacheDir: () async => cacheDir,
-        outbox: OutboxRepositoryImpl(db),
-      );
+      final emails = _gatedEmails(db, accounts, network, cacheDir);
       await accounts.addAccount(account, user.password);
 
       final subject = 'sendnow-${DateTime.now().millisecondsSinceEpoch}';
