@@ -3,18 +3,18 @@
 // Do not manually edit this file.
 
 // ignore_for_file: no_leading_underscores_for_library_prefixes
-import 'dart:async' as _i5;
+import 'dart:async' as _i6;
 
 import 'package:mockito/mockito.dart' as _i1;
-import 'package:mockito/src/dummies.dart' as _i7;
+import 'package:mockito/src/dummies.dart' as _i8;
 import 'package:sharedinbox/core/filter/filter_expression.dart' as _i10;
-import 'package:sharedinbox/core/models/account.dart' as _i6;
+import 'package:sharedinbox/core/models/account.dart' as _i7;
 import 'package:sharedinbox/core/models/email.dart' as _i3;
 import 'package:sharedinbox/core/models/mailbox.dart' as _i2;
 import 'package:sharedinbox/core/models/pending_change.dart' as _i11;
-import 'package:sharedinbox/core/repositories/account_repository.dart' as _i4;
-import 'package:sharedinbox/core/repositories/email_repository.dart' as _i9;
-import 'package:sharedinbox/core/repositories/mailbox_repository.dart' as _i8;
+import 'package:sharedinbox/core/repositories/account_repository.dart' as _i5;
+import 'package:sharedinbox/core/repositories/email_repository.dart' as _i4;
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart' as _i9;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -62,9 +62,8 @@ class _FakeSyncEmailsResult_2 extends _i1.SmartFake
         );
 }
 
-class _FakeReliabilityResult_3 extends _i1.SmartFake
-    implements _i3.ReliabilityResult {
-  _FakeReliabilityResult_3(
+class _FakeSendNowResult_3 extends _i1.SmartFake implements _i4.SendNowResult {
+  _FakeSendNowResult_3(
     Object parent,
     Invocation parentInvocation,
   ) : super(
@@ -73,9 +72,20 @@ class _FakeReliabilityResult_3 extends _i1.SmartFake
         );
 }
 
-class _FakeMailboxDiagnostics_4 extends _i1.SmartFake
+class _FakeReliabilityResult_4 extends _i1.SmartFake
+    implements _i3.ReliabilityResult {
+  _FakeReliabilityResult_4(
+    Object parent,
+    Invocation parentInvocation,
+  ) : super(
+          parent,
+          parentInvocation,
+        );
+}
+
+class _FakeMailboxDiagnostics_5 extends _i1.SmartFake
     implements _i3.MailboxDiagnostics {
-  _FakeMailboxDiagnostics_4(
+  _FakeMailboxDiagnostics_5(
     Object parent,
     Invocation parentInvocation,
   ) : super(
@@ -87,32 +97,32 @@ class _FakeMailboxDiagnostics_4 extends _i1.SmartFake
 /// A class which mocks [AccountRepository].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockAccountRepository extends _i1.Mock implements _i4.AccountRepository {
+class MockAccountRepository extends _i1.Mock implements _i5.AccountRepository {
   MockAccountRepository() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i5.Stream<List<_i6.Account>> observeAccounts() => (super.noSuchMethod(
+  _i6.Stream<List<_i7.Account>> observeAccounts() => (super.noSuchMethod(
         Invocation.method(
           #observeAccounts,
           [],
         ),
-        returnValue: _i5.Stream<List<_i6.Account>>.empty(),
-      ) as _i5.Stream<List<_i6.Account>>);
+        returnValue: _i6.Stream<List<_i7.Account>>.empty(),
+      ) as _i6.Stream<List<_i7.Account>>);
 
   @override
-  _i5.Future<_i6.Account?> getAccount(String? id) => (super.noSuchMethod(
+  _i6.Future<_i7.Account?> getAccount(String? id) => (super.noSuchMethod(
         Invocation.method(
           #getAccount,
           [id],
         ),
-        returnValue: _i5.Future<_i6.Account?>.value(),
-      ) as _i5.Future<_i6.Account?>);
+        returnValue: _i6.Future<_i7.Account?>.value(),
+      ) as _i6.Future<_i7.Account?>);
 
   @override
-  _i5.Future<void> addAccount(
-    _i6.Account? account,
+  _i6.Future<void> addAccount(
+    _i7.Account? account,
     String? password,
   ) =>
       (super.noSuchMethod(
@@ -123,13 +133,13 @@ class MockAccountRepository extends _i1.Mock implements _i4.AccountRepository {
             password,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> updateAccount(
-    _i6.Account? account, {
+  _i6.Future<void> updateAccount(
+    _i7.Account? account, {
     String? password,
   }) =>
       (super.noSuchMethod(
@@ -138,65 +148,65 @@ class MockAccountRepository extends _i1.Mock implements _i4.AccountRepository {
           [account],
           {#password: password},
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> removeAccount(String? id) => (super.noSuchMethod(
+  _i6.Future<void> removeAccount(String? id) => (super.noSuchMethod(
         Invocation.method(
           #removeAccount,
           [id],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<String> getPassword(String? accountId) => (super.noSuchMethod(
+  _i6.Future<String> getPassword(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #getPassword,
           [accountId],
         ),
-        returnValue: _i5.Future<String>.value(_i7.dummyValue<String>(
+        returnValue: _i6.Future<String>.value(_i8.dummyValue<String>(
           this,
           Invocation.method(
             #getPassword,
             [accountId],
           ),
         )),
-      ) as _i5.Future<String>);
+      ) as _i6.Future<String>);
 }
 
 /// A class which mocks [MailboxRepository].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
+class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
   MockMailboxRepository() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i5.Stream<List<_i2.Mailbox>> observeMailboxes(String? accountId) =>
+  _i6.Stream<List<_i2.Mailbox>> observeMailboxes(String? accountId) =>
       (super.noSuchMethod(
         Invocation.method(
           #observeMailboxes,
           [accountId],
         ),
-        returnValue: _i5.Stream<List<_i2.Mailbox>>.empty(),
-      ) as _i5.Stream<List<_i2.Mailbox>>);
+        returnValue: _i6.Stream<List<_i2.Mailbox>>.empty(),
+      ) as _i6.Stream<List<_i2.Mailbox>>);
 
   @override
-  _i5.Future<int> syncMailboxes(String? accountId) => (super.noSuchMethod(
+  _i6.Future<int> syncMailboxes(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #syncMailboxes,
           [accountId],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<_i2.Mailbox?> findMailboxByRole(
+  _i6.Future<_i2.Mailbox?> findMailboxByRole(
     String? accountId,
     String? role,
   ) =>
@@ -208,21 +218,21 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             role,
           ],
         ),
-        returnValue: _i5.Future<_i2.Mailbox?>.value(),
-      ) as _i5.Future<_i2.Mailbox?>);
+        returnValue: _i6.Future<_i2.Mailbox?>.value(),
+      ) as _i6.Future<_i2.Mailbox?>);
 
   @override
-  _i5.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
+  _i6.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #clearForResync,
           [accountId],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<_i2.Mailbox> createMailboxWithRole(
+  _i6.Future<_i2.Mailbox> createMailboxWithRole(
     String? accountId,
     String? name,
     String? role, {
@@ -238,7 +248,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
           ],
           {#parentDisplayPath: parentDisplayPath},
         ),
-        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+        returnValue: _i6.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
           Invocation.method(
             #createMailboxWithRole,
@@ -250,10 +260,10 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             {#parentDisplayPath: parentDisplayPath},
           ),
         )),
-      ) as _i5.Future<_i2.Mailbox>);
+      ) as _i6.Future<_i2.Mailbox>);
 
   @override
-  _i5.Future<_i2.Mailbox> createMailbox(
+  _i6.Future<_i2.Mailbox> createMailbox(
     String? accountId,
     String? name, {
     String? parentDisplayPath,
@@ -267,7 +277,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
           ],
           {#parentDisplayPath: parentDisplayPath},
         ),
-        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+        returnValue: _i6.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
           Invocation.method(
             #createMailbox,
@@ -278,10 +288,10 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             {#parentDisplayPath: parentDisplayPath},
           ),
         )),
-      ) as _i5.Future<_i2.Mailbox>);
+      ) as _i6.Future<_i2.Mailbox>);
 
   @override
-  _i5.Future<_i2.Mailbox> renameMailbox(
+  _i6.Future<_i2.Mailbox> renameMailbox(
     String? accountId,
     String? mailboxPath,
     String? newName,
@@ -295,7 +305,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             newName,
           ],
         ),
-        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+        returnValue: _i6.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
           Invocation.method(
             #renameMailbox,
@@ -306,10 +316,10 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             ],
           ),
         )),
-      ) as _i5.Future<_i2.Mailbox>);
+      ) as _i6.Future<_i2.Mailbox>);
 
   @override
-  _i5.Future<void> deleteMailbox(
+  _i6.Future<void> deleteMailbox(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -321,12 +331,12 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             mailboxPath,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<_i2.Mailbox> moveMailbox(
+  _i6.Future<_i2.Mailbox> moveMailbox(
     String? accountId,
     String? mailboxPath, {
     required String? newParentDisplayPath,
@@ -340,7 +350,7 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
           ],
           {#newParentDisplayPath: newParentDisplayPath},
         ),
-        returnValue: _i5.Future<_i2.Mailbox>.value(_FakeMailbox_0(
+        returnValue: _i6.Future<_i2.Mailbox>.value(_FakeMailbox_0(
           this,
           Invocation.method(
             #moveMailbox,
@@ -351,25 +361,25 @@ class MockMailboxRepository extends _i1.Mock implements _i8.MailboxRepository {
             {#newParentDisplayPath: newParentDisplayPath},
           ),
         )),
-      ) as _i5.Future<_i2.Mailbox>);
+      ) as _i6.Future<_i2.Mailbox>);
 }
 
 /// A class which mocks [EmailRepository].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
+class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   MockEmailRepository() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i5.Stream<String> get onChangesQueued => (super.noSuchMethod(
+  _i6.Stream<String> get onChangesQueued => (super.noSuchMethod(
         Invocation.getter(#onChangesQueued),
-        returnValue: _i5.Stream<String>.empty(),
-      ) as _i5.Stream<String>);
+        returnValue: _i6.Stream<String>.empty(),
+      ) as _i6.Stream<String>);
 
   @override
-  _i5.Stream<List<_i3.Email>> observeEmails(
+  _i6.Stream<List<_i3.Email>> observeEmails(
     String? accountId,
     String? mailboxPath, {
     int? limit = 50,
@@ -383,11 +393,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ],
           {#limit: limit},
         ),
-        returnValue: _i5.Stream<List<_i3.Email>>.empty(),
-      ) as _i5.Stream<List<_i3.Email>>);
+        returnValue: _i6.Stream<List<_i3.Email>>.empty(),
+      ) as _i6.Stream<List<_i3.Email>>);
 
   @override
-  _i5.Stream<List<_i3.EmailThread>> observeThreads(
+  _i6.Stream<List<_i3.EmailThread>> observeThreads(
     String? accountId,
     String? mailboxPath, {
     int? limit = 50,
@@ -401,22 +411,22 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ],
           {#limit: limit},
         ),
-        returnValue: _i5.Stream<List<_i3.EmailThread>>.empty(),
-      ) as _i5.Stream<List<_i3.EmailThread>>);
+        returnValue: _i6.Stream<List<_i3.EmailThread>>.empty(),
+      ) as _i6.Stream<List<_i3.EmailThread>>);
 
   @override
-  _i5.Stream<List<_i3.EmailThread>> observeAllInboxThreads({int? limit = 50}) =>
+  _i6.Stream<List<_i3.EmailThread>> observeAllInboxThreads({int? limit = 50}) =>
       (super.noSuchMethod(
         Invocation.method(
           #observeAllInboxThreads,
           [],
           {#limit: limit},
         ),
-        returnValue: _i5.Stream<List<_i3.EmailThread>>.empty(),
-      ) as _i5.Stream<List<_i3.EmailThread>>);
+        returnValue: _i6.Stream<List<_i3.EmailThread>>.empty(),
+      ) as _i6.Stream<List<_i3.EmailThread>>);
 
   @override
-  _i5.Stream<List<_i3.Email>> observeEmailsInThread(
+  _i6.Stream<List<_i3.Email>> observeEmailsInThread(
     String? accountId,
     String? mailboxPath,
     String? threadId,
@@ -430,11 +440,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             threadId,
           ],
         ),
-        returnValue: _i5.Stream<List<_i3.Email>>.empty(),
-      ) as _i5.Stream<List<_i3.Email>>);
+        returnValue: _i6.Stream<List<_i3.Email>>.empty(),
+      ) as _i6.Stream<List<_i3.Email>>);
 
   @override
-  _i5.Stream<List<_i3.Email>> observeThreadAcrossFolders(
+  _i6.Stream<List<_i3.Email>> observeThreadAcrossFolders(
     String? accountId,
     String? threadId,
   ) =>
@@ -446,20 +456,20 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             threadId,
           ],
         ),
-        returnValue: _i5.Stream<List<_i3.Email>>.empty(),
-      ) as _i5.Stream<List<_i3.Email>>);
+        returnValue: _i6.Stream<List<_i3.Email>>.empty(),
+      ) as _i6.Stream<List<_i3.Email>>);
 
   @override
-  _i5.Future<_i3.Email?> getEmail(String? emailId) => (super.noSuchMethod(
+  _i6.Future<_i3.Email?> getEmail(String? emailId) => (super.noSuchMethod(
         Invocation.method(
           #getEmail,
           [emailId],
         ),
-        returnValue: _i5.Future<_i3.Email?>.value(),
-      ) as _i5.Future<_i3.Email?>);
+        returnValue: _i6.Future<_i3.Email?>.value(),
+      ) as _i6.Future<_i3.Email?>);
 
   @override
-  _i5.Future<_i3.EmailBody> getEmailBody(
+  _i6.Future<_i3.EmailBody> getEmailBody(
     String? emailId, {
     bool? forceRefresh = false,
   }) =>
@@ -469,7 +479,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           [emailId],
           {#forceRefresh: forceRefresh},
         ),
-        returnValue: _i5.Future<_i3.EmailBody>.value(_FakeEmailBody_1(
+        returnValue: _i6.Future<_i3.EmailBody>.value(_FakeEmailBody_1(
           this,
           Invocation.method(
             #getEmailBody,
@@ -477,10 +487,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             {#forceRefresh: forceRefresh},
           ),
         )),
-      ) as _i5.Future<_i3.EmailBody>);
+      ) as _i6.Future<_i3.EmailBody>);
 
   @override
-  _i5.Future<_i3.SyncEmailsResult> syncEmails(
+  _i6.Future<_i3.SyncEmailsResult> syncEmails(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -493,7 +503,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ],
         ),
         returnValue:
-            _i5.Future<_i3.SyncEmailsResult>.value(_FakeSyncEmailsResult_2(
+            _i6.Future<_i3.SyncEmailsResult>.value(_FakeSyncEmailsResult_2(
           this,
           Invocation.method(
             #syncEmails,
@@ -503,10 +513,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             ],
           ),
         )),
-      ) as _i5.Future<_i3.SyncEmailsResult>);
+      ) as _i6.Future<_i3.SyncEmailsResult>);
 
   @override
-  _i5.Future<void> setFlag(
+  _i6.Future<void> setFlag(
     String? emailId, {
     bool? seen,
     bool? flagged,
@@ -520,12 +530,12 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             #flagged: flagged,
           },
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> markAllAsRead(
+  _i6.Future<void> markAllAsRead(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -537,12 +547,12 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             mailboxPath,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> moveEmail(
+  _i6.Future<void> moveEmail(
     String? emailId,
     String? destMailboxPath,
   ) =>
@@ -554,21 +564,21 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             destMailboxPath,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<String?> deleteEmail(String? emailId) => (super.noSuchMethod(
+  _i6.Future<String?> deleteEmail(String? emailId) => (super.noSuchMethod(
         Invocation.method(
           #deleteEmail,
           [emailId],
         ),
-        returnValue: _i5.Future<String?>.value(),
-      ) as _i5.Future<String?>);
+        returnValue: _i6.Future<String?>.value(),
+      ) as _i6.Future<String?>);
 
   @override
-  _i5.Future<void> sendEmail(
+  _i6.Future<void> sendEmail(
     String? accountId,
     _i3.EmailDraft? draft,
   ) =>
@@ -580,12 +590,12 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             draft,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<int> enqueueSend(
+  _i6.Future<int> enqueueSend(
     String? accountId,
     _i3.EmailDraft? draft,
   ) =>
@@ -597,11 +607,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             draft,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<int> flushOutbox(
+  _i6.Future<int> flushOutbox(
     String? accountId,
     String? password,
   ) =>
@@ -613,11 +623,32 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             password,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<String> downloadAttachment(
+  _i6.Future<_i4.SendNowResult> sendNow(
+    String? accountId, {
+    int? outboxRowId,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #sendNow,
+          [accountId],
+          {#outboxRowId: outboxRowId},
+        ),
+        returnValue: _i6.Future<_i4.SendNowResult>.value(_FakeSendNowResult_3(
+          this,
+          Invocation.method(
+            #sendNow,
+            [accountId],
+            {#outboxRowId: outboxRowId},
+          ),
+        )),
+      ) as _i6.Future<_i4.SendNowResult>);
+
+  @override
+  _i6.Future<String> downloadAttachment(
     String? emailId,
     _i3.EmailAttachment? attachment,
   ) =>
@@ -629,7 +660,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             attachment,
           ],
         ),
-        returnValue: _i5.Future<String>.value(_i7.dummyValue<String>(
+        returnValue: _i6.Future<String>.value(_i8.dummyValue<String>(
           this,
           Invocation.method(
             #downloadAttachment,
@@ -639,25 +670,25 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             ],
           ),
         )),
-      ) as _i5.Future<String>);
+      ) as _i6.Future<String>);
 
   @override
-  _i5.Future<String> fetchRawRfc822(String? emailId) => (super.noSuchMethod(
+  _i6.Future<String> fetchRawRfc822(String? emailId) => (super.noSuchMethod(
         Invocation.method(
           #fetchRawRfc822,
           [emailId],
         ),
-        returnValue: _i5.Future<String>.value(_i7.dummyValue<String>(
+        returnValue: _i6.Future<String>.value(_i8.dummyValue<String>(
           this,
           Invocation.method(
             #fetchRawRfc822,
             [emailId],
           ),
         )),
-      ) as _i5.Future<String>);
+      ) as _i6.Future<String>);
 
   @override
-  _i5.Future<List<_i3.Email>> searchEmails(
+  _i6.Future<List<_i3.Email>> searchEmails(
     String? accountId,
     String? mailboxPath,
     String? query,
@@ -671,11 +702,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             query,
           ],
         ),
-        returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
-      ) as _i5.Future<List<_i3.Email>>);
+        returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
+      ) as _i6.Future<List<_i3.Email>>);
 
   @override
-  _i5.Future<List<_i3.Email>> searchEmailsGlobal(
+  _i6.Future<List<_i3.Email>> searchEmailsGlobal(
     String? accountId,
     String? query,
   ) =>
@@ -687,11 +718,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             query,
           ],
         ),
-        returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
-      ) as _i5.Future<List<_i3.Email>>);
+        returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
+      ) as _i6.Future<List<_i3.Email>>);
 
   @override
-  _i5.Future<List<_i3.Email>> searchEmailsStructured(
+  _i6.Future<List<_i3.Email>> searchEmailsStructured(
     String? accountId,
     _i10.FilterGroup? filter,
   ) =>
@@ -703,11 +734,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             filter,
           ],
         ),
-        returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
-      ) as _i5.Future<List<_i3.Email>>);
+        returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
+      ) as _i6.Future<List<_i3.Email>>);
 
   @override
-  _i5.Future<List<_i3.Email>> getEmailsByAddress(
+  _i6.Future<List<_i3.Email>> getEmailsByAddress(
     String? accountId,
     String? address,
   ) =>
@@ -719,11 +750,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             address,
           ],
         ),
-        returnValue: _i5.Future<List<_i3.Email>>.value(<_i3.Email>[]),
-      ) as _i5.Future<List<_i3.Email>>);
+        returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
+      ) as _i6.Future<List<_i3.Email>>);
 
   @override
-  _i5.Future<List<_i3.EmailAddress>> searchAddresses(
+  _i6.Future<List<_i3.EmailAddress>> searchAddresses(
     String? accountId,
     String? query, {
     int? limit = 10,
@@ -738,11 +769,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           {#limit: limit},
         ),
         returnValue:
-            _i5.Future<List<_i3.EmailAddress>>.value(<_i3.EmailAddress>[]),
-      ) as _i5.Future<List<_i3.EmailAddress>>);
+            _i6.Future<List<_i3.EmailAddress>>.value(<_i3.EmailAddress>[]),
+      ) as _i6.Future<List<_i3.EmailAddress>>);
 
   @override
-  _i5.Future<int> flushPendingChanges(
+  _i6.Future<int> flushPendingChanges(
     String? accountId,
     String? password,
   ) =>
@@ -754,63 +785,63 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             password,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Stream<List<_i3.FailedMutation>> observeFailedMutations(
+  _i6.Stream<List<_i3.FailedMutation>> observeFailedMutations(
           String? accountId) =>
       (super.noSuchMethod(
         Invocation.method(
           #observeFailedMutations,
           [accountId],
         ),
-        returnValue: _i5.Stream<List<_i3.FailedMutation>>.empty(),
-      ) as _i5.Stream<List<_i3.FailedMutation>>);
+        returnValue: _i6.Stream<List<_i3.FailedMutation>>.empty(),
+      ) as _i6.Stream<List<_i3.FailedMutation>>);
 
   @override
-  _i5.Stream<List<_i11.PendingChange>> observePendingChanges(
+  _i6.Stream<List<_i11.PendingChange>> observePendingChanges(
           String? accountId) =>
       (super.noSuchMethod(
         Invocation.method(
           #observePendingChanges,
           [accountId],
         ),
-        returnValue: _i5.Stream<List<_i11.PendingChange>>.empty(),
-      ) as _i5.Stream<List<_i11.PendingChange>>);
+        returnValue: _i6.Stream<List<_i11.PendingChange>>.empty(),
+      ) as _i6.Stream<List<_i11.PendingChange>>);
 
   @override
-  _i5.Stream<List<_i11.PendingChange>> observeAllPendingChanges() =>
+  _i6.Stream<List<_i11.PendingChange>> observeAllPendingChanges() =>
       (super.noSuchMethod(
         Invocation.method(
           #observeAllPendingChanges,
           [],
         ),
-        returnValue: _i5.Stream<List<_i11.PendingChange>>.empty(),
-      ) as _i5.Stream<List<_i11.PendingChange>>);
+        returnValue: _i6.Stream<List<_i11.PendingChange>>.empty(),
+      ) as _i6.Stream<List<_i11.PendingChange>>);
 
   @override
-  _i5.Future<void> discardMutation(int? id) => (super.noSuchMethod(
+  _i6.Future<void> discardMutation(int? id) => (super.noSuchMethod(
         Invocation.method(
           #discardMutation,
           [id],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> retryMutation(int? id) => (super.noSuchMethod(
+  _i6.Future<void> retryMutation(int? id) => (super.noSuchMethod(
         Invocation.method(
           #retryMutation,
           [id],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<bool> cancelPendingChange(
+  _i6.Future<bool> cancelPendingChange(
     String? emailId,
     String? changeType,
   ) =>
@@ -822,11 +853,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             changeType,
           ],
         ),
-        returnValue: _i5.Future<bool>.value(false),
-      ) as _i5.Future<bool>);
+        returnValue: _i6.Future<bool>.value(false),
+      ) as _i6.Future<bool>);
 
   @override
-  _i5.Future<void> snoozeEmail(
+  _i6.Future<void> snoozeEmail(
     String? emailId,
     DateTime? until,
   ) =>
@@ -838,32 +869,32 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             until,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<int> wakeUpEmails(String? accountId) => (super.noSuchMethod(
+  _i6.Future<int> wakeUpEmails(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #wakeUpEmails,
           [accountId],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<void> restoreEmails(List<_i3.Email>? emails) =>
+  _i6.Future<void> restoreEmails(List<_i3.Email>? emails) =>
       (super.noSuchMethod(
         Invocation.method(
           #restoreEmails,
           [emails],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<_i3.Email?> findEmailByMessageId(
+  _i6.Future<_i3.Email?> findEmailByMessageId(
     String? accountId,
     String? messageId,
   ) =>
@@ -875,20 +906,20 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             messageId,
           ],
         ),
-        returnValue: _i5.Future<_i3.Email?>.value(),
-      ) as _i5.Future<_i3.Email?>);
+        returnValue: _i6.Future<_i3.Email?>.value(),
+      ) as _i6.Future<_i3.Email?>);
 
   @override
-  _i5.Future<int> applySieveRules(String? accountId) => (super.noSuchMethod(
+  _i6.Future<int> applySieveRules(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #applySieveRules,
           [accountId],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<int> previewSieveRuleMatches(
+  _i6.Future<int> previewSieveRuleMatches(
     String? accountId,
     String? scriptContent,
   ) =>
@@ -900,11 +931,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             scriptContent,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<int> applySieveScriptToInbox(
+  _i6.Future<int> applySieveScriptToInbox(
     String? accountId,
     String? scriptContent,
   ) =>
@@ -916,11 +947,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             scriptContent,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Stream<void> watchJmapPush(
+  _i6.Stream<void> watchJmapPush(
     String? accountId,
     String? password,
   ) =>
@@ -932,11 +963,11 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             password,
           ],
         ),
-        returnValue: _i5.Stream<void>.empty(),
-      ) as _i5.Stream<void>);
+        returnValue: _i6.Stream<void>.empty(),
+      ) as _i6.Stream<void>);
 
   @override
-  _i5.Future<_i3.ReliabilityResult> verifySyncReliability(
+  _i6.Future<_i3.ReliabilityResult> verifySyncReliability(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -949,7 +980,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ],
         ),
         returnValue:
-            _i5.Future<_i3.ReliabilityResult>.value(_FakeReliabilityResult_3(
+            _i6.Future<_i3.ReliabilityResult>.value(_FakeReliabilityResult_4(
           this,
           Invocation.method(
             #verifySyncReliability,
@@ -959,10 +990,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             ],
           ),
         )),
-      ) as _i5.Future<_i3.ReliabilityResult>);
+      ) as _i6.Future<_i3.ReliabilityResult>);
 
   @override
-  _i5.Future<_i3.MailboxDiagnostics> diagnoseMailbox(
+  _i6.Future<_i3.MailboxDiagnostics> diagnoseMailbox(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -975,7 +1006,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
           ],
         ),
         returnValue:
-            _i5.Future<_i3.MailboxDiagnostics>.value(_FakeMailboxDiagnostics_4(
+            _i6.Future<_i3.MailboxDiagnostics>.value(_FakeMailboxDiagnostics_5(
           this,
           Invocation.method(
             #diagnoseMailbox,
@@ -985,10 +1016,10 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             ],
           ),
         )),
-      ) as _i5.Future<_i3.MailboxDiagnostics>);
+      ) as _i6.Future<_i3.MailboxDiagnostics>);
 
   @override
-  _i5.Future<int> sweepOrphanThreads(
+  _i6.Future<int> sweepOrphanThreads(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -1000,21 +1031,21 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             mailboxPath,
           ],
         ),
-        returnValue: _i5.Future<int>.value(0),
-      ) as _i5.Future<int>);
+        returnValue: _i6.Future<int>.value(0),
+      ) as _i6.Future<int>);
 
   @override
-  _i5.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
+  _i6.Future<void> clearForResync(String? accountId) => (super.noSuchMethod(
         Invocation.method(
           #clearForResync,
           [accountId],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 
   @override
-  _i5.Future<void> clearMailboxForResync(
+  _i6.Future<void> clearMailboxForResync(
     String? accountId,
     String? mailboxPath,
   ) =>
@@ -1026,7 +1057,7 @@ class MockEmailRepository extends _i1.Mock implements _i9.EmailRepository {
             mailboxPath,
           ],
         ),
-        returnValue: _i5.Future<void>.value(),
-        returnValueForMissingStub: _i5.Future<void>.value(),
-      ) as _i5.Future<void>);
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
 }

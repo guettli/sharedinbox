@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart' show OrderingTerm, Value;
@@ -317,6 +318,97 @@ void main() {
       await repo.discard(id);
       final rows = await db.select(db.outbox).get();
       expect(rows, isEmpty);
+    });
+
+    test(
+      'concurrent flushes for one account serialise so a row is sent once',
+      () async {
+        // Regression for #755: a UI-initiated send (EmailRepository.sendNow)
+        // and the background sync loop can both call flush at the same moment.
+        // Without the per-account lock they would each select the same pending
+        // row and transmit it — delivering the message twice.
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        final repo = OutboxRepositoryImpl(db);
+        await repo.enqueue(_accountId, _makeDraft(subject: 'once'));
+
+        var senderCalls = 0;
+        final firstEntered = Completer<void>();
+        final release = Completer<void>();
+        Future<void> sender(OutboxJob job) async {
+          senderCalls++;
+          if (!firstEntered.isCompleted) firstEntered.complete();
+          // Hold the first flush inside the sender so the second flush would
+          // race it if the lock were missing.
+          await release.future;
+        }
+
+        final flushA = repo.flush(_accountId, sender);
+        await firstEntered.future;
+        final flushB = repo.flush(_accountId, sender);
+
+        // Give B a chance to (wrongly) pick up the same row before A finishes.
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        release.complete();
+
+        final sentA = await flushA;
+        final sentB = await flushB;
+
+        expect(
+          senderCalls,
+          1,
+          reason: 'the row must be transmitted exactly once',
+        );
+        expect(sentA, 1);
+        expect(
+          sentB,
+          0,
+          reason: 'B waits for A, by which point the row is already gone',
+        );
+        expect(await db.select(db.outbox).get(), isEmpty);
+      },
+    );
+
+    test('flushes for different accounts still run concurrently', () async {
+      // The lock is per-account, so an in-flight send for one account must not
+      // block a send for another.
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      await db.into(db.accounts).insert(
+            AccountsCompanion.insert(
+              id: 'acc-2',
+              displayName: 'Bob',
+              email: 'bob@example.com',
+              imapHost: 'imap.example.com',
+              imapPort: 993,
+              imapSsl: true,
+              smtpHost: 'smtp.example.com',
+              smtpPort: 587,
+              smtpSsl: true,
+            ),
+          );
+      final repo = OutboxRepositoryImpl(db);
+      await repo.enqueue(_accountId, _makeDraft(subject: 'A'));
+      await repo.enqueue('acc-2', _makeDraft(subject: 'B'));
+
+      final bothEntered = Completer<void>();
+      var entered = 0;
+      final release = Completer<void>();
+      Future<void> sender(OutboxJob job) async {
+        entered++;
+        if (entered == 2 && !bothEntered.isCompleted) bothEntered.complete();
+        await release.future;
+      }
+
+      final flushA = repo.flush(_accountId, sender);
+      final flushB = repo.flush('acc-2', sender);
+
+      // Both senders should be inside the send at the same time; if the lock
+      // were global this would hang and the test would time out.
+      await bothEntered.future;
+      release.complete();
+      expect(await flushA, 1);
+      expect(await flushB, 1);
     });
 
     group('OutboxFlushObserver', () {

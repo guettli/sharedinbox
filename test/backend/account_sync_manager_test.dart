@@ -677,6 +677,10 @@ class _FakeEmails implements EmailRepository {
   Future<int> flushOutbox(String accountId, String password) async => 0;
 
   @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async =>
+      const SendNowResult(SendNowOutcome.sent);
+
+  @override
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,

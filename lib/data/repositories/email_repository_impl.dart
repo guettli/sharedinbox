@@ -5400,7 +5400,18 @@ class EmailRepositoryImpl implements EmailRepository {
       );
 
   @override
-  Future<int> flushOutbox(String accountId, String password) async {
+  Future<int> flushOutbox(String accountId, String password) =>
+      _flushOutbox(accountId, password);
+
+  /// Shared flush machinery for [flushOutbox] (background sync loop) and
+  /// [sendNow] (UI-initiated). [extraObserver], when supplied, is notified of
+  /// every row outcome alongside the app-log observer, letting a caller capture
+  /// the fate of a specific row without duplicating the sender/timing wiring.
+  Future<int> _flushOutbox(
+    String accountId,
+    String password, {
+    OutboxFlushObserver? extraObserver,
+  }) async {
     final account = (await _accounts.getAccount(accountId))!;
     // Per-row timing breakdowns, keyed by outbox row id, so the log observer
     // can report *why* each send took as long as it did (#801). Scoped to this
@@ -5449,7 +5460,98 @@ class EmailRepositoryImpl implements EmailRepository {
           timing.total = stopwatch.elapsed;
         }
       },
-      observer: _outboxLogObserver(accountId, timings),
+      observer: _combineObservers(
+        extraObserver,
+        _outboxLogObserver(accountId, timings),
+      ),
+    );
+  }
+
+  @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async {
+    final password = await _accounts.getPassword(accountId);
+    // Capture the target row's outcome as the guarded flush processes it, so we
+    // can report the concrete result to the user (#755). Runs alongside the
+    // app-log observer via [_combineObservers].
+    SendNowResult? captured;
+    final observer = outboxRowId == null
+        ? null
+        : OutboxFlushObserver(
+            onOk: (job) {
+              if (job.id == outboxRowId) {
+                captured = const SendNowResult(SendNowOutcome.sent);
+              }
+            },
+            onTransient: (job, error, stack, nextAttemptAt) {
+              if (job.id == outboxRowId) {
+                captured = SendNowResult(
+                  SendNowOutcome.transientFailed,
+                  message: error.toString(),
+                );
+              }
+            },
+            onPermanent: (job, error) {
+              if (job.id == outboxRowId) {
+                captured = SendNowResult(
+                  SendNowOutcome.permanentlyFailed,
+                  message: error.message,
+                );
+              }
+            },
+          );
+    await _flushOutbox(accountId, password, extraObserver: observer);
+    if (captured != null) return captured!;
+    if (outboxRowId == null) {
+      return const SendNowResult(SendNowOutcome.sent);
+    }
+    // The row was not processed by this flush — either a concurrent flush had
+    // already sent it (the per-account lock serialises the two, so it was gone
+    // by the time we ran) or it is not eligible yet. Derive the outcome from
+    // its current persisted state.
+    final row = await (_db.select(_db.outbox)
+          ..where((t) => t.id.equals(outboxRowId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) {
+      // Deleted from the queue means it was sent (a discard cannot race this).
+      return const SendNowResult(SendNowOutcome.sent);
+    }
+    if (row.status == 'failed') {
+      return SendNowResult(
+        SendNowOutcome.permanentlyFailed,
+        message: row.lastError,
+      );
+    }
+    return SendNowResult(SendNowOutcome.queued, message: row.lastError);
+  }
+
+  /// Fans a single flush's row-outcome callbacks out to two observers. Each
+  /// side is best-effort — the outbox's own `_safeNotify` already guards the
+  /// combined callback — and [first] runs before [second] so a capturing
+  /// observer records its result even if the log observer later throws.
+  OutboxFlushObserver? _combineObservers(
+    OutboxFlushObserver? first,
+    OutboxFlushObserver? second,
+  ) {
+    if (first == null) return second;
+    if (second == null) return first;
+    return OutboxFlushObserver(
+      onAttempt: (job) {
+        first.onAttempt?.call(job);
+        second.onAttempt?.call(job);
+      },
+      onOk: (job) {
+        first.onOk?.call(job);
+        second.onOk?.call(job);
+      },
+      onTransient: (job, error, stack, nextAttemptAt) {
+        first.onTransient?.call(job, error, stack, nextAttemptAt);
+        second.onTransient?.call(job, error, stack, nextAttemptAt);
+      },
+      onPermanent: (job, error) {
+        first.onPermanent?.call(job, error);
+        second.onPermanent?.call(job, error);
+      },
     );
   }
 
@@ -5619,7 +5721,48 @@ class EmailRepositoryImpl implements EmailRepository {
         // Best-effort: the message is already sent.
       }
     }
-    // Save a copy to the Sent folder via IMAP APPEND.
+    // The SMTP send above is the commit point (#755): once sendMessage returns,
+    // the message is on its way and must never be re-sent. Saving a copy to the
+    // IMAP Sent folder is best-effort from here on — swallow and log any failure
+    // rather than rethrow. If it rethrew, the outbox would treat this
+    // already-sent row as a transient failure and re-send it on the next retry,
+    // delivering the message twice and leaving the row lingering in the Sent
+    // Queue until a later attempt finally completed the append.
+    try {
+      await _appendSentCopy(
+        account,
+        password,
+        mimeMessage,
+        imapEndpoint,
+        timing,
+      );
+    } catch (e, stack) {
+      final logger = _appLogger;
+      if (logger != null) {
+        unawaited(
+          logger.warn(
+            'outbox.send.sent_copy_failed',
+            'Message sent, but saving a copy to the Sent folder failed: $e',
+            accountId: account.id,
+            error: e,
+            stack: stack,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Connects over IMAP and APPENDs [mimeMessage] to the Sent folder, creating
+  /// the folder first when the server does not pre-create it. Extracted from
+  /// [_sendEmailImap] so the caller can treat the whole Sent-copy step as one
+  /// best-effort unit that never undoes an already-completed SMTP send (#755).
+  Future<void> _appendSentCopy(
+    account_model.Account account,
+    String password,
+    imap.MimeMessage mimeMessage,
+    String imapEndpoint,
+    SendTiming timing,
+  ) async {
     // Create the folder first — many servers don't pre-create it.
     final imapClient = await _withPhase(
       'IMAP connect/login (to append Sent copy)',

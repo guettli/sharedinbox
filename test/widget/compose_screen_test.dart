@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 
@@ -122,22 +123,15 @@ void main() {
     );
 
     testWidgets(
-      'kicks the sync loop after queueing so the message goes out now, not '
-      'on the next cycle (#801)',
+      'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {
-        final kicked = <String>[];
-        final email = FakeEmailRepository();
+        final email = FakeEmailRepository()
+          ..sendNowResult = const SendNowResult(SendNowOutcome.sent);
         final router = _homeAndCompose();
         await tester.pumpWidget(
           _wrap(
             router: router,
-            overrides: _composeOverrides(
-              email: email,
-              syncNow: (accountId) {
-                kicked.add(accountId);
-                return true;
-              },
-            ),
+            overrides: _composeOverrides(email: email),
           ),
         );
         await tester.pumpAndSettle();
@@ -153,11 +147,50 @@ void main() {
         await tester.tap(find.byIcon(Icons.send));
         await tester.pumpAndSettle();
 
-        // The draft was queued and the sync loop was woken with the same
-        // account, so the outbox drains immediately instead of after the next
-        // IDLE cycle.
+        // The draft was queued and then sent right away (not left for the next
+        // IDLE cycle), and the concrete result is surfaced to the user.
         expect(email.sentEmailAccountId, kTestAccount.id);
-        expect(kicked, [kTestAccount.id]);
+        expect(
+          email.sendNowRowIds,
+          isNotEmpty,
+          reason: 'compose must attempt the send now, not just enqueue it',
+        );
+        expect(find.text('Message sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'surfaces a failed direct send with its reason (#755)',
+      (tester) async {
+        final email = FakeEmailRepository()
+          ..sendNowResult = const SendNowResult(
+            SendNowOutcome.permanentlyFailed,
+            message: 'SMTP rejected: mailbox full',
+          );
+        final router = _homeAndCompose();
+        await tester.pumpWidget(
+          _wrap(
+            router: router,
+            overrides: _composeOverrides(email: email),
+          ),
+        );
+        await tester.pumpAndSettle();
+        unawaited(router.push('/compose'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com',
+        );
+        await tester.pump();
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Send failed: SMTP rejected: mailbox full'),
+          findsOneWidget,
+        );
       },
     );
 

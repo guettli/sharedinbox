@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
 
@@ -27,17 +28,14 @@ class _RecordingOutboxRepository extends FakeOutboxRepository {
 
 Widget _wrap({
   required List<Override> overrides,
-  List<String>? syncedAccounts,
+  FakeEmailRepository? emails,
 }) {
   return ProviderScope(
     overrides: [
-      // Avoid materialising a real AccountSyncManager (which pulls in a Drift
-      // database + a stack of other providers) — the tile only needs a plain
-      // callback to record kicks against.
-      syncNowProvider.overrideWithValue((accountId) {
-        syncedAccounts?.add(accountId);
-        return true;
-      }),
+      // The Retry button sends via EmailRepository.sendNow; a fake stands in so
+      // the tile never touches a real repository (or the network).
+      emailRepositoryProvider
+          .overrideWithValue(emails ?? FakeEmailRepository()),
       ...overrides,
     ],
     child: const MaterialApp(home: SentQueueScreen()),
@@ -140,7 +138,7 @@ void main() {
   });
 
   testWidgets(
-    'retry resets the queue row, kicks sync, and shows a SnackBar',
+    'retry resets the row, sends it now, and shows the sent SnackBar',
     (tester) async {
       final repo = _RecordingOutboxRepository();
       repo.messages.add(
@@ -155,11 +153,12 @@ void main() {
           status: 'pending',
         ),
       );
+      final emails = FakeEmailRepository()
+        ..sendNowResult = const SendNowResult(SendNowOutcome.sent);
 
-      final synced = <String>[];
       await tester.pumpWidget(
         _wrap(
-          syncedAccounts: synced,
+          emails: emails,
           overrides: [
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([accountA]),
@@ -171,15 +170,14 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.refresh));
-      await tester.pump();
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(repo.retried, [42]);
       expect(
-        synced,
-        ['acc-1'],
-        reason: 'Retry must kick the sync loop, not just reset the DB row',
+        emails.sendNowRowIds,
+        [42],
+        reason: 'Retry must actually send the row now, not just reset it',
       );
-      expect(find.text('Retrying send…'), findsOneWidget);
+      expect(find.text('Message sent'), findsOneWidget);
 
       await tester.tap(find.byIcon(Icons.delete_outline));
       await tester.pump();
@@ -188,7 +186,7 @@ void main() {
   );
 
   testWidgets(
-    'retry shows an actionable message when the sync loop is not running',
+    'retry surfaces the concrete failure reason in the SnackBar',
     (tester) async {
       final repo = _RecordingOutboxRepository();
       repo.messages.add(
@@ -203,28 +201,73 @@ void main() {
           status: 'pending',
         ),
       );
+      final emails = FakeEmailRepository()
+        ..sendNowResult = const SendNowResult(
+          SendNowOutcome.transientFailed,
+          message: 'Connection refused',
+        );
 
       await tester.pumpWidget(
-        ProviderScope(
+        _wrap(
+          emails: emails,
           overrides: [
-            syncNowProvider.overrideWithValue((accountId) => false),
             accountRepositoryProvider.overrideWithValue(
               FakeAccountRepository([accountA]),
             ),
             outboxRepositoryProvider.overrideWithValue(repo),
           ],
-          child: const MaterialApp(home: SentQueueScreen()),
         ),
       );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.refresh));
-      await tester.pump();
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(
-        find.textContaining('Sync for this account is stopped'),
+        find.text('Send failed, will retry: Connection refused'),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'retry shows an error SnackBar when the send itself throws (#755)',
+    (tester) async {
+      // sendNow reads the password itself and can throw before the network
+      // (e.g. no stored password). Retry must still report the failure rather
+      // than fail silently — the "nothing happens" the issue complains about.
+      final repo = _RecordingOutboxRepository();
+      repo.messages.add(
+        OutboxMessage(
+          id: 11,
+          accountId: 'acc-1',
+          subject: 'Ping',
+          to: const ['carol@example.com'],
+          cc: const [],
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          attempts: 0,
+          status: 'pending',
+        ),
+      );
+      final emails = FakeEmailRepository()
+        ..sendNowError = StateError('No password stored for account acc-1');
+
+      await tester.pumpWidget(
+        _wrap(
+          emails: emails,
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([accountA]),
+            ),
+            outboxRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.refresh));
+      await tester.pumpAndSettle();
+      expect(repo.retried, [11]);
+      expect(find.textContaining('Send failed:'), findsOneWidget);
     },
   );
 
