@@ -228,12 +228,22 @@ const _account = Account(
   jmapUrl: _sessionUrl,
 );
 
-class _StubAccounts implements AccountRepository {
+const _imapAccount = Account(
+  id: 'imap1',
+  displayName: 'bob',
+  email: 'bob@example.com',
+);
+
+/// Serves a single fixed [account] and no-ops every mutating method; the two
+/// concrete stubs differ only in which fixture they expose.
+abstract class _SingleAccountRepository implements AccountRepository {
+  Account get account;
+
   @override
-  Stream<List<Account>> observeAccounts() => Stream.value([_account]);
+  Stream<List<Account>> observeAccounts() => Stream.value([account]);
   @override
   Future<Account?> getAccount(String id) async =>
-      id == _account.id ? _account : null;
+      id == account.id ? account : null;
   @override
   Future<String> getPassword(String accountId) async => 'pw';
   @override
@@ -244,26 +254,14 @@ class _StubAccounts implements AccountRepository {
   Future<void> removeAccount(String id) async {}
 }
 
-const _imapAccount = Account(
-  id: 'imap1',
-  displayName: 'bob',
-  email: 'bob@example.com',
-);
+class _StubAccounts extends _SingleAccountRepository {
+  @override
+  Account get account => _account;
+}
 
-class _StubImapAccounts implements AccountRepository {
+class _StubImapAccounts extends _SingleAccountRepository {
   @override
-  Stream<List<Account>> observeAccounts() => Stream.value([_imapAccount]);
-  @override
-  Future<Account?> getAccount(String id) async =>
-      id == _imapAccount.id ? _imapAccount : null;
-  @override
-  Future<String> getPassword(String accountId) async => 'pw';
-  @override
-  Future<void> addAccount(Account a, String p) async {}
-  @override
-  Future<void> updateAccount(Account a, {String? password}) async {}
-  @override
-  Future<void> removeAccount(String id) async {}
+  Account get account => _imapAccount;
 }
 
 /// Fake IMAP client for the notes incremental-sync path. Serves UID searches
@@ -336,6 +334,22 @@ Future<void> _pumpLogs() async {
   }
 }
 
+/// Builds a JMAP-backed [NoteRepositoryImpl] wired to a recording logger,
+/// returning both so tests can drive the repo and assert on emitted logs.
+({NoteRepositoryImpl repo, _RecordingLogRepo logRepo}) _jmapRepoWithLogger(
+  AppDatabase db,
+  http.Client client,
+) {
+  final logRepo = _RecordingLogRepo();
+  final repo = NoteRepositoryImpl(
+    db,
+    _StubAccounts(),
+    httpClient: client,
+    appLogger: AppLogger(logRepo),
+  );
+  return (repo: repo, logRepo: logRepo);
+}
+
 Future<void> _seedImapAccount(AppDatabase db) async {
   await db.into(db.accounts).insert(
         AccountsCompanion.insert(
@@ -368,20 +382,24 @@ Future<void> _seedAccount(AppDatabase db) async {
       );
 }
 
+/// Opens a fresh in-memory test database and seeds it via [seed]. Callers
+/// register this in `setUp` so each test starts from a clean database.
+Future<AppDatabase> _freshSeededDb(
+  Future<void> Function(AppDatabase) seed,
+) async {
+  final db = openTestDatabase();
+  await seed(db);
+  return db;
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
   group('NoteRepositoryImpl JMAP syncAllNotes', () {
     late AppDatabase db;
 
-    setUp(() async {
-      db = openTestDatabase();
-      await _seedAccount(db);
-    });
-
-    tearDown(() async {
-      await db.close();
-    });
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
 
     test('first sync populates notes and stores queryState + emailState',
         () async {
@@ -706,13 +724,7 @@ void main() {
         ),
       ]);
 
-      final logRepo = _RecordingLogRepo();
-      final repo = NoteRepositoryImpl(
-        db,
-        _StubAccounts(),
-        httpClient: script.build(),
-        appLogger: AppLogger(logRepo),
-      );
+      final (:repo, :logRepo) = _jmapRepoWithLogger(db, script.build());
 
       await repo.syncAllNotes(_account.id);
       await _pumpLogs();
@@ -730,14 +742,8 @@ void main() {
   group('NoteRepositoryImpl IMAP prune-by-serverId', () {
     late AppDatabase db;
 
-    setUp(() async {
-      db = openTestDatabase();
-      await _seedImapAccount(db);
-    });
-
-    tearDown(() async {
-      await db.close();
-    });
+    setUp(() async => db = await _freshSeededDb(_seedImapAccount));
+    tearDown(() => db.close());
 
     test('locally-added note with empty serverId survives the prune', () async {
       // Checkpoint from a prior sync (uidValidity 0 matches the fake mailbox),
@@ -809,14 +815,8 @@ void main() {
   group('NoteRepositoryImpl add logging', () {
     late AppDatabase db;
 
-    setUp(() async {
-      db = openTestDatabase();
-      await _seedAccount(db);
-    });
-
-    tearDown(() async {
-      await db.close();
-    });
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
 
     test('addNote logs note.added scoped to the mail via emailId', () async {
       await db.into(db.emails).insert(
@@ -849,13 +849,7 @@ void main() {
         }),
       ]);
 
-      final logRepo = _RecordingLogRepo();
-      final repo = NoteRepositoryImpl(
-        db,
-        _StubAccounts(),
-        httpClient: script.build(),
-        appLogger: AppLogger(logRepo),
-      );
+      final (:repo, :logRepo) = _jmapRepoWithLogger(db, script.build());
 
       await repo.addNote(_account.id, '<msg-1@ex.com>', 'hello');
       await _pumpLogs();
