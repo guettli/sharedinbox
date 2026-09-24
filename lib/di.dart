@@ -622,6 +622,7 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
   );
 });
 
