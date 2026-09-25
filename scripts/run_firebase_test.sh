@@ -9,8 +9,10 @@
 #      fresh execs (see the loop below) until Play has generated the split
 #      APKs. If Play has not finished within the total budget, we skip this
 #      cycle (see #414 — Play-side delay is not a red build; #432 — why the
-#      wait no longer lives inside one long exec). Every other failure (auth,
-#      network, Play API 5xx) still exits non-zero.
+#      wait no longer lives inside one long exec). An attempt that wedges and
+#      gets killed by its per-attempt timeout is retried like a not-ready one
+#      (see #898). Every other failure (auth, network, Play API 5xx) still
+#      exits non-zero.
 #   2. Run Firebase Test Lab against the fetched APKs.
 #   3. On success, record the versionCode in LAST_TESTED_ALPHA_VERSION_CODE
 #      so callers can tell which alpha was last exercised green. Written
@@ -147,9 +149,12 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # cache-warmed), one Play check and the split-APK download — no inner poll to
 # outlast anymore. 600s leaves comfortable headroom for a slow download while
 # still killing a genuinely wedged exec promptly (see #396, #398).
-FETCH_ATTEMPT_TIMEOUT_SECONDS=600
-FETCH_TOTAL_BUDGET_SECONDS=5400
-FETCH_RETRY_INTERVAL_SECONDS=60
+#
+# All three knobs are overridable from the environment so scripts/test_run_firebase_test.sh
+# can exercise the retry loop in seconds; CI never sets them.
+FETCH_ATTEMPT_TIMEOUT_SECONDS=${FETCH_ATTEMPT_TIMEOUT_SECONDS:-600}
+FETCH_TOTAL_BUDGET_SECONDS=${FETCH_TOTAL_BUDGET_SECONDS:-5400}
+FETCH_RETRY_INTERVAL_SECONDS=${FETCH_RETRY_INTERVAL_SECONDS:-60}
 
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
@@ -163,11 +168,31 @@ while :; do
     # re-run and re-check Play; otherwise the engine would serve the first
     # attempt's cached PENDING directory and the retry loop would never make
     # progress (see #432).
-    if ! timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
-            --play-store-config env:PLAY_STORE_CONFIG_JSON \
-            --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
-            -o "$APK_DIR"; then
-        echo "ERROR: dagger fetch-play-store-apks failed" >&2
+    FETCH_RC=0
+    timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+        --play-store-config env:PLAY_STORE_CONFIG_JSON \
+        --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+        -o "$APK_DIR" || FETCH_RC=$?
+    if [ "$FETCH_RC" -ne 0 ]; then
+        # A wedged exec (124 from `timeout`, or 137 once --kill-after escalates
+        # to SIGKILL) says nothing about Play or about this repo — the engine
+        # call simply stalled, most often pulling python:3.12-alpine from a
+        # flaky registry (#453). In #898 attempt 34 hung there for the full
+        # 600s after 33 healthy attempts and failed the whole cycle, filing a
+        # "Firebase Tests failed" issue for a hiccup a single retry would have
+        # absorbed. Retry it like a PENDING attempt while budget remains; only
+        # a wedge that outlasts the budget is a real, reportable problem.
+        if [ "$FETCH_RC" -eq 124 ] || [ "$FETCH_RC" -eq 137 ]; then
+            NOW=$(date +%s)
+            if [ "$NOW" -lt "$FETCH_DEADLINE" ]; then
+                echo "::warning::[firebase] fetch attempt $FETCH_ATTEMPT wedged (killed after ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s); retrying in ${FETCH_RETRY_INTERVAL_SECONDS}s ($(( FETCH_DEADLINE - NOW ))s left)" >&2
+                sleep "$FETCH_RETRY_INTERVAL_SECONDS"
+                continue
+            fi
+            echo "ERROR: dagger fetch-play-store-apks kept timing out after ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s per attempt for the whole ${FETCH_TOTAL_BUDGET_SECONDS}s budget" >&2
+            exit 1
+        fi
+        echo "ERROR: dagger fetch-play-store-apks failed (exit $FETCH_RC)" >&2
         exit 1
     fi
     if [ ! -f "$APK_DIR/versionCode" ]; then
