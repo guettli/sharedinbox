@@ -1,6 +1,7 @@
 package de.sharedinbox.mua
 
 import android.content.Intent
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
@@ -18,6 +19,10 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         ).also { it.initialIntent = intent }
+        Log.i(
+            MailIntentBridge.TAG,
+            "cold start: action=${intent?.action} scheme=${intent?.data?.scheme}",
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -25,6 +30,11 @@ class MainActivity : FlutterActivity() {
         // singleTop keeps a single activity instance, so a new "compose
         // email" intent arrives here instead of via configureFlutterEngine.
         // The bridge forwards it to Dart via its EventChannel.
+        Log.i(
+            MailIntentBridge.TAG,
+            "warm start: action=${intent.action} scheme=${intent.data?.scheme} " +
+                "bridge=${mailIntentBridge != null}",
+        )
         mailIntentBridge?.deliver(intent)
     }
 

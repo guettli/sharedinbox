@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -32,6 +33,12 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
     private var eventSink: EventChannel.EventSink? = null
 
     /**
+     * A warm-start intent that arrived before Dart attached its event-channel
+     * listener. Held rather than dropped, and flushed from `onListen` (#862).
+     */
+    private var pendingIntent: Map<String, Any?>? = null
+
+    /**
      * The launch intent. Consumed by [getInitialIntent] so a foreground
      * configuration change does not replay the same intent twice.
      */
@@ -43,7 +50,13 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
                 "getInitialIntent" -> {
                     val intent = initialIntent
                     initialIntent = null
-                    result.success(intent?.let { parseIntent(it) })
+                    val parsed = intent?.let { parseIntent(it) }
+                    Log.i(
+                        TAG,
+                        "getInitialIntent: action=${intent?.action} " +
+                            "parsed=${describe(parsed)}",
+                    )
+                    result.success(parsed)
                 }
                 else -> result.notImplemented()
             }
@@ -51,6 +64,12 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
         eventChannel.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                 eventSink = events
+                val held = pendingIntent
+                pendingIntent = null
+                if (held != null) {
+                    Log.i(TAG, "onListen: flushing held intent ${describe(held)}")
+                    events.success(held)
+                }
             }
 
             override fun onCancel(arguments: Any?) {
@@ -61,14 +80,28 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
 
     /** Called from `MainActivity.onNewIntent` for warm-start intents. */
     fun deliver(intent: Intent) {
-        val parsed = parseIntent(intent) ?: return
-        eventSink?.success(parsed)
+        val parsed = parseIntent(intent)
+        if (parsed == null) {
+            Log.i(TAG, "deliver: action=${intent.action} carries no compose fields")
+            return
+        }
+        val sink = eventSink
+        if (sink == null) {
+            // Dart has not subscribed yet (the engine is still starting up).
+            // Hold the intent instead of dropping it — onListen replays it.
+            Log.i(TAG, "deliver: no listener yet, holding ${describe(parsed)}")
+            pendingIntent = parsed
+            return
+        }
+        Log.i(TAG, "deliver: forwarding ${describe(parsed)}")
+        sink.success(parsed)
     }
 
     fun dispose() {
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
+        pendingIntent = null
     }
 
     private fun parseIntent(intent: Intent): Map<String, Any?>? {
@@ -160,8 +193,23 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
     }
 
     companion object {
+        const val TAG = "MailIntentBridge"
         const val METHOD_CHANNEL = "sharedinbox/mail_intent"
         const val EVENT_CHANNEL = "sharedinbox/mail_intent_events"
+
+        /**
+         * Field-by-field summary for logcat. Only the *shape* of the intent is
+         * logged (which fields arrived and how long they are) so recipients,
+         * subjects and bodies never end up in the system log.
+         */
+        @JvmStatic
+        fun describe(parsed: Map<String, Any?>?): String {
+            if (parsed == null) return "none"
+            val lengths = listOf("to", "cc", "bcc", "subject", "body")
+                .joinToString(" ") { "$it=${(parsed[it] as? String)?.length ?: 0}" }
+            val attachments = (parsed["attachmentPaths"] as? List<*>)?.size ?: 0
+            return "$lengths attachments=$attachments"
+        }
 
         /**
          * Parses a `mailto:` URI per RFC 6068. Public so unit-test fixtures
