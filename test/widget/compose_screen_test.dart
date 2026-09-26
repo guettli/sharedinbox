@@ -422,21 +422,10 @@ Future<void> _pumpComposeFromHome(
 }
 
 /// A router with a home screen under a compose route so [context.pop()] has
-/// somewhere to land.
-GoRouter _homeAndCompose() => GoRouter(
-      initialLocation: '/home',
-      routes: [
-        GoRoute(
-          path: '/home',
-          builder: (ctx, state) =>
-              const Scaffold(body: Center(child: Text('home'))),
-        ),
-        GoRoute(
-          path: '/compose',
-          builder: (ctx, state) => const ComposeScreen(),
-        ),
-      ],
-    );
+/// somewhere to land. The scaffolding is shared with the other tests that need
+/// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
+GoRouter _homeAndCompose() =>
+    homeAndComposeRouter(compose: (_) => const ComposeScreen());
 
 Widget _buildRouter({
   required GoRouter router,
