@@ -735,6 +735,31 @@ class _NoOpManageSieveProbeService implements ManageSieveProbeService {
 ///
 /// Providers are replaced with [overrides], so no database or network is used.
 /// A fresh [GoRouter] is created for every call so tests are independent.
+/// A minimal two-route router: a `/home` landing spot a test can navigate away
+/// from, plus `/compose` built by [compose].
+///
+/// Shared rather than copied: three widget tests had drifted into their own
+/// copies of this scaffolding, which the duplication gate correctly flags as one
+/// clone. Pass [compose] to decide what `/compose` renders -- the real
+/// ComposeScreen, a prefilled one, or a bare stub.
+GoRouter homeAndComposeRouter({
+  required Widget Function(GoRouterState state) compose,
+}) =>
+    GoRouter(
+      initialLocation: '/home',
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (ctx, state) =>
+              const Scaffold(body: Center(child: Text('home'))),
+        ),
+        GoRoute(
+          path: '/compose',
+          builder: (ctx, state) => compose(state),
+        ),
+      ],
+    );
+
 Widget buildApp({
   required String initialLocation,
   required List<Override> overrides,

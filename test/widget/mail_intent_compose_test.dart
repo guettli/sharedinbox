@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -12,27 +13,70 @@ import 'helpers.dart';
 
 /// Minimal mirror of the real route table: an initial location the intent has
 /// to navigate away from, plus `/compose` reading the prefill `extra`.
-GoRouter _composeRouter() => GoRouter(
-      initialLocation: '/home',
-      routes: [
-        GoRoute(
-          path: '/home',
-          builder: (ctx, state) =>
-              const Scaffold(body: Center(child: Text('home'))),
-        ),
-        GoRoute(
-          path: '/compose',
-          builder: (ctx, state) {
-            final extra = state.extra as Map<String, dynamic>?;
-            return ComposeScreen(
-              prefillTo: extra?['prefillTo'] as String?,
-              prefillCc: extra?['prefillCc'] as String?,
-              prefillSubject: extra?['prefillSubject'] as String?,
-              prefillBody: extra?['prefillBody'] as String?,
-            );
-          },
-        ),
-      ],
+GoRouter _composeRouter() => homeAndComposeRouter(
+      compose: (state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        return ComposeScreen(
+          prefillTo: extra?['prefillTo'] as String?,
+          prefillCc: extra?['prefillCc'] as String?,
+          prefillSubject: extra?['prefillSubject'] as String?,
+          prefillBody: extra?['prefillBody'] as String?,
+        );
+      },
+    );
+
+/// A `/compose` that renders a bare marker instead of the real screen, for the
+/// tests that only care *whether* navigation happened.
+GoRouter _composeStubRouter() => homeAndComposeRouter(
+      compose: (_) => const Scaffold(body: Center(child: Text('compose'))),
+    );
+
+/// Forces the Android branch (these tests run on the host) and installs the mock
+/// platform channels, restoring all of it on teardown.
+///
+/// Extracted rather than repeated in each test: five copies of this preamble is
+/// what the duplication gate flags, and the teardown is the half that is easy to
+/// get wrong -- a leaked `isAndroidForTest` makes some later, unrelated test fail
+/// for no visible reason.
+void _useMockIntentChannels(
+  WidgetTester tester, {
+  bool android = true,
+  Future<Object?>? Function(MethodCall call)? onMethodCall,
+  MockStreamHandler? streamHandler,
+}) {
+  final prevIsAndroid = MailIntentHandler.isAndroidForTest;
+  MailIntentHandler.isAndroidForTest = () => android;
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    MailIntentHandler.methodChannel,
+    onMethodCall ?? (call) async => null,
+  );
+  if (streamHandler != null) {
+    tester.binding.defaultBinaryMessenger.setMockStreamHandler(
+      MailIntentHandler.eventChannel,
+      streamHandler,
+    );
+  }
+  addTearDown(() {
+    MailIntentHandler.isAndroidForTest = prevIsAndroid;
+    tester.binding.defaultBinaryMessenger
+      ..setMockMethodCallHandler(MailIntentHandler.methodChannel, null)
+      ..setMockStreamHandler(MailIntentHandler.eventChannel, null);
+  });
+}
+
+/// Pumps the app around [router]. Deliberately does NOT settle: the cold-start
+/// test needs to start the handler before the first frame, so each test decides
+/// when to pump again.
+Future<void> _pumpApp(
+  WidgetTester tester,
+  GoRouter router, {
+  List<Override>? overrides,
+}) =>
+    tester.pumpWidget(
+      ProviderScope(
+        overrides: overrides ?? baseOverrides(accounts: [kTestAccount]),
+        child: MaterialApp.router(routerConfig: router),
+      ),
     );
 
 void main() {
@@ -40,12 +84,9 @@ void main() {
     testWidgets(
       'cold-start mailto: intent navigates to compose with prefilled fields',
       (tester) async {
-        // Force the Android branch even though tests run on the host.
-        final prevIsAndroid = MailIntentHandler.isAndroidForTest;
-        MailIntentHandler.isAndroidForTest = () => true;
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          MailIntentHandler.methodChannel,
-          (MethodCall call) async {
+        _useMockIntentChannels(
+          tester,
+          onMethodCall: (call) async {
             if (call.method == 'getInitialIntent') {
               return <String, Object?>{
                 'to': 'bob@example.com',
@@ -57,24 +98,9 @@ void main() {
             return null;
           },
         );
-        addTearDown(() {
-          MailIntentHandler.isAndroidForTest = prevIsAndroid;
-          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-            MailIntentHandler.methodChannel,
-            null,
-          );
-        });
 
         final router = _composeRouter();
-
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              ...baseOverrides(accounts: [kTestAccount]),
-            ],
-            child: MaterialApp.router(routerConfig: router),
-          ),
-        );
+        await _pumpApp(tester, router);
         await tester.pumpAndSettle();
         expect(find.text('home'), findsOneWidget);
 
@@ -110,40 +136,25 @@ void main() {
     testWidgets(
       'cold-start intent opens compose with prefills',
       (tester) async {
-        final prevIsAndroid = MailIntentHandler.isAndroidForTest;
-        MailIntentHandler.isAndroidForTest = () => true;
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          MailIntentHandler.methodChannel,
-          (MethodCall call) async => <String, Object?>{
+        _useMockIntentChannels(
+          tester,
+          onMethodCall: (call) async => <String, Object?>{
             'to': 'dana@example.com',
             'subject': 'Race',
             'attachmentPaths': <String>[],
           },
         );
-        addTearDown(() {
-          MailIntentHandler.isAndroidForTest = prevIsAndroid;
-          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-            MailIntentHandler.methodChannel,
-            null,
-          );
-        });
 
         final router = _composeRouter();
         // Start the bridge *before* the first frame, the way `main.dart` does
-        // from `initState`, so the intent resolves around the time the router
-        // settles its initial location rather than long after it (#862).
+        // from `initState`. That is the shape of the real launch, which is why it
+        // is worth covering -- but see the note above: it does not actually
+        // interleave with the router's initial parse.
         final handler = MailIntentHandler(router: router);
         addTearDown(handler.dispose);
         final initialized = handler.initialize();
 
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              ...baseOverrides(accounts: [kTestAccount]),
-            ],
-            child: MaterialApp.router(routerConfig: router),
-          ),
-        );
+        await _pumpApp(tester, router);
         await initialized;
         await tester.pumpAndSettle();
 
@@ -163,37 +174,18 @@ void main() {
     testWidgets(
       'warm-start intent (onNewIntent) navigates to compose',
       (tester) async {
-        final prevIsAndroid = MailIntentHandler.isAndroidForTest;
-        MailIntentHandler.isAndroidForTest = () => true;
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          MailIntentHandler.methodChannel,
-          (MethodCall call) async => null,
-        );
         MockStreamHandlerEventSink? sink;
-        tester.binding.defaultBinaryMessenger.setMockStreamHandler(
-          MailIntentHandler.eventChannel,
-          MockStreamHandler.inline(
+        _useMockIntentChannels(
+          tester,
+          streamHandler: MockStreamHandler.inline(
             onListen: (arguments, events) {
               sink = events;
             },
           ),
         );
-        addTearDown(() {
-          MailIntentHandler.isAndroidForTest = prevIsAndroid;
-          tester.binding.defaultBinaryMessenger
-            ..setMockMethodCallHandler(MailIntentHandler.methodChannel, null)
-            ..setMockStreamHandler(MailIntentHandler.eventChannel, null);
-        });
 
         final router = _composeRouter();
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              ...baseOverrides(accounts: [kTestAccount]),
-            ],
-            child: MaterialApp.router(routerConfig: router),
-          ),
-        );
+        await _pumpApp(tester, router);
         await tester.pumpAndSettle();
 
         final handler = MailIntentHandler(router: router);
@@ -229,45 +221,17 @@ void main() {
     testWidgets(
       'no-op when getInitialIntent returns null (normal launch)',
       (tester) async {
-        final prevIsAndroid = MailIntentHandler.isAndroidForTest;
-        MailIntentHandler.isAndroidForTest = () => true;
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          MailIntentHandler.methodChannel,
-          (MethodCall call) async => null,
-        );
-        addTearDown(() {
-          MailIntentHandler.isAndroidForTest = prevIsAndroid;
-          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-            MailIntentHandler.methodChannel,
-            null,
-          );
-        });
+        _useMockIntentChannels(tester);
 
-        final router = GoRouter(
-          initialLocation: '/home',
-          routes: [
-            GoRoute(
-              path: '/home',
-              builder: (ctx, state) =>
-                  const Scaffold(body: Center(child: Text('home'))),
-            ),
-            GoRoute(
-              path: '/compose',
-              builder: (ctx, state) =>
-                  const Scaffold(body: Center(child: Text('compose'))),
+        final router = _composeStubRouter();
+        await _pumpApp(
+          tester,
+          router,
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository(),
             ),
           ],
-        );
-
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository(),
-              ),
-            ],
-            child: MaterialApp.router(routerConfig: router),
-          ),
         );
         await tester.pumpAndSettle();
 
@@ -283,34 +247,17 @@ void main() {
     );
 
     testWidgets('skipped entirely on non-Android platforms', (tester) async {
-      final prevIsAndroid = MailIntentHandler.isAndroidForTest;
-      MailIntentHandler.isAndroidForTest = () => false;
       var channelCalled = false;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        MailIntentHandler.methodChannel,
-        (MethodCall call) async {
+      _useMockIntentChannels(
+        tester,
+        android: false,
+        onMethodCall: (call) async {
           channelCalled = true;
           return null;
         },
       );
-      addTearDown(() {
-        MailIntentHandler.isAndroidForTest = prevIsAndroid;
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          MailIntentHandler.methodChannel,
-          null,
-        );
-      });
 
-      final router = GoRouter(
-        initialLocation: '/home',
-        routes: [
-          GoRoute(
-            path: '/home',
-            builder: (ctx, state) =>
-                const Scaffold(body: Center(child: Text('home'))),
-          ),
-        ],
-      );
+      final router = _composeStubRouter();
 
       final handler = MailIntentHandler(router: router);
       await handler.initialize();
