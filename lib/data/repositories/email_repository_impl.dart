@@ -5499,10 +5499,20 @@ class EmailRepositoryImpl implements EmailRepository {
               }
             },
           );
-    await _flushOutbox(accountId, password, extraObserver: observer);
+    final sentCount = await _flushOutbox(
+      accountId,
+      password,
+      extraObserver: observer,
+    );
     if (captured != null) return captured!;
     if (outboxRowId == null) {
-      return const SendNowResult(SendNowOutcome.sent);
+      // No row targeted, so report what the flush actually did, per the
+      // interface contract ("otherwise it reports whether anything was sent").
+      // Claiming `sent` unconditionally would report delivery even when the
+      // queue was empty or every row failed.
+      return SendNowResult(
+        sentCount > 0 ? SendNowOutcome.sent : SendNowOutcome.queued,
+      );
     }
     // The row was not processed by this flush — either a concurrent flush had
     // already sent it (the per-account lock serialises the two, so it was gone
@@ -5513,7 +5523,11 @@ class EmailRepositoryImpl implements EmailRepository {
           ..limit(1))
         .getSingleOrNull();
     if (row == null) {
-      // Deleted from the queue means it was sent (a discard cannot race this).
+      // Gone from the queue. Usually that means a concurrent flush delivered it,
+      // and reporting `sent` is right. It is NOT proof of delivery though: the
+      // Discard action stays enabled while a retry is in flight, so a user who
+      // discards mid-send also lands here. Distinguishing the two needs a
+      // durable per-row terminal state, which is the dedup follow-up's job.
       return const SendNowResult(SendNowOutcome.sent);
     }
     if (row.status == 'failed') {
