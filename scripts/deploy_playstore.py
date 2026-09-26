@@ -22,6 +22,45 @@ _MAX_UPLOAD_ATTEMPTS = 3
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
 
 
+def _raise_for_status(resp, what):
+    """`requests`' own raise_for_status() reports the status line and nothing
+    else, so a Play API rejection arrives as a bare "400 Client Error: Bad
+    Request for url: ..." -- while the actual reason, which Google DOES send as
+    a JSON body, is discarded.
+
+    That is the difference between a one-line diagnosis and guesswork: a failed
+    deploy on 2026-09-26 produced three identical 400s with no stated cause, and
+    the only way to learn why was to change this file. Include the body.
+    """
+    try:
+        resp.raise_for_status()
+    except Exception as exc:
+        body = (resp.text or "").strip()
+        if len(body) > 2000:
+            body = body[:2000] + "… (truncated)"
+        raise RuntimeError(
+            f"{what} failed: {exc}\nPlay API response body: {body or '(empty)'}"
+        ) from exc
+
+
+def _is_retryable(exc):
+    """Whether re-uploading the same bytes could plausibly succeed.
+
+    A 4xx is the server saying the REQUEST is wrong -- a bad bundle, a reused
+    version code, a revoked credential. Re-sending it unchanged cannot fix that,
+    and retrying only buries the real error under two more copies of itself and
+    30s of sleeps, which is exactly how the 2026-09-26 failure came to look like
+    a flake. Retry transport faults and 5xx; also 408/429, which are explicit
+    "try again" signals.
+    """
+    resp = getattr(getattr(exc, "__cause__", None), "response", None)
+    if resp is None:
+        resp = getattr(exc, "response", None)
+    if resp is None:
+        return True  # connection reset, timeout, DNS -- worth another go
+    return resp.status_code >= 500 or resp.status_code in (408, 429)
+
+
 def _upload_aab_resumable(session, package, edit_id, aab_path):
     """Upload AAB using the Google resumable upload protocol."""
     file_size = os.path.getsize(aab_path)
@@ -38,7 +77,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
         },
         timeout=60,
     )
-    init_resp.raise_for_status()
+    _raise_for_status(init_resp, "initiating the resumable upload session")
     upload_url = init_resp.headers["Location"]
 
     # Step 2: upload the file in a single PUT to the session URI
@@ -52,7 +91,7 @@ def _upload_aab_resumable(session, package, edit_id, aab_path):
             },
             timeout=600,
         )
-    upload_resp.raise_for_status()
+    _raise_for_status(upload_resp, "uploading the AAB")
     return upload_resp.json()
 
 
@@ -82,7 +121,7 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
         },
         timeout=600,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp, "uploading the deobfuscation mapping")
     return resp.json() if resp.content else {}
 
 
@@ -103,17 +142,25 @@ def main():
     session = AuthorizedSession(creds)
 
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
-    edit_resp.raise_for_status()
+    _raise_for_status(edit_resp, "creating the Play edit")
     edit_id = edit_resp.json()["id"]
 
     last_exc = None
     bundle = None
+    attempts_made = 0
     for attempt in range(_MAX_UPLOAD_ATTEMPTS):
+        attempts_made = attempt + 1
         try:
             bundle = _upload_aab_resumable(session, PACKAGE_NAME, edit_id, AAB_PATH)
             break
         except Exception as exc:
             last_exc = exc
+            if not _is_retryable(exc):
+                print(
+                    f"Upload attempt {attempt + 1} failed and is NOT retryable "
+                    f"(the request itself was rejected):\n{exc}"
+                )
+                break
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
                 delay = 10 * (2 ** attempt)
                 print(
@@ -122,8 +169,13 @@ def main():
                 )
                 time.sleep(delay)
     if bundle is None:
+        # Keep the attempt count -- it distinguishes "we gave up after
+        # _MAX_UPLOAD_ATTEMPTS transient failures" from "we stopped at the first
+        # one because the request itself was rejected" -- and carry the cause,
+        # which now includes the Play API's own explanation.
         raise RuntimeError(
-            f"AAB upload failed after {_MAX_UPLOAD_ATTEMPTS} attempts"
+            f"AAB upload failed after {attempts_made} of "
+            f"{_MAX_UPLOAD_ATTEMPTS} attempt(s): {last_exc}"
         ) from last_exc
 
     version_code = bundle["versionCode"]
@@ -176,13 +228,13 @@ def main():
             json={"releases": [{"versionCodes": [version_code], "status": "completed"}]},
             timeout=30,
         )
-        track_resp.raise_for_status()
+        _raise_for_status(track_resp, f"assigning the AAB to track {track}")
 
     commit_resp = session.post(
         f"{_BASE}/{PACKAGE_NAME}/edits/{edit_id}:commit",
         timeout=30,
     )
-    commit_resp.raise_for_status()
+    _raise_for_status(commit_resp, "committing the Play edit")
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 
