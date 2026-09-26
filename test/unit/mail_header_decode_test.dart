@@ -69,5 +69,38 @@ void main() {
         'für Tills Rucksack, Gürtelschnalle',
       );
     });
+
+    test('decodes an encoded-word glued to plain ASCII text (#868)', () {
+      // The exact malformed Subject the app round-tripped: a single `ü`
+      // wrapped in an encoded-word (spelled `utf8`) glued to the surrounding
+      // ASCII with no separating whitespace. Must not gain spurious spaces.
+      expect(
+        decodeMailHeader('Schneidersitz B=?utf8?Q?=C3=BC?=rostuhl'),
+        'Schneidersitz Bürostuhl',
+      );
+    });
+
+    test('keeps a trailing space after a glued encoded-word (#868)', () {
+      // Trimming is the caller's job, not the decoder's.
+      expect(
+        decodeMailHeader('Schneidersitz B=?utf8?Q?=C3=BC?=rostuhl '),
+        'Schneidersitz Bürostuhl ',
+      );
+    });
+
+    test('decodes an encoded-word glued to ASCII on both sides', () {
+      expect(
+        decodeMailHeader('B=?utf-8?Q?=C3=BC?=ro=?utf-8?Q?st=C3=BChl?='),
+        'Büröstühl',
+      );
+    });
+
+    test('decodes a base64 encoded-word glued to plain ASCII', () {
+      // "ü" as base64 (=C3=BC -> w7w=) glued to surrounding ASCII.
+      expect(
+        decodeMailHeader('B=?utf-8?B?w7w=?=rostuhl'),
+        'Bürostuhl',
+      );
+    });
   });
 }
