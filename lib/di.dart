@@ -630,6 +630,26 @@ final installedVersionsProvider = FutureProvider<Map<String, DateTime>>((ref) {
   return ref.watch(dbProvider).loadInstalledVersions();
 });
 
+/// UI-facing view of a locally recorded bug report (no data-layer type crosses
+/// the ui boundary). Newest first.
+typedef BugReportInfo = ({
+  String issueUrl,
+  int? issueNumber,
+  DateTime createdAt
+});
+
+final bugReportsProvider = FutureProvider<List<BugReportInfo>>((ref) async {
+  final rows = await ref.watch(dbProvider).loadBugReports();
+  return [
+    for (final r in rows)
+      (
+        issueUrl: r.issueUrl,
+        issueNumber: r.issueNumber,
+        createdAt: r.createdAt
+      ),
+  ];
+});
+
 /// Stream of notes for a specific email, identified by (accountId, messageId).
 final notesProvider =
     StreamProvider.autoDispose.family<List<EmailNote>, (String, String)>(
