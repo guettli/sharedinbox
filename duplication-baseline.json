@@ -3738,6 +3738,20 @@
       "start_line": 29,
       "end_line": 42,
       "key": "0d1fba5e20807bc3"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/outbox_offline_imap_test.dart",
+      "start_line": 85,
+      "end_line": 97,
+      "key": "830177bdedf3f94b"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/outbox_offline_jmap_test.dart",
+      "start_line": 49,
+      "end_line": 61,
+      "key": "830177bdedf3f94b"
     }
   ]
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -24,6 +25,11 @@ class OutboxRepositoryImpl implements OutboxRepository {
   /// the data layer never reaches for the `package_info_plus` platform plugin
   /// (production wires the real value in `di.dart`; tests pass a literal).
   final String _appVersion;
+
+  /// Per-account tail of the in-flight flush chain. Serialises [flush] calls
+  /// for the same account so a UI-initiated send and the background sync loop
+  /// never select and transmit the same outbox row concurrently (#755).
+  final Map<String, Future<void>> _flushChain = {};
 
   @override
   Future<int> enqueue(String accountId, model.EmailDraft draft) async {
@@ -52,6 +58,28 @@ class OutboxRepositoryImpl implements OutboxRepository {
 
   @override
   Future<int> flush(
+    String accountId,
+    Future<void> Function(OutboxJob job) sender, {
+    DateTime? now,
+    OutboxFlushObserver? observer,
+  }) {
+    // Serialise flushes per account so a UI-initiated send (via
+    // EmailRepository.sendNow) and the background sync loop's flush can never
+    // both select and transmit the same row — which would deliver the message
+    // twice (#755). Chained-completer mutex: each call waits on the previous
+    // flush for the same account before selecting eligible rows.
+    final previous = _flushChain[accountId] ?? Future<void>.value();
+    final result = previous.then(
+      (_) => _flushLocked(accountId, sender, now: now, observer: observer),
+    );
+    // The stored chain link must never reject, or a single failed flush would
+    // wedge every later flush for the account; swallow errors on it (the real
+    // error still propagates through [result] to this caller).
+    _flushChain[accountId] = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<int> _flushLocked(
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,

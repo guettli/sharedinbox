@@ -14,6 +14,8 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart'
+    show SendNowOutcome;
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -389,24 +391,56 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           _attachments.map((a) => a.path).toList(),
         ),
       );
-      // Enqueue rather than send-and-await so a flaky network never blocks the
-      // UI. The outbox is drained on every sync cycle (see AccountSyncManager).
-      await ref.read(emailRepositoryProvider).enqueueSend(_accountId!, draft);
-      // Wake the sync loop so the message goes out now instead of waiting for
-      // the next cycle — an IMAP loop can sit in IDLE for many minutes between
-      // cycles, which is why sending "took several minutes" (#801). Mirrors the
-      // kick the outbox Retry button already does.
-      ref.read(syncNowProvider)(_accountId!);
+      // Enqueue first so the message is durably persisted even if the send
+      // below is interrupted; the outbox is also drained on every sync cycle.
+      final rowId = await ref
+          .read(emailRepositoryProvider)
+          .enqueueSend(_accountId!, draft);
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on.
       if (_draftId != null) {
         await _draftRepo.deleteDraft(_draftId!);
       }
+      // Attempt the send right now instead of only kicking the background loop,
+      // so the message goes out "directly" and the user sees the concrete
+      // outcome via a SnackBar (which AppMessenger also mirrors to the app log)
+      // rather than a fire-and-forget "queued" with no follow-up (#755).
+      final result = await ref
+          .read(emailRepositoryProvider)
+          .sendNow(_accountId!, outboxRowId: rowId);
       if (mounted) {
-        messenger.show(
-          'Message queued',
-          duration: const Duration(seconds: 3),
-        );
+        switch (result.outcome) {
+          case SendNowOutcome.sent:
+            messenger.show(
+              'Message sent',
+              event: 'compose.sent',
+              accountId: _accountId,
+              duration: const Duration(seconds: 3),
+            );
+          case SendNowOutcome.transientFailed:
+            messenger.show(
+              'Queued — will retry: ${result.message}',
+              level: AppLogLevel.warn,
+              event: 'compose.send_queued',
+              accountId: _accountId,
+              duration: const Duration(seconds: 5),
+            );
+          case SendNowOutcome.permanentlyFailed:
+            messenger.show(
+              'Send failed: ${result.message}',
+              level: AppLogLevel.error,
+              event: 'compose.send_failed',
+              accountId: _accountId,
+              duration: const Duration(seconds: 5),
+            );
+          case SendNowOutcome.queued:
+            messenger.show(
+              'Message queued',
+              event: 'compose.queued',
+              accountId: _accountId,
+              duration: const Duration(seconds: 3),
+            );
+        }
         context.pop();
       }
     } catch (e, stack) {

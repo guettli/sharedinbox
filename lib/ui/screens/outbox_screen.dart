@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -17,6 +19,15 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 /// [AccountSyncManager.syncNow]. Callback-shape so the queued-message tiles
 /// stay decoupled from the concrete sync manager (and testable without one).
 typedef SyncNowFn = bool Function(String accountId);
+
+/// Sends the queued message [outboxRowId] for [accountId] now and returns the
+/// concrete outcome, so the caller can report it via a SnackBar. Callback-shape
+/// (sourced from [EmailRepository.sendNow]) so the queue tiles stay decoupled
+/// from the repository and remain testable without a real one.
+typedef SendNowFn = Future<SendNowResult> Function(
+  String accountId, {
+  int? outboxRowId,
+});
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
@@ -64,7 +75,7 @@ class OutboxScreen extends ConsumerWidget {
             itemBuilder: (ctx, i) => OutboxQueueTile(
               message: rows[i],
               repo: repo,
-              syncNow: ref.read(syncNowProvider),
+              sendNow: ref.read(emailRepositoryProvider).sendNow,
             ),
           );
         },
@@ -79,19 +90,19 @@ class OutboxScreen extends ConsumerWidget {
 /// the per-account Outbox omits those. Sharing one tile keeps the two views —
 /// and their Retry/Discard wiring — from drifting apart. Extracted so widget
 /// tests can construct one without pumping a full [Scaffold] + Riverpod scope.
-class OutboxQueueTile extends StatelessWidget {
+class OutboxQueueTile extends StatefulWidget {
   const OutboxQueueTile({
     super.key,
     required this.message,
     required this.repo,
-    required this.syncNow,
+    required this.sendNow,
     this.account,
     this.showAccountHeader = false,
   });
 
   final OutboxMessage message;
   final OutboxRepository repo;
-  final SyncNowFn syncNow;
+  final SendNowFn sendNow;
 
   /// Owning account, supplied by the global Sent Queue so the row can name the
   /// account the message belongs to. May be null there if the account was
@@ -103,8 +114,58 @@ class OutboxQueueTile extends StatelessWidget {
   final bool showAccountHeader;
 
   @override
+  State<OutboxQueueTile> createState() => _OutboxQueueTileState();
+}
+
+class _OutboxQueueTileState extends State<OutboxQueueTile> {
+  /// True while a Retry send is in flight, so the Retry button is disabled and
+  /// the row shows a spinner rather than letting the user fire a second send.
+  bool _retrying = false;
+
+  Future<void> _handleRetry() async {
+    final message = widget.message;
+    // Capture the messenger before the async gap: a successful send removes
+    // this row from the stream and disposes the tile, after which `context`
+    // is no longer safe to touch.
+    final messenger = context.appMessenger();
+    setState(() => _retrying = true);
+    try {
+      // Reset the backoff so the row is eligible, then send it now and report
+      // the concrete outcome — the explicit ask in #755. `sendNow` reads the
+      // password itself and runs the same guarded flush the background loop
+      // uses, so this can never double-send.
+      await widget.repo.retry(message.id);
+      final result =
+          await widget.sendNow(message.accountId, outboxRowId: message.id);
+      final (text, level) = _describeRetryResult(result);
+      messenger.show(
+        text,
+        level: level,
+        event: 'outbox.retry',
+        accountId: message.accountId,
+      );
+    } catch (e, stack) {
+      // sendNow reads the password itself, so it can throw before it even
+      // reaches the network (e.g. no stored password). Retry must still tell
+      // the user what happened rather than fail silently — the whole point of
+      // #755 ("nothing happens, no useful info").
+      messenger.show(
+        'Send failed: $e',
+        level: AppLogLevel.error,
+        event: 'outbox.retry',
+        accountId: message.accountId,
+        error: e,
+        stack: stack,
+      );
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final message = widget.message;
     final rawSubject =
         message.subject.isEmpty ? '(no subject)' : message.subject;
     final subject = rawSubject.length > _subjectPreviewLength
@@ -113,7 +174,7 @@ class OutboxQueueTile extends StatelessWidget {
     final receiver = message.to.isNotEmpty
         ? message.to.join(', ')
         : (message.cc.isNotEmpty ? message.cc.join(', ') : '(no recipient)');
-    final account = this.account;
+    final account = widget.account;
     final accountLabel = (account?.displayName.isNotEmpty ?? false)
         ? account!.displayName
         : (account?.email ?? message.accountId);
@@ -128,13 +189,13 @@ class OutboxQueueTile extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showAccountHeader)
+          if (widget.showAccountHeader)
             Text(
               '$accountLabel • $accountType',
               overflow: TextOverflow.ellipsis,
             ),
           Text('To: $receiver', overflow: TextOverflow.ellipsis),
-          if (showAccountHeader)
+          if (widget.showAccountHeader)
             Text(
               _dateFmt.format(message.createdAt.toLocal()),
               style: theme.textTheme.bodySmall,
@@ -146,18 +207,31 @@ class OutboxQueueTile extends StatelessWidget {
         ],
       ),
       trailing: QueueRowActions(
-        onRetry: () => retryQueueRow(
-          context: context,
-          accountId: message.accountId,
-          retry: () => repo.retry(message.id),
-          syncNow: syncNow,
-          runningMessage: 'Retrying send…',
-          notRunningMessage: 'Sync for this account is stopped, so the message '
-              'cannot be sent. Check the account credentials.',
-        ),
-        onDiscard: () => unawaited(repo.discard(message.id)),
+        retrying: _retrying,
+        onRetry: _retrying ? null : _handleRetry,
+        onDiscard: () => unawaited(widget.repo.discard(message.id)),
       ),
     );
+  }
+}
+
+/// Maps a [SendNowResult] to the SnackBar text and log level shown after a
+/// Retry. Kept next to the tile so the wording stays with its only caller.
+(String, AppLogLevel) _describeRetryResult(SendNowResult result) {
+  switch (result.outcome) {
+    case SendNowOutcome.sent:
+      return ('Message sent', AppLogLevel.info);
+    case SendNowOutcome.transientFailed:
+      return ('Send failed, will retry: ${result.message}', AppLogLevel.warn);
+    case SendNowOutcome.permanentlyFailed:
+      return ('Send failed: ${result.message}', AppLogLevel.error);
+    case SendNowOutcome.queued:
+      return (
+        result.message == null
+            ? 'Still queued — will send on the next sync'
+            : 'Still queued: ${result.message}',
+        AppLogLevel.warn,
+      );
   }
 }
 
@@ -215,21 +289,38 @@ class QueueRowActions extends StatelessWidget {
     super.key,
     required this.onRetry,
     required this.onDiscard,
+    this.retrying = false,
   });
 
-  final VoidCallback onRetry;
+  /// Tapped to retry the row. Null disables the button — e.g. while a retry is
+  /// already in flight.
+  final VoidCallback? onRetry;
   final VoidCallback onDiscard;
+
+  /// When true the Retry affordance is replaced by a small spinner so the user
+  /// can see the send is under way.
+  final bool retrying;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          tooltip: 'Retry now',
-          onPressed: onRetry,
-        ),
+        if (retrying)
+          const Padding(
+            padding: EdgeInsets.all(AppSpacing.sm),
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          )
+        else
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Retry now',
+            onPressed: onRetry,
+          ),
         IconButton(
           icon: const Icon(Icons.delete_outline),
           tooltip: 'Discard',
