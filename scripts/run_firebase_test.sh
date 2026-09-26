@@ -169,6 +169,15 @@ FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
 FETCH_CONSECUTIVE_TIMEOUTS=0
+# The alpha-track version code, once an attempt has resolved it. Resolving it
+# requires opening a Play *edit*, and Play permits exactly one edit per app:
+# opening one silently deletes the edit a concurrent deploy is uploading its
+# AAB into, which fails that deploy (see #907, #908). Polling once a minute for
+# up to 90 minutes therefore used to fire ~90 of those inserts per run — enough
+# to break nearly every hourly deploy it overlapped. We are waiting for Play to
+# generate the APKs of one specific release, so hand the resolved code back to
+# every later attempt: only the first one opens an edit.
+RESOLVED_VERSION_CODE=""
 while :; do
     FETCH_ATTEMPT=$((FETCH_ATTEMPT + 1))
     # Start each attempt from a clean dest dir so a stale PENDING (or partial
@@ -187,6 +196,7 @@ while :; do
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env:PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+            --version-code "$RESOLVED_VERSION_CODE" \
             -o "$APK_DIR" || FETCH_RC=$?
     # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
     # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".
@@ -216,6 +226,8 @@ while :; do
         echo "ERROR: $APK_DIR/versionCode is empty" >&2
         exit 1
     fi
+    # Every further attempt reuses it instead of opening another Play edit.
+    RESOLVED_VERSION_CODE="$VERSION_CODE"
     # No PENDING marker means the split APKs were downloaded — proceed to test.
     if [ ! -f "$APK_DIR/PENDING" ]; then
         break

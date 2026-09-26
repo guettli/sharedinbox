@@ -54,6 +54,11 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 _POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "300"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
+# Env var through which the caller hands back an already-resolved versionCode
+# so this attempt does not have to open a Play edit to look it up again — see
+# :func:`_version_code_from_env` for why that matters (#907, #908).
+_VERSION_CODE_ENV = "PLAY_APKS_VERSION_CODE"
+
 # Play only generates downloadable split APKs for a release it is actually
 # serving. A "draft" release (uploaded but never rolled out) never gets a
 # generatedApks listing, so resolving to its versionCode makes every fetch poll
@@ -380,6 +385,33 @@ def _enumerate_downloads(listing):
     return downloads
 
 
+def _version_code_from_env():
+    """The versionCode a previous fetch attempt already resolved, if any.
+
+    Resolving it costs a Play *edit* (see :func:`_resolve_version_code`), and
+    ``edits.insert`` silently deletes the app's existing edit — including the
+    one a concurrent deploy is uploading its AAB into, which kills that deploy
+    (see #907, #908). The wrapper polls Play once a minute for up to 90
+    minutes, so re-resolving per attempt opened ~90 edits per run and made
+    overlapping deploys fail almost every time. The version code cannot change
+    under us in a way we care about — we are waiting for Play to generate the
+    APKs of *that* release — so the wrapper resolves it once and hands it back
+    on every subsequent attempt.
+
+    An unparsable value is a wrapper bug, not a Play state we should paper
+    over, so it fails loudly rather than silently re-resolving.
+    """
+    raw = (os.environ.get(_VERSION_CODE_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"{_VERSION_CODE_ENV} is set to {raw!r}, which is not a versionCode"
+        ) from None
+
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: fetch_playstore_apks.py <dest-dir>", file=sys.stderr)
@@ -401,8 +433,16 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
-    print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    version_code = _version_code_from_env()
+    if version_code is None:
+        version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
+        print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    else:
+        print(
+            f"Reusing caller-supplied {TRACK} versionCode: {version_code} "
+            "(no Play edit opened)",
+            file=sys.stderr,
+        )
 
     try:
         listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)

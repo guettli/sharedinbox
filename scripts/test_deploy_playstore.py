@@ -10,6 +10,45 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import deploy_playstore
 
+# Play's verbatim answer when another client's edits.insert deleted our edit.
+_EDIT_DELETED_BODY = (
+    '{"error":{"code":400,"message":"This Edit has been deleted.",'
+    '"status":"FAILED_PRECONDITION"}}'
+)
+
+
+def _wrapped_http_error(status, text="body"):
+    """Build the exact exception shape production raises: an HTTPError carrying
+    the response, wrapped by _raise_for_status via `raise ... from`."""
+    import requests
+
+    resp = MagicMock(status_code=status, text=text)
+    cause = requests.HTTPError(f"{status} Error", response=resp)
+    try:
+        raise RuntimeError(f"uploading the AAB failed: {status}") from cause
+    except RuntimeError as exc:
+        return exc
+
+
+def _main_patches(session, env, *, upload_side_effects, deobf_side_effects=None):
+    """The patch stack main() needs to run offline: no credentials, no network,
+    no sleeping. Started/stopped by the caller so a test can inspect the mocks
+    after main() has raised."""
+    real_exists = os.path.exists
+    return [
+        patch.dict(os.environ, env, clear=True),
+        # AAB_PATH is always reported as present so main() proceeds; every other
+        # path (the mapping file) is checked against the real filesystem.
+        patch("deploy_playstore.os.path.exists",
+              side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)),
+        patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
+        patch("deploy_playstore.AuthorizedSession", return_value=session),
+        patch("deploy_playstore._upload_aab_resumable", side_effect=upload_side_effects),
+        patch("deploy_playstore._upload_deobfuscation_file",
+              side_effect=deobf_side_effects or (lambda *a, **kw: {})),
+        patch("deploy_playstore.time.sleep"),
+    ]
+
 
 def _make_session(
     edit_id="edit-42",
@@ -155,21 +194,14 @@ class TestUploadRetry(unittest.TestCase):
             f.write(b"mapping-content")
             mapping_path = f.name
 
-        env = {
-            "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
-            "MAPPING_TXT_PATH": mapping_path,
-        }
-        real_exists = os.path.exists
-        patches = [
-            patch.dict(os.environ, env, clear=True),
-            patch("deploy_playstore.os.path.exists",
-                  side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)),
-            patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
-            patch("deploy_playstore.AuthorizedSession", return_value=mock_session),
-            patch("deploy_playstore._upload_aab_resumable", side_effect=upload_side_effects),
-            patch("deploy_playstore._upload_deobfuscation_file", return_value={}),
-            patch("deploy_playstore.time.sleep"),
-        ]
+        patches = _main_patches(
+            mock_session,
+            {
+                "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
+                "MAPPING_TXT_PATH": mapping_path,
+            },
+            upload_side_effects=upload_side_effects,
+        )
         for p in patches:
             p.start()
         try:
@@ -192,18 +224,7 @@ class TestUploadRetry(unittest.TestCase):
             self._run_main([ValueError("err"), ValueError("err"), ValueError("err")])
         self.assertIn(str(deploy_playstore._MAX_UPLOAD_ATTEMPTS), str(ctx.exception))
 
-    @staticmethod
-    def _wrapped_http_error(status, text="body"):
-        """Build the exact exception shape production raises: an HTTPError
-        carrying the response, wrapped by _raise_for_status via `raise ... from`."""
-        import requests
-
-        resp = MagicMock(status_code=status, text=text)
-        cause = requests.HTTPError(f"{status} Error", response=resp)
-        try:
-            raise RuntimeError(f"uploading the AAB failed: {status}") from cause
-        except RuntimeError as exc:
-            return exc
+    _wrapped_http_error = staticmethod(_wrapped_http_error)
 
     def test_client_error_is_not_retried(self):
         """A 4xx means the REQUEST is wrong, so re-sending the same bytes cannot
@@ -224,6 +245,146 @@ class TestUploadRetry(unittest.TestCase):
     def test_429_is_retried(self):
         """429 is an explicit 'try again', despite being a 4xx."""
         self._run_main([self._wrapped_http_error(429), {"versionCode": 12}])
+
+
+class TestDeletedEdit(unittest.TestCase):
+    """Play allows exactly ONE live edit per app, and `edits.insert` silently
+    deletes the existing one. So any other Play client — the Firebase Tests
+    workflow opens an edit every 60s while polling for split APKs — kills the
+    edit this deploy is uploading into, and we only learn when our next request
+    is rejected. That is what broke Deploy on 2026-09-26 (see #907, #908).
+
+    Re-sending into a deleted edit is futile, so the upload loop must not; the
+    deploy as a whole is still retryable, from a FRESH edit.
+    """
+
+    def setUp(self):
+        self.edits_created = []
+        self.session = MagicMock()
+
+        def post(url, *args, **kwargs):
+            if url.endswith("/edits"):
+                self.edits_created.append(url)
+                return MagicMock(
+                    **{"json.return_value": {"id": f"edit-{len(self.edits_created)}"}}
+                )
+            return MagicMock(**{"content": b"", "json.return_value": {}})
+
+        self.session.post.side_effect = post
+        self.session.put.return_value = MagicMock()
+
+    def _run_main(self, upload_side_effects, deobf_side_effects=None, with_mapping=True):
+        import tempfile
+
+        mapping_path = None
+        if with_mapping:
+            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+                f.write(b"mapping-content")
+                mapping_path = f.name
+
+        env = {"PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}'}
+        if mapping_path:
+            env["MAPPING_TXT_PATH"] = mapping_path
+
+        patches = _main_patches(
+            self.session,
+            env,
+            upload_side_effects=upload_side_effects,
+            deobf_side_effects=deobf_side_effects,
+        )
+        started = [p.start() for p in patches]
+        self.upload_mock = started[4]
+        self.deobf_mock = started[5]
+        self.sleep_mock = started[6]
+        try:
+            deploy_playstore.main()
+        finally:
+            for p in patches:
+                p.stop()
+            if mapping_path:
+                os.unlink(mapping_path)
+
+    @staticmethod
+    def _deleted_edit_error():
+        return _wrapped_http_error(400, _EDIT_DELETED_BODY)
+
+    def test_upload_restarts_on_a_fresh_edit(self):
+        self._run_main([self._deleted_edit_error(), {"versionCode": 21}])
+        self.assertEqual(len(self.edits_created), 2)
+        # The retry must target the NEW edit; re-PUTting into the deleted one
+        # would fail identically forever.
+        second_upload_edit = self.upload_mock.call_args_list[1][0][2]
+        self.assertEqual(second_upload_edit, "edit-2")
+        commit_urls = [
+            c[0][0] for c in self.session.post.call_args_list if ":commit" in c[0][0]
+        ]
+        self.assertEqual(len(commit_urls), 1)
+        self.assertIn("/edits/edit-2:commit", commit_urls[0])
+
+    def test_deobfuscation_upload_restarts_on_a_fresh_edit(self):
+        # The edit can just as well be deleted after the AAB landed.
+        self._run_main(
+            [{"versionCode": 22}, {"versionCode": 22}],
+            deobf_side_effects=[self._deleted_edit_error(), {}],
+        )
+        self.assertEqual(len(self.edits_created), 2)
+        # Two calls, not four: the deleted edit is not re-posted into three
+        # times (with 30s of sleeps) before we start over.
+        self.assertEqual(self.deobf_mock.call_count, 2)
+
+    def test_gives_up_after_max_edit_attempts(self):
+        attempts = deploy_playstore._MAX_EDIT_ATTEMPTS
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main([self._deleted_edit_error() for _ in range(attempts)])
+        self.assertEqual(len(self.edits_created), attempts)
+        msg = str(ctx.exception)
+        self.assertIn(str(attempts), msg)
+        self.assertIn("#907", msg)
+
+    def test_other_client_errors_do_not_open_a_new_edit(self):
+        # A reused version code or a bad bundle is not fixed by a fresh edit;
+        # it must fail on the spot, as #906 established.
+        with self.assertRaises(RuntimeError):
+            self._run_main(
+                [_wrapped_http_error(400, '{"error":{"message":"Version code 7 already used"}}')]
+            )
+        self.assertEqual(len(self.edits_created), 1)
+
+    def test_missing_mapping_fails_before_opening_an_edit(self):
+        # The mapping check costs nothing and blocks the release either way, so
+        # it must not sit behind a ~2m20s upload.
+        with self.assertRaises(SystemExit) as ctx:
+            self._run_main([{"versionCode": 23}], with_mapping=False)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(self.edits_created, [])
+        self.upload_mock.assert_not_called()
+
+
+class TestIsEditDeleted(unittest.TestCase):
+    def test_recognises_plays_wording(self):
+        self.assertTrue(
+            deploy_playstore._is_edit_deleted(_wrapped_http_error(400, _EDIT_DELETED_BODY))
+        )
+
+    def test_other_400_is_not_a_deleted_edit(self):
+        self.assertFalse(
+            deploy_playstore._is_edit_deleted(
+                _wrapped_http_error(400, '{"error":{"message":"Bundle is invalid"}}')
+            )
+        )
+
+    def test_error_without_a_response_is_not_a_deleted_edit(self):
+        self.assertFalse(deploy_playstore._is_edit_deleted(ValueError("connection reset")))
+
+    def test_finds_the_response_through_nested_causes(self):
+        # main() sees the RuntimeError the upload loop raises, which wraps the
+        # RuntimeError from _raise_for_status, which wraps the HTTPError that
+        # carries the response.
+        inner = _wrapped_http_error(400, _EDIT_DELETED_BODY)
+        try:
+            raise RuntimeError("AAB upload failed after 1 of 3 attempt(s)") from inner
+        except RuntimeError as outer:
+            self.assertTrue(deploy_playstore._is_edit_deleted(outer))
 
 
 class TestRaiseForStatus(unittest.TestCase):

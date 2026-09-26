@@ -95,6 +95,12 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 scripts/test_fetch_playstore_apks.py'
         pass_filenames: false
         files: ^scripts/(fetch_playstore_apks|test_fetch_playstore_apks)\.py$
+      - id: deploy-playstore-tests
+        name: deploy-playstore unit tests
+        language: system
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 scripts/test_deploy_playstore.py'
+        pass_filenames: false
+        files: ^scripts/(deploy_playstore|test_deploy_playstore)\.py$
       - id: run-firebase-test-fetch-tests
         name: run_firebase_test.sh APK-fetch retry tests
         language: system

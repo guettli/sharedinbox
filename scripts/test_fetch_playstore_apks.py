@@ -853,5 +853,59 @@ class TestMainWritesVersionCodeFile(unittest.TestCase):
             self.assertEqual(vc_path.read_text().strip(), "42")
 
 
+class TestVersionCodeFromEnv(unittest.TestCase):
+    """Resolving the alpha version code costs a Play *edit*, and Play allows
+    exactly one edit per app: opening one silently deletes the edit a
+    concurrent deploy is uploading its AAB into, which fails that deploy (see
+    #907, #908). The wrapper polls once a minute for up to 90 minutes, so it
+    resolves the code once and hands it back — only the first attempt opens an
+    edit."""
+
+    def test_unset_means_resolve_it_ourselves(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(fetch_playstore_apks._version_code_from_env())
+
+    def test_blank_means_resolve_it_ourselves(self):
+        # The wrapper always passes --version-code; it is empty on attempt 1.
+        with patch.dict(
+            os.environ, {"PLAY_APKS_VERSION_CODE": "  "}, clear=True
+        ):
+            self.assertIsNone(fetch_playstore_apks._version_code_from_env())
+
+    def test_parses_the_supplied_code(self):
+        with patch.dict(
+            os.environ, {"PLAY_APKS_VERSION_CODE": "1790408067\n"}, clear=True
+        ):
+            self.assertEqual(
+                fetch_playstore_apks._version_code_from_env(), 1790408067
+            )
+
+    def test_unparsable_value_fails_loudly(self):
+        # A wrapper bug, not a Play state to paper over: silently re-resolving
+        # would put the edit-opening back without anyone noticing.
+        with patch.dict(
+            os.environ, {"PLAY_APKS_VERSION_CODE": "latest"}, clear=True
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                fetch_playstore_apks._version_code_from_env()
+        self.assertIn("PLAY_APKS_VERSION_CODE", str(ctx.exception))
+
+    def test_main_uses_it_instead_of_resolving(self):
+        # _patches stubs the resolver to return 111; if main() had called it,
+        # the persisted versionCode would be 111 rather than the supplied 222.
+        with tempfile.TemporaryDirectory() as dest_dir:
+            _with_patches(
+                _patches(
+                    dest_dir,
+                    version_code=111,
+                    list_apks={},
+                    env={"PLAY_APKS_VERSION_CODE": "222"},
+                ),
+                fetch_playstore_apks.main,
+            )
+            vc_path = Path(dest_dir) / "versionCode"
+            self.assertEqual(vc_path.read_text().strip(), "222")
+
+
 if __name__ == "__main__":
     unittest.main()

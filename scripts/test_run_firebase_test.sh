@@ -51,11 +51,16 @@ cat >"$SCRATCH/dagger" <<EOF
 n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
 
 # The loop passes the dest dir as \`-o <dir>\`; mirror Dagger's export into it.
+# --version-code is recorded per attempt so a test can pin that only the first
+# attempt resolves it (and therefore opens a Play edit).
 dest=""
+vc=""
 while [ \$# -gt 0 ]; do
     if [ "\$1" = "-o" ]; then dest="\$2"; fi
+    if [ "\$1" = "--version-code" ]; then vc="\$2"; fi
     shift
 done
+echo "\$vc" >>"$SCRATCH/version-codes"
 
 read -r -a plan <<<"\$FETCH_PLAN"
 idx=\$((n - 1))
@@ -102,6 +107,7 @@ chmod +x "$SCRATCH/sleep"
 run_fetch() {
     local plan="$1" budget="${2:-3600}"
     echo 0 >"$SCRATCH/attempts"
+    : >"$SCRATCH/version-codes"
     rm -rf "$SCRATCH/apks"
     mkdir -p "$SCRATCH/apks"
     PATH="$SCRATCH:$PATH" \
@@ -240,6 +246,26 @@ elif [ "$attempts" -ne 1 ]; then
     _fail "no-versioncode: should not retry (got $attempts attempts)" "$out"
 elif ! printf '%s' "$out" | grep -q "versionCode missing after fetch"; then
     _fail "no-versioncode: should name the missing marker" "$out"
+else
+    _pass
+fi
+
+# --- Only the first attempt resolves the versionCode (#907, #908) -------------
+# Resolving it opens a Play edit, and Play allows exactly one edit per app —
+# each extra insert deletes the edit a concurrent deploy is uploading into.
+# Attempt 1 passes an empty --version-code (resolve it), every later attempt
+# hands the resolved code back so it never opens another edit.
+out=$(run_fetch "pending pending ready")
+rc=$?
+mapfile -t seen_version_codes <"$SCRATCH/version-codes"
+if [ "$rc" -ne 0 ]; then
+    _fail "version-code-reuse: should exit 0" "$out"
+elif [ "${#seen_version_codes[@]}" -ne 3 ]; then
+    _fail "version-code-reuse: expected 3 recorded attempts (got ${#seen_version_codes[@]})" "$out"
+elif [ -n "${seen_version_codes[0]}" ]; then
+    _fail "version-code-reuse: attempt 1 must resolve it (got '${seen_version_codes[0]}')" "$out"
+elif [ "${seen_version_codes[1]}" != "1790309773" ] || [ "${seen_version_codes[2]}" != "1790309773" ]; then
+    _fail "version-code-reuse: later attempts must reuse the resolved code (got '${seen_version_codes[1]}', '${seen_version_codes[2]}')" "$out"
 else
     _pass
 fi
