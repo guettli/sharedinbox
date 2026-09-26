@@ -1,16 +1,21 @@
 import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'fake_imap.dart';
 
 // ── Test doubles ──────────────────────────────────────────────────────────
 
@@ -223,12 +228,22 @@ const _account = Account(
   jmapUrl: _sessionUrl,
 );
 
-class _StubAccounts implements AccountRepository {
+const _imapAccount = Account(
+  id: 'imap1',
+  displayName: 'bob',
+  email: 'bob@example.com',
+);
+
+/// Serves a single fixed [account] and no-ops every mutating method; the two
+/// concrete stubs differ only in which fixture they expose.
+abstract class _SingleAccountRepository implements AccountRepository {
+  Account get account;
+
   @override
-  Stream<List<Account>> observeAccounts() => Stream.value([_account]);
+  Stream<List<Account>> observeAccounts() => Stream.value([account]);
   @override
   Future<Account?> getAccount(String id) async =>
-      id == _account.id ? _account : null;
+      id == account.id ? account : null;
   @override
   Future<String> getPassword(String accountId) async => 'pw';
   @override
@@ -237,6 +252,118 @@ class _StubAccounts implements AccountRepository {
   Future<void> updateAccount(Account a, {String? password}) async {}
   @override
   Future<void> removeAccount(String id) async {}
+}
+
+class _StubAccounts extends _SingleAccountRepository {
+  @override
+  Account get account => _account;
+}
+
+class _StubImapAccounts extends _SingleAccountRepository {
+  @override
+  Account get account => _imapAccount;
+}
+
+/// Fake IMAP client for the notes incremental-sync path. Serves UID searches
+/// from [searchResults] and never returns message bodies (the incremental
+/// prune test appends no new UIDs).
+class _NotesFakeImap extends FakeImapClient {
+  _NotesFakeImap(this.searchResults);
+  final Map<String, List<int>> searchResults;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        pathSeparator: '/',
+        flags: [],
+      );
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    final hits = searchResults[searchCriteria] ?? const <int>[];
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
+  }
+}
+
+ImapConnectFn _fixedImapConnect(imap.ImapClient client) =>
+    (account, username, password) async => client;
+
+/// Records every [AppLogger] insert so tests can assert on emitted events.
+class _RecordingLogRepo extends NoOpAppLogRepository {
+  final inserts = <Map<String, Object?>>[];
+
+  @override
+  Future<int?> insert({
+    required AppLogLevel level,
+    required String event,
+    required String message,
+    String? dataJson,
+    String? screen,
+    String? accountId,
+    String? mailboxPath,
+    String? emailId,
+    int? syncLogId,
+    DateTime? createdAt,
+  }) async {
+    inserts.add({
+      'level': level,
+      'event': event,
+      'accountId': accountId,
+      'emailId': emailId,
+      'dataJson': dataJson,
+    });
+    return inserts.length;
+  }
+}
+
+/// Flushes fire-and-forget (`unawaited`) log writes scheduled by the repo.
+Future<void> _pumpLogs() async {
+  for (var i = 0; i < 5; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// Builds a JMAP-backed [NoteRepositoryImpl] wired to a recording logger,
+/// returning both so tests can drive the repo and assert on emitted logs.
+({NoteRepositoryImpl repo, _RecordingLogRepo logRepo}) _jmapRepoWithLogger(
+  AppDatabase db,
+  http.Client client,
+) {
+  final logRepo = _RecordingLogRepo();
+  final repo = NoteRepositoryImpl(
+    db,
+    _StubAccounts(),
+    httpClient: client,
+    appLogger: AppLogger(logRepo),
+  );
+  return (repo: repo, logRepo: logRepo);
+}
+
+Future<void> _seedImapAccount(AppDatabase db) async {
+  await db.into(db.accounts).insert(
+        AccountsCompanion.insert(
+          id: _imapAccount.id,
+          displayName: _imapAccount.displayName,
+          email: _imapAccount.email,
+          imapHost: '',
+          imapPort: 0,
+          imapSsl: false,
+          smtpHost: '',
+          smtpPort: 0,
+          smtpSsl: false,
+        ),
+      );
 }
 
 Future<void> _seedAccount(AppDatabase db) async {
@@ -255,20 +382,24 @@ Future<void> _seedAccount(AppDatabase db) async {
       );
 }
 
+/// Opens a fresh in-memory test database and seeds it via [seed]. Callers
+/// register this in `setUp` so each test starts from a clean database.
+Future<AppDatabase> _freshSeededDb(
+  Future<void> Function(AppDatabase) seed,
+) async {
+  final db = openTestDatabase();
+  await seed(db);
+  return db;
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
   group('NoteRepositoryImpl JMAP syncAllNotes', () {
     late AppDatabase db;
 
-    setUp(() async {
-      db = openTestDatabase();
-      await _seedAccount(db);
-    });
-
-    tearDown(() async {
-      await db.close();
-    });
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
 
     test('first sync populates notes and stores queryState + emailState',
         () async {
@@ -543,6 +674,198 @@ void main() {
             ))
           .getSingleOrNull();
       expect(checkpoint, isNull);
+    });
+
+    test('removed note is logged against its mail with emailId', () async {
+      // Seed a full-sync checkpoint and two cached notes; one will be
+      // destroyed on the next incremental sync.
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'local-e0',
+              accountId: _account.id,
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2026),
+              messageId: const Value('<m0@ex.com>'),
+            ),
+          );
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-old',
+              accountId: _account.id,
+              messageId: '<m0@ex.com>',
+              noteText: 'to be destroyed',
+              serverId: 'e-old',
+              createdAt: DateTime(2026),
+            ),
+          );
+      await db.into(db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: _account.id,
+              resourceType: 'notes',
+              state: jsonEncode({'queryState': 'q-v1', 'emailState': 'e-v1'}),
+              syncedAt: DateTime(2026),
+            ),
+          );
+
+      final script = _JmapScript([
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn(
+          'Email/queryChanges',
+          _incrementalResponse(
+            newQueryState: 'q-v2',
+            added: const [],
+            removed: const [],
+            newEmailState: 'e-v2',
+            created: const [],
+            updated: const [],
+            destroyed: const ['e-old'],
+          ),
+        ),
+      ]);
+
+      final (:repo, :logRepo) = _jmapRepoWithLogger(db, script.build());
+
+      await repo.syncAllNotes(_account.id);
+      await _pumpLogs();
+
+      final removedLog = logRepo.inserts.firstWhere(
+        (m) => m['event'] == 'note.sync.pruned_removed',
+        orElse: () => {},
+      );
+      expect(removedLog, isNotEmpty, reason: 'removal should be logged');
+      expect(removedLog['emailId'], 'local-e0');
+      expect(removedLog['level'], AppLogLevel.warn);
+    });
+  });
+
+  group('NoteRepositoryImpl IMAP prune-by-serverId', () {
+    late AppDatabase db;
+
+    setUp(() async => db = await _freshSeededDb(_seedImapAccount));
+    tearDown(() => db.close());
+
+    test('locally-added note with empty serverId survives the prune', () async {
+      // Checkpoint from a prior sync (uidValidity 0 matches the fake mailbox),
+      // forcing the incremental path that prunes by serverId.
+      await db.into(db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: _imapAccount.id,
+              resourceType: 'notes',
+              state: jsonEncode({'uidValidity': 0, 'lastUid': 10}),
+              syncedAt: DateTime(2026),
+            ),
+          );
+      // A: just added on a server without UIDPLUS → serverId ''.
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-pending',
+              accountId: _imapAccount.id,
+              messageId: '<a@ex.com>',
+              noteText: 'just added',
+              serverId: '',
+              createdAt: DateTime(2026),
+            ),
+          );
+      // B: reconciled note whose UID is still on the server.
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-kept',
+              accountId: _imapAccount.id,
+              messageId: '<b@ex.com>',
+              noteText: 'kept',
+              serverId: '5',
+              createdAt: DateTime(2026),
+            ),
+          );
+      // C: a note whose server message really is gone → should be pruned.
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-gone',
+              accountId: _imapAccount.id,
+              messageId: '<c@ex.com>',
+              noteText: 'gone',
+              serverId: '99',
+              createdAt: DateTime(2026),
+            ),
+          );
+
+      final fake = _NotesFakeImap({
+        'UID 11:*': const <int>[],
+        'ALL': const [5],
+      });
+      final repo = NoteRepositoryImpl(
+        db,
+        _StubImapAccounts(),
+        imapConnect: _fixedImapConnect(fake),
+      );
+
+      await repo.syncAllNotes(_imapAccount.id);
+
+      final ids =
+          (await db.select(db.emailNotes).get()).map((r) => r.id).toSet();
+      expect(
+        ids,
+        {'n-pending', 'n-kept'},
+        reason: 'empty-serverId note must survive; stale serverId is pruned',
+      );
+    });
+  });
+
+  group('NoteRepositoryImpl add logging', () {
+    late AppDatabase db;
+
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
+
+    test('addNote logs note.added scoped to the mail via emailId', () async {
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'local-e1',
+              accountId: _account.id,
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2026),
+              messageId: const Value('<msg-1@ex.com>'),
+            ),
+          );
+
+      final script = _JmapScript([
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn('Email/set', {
+          'sessionState': 'st1',
+          'methodResponses': [
+            [
+              'Email/set',
+              {
+                'accountId': _jmapAccountId,
+                'created': {
+                  'new-note': {'id': 'server-note-1'},
+                },
+              },
+              '0',
+            ],
+          ],
+        }),
+      ]);
+
+      final (:repo, :logRepo) = _jmapRepoWithLogger(db, script.build());
+
+      await repo.addNote(_account.id, '<msg-1@ex.com>', 'hello');
+      await _pumpLogs();
+
+      final added = logRepo.inserts.firstWhere(
+        (m) => m['event'] == 'note.added',
+        orElse: () => {},
+      );
+      expect(added, isNotEmpty, reason: 'add should be logged');
+      expect(added['emailId'], 'local-e1');
+      expect(added['level'], AppLogLevel.info);
+      expect(
+        logRepo.inserts.any((m) => m['event'] == 'note.add.no_server_id'),
+        isFalse,
+        reason: 'a real server id was returned',
+      );
     });
   });
 }
