@@ -4421,10 +4421,19 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Finds the path of the mailbox on [accountId] that corresponds to a move
-  /// whose source destination had the given [role] / [name]. Prefers a role
-  /// match (roles are protocol-independent); falls back to a case-insensitive
-  /// name match for role-less custom folders. Returns null when the counterpart
-  /// has no equivalent mailbox.
+  /// whose source destination had the given [role] / [name]. Matches in the
+  /// same order [AccountComparison] pairs the two protocol views of one server:
+  /// exact (role, name) first, then role alone (roles are protocol-independent),
+  /// then a case-insensitive name match for role-less custom folders. Returns
+  /// null when the counterpart has no equivalent mailbox.
+  ///
+  /// The exact pass matters because a role is not unique: Stalwart ships
+  /// "Deleted Items" as its trash folder, so a mailbox the user (or a test)
+  /// creates as "Trash" carries role `trash` too. Matching on the role alone
+  /// picked whichever of the two came first out of the DB, mirroring the move
+  /// into the *sibling* trash folder — the shared server message then sat in
+  /// both folders at once, which the single-folder local model cannot
+  /// represent, and the two accounts diverged for good (#910).
   Future<String?> _resolveCounterpartMailboxPath(
     String accountId, {
     required String? role,
@@ -4433,12 +4442,15 @@ class EmailRepositoryImpl implements EmailRepository {
     final mailboxes = await (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    final lowerName = name.toLowerCase();
+    for (final m in mailboxes) {
+      if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
+    }
     if (role != null) {
       for (final m in mailboxes) {
         if (m.role == role) return m.path;
       }
     }
-    final lowerName = name.toLowerCase();
     for (final m in mailboxes) {
       if (m.name.toLowerCase() == lowerName) return m.path;
     }
@@ -5147,15 +5159,23 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'move':
         final destMailboxId = payload['dest'] as String;
-        final srcMailboxId = payload['src'] as String;
+        // Set `mailboxIds` outright rather than patching `dest: true` plus
+        // `src: null`. `src` is the folder the row sat in when the move was
+        // queued; by flush time the server can hold the message elsewhere
+        // (another client moved it, or an earlier queued move of ours landed
+        // first). Dropping only the stale `src` then leaves it filed in two
+        // folders at once, which the single-folder local model cannot
+        // represent, so the mail sticks in a folder the local cache never
+        // shows and the account diverges permanently (#910). A replacement is
+        // also what a move means here: the mail is now in the destination and
+        // nowhere else.
         responses = await jmap.call([
           [
             'Email/set',
             setArgs({
               'update': {
                 jmapEmailId: {
-                  'mailboxIds/$destMailboxId': true,
-                  'mailboxIds/$srcMailboxId': null,
+                  'mailboxIds': {destMailboxId: true},
                 },
               },
             }),

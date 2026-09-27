@@ -3918,6 +3918,53 @@ void main() {
       expect(mirror!.mailboxPath, 'Archive');
     });
 
+    // Stalwart names its trash folder "Deleted Items", so a second folder
+    // called "Trash" carries role `trash` as well. The mirror must land in the
+    // folder the user actually picked — mirroring into the sibling trash folder
+    // files the shared server message in two folders at once, which the
+    // single-folder local model cannot represent (#910).
+    test('move mirror disambiguates two same-role folders by name', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'imap-p',
+        'Deleted Items',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedMailbox(r.db, 'jmap-p', 'mbx-inbox', 'Inbox', role: 'inbox');
+      // The decoy sorts first both by insertion and by id, so a role-only match
+      // lands on it whatever order the rows come back in.
+      await seedMailbox(r.db, 'jmap-p', 'mbx-a-trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'jmap-p',
+        'mbx-b-deleted',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(
+          r.db, 'jmap-p:e1', 'jmap-p', 'mbx-inbox', 'abc@example.com');
+
+      await r.emails.moveEmail('imap-p:5', 'Deleted Items');
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbx-b-deleted');
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, hasLength(1));
+      expect(
+        jsonDecode(changes.first.payload),
+        {'src': 'mbx-inbox', 'dest': 'mbx-b-deleted'},
+      );
+    });
+
     test('spam move mirrors to the counterpart junk mailbox', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_imapPair, 'pw');
@@ -5419,6 +5466,65 @@ void main() {
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    // A queued move carries the folder the row sat in when it was enqueued.
+    // Patching `mailboxIds/dest: true` + `mailboxIds/src: null` leaves the mail
+    // in two folders when that `src` has gone stale, so the move must set
+    // `mailboxIds` outright instead (#910).
+    test('move replaces mailboxIds instead of unsetting the queued src',
+        () async {
+      Map<String, dynamic>? capturedUpdate;
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        final call = (body['methodCalls'] as List).first as List;
+        final args = call[1] as Map<String, dynamic>;
+        final update = args['update'] as Map<String, dynamic>;
+        capturedUpdate = update['e1'] as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                {'accountId': 'acct1', 'updated': {}},
+                '0',
+              ],
+            ],
+          }),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await seedChange(
+        r.db,
+        r.accounts,
+        changeType: 'move',
+        payload: '{"src":"mbx1","dest":"mbx2"}',
+      );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(capturedUpdate, {
+        'mailboxIds': {'mbx2': true},
+      });
     });
 
     test('sends delete and removes change on success', () async {
