@@ -3949,7 +3949,12 @@ void main() {
       );
       await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
       await seedEmail(
-          r.db, 'jmap-p:e1', 'jmap-p', 'mbx-inbox', 'abc@example.com');
+        r.db,
+        'jmap-p:e1',
+        'jmap-p',
+        'mbx-inbox',
+        'abc@example.com',
+      );
 
       await r.emails.moveEmail('imap-p:5', 'Deleted Items');
 
