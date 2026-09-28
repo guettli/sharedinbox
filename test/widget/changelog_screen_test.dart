@@ -269,4 +269,27 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('shows the mise upgrade command instead of a download link', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+        repoStatus: const RepoStatus(state: RepoStatusState.upToDate),
+        updateInfo: const UpdateInfo(
+          latestVersion: '0.1.2',
+          downloadUrl:
+              'https://github.com/guettli/sharedinbox/releases/tag/v0.1.2',
+          upgradeCommand: kMiseUpgradeCommand,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('run: $kMiseUpgradeCommand'),
+      findsOneWidget,
+    );
+  });
 }

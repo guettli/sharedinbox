@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -477,6 +478,29 @@ class _UpdateBanner extends ConsumerWidget {
     return update.when(
       data: (info) {
         if (info == null) return const SizedBox.shrink();
+        // A mise-managed install upgrades itself in place; pointing its user at
+        // a tarball download would leave mise's install dir stale.
+        final command = info.upgradeCommand;
+        if (command != null) {
+          return MaterialBanner(
+            content: Text(
+              'Update available: ${info.latestVersion} — run: $command',
+            ),
+            leading: const Icon(Icons.system_update),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: command));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Copied: $command')),
+                  );
+                },
+                child: const Text('Copy command'),
+              ),
+            ],
+          );
+        }
         return MaterialBanner(
           content: Text('Update available: ${info.latestVersion}'),
           leading: const Icon(Icons.system_update),

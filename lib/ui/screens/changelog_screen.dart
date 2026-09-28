@@ -169,10 +169,19 @@ class _StatusHeader extends ConsumerWidget {
           ),
           if (update != null) ...[
             const SizedBox(height: 6),
-            _AppLink(
-              text: 'A new app version is available (${update.latestVersion})',
-              onTap: () => ChangeLogScreen._launch(update.downloadUrl),
-            ),
+            // mise owns its install dir — tell those users the upgrade command
+            // instead of linking a tarball they should not unpack over it.
+            if (update.upgradeCommand != null)
+              SelectableText(
+                'A new app version is available (${update.latestVersion}) — '
+                'run: ${update.upgradeCommand}',
+              )
+            else
+              _AppLink(
+                text:
+                    'A new app version is available (${update.latestVersion})',
+                onTap: () => ChangeLogScreen._launch(update.downloadUrl),
+              ),
           ],
         ],
       ),

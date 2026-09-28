@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=SharedInbox
+GenericName=Email Client
+Comment=IMAP email client — offline-first, syncs with IMAP IDLE
+# Resolved via PATH. A mise install dir is versioned, so pointing Exec at the
+# install path directly goes stale on the next `mise up`; see README.md for the
+# `mise x -- sharedinbox` variant to use when the launcher has no mise on PATH.
+Exec=sharedinbox
+Icon=sharedinbox
+Terminal=false
+Categories=Network;Email;
+Keywords=Email;IMAP;Mail;Inbox;
+StartupWMClass=sharedinbox
