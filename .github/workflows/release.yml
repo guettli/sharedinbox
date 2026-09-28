@@ -1,0 +1,71 @@
+name: Release
+
+# Publishes the Linux tarball as a GitHub Release asset, which is what
+# `mise use -g github:guettli/sharedinbox@latest` installs (see README).
+#
+# Deliberately separate from deploy.yml: the hourly build keeps shipping git-hash
+# snapshots to sharedinbox.de/builds + latest.json, while a release happens only
+# when a human pushes a `v<pubspec version>` tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the leading v (must match pubspec.yaml), e.g. 0.1.2'
+        required: true
+        type: string
+
+# Releases for two tags must not race on the same Dagger engine caches.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-linux:
+    name: Publish Linux Release
+    runs-on: sharedinbox-arc
+    timeout-minutes: 60
+    if: github.server_url == 'https://github.com'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 100
+
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${INPUT_VERSION:-${REF_NAME#v}}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (pubspec: $(scripts/pubspec_version.sh))"
+
+      # task release-linux refuses to publish when VERSION and pubspec.yaml
+      # disagree, so a mistyped tag fails here instead of shipping a release
+      # whose About page shows a different version.
+      - name: Build and publish the GitHub Release
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: task release-linux
+
+      # The acceptance test for the whole feature: install the release we just
+      # published with mise in a clean container and confirm it launches.
+      # Needs a published release, so it cannot run on PRs.
+      - name: Verify `mise use github:guettli/sharedinbox` installs it
+        env:
+          DAGGER_NO_NAG: "1"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: task check-mise-install

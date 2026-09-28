@@ -166,7 +166,9 @@ const _excluded = <String, String>{
   'lib/data/repositories/note_repository_impl.dart':
       'IMAP APPEND / JMAP Email/set over a real network connection',
   'lib/core/services/update_service.dart':
-      'FutureProvider hits https://sharedinbox.de/latest.json with no injectable http.Client',
+      'FutureProvider hits latest.json / the GitHub Releases API with no '
+          'injectable http.Client; its pure parsers are covered by '
+          'test/unit/update_service_test.dart',
   'lib/core/services/unified_push_service.dart':
       'UnifiedPush plugin channel — plugin-only surface',
   'lib/core/sync/background_sync.dart':

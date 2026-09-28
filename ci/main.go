@@ -1082,19 +1082,32 @@ func (m *Ci) BuildLinux() *dagger.Directory {
 		Directory("build/linux/x64/release/bundle")
 }
 
+// buildLinuxBundle builds the Linux release bundle with optional dart-defines.
+//
+// releaseVersion is set only for tagged GitHub Releases (the mise channel). It
+// is what update_service.dart uses to decide that it must compare against
+// GitHub Releases (SemVer) instead of latest.json (a git hash) — see
+// PackageLinuxRelease.
+func (m *Ci) buildLinuxBundle(commitHash, releaseVersion string) *dagger.Directory {
+	args := []string{"flutter", "build", "linux", "--release"}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	if releaseVersion != "" {
+		args = append(args, "--dart-define=RELEASE_VERSION="+releaseVersion)
+	}
+	return m.setup(m.linuxSrc()).
+		WithExec(args).
+		Directory("build/linux/x64/release/bundle")
+}
+
 // BuildLinuxRelease builds the Linux release bundle.
 func (m *Ci) BuildLinuxRelease(
 	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
 	// +optional
 	commitHash string,
 ) *dagger.Directory {
-	args := []string{"flutter", "build", "linux", "--release"}
-	if commitHash != "" {
-		args = append(args, "--dart-define=GIT_HASH="+commitHash)
-	}
-	return m.setup(m.linuxSrc()).
-		WithExec(args).
-		Directory("build/linux/x64/release/bundle")
+	return m.buildLinuxBundle(commitHash, "")
 }
 
 // DeployLinux packages and deploys the Linux release to the server.
@@ -1117,6 +1130,257 @@ func (m *Ci) DeployLinux(
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
 		WithExec([]string{"ssh", "-i", "/home/deploy/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /home/deploy/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		Stdout(ctx)
+}
+
+// defaultRepository is the GitHub repo that hosts the Releases mise installs
+// from. Overridable on the release/check functions so a fork can test the whole
+// flow against its own repo.
+const defaultRepository = "guettli/sharedinbox"
+
+// linuxReleaseDirName is the single top-level directory inside the release
+// tarball. mise extracts the whole archive, so `strip_components = 1` lands the
+// executable next to its `data/` and `lib/` siblings — which the Flutter Linux
+// runner requires, because it resolves asset paths relative to /proc/self/exe.
+func linuxReleaseDirName(version string) string {
+	return fmt.Sprintf("sharedinbox-%s-linux-x86_64", version)
+}
+
+// PackageLinuxRelease builds the Linux bundle and packs it into the tarball
+// that gets attached to a GitHub Release.
+//
+// The asset name carries "linux" and "x86_64" so mise's os/arch autodetection
+// matches it even once an aarch64 asset exists alongside it.
+//
+// Layout (one top-level dir, see linuxReleaseDirName):
+//
+//	sharedinbox-<version>-linux-x86_64/
+//	  sharedinbox                                     # ELF executable
+//	  data/                                           # flutter_assets, icudtl.dat
+//	  lib/                                            # libapp.so, libflutter_linux_gtk.so, …
+//	  share/applications/sharedinbox.desktop          # menu entry (opt-in, see README)
+//	  share/icons/hicolor/512x512/apps/sharedinbox.png
+func (m *Ci) PackageLinuxRelease(
+	// Release version without the leading "v", e.g. "0.1.2". Must match pubspec.yaml.
+	version string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	dir := linuxReleaseDirName(version)
+	asset := dir + ".tar.gz"
+	return dag.Container().
+		From("alpine:3.21").
+		// GNU tar: busybox tar has no --sort/--mtime/--owner.
+		WithExec([]string{"apk", "add", "--no-cache", "tar"}).
+		WithDirectory("/pkg/"+dir, m.buildLinuxBundle(commitHash, version)).
+		WithFile("/pkg/"+dir+"/share/applications/sharedinbox.desktop",
+			m.Source.File("linux/packaging/sharedinbox.desktop")).
+		WithFile("/pkg/"+dir+"/share/icons/hicolor/512x512/apps/sharedinbox.png",
+			m.Source.File("linux/sharedinbox.png")).
+		// --sort=name + a fixed mtime keep the tarball byte-identical across
+		// rebuilds of the same bundle, so re-running a release does not churn
+		// the published SHA256SUMS.
+		WithExec([]string{"tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+			"-czf", "/tmp/" + asset, "-C", "/pkg", dir}).
+		File("/tmp/" + asset)
+}
+
+// releaseLinuxScript publishes the tarball + checksums to the GitHub Release
+// for tag v$VERSION, creating the release when it does not exist yet.
+//
+// The release must not be a draft: mise's github backend enumerates published
+// releases only, so a draft is invisible to `mise use …@latest`.
+const releaseLinuxScript = `#!/bin/sh
+set -eu
+TAG="v${VERSION}"
+cd /out
+sha256sum "${ASSET}" > SHA256SUMS
+cat SHA256SUMS
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    echo "Release $TAG exists — uploading assets"
+    gh release upload "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --clobber
+else
+    echo "Creating release $TAG"
+    set -- "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --title "$TAG" --generate-notes
+    # --target only applies when the tag does not exist on the remote yet; a
+    # tag-triggered run already pushed it, and gh then ignores the flag.
+    [ -n "${COMMIT_HASH:-}" ] && set -- "$@" --target "$COMMIT_HASH"
+    gh release create "$@"
+fi
+# Fail loudly if the asset did not actually land — mise resolving @latest to a
+# release without a matching asset is the failure this guards against.
+ASSETS=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+printf '%s\n' "$ASSETS" | grep -qxF "${ASSET}" || {
+    echo "ERROR: ${ASSET} missing from release $TAG. Assets: $ASSETS"; exit 1; }
+DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
+[ "$DRAFT" = "false" ] || { echo "ERROR: release $TAG is a draft — mise cannot see it"; exit 1; }
+echo "Published $TAG with ${ASSET} and SHA256SUMS"
+`
+
+// ReleaseLinux packages the Linux bundle and publishes it as a GitHub Release
+// asset, so `mise use -g github:guettli/sharedinbox@<version>` can install it.
+//
+// This is additive: the hourly sharedinbox.de/builds + latest.json channel
+// (DeployLinux) is untouched.
+func (m *Ci) ReleaseLinux(
+	ctx context.Context,
+	// Needs contents:write on the repository.
+	githubToken *dagger.Secret,
+	// Release version without the leading "v", e.g. "0.1.2". Tag is "v$version".
+	version string,
+	// Git commit hash for the GIT_HASH dart-define and the tag target.
+	// +optional
+	commitHash string,
+	// owner/repo to release into. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	asset := linuxReleaseDirName(version) + ".tar.gz"
+
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "github-cli"}).
+		WithFile("/out/"+asset, m.PackageLinuxRelease(version, commitHash)).
+		WithSecretVariable("GH_TOKEN", githubToken).
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("ASSET", asset).
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("COMMIT_HASH", commitHash).
+		WithNewFile("/tmp/release.sh", releaseLinuxScript).
+		WithExec([]string{"sh", "/tmp/release.sh"}).
+		Stdout(ctx)
+}
+
+// checkMiseInstallScript installs the published release through mise exactly
+// the way the README tells users to, then proves the result actually runs.
+//
+// The launch test is the point of the whole check: a wrong strip_components /
+// bin_path lands `sharedinbox` without its sibling data/ and lib/, which no
+// amount of `command -v` checking would catch — the binary exists and then dies
+// on startup.
+const checkMiseInstallScript = `#!/bin/bash
+set -euo pipefail
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+export MISE_YES=1
+
+curl -fsSL https://mise.run | sh
+mise --version
+
+mkdir -p "$HOME/.config/mise"
+# Exactly the snippet documented in README.md — if this drifts, the docs lie.
+cat > "$HOME/.config/mise/config.toml" <<EOF
+[tools."github:${REPO}"]
+version = "${VERSION}"
+asset_pattern = "sharedinbox-*-linux-x86_64.tar.gz"
+strip_components = 1
+bin_path = "."
+filter_bins = ["sharedinbox"]
+EOF
+cat "$HOME/.config/mise/config.toml"
+
+mise install
+BIN=$(mise which sharedinbox)
+echo "resolved: $BIN"
+case "$BIN" in
+    */mise/installs/*) ;;
+    *) echo "ERROR: sharedinbox did not resolve into a mise install dir: $BIN"; exit 1 ;;
+esac
+[ -x "$BIN" ] || { echo "ERROR: $BIN is not executable"; exit 1; }
+
+INSTALL_DIR=$(dirname "$BIN")
+for required in data/flutter_assets lib/libapp.so; do
+    [ -e "$INSTALL_DIR/$required" ] || {
+        echo "ERROR: $required missing next to the executable — tarball layout or strip_components is wrong"
+        ls -la "$INSTALL_DIR"; exit 1; }
+done
+
+# A missing runtime .so shows up here rather than as a mystery launch failure.
+# The plugin libraries in lib/ pull in their own dependencies (libsecret,
+# jsoncpp, …), so check them too rather than only the executable.
+if { ldd "$BIN"; ldd "$INSTALL_DIR"/lib/*.so; } | grep "not found"; then
+    echo "ERROR: unresolved shared libraries (install the runtime deps listed in README.md)"
+    exit 1
+fi
+
+echo "Launching under Xvfb…"
+set +e
+xvfb-run -a timeout 20 "$BIN" >/tmp/app.log 2>&1 &
+APP=$!
+sleep 12
+if ! kill -0 "$APP" 2>/dev/null; then
+    wait "$APP"; rc=$?
+    echo "ERROR: sharedinbox exited after less than 12s (rc=$rc)"
+    cat /tmp/app.log
+    exit 1
+fi
+kill "$APP" 2>/dev/null
+set -e
+echo "--- app log ---"
+cat /tmp/app.log || true
+echo "OK: mise install of ${VERSION} launches and survives 12s"
+
+# The bare form (no asset_pattern/bin_path) is the one-liner in the README's
+# TL;DR. It relies on mise's autodetection, so report it rather than gate on it.
+rm -f "$HOME/.config/mise/config.toml"
+if mise use -g "github:${REPO}@${VERSION}" >/tmp/bare.log 2>&1 && mise which sharedinbox >/dev/null 2>&1; then
+    echo "OK: bare 'mise use -g github:${REPO}@${VERSION}' also resolves sharedinbox"
+else
+    echo "WARN: bare 'mise use -g github:${REPO}@${VERSION}' did NOT resolve sharedinbox;"
+    echo "WARN: the explicit [tools] block from README.md is required. Output:"
+    cat /tmp/bare.log || true
+fi
+`
+
+// CheckMiseInstall installs a published release with mise inside a clean
+// Ubuntu container and asserts it launches. Needs the release to exist on
+// GitHub and real network access, so it is deliberately NOT part of check-fast
+// or the PR gate — .github/workflows/release.yml runs it right after publishing.
+func (m *Ci) CheckMiseInstall(
+	ctx context.Context,
+	// Release version without the leading "v", or "latest".
+	version string,
+	// owner/repo to install from. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// Optional token, only to avoid anonymous GitHub API rate limits.
+	// +optional
+	githubToken *dagger.Secret,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+
+	ctr := dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		// Runtime dependencies only — deliberately NOT the -dev packages the
+		// build image installs. This container is the proof that the README's
+		// apt line is sufficient for a user who only ever installs via mise.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl git " +
+				// README runtime deps. libjsoncpp25 is Ubuntu 24.04's name for
+				// the jsoncpp the flutter_secure_storage plugin links against.
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// headless GL so the GTK window can be created under Xvfb.
+				// xauth is what xvfb-run needs and is only a Recommends of xvfb.
+				"xvfb xauth libosmesa6 libegl1"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("REPO", repository)
+	if githubToken != nil {
+		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
+	}
+	return ctr.
+		WithNewFile("/tmp/check_mise_install.sh", checkMiseInstallScript).
+		WithExec([]string{"bash", "/tmp/check_mise_install.sh"}).
 		Stdout(ctx)
 }
 
@@ -1935,6 +2199,13 @@ flowchart TD
 
     subgraph gh_firebase ["GitHub Actions · firebase-tests.yml (daily cron + workflow_dispatch)"]
         fbTest["test-android-firebase\n(alpha versionCode changed)"]
+    end
+
+    subgraph gh_release ["GitHub Actions · release.yml (push tag v* + workflow_dispatch)"]
+        relLinux["release-linux\nPackageLinuxRelease → GitHub Release asset"]
+        miseCheck["check-mise-install\nmise install + Xvfb launch"]
+
+        relLinux --> miseCheck
     end
 
     check -- "task check-dagger" --> ciCheck

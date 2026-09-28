@@ -185,6 +185,38 @@ tasks:
     cmds:
       - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
+  package-linux-release:
+    desc: Build the mise-installable Linux tarball via Dagger and export it to build/ (VERSION defaults to pubspec.yaml)
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/pubspec_version.sh)}"
+        HASH=$(git rev-parse --short HEAD)
+        ASSET="sharedinbox-$VERSION-linux-x86_64.tar.gz"
+        mkdir -p build
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. package-linux-release --version "$VERSION" --commit-hash "$HASH" -o "build/$ASSET"
+        echo "Wrote build/$ASSET"
+
+  release-linux:
+    desc: Publish the Linux tarball as a GitHub Release asset on tag v$VERSION (what `mise use github:guettli/sharedinbox` installs)
+    preconditions:
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN is not set (needs contents:write)"
+      - sh: test -n "$VERSION"
+        msg: "VERSION is not set (e.g. VERSION=0.1.2, without the leading v)"
+      # A release whose About page shows a different version than the tag is
+      # worse than no release, so refuse to publish on a mismatch.
+      - sh: test "$VERSION" = "$(scripts/pubspec_version.sh)"
+        msg: "VERSION does not match the version: field in pubspec.yaml"
+    cmds:
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}"
+
+  check-mise-install:
+    desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/pubspec_version.sh)}"
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. check-mise-install --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}"
+
   build-android-bundle:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
     cmds:
