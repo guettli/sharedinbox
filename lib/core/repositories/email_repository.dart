@@ -70,6 +70,18 @@ abstract class EmailRepository {
   /// Returns the number of messages successfully transmitted.
   Future<int> flushOutbox(String accountId, String password);
 
+  /// Immediately attempts to send the queued outbox messages for [accountId]
+  /// and reports the concrete outcome, so a user action (composing a message,
+  /// or hitting Retry) gets real feedback instead of a fire-and-forget kick of
+  /// the background loop (#755).
+  ///
+  /// Reads the account password itself and runs the same flush the background
+  /// sync loop uses, guarded by a per-account lock so a UI-initiated send can
+  /// never race the loop into delivering the same message twice. When
+  /// [outboxRowId] is supplied the returned [SendNowResult] describes that
+  /// row's fate; otherwise it reports whether anything was sent.
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId});
+
   /// Downloads [attachment] bytes from the server (or local cache) and returns
   /// the local file-system path.  Subsequent calls for the same attachment
   /// return the cached path without a network round-trip.
@@ -220,4 +232,31 @@ abstract class EmailRepository {
   /// in full. EmailBodies are preserved so already-downloaded content is not
   /// re-downloaded. Other mailboxes are untouched.
   Future<void> clearMailboxForResync(String accountId, String mailboxPath);
+}
+
+/// Outcome of an [EmailRepository.sendNow] call for the targeted outbox row.
+enum SendNowOutcome {
+  /// The message was transmitted and removed from the queue.
+  sent,
+
+  /// The send failed with a retriable error; the row stays queued and backs
+  /// off for a later automatic retry.
+  transientFailed,
+
+  /// The send failed permanently (e.g. a 5xx SMTP rejection); the row is
+  /// marked failed and will not be retried automatically.
+  permanentlyFailed,
+
+  /// No send was attempted for the row (e.g. it was not yet eligible, or a
+  /// concurrent flush handled it) and it remains queued.
+  queued,
+}
+
+/// The result of an [EmailRepository.sendNow] call: the [outcome] plus, on
+/// failure, a human-readable [message] explaining why, suitable for a SnackBar.
+class SendNowResult {
+  const SendNowResult(this.outcome, {this.message});
+
+  final SendNowOutcome outcome;
+  final String? message;
 }

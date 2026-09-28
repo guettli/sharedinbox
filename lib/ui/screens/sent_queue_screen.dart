@@ -18,7 +18,7 @@ class SentQueueScreen extends ConsumerWidget {
     final rowsAsync = ref.watch(allOutboxProvider);
     final accountsAsync = ref.watch(allAccountsProvider);
     final repo = ref.watch(outboxRepositoryProvider);
-    final syncNow = ref.read(syncNowProvider);
+    final sendNow = ref.read(emailRepositoryProvider).sendNow;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sent Queue')),
@@ -38,7 +38,7 @@ class SentQueueScreen extends ConsumerWidget {
               message: rows[i],
               account: accountsById[rows[i].accountId],
               repo: repo,
-              syncNow: syncNow,
+              sendNow: sendNow,
               showAccountHeader: true,
             ),
           );

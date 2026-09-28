@@ -15,6 +15,8 @@ import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart'
+    show SendNowOutcome;
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/imap/object_id.dart';
@@ -426,6 +428,35 @@ void main() {
       final r = _makeRepos();
       expect(await r.emails.getEmail('no-such-id'), isNull);
     });
+
+    test(
+      'sendNow reports transientFailed and keeps the row when SMTP is down',
+      () async {
+        // _noSmtpConnect errors, so the guarded flush inside sendNow sees a
+        // (non-permanent) failure and must surface it as a transient outcome
+        // while leaving the row queued for a later retry (#755).
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hi',
+            body: 'body',
+          ),
+        );
+
+        final result = await r.emails.sendNow(_account.id, outboxRowId: rowId);
+        expect(result.outcome, SendNowOutcome.transientFailed);
+        expect(
+          await r.db.select(r.db.outbox).get(),
+          hasLength(1),
+          reason: 'a transient failure must leave the row queued',
+        );
+      },
+    );
 
     test('observeEmails reflects inserted row', () async {
       final r = _makeRepos();
@@ -3887,6 +3918,58 @@ void main() {
       expect(mirror!.mailboxPath, 'Archive');
     });
 
+    // Stalwart names its trash folder "Deleted Items", so a second folder
+    // called "Trash" carries role `trash` as well. The mirror must land in the
+    // folder the user actually picked — mirroring into the sibling trash folder
+    // files the shared server message in two folders at once, which the
+    // single-folder local model cannot represent (#910).
+    test('move mirror disambiguates two same-role folders by name', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'imap-p',
+        'Deleted Items',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedMailbox(r.db, 'jmap-p', 'mbx-inbox', 'Inbox', role: 'inbox');
+      // The decoy sorts first both by insertion and by id, so a role-only match
+      // lands on it whatever order the rows come back in.
+      await seedMailbox(r.db, 'jmap-p', 'mbx-a-trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'jmap-p',
+        'mbx-b-deleted',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(
+        r.db,
+        'jmap-p:e1',
+        'jmap-p',
+        'mbx-inbox',
+        'abc@example.com',
+      );
+
+      await r.emails.moveEmail('imap-p:5', 'Deleted Items');
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbx-b-deleted');
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, hasLength(1));
+      expect(
+        jsonDecode(changes.first.payload),
+        {'src': 'mbx-inbox', 'dest': 'mbx-b-deleted'},
+      );
+    });
+
     test('spam move mirrors to the counterpart junk mailbox', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_imapPair, 'pw');
@@ -5388,6 +5471,65 @@ void main() {
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    // A queued move carries the folder the row sat in when it was enqueued.
+    // Patching `mailboxIds/dest: true` + `mailboxIds/src: null` leaves the mail
+    // in two folders when that `src` has gone stale, so the move must set
+    // `mailboxIds` outright instead (#910).
+    test('move replaces mailboxIds instead of unsetting the queued src',
+        () async {
+      Map<String, dynamic>? capturedUpdate;
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        final call = (body['methodCalls'] as List).first as List;
+        final args = call[1] as Map<String, dynamic>;
+        final update = args['update'] as Map<String, dynamic>;
+        capturedUpdate = update['e1'] as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                {'accountId': 'acct1', 'updated': {}},
+                '0',
+              ],
+            ],
+          }),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await seedChange(
+        r.db,
+        r.accounts,
+        changeType: 'move',
+        payload: '{"src":"mbx1","dest":"mbx2"}',
+      );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(capturedUpdate, {
+        'mailboxIds': {'mbx2': true},
+      });
     });
 
     test('sends delete and removes change on success', () async {
@@ -6934,44 +7076,62 @@ void main() {
       );
     });
 
-    test('sendEmail aborts with TimeoutException when IMAP connect hangs',
-        () async {
-      final r = _makeRepos(
-        sendOperationTimeout: const Duration(milliseconds: 50),
-        smtpConnect: (Account _, String __, String ___) async =>
-            _NoOpSmtpClient(),
-        imapConnect: (Account _, String __, String ___) =>
-            Completer<imap.ImapClient>().future,
-      );
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'sendEmail treats a hung IMAP Sent-copy connect as best-effort (#755)',
+      () async {
+        // The SMTP send has already committed the message, so a hung IMAP
+        // connect for the Sent copy must NOT fail the send — otherwise the
+        // outbox would re-send an already-delivered message. It is swallowed
+        // and logged instead.
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) =>
+              Completer<imap.ImapClient>().future,
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_account, 'pw');
 
-      await expectLater(
-        r.emails.sendEmail('acc-1', draft),
-        throwsA(isA<TimeoutException>()),
-      );
-    });
+        // Completes normally rather than throwing.
+        await r.emails.sendEmail('acc-1', draft);
+        expect(
+          recorder.entries.map((e) => e.event),
+          contains('outbox.send.sent_copy_failed'),
+        );
+      },
+    );
 
-    test('sendEmail aborts with TimeoutException when IMAP createMailbox hangs',
-        () async {
-      final hangingMailbox = _HangingCreateMailboxImapClient();
-      final r = _makeRepos(
-        sendOperationTimeout: const Duration(milliseconds: 50),
-        smtpConnect: (Account _, String __, String ___) async =>
-            _NoOpSmtpClient(),
-        imapConnect: (Account _, String __, String ___) async => hangingMailbox,
-      );
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'sendEmail still logs out after a hung IMAP createMailbox (#755)',
+      () async {
+        final hangingMailbox = _HangingCreateMailboxImapClient();
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) async =>
+              hangingMailbox,
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_account, 'pw');
 
-      await expectLater(
-        r.emails.sendEmail('acc-1', draft),
-        throwsA(isA<TimeoutException>()),
-      );
-      expect(
-        hangingMailbox.logoutCalled,
-        isTrue,
-        reason: 'logout must run in finally',
-      );
-    });
+        // Best-effort Sent copy: the hang is swallowed, the send succeeds, and
+        // logout still runs in the finally so the connection isn't leaked.
+        await r.emails.sendEmail('acc-1', draft);
+        expect(
+          hangingMailbox.logoutCalled,
+          isTrue,
+          reason: 'logout must run in finally even when the Sent copy fails',
+        );
+        expect(
+          recorder.entries.map((e) => e.event),
+          contains('outbox.send.sent_copy_failed'),
+        );
+      },
+    );
 
     test(
       'SMTP connect timeout carries phase name + host:port so the sent-queue '
@@ -7003,30 +7163,26 @@ void main() {
     );
 
     test(
-      'IMAP connect timeout carries the IMAP host:port',
+      'a failed IMAP Sent copy is logged with the IMAP host:port (#755)',
       () async {
+        // The information that used to ride on the thrown error now lands in
+        // the best-effort warning log instead (the send itself succeeds).
+        final recorder = _PushStatusRecorder();
         final r = _makeRepos(
           sendOperationTimeout: const Duration(milliseconds: 50),
           smtpConnect: (Account _, String __, String ___) async =>
               _NoOpSmtpClient(),
           imapConnect: (Account _, String __, String ___) =>
               Completer<imap.ImapClient>().future,
+          appLogger: AppLogger(recorder),
         );
         await r.accounts.addAccount(_account, 'pw');
 
-        await expectLater(
-          r.emails.sendEmail('acc-1', draft),
-          throwsA(
-            isA<TimeoutException>().having(
-              (e) => e.message,
-              'message',
-              allOf(
-                contains('IMAP connect/login'),
-                contains('imap.example.com'),
-              ),
-            ),
-          ),
+        await r.emails.sendEmail('acc-1', draft);
+        final warning = recorder.entries.firstWhere(
+          (e) => e.event == 'outbox.send.sent_copy_failed',
         );
+        expect(warning.message, contains('imap.example.com'));
       },
     );
   });

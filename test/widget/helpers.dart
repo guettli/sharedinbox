@@ -532,6 +532,25 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<int> flushOutbox(String accountId, String password) async => 0;
 
+  /// Result returned by [sendNow]; defaults to a successful send. Tests set this
+  /// to exercise the queued/failed SnackBar branches.
+  SendNowResult sendNowResult = const SendNowResult(SendNowOutcome.sent);
+
+  /// The `outboxRowId`s passed to [sendNow], in call order.
+  final List<int?> sendNowRowIds = [];
+
+  /// When set, [sendNow] throws this instead of returning [sendNowResult], so
+  /// tests can exercise the Retry error path (e.g. no stored password).
+  Object? sendNowError;
+
+  @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async {
+    sendNowRowIds.add(outboxRowId);
+    final error = sendNowError;
+    if (error != null) throw error;
+    return sendNowResult;
+  }
+
   /// Bytes written to disk by [downloadAttachment]. Defaults to a valid 1×1
   /// PNG so image-preview tests pass the signature sniff in the detail screen;
   /// override with garbage to exercise the "could not be displayed" fallback.
@@ -716,6 +735,31 @@ class _NoOpManageSieveProbeService implements ManageSieveProbeService {
 ///
 /// Providers are replaced with [overrides], so no database or network is used.
 /// A fresh [GoRouter] is created for every call so tests are independent.
+/// A minimal two-route router: a `/home` landing spot a test can navigate away
+/// from, plus `/compose` built by [compose].
+///
+/// Shared rather than copied: three widget tests had drifted into their own
+/// copies of this scaffolding, which the duplication gate correctly flags as one
+/// clone. Pass [compose] to decide what `/compose` renders -- the real
+/// ComposeScreen, a prefilled one, or a bare stub.
+GoRouter homeAndComposeRouter({
+  required Widget Function(GoRouterState state) compose,
+}) =>
+    GoRouter(
+      initialLocation: '/home',
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (ctx, state) =>
+              const Scaffold(body: Center(child: Text('home'))),
+        ),
+        GoRoute(
+          path: '/compose',
+          builder: (ctx, state) => compose(state),
+        ),
+      ],
+    );
+
 Widget buildApp({
   required String initialLocation,
   required List<Override> overrides,

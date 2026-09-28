@@ -55,6 +55,9 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<int> flushOutbox(String a, String p) async => 0;
   @override
+  Future<SendNowResult> sendNow(String a, {int? outboxRowId}) async =>
+      const SendNowResult(SendNowOutcome.sent);
+  @override
   Future<String> downloadAttachment(String id, EmailAttachment att) async => '';
   @override
   Future<String> fetchRawRfc822(String id) async => '';

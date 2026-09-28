@@ -9,8 +9,10 @@
 #      fresh execs (see the loop below) until Play has generated the split
 #      APKs. If Play has not finished within the total budget, we skip this
 #      cycle (see #414 — Play-side delay is not a red build; #432 — why the
-#      wait no longer lives inside one long exec). Every other failure (auth,
-#      network, Play API 5xx) still exits non-zero.
+#      wait no longer lives inside one long exec). An attempt that wedges and
+#      gets killed by its own timeout is retried too (see #897); only a run of
+#      consecutive timeouts fails the job. Every other failure (auth, network,
+#      Play API 5xx) still exits non-zero.
 #   2. Run Firebase Test Lab against the fetched APKs.
 #   3. On success, record the versionCode in LAST_TESTED_ALPHA_VERSION_CODE
 #      so callers can tell which alpha was last exercised green. Written
@@ -147,12 +149,26 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # cache-warmed), one Play check and the split-APK download — no inner poll to
 # outlast anymore. 600s leaves comfortable headroom for a slow download while
 # still killing a genuinely wedged exec promptly (see #396, #398).
-FETCH_ATTEMPT_TIMEOUT_SECONDS=600
-FETCH_TOTAL_BUDGET_SECONDS=5400
-FETCH_RETRY_INTERVAL_SECONDS=60
+#
+# A single wedged attempt must NOT fail the job: the exec can stall on
+# infrastructure that has nothing to do with the APK — most commonly a Docker
+# Hub hiccup while `Container.from("python:3.12-alpine")` pulls the base image
+# (the same TLS-handshake stall the workflow guards against for the runner-wait
+# step, see #453). In #897, attempt 34 of 34 hung there, `timeout` killed it at
+# 600s, and the whole run went red — with ~52 min of budget still unspent and
+# 33 healthy attempts behind it. Treat a per-attempt timeout like a PENDING
+# result instead: warn, wait, and retry on a fresh exec. Only give up when the
+# stall repeats FETCH_MAX_CONSECUTIVE_TIMEOUTS times in a row (a genuinely
+# wedged engine, which waiting will not fix) or the overall budget elapses.
+# Every other non-zero exit (auth, network, Play API 5xx) still fails at once.
+FETCH_ATTEMPT_TIMEOUT_SECONDS="${FIREBASE_FETCH_ATTEMPT_TIMEOUT_S:-600}"
+FETCH_TOTAL_BUDGET_SECONDS="${FIREBASE_FETCH_TOTAL_BUDGET_S:-5400}"
+FETCH_RETRY_INTERVAL_SECONDS="${FIREBASE_FETCH_RETRY_INTERVAL_S:-60}"
+FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
 
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
+FETCH_CONSECUTIVE_TIMEOUTS=0
 while :; do
     FETCH_ATTEMPT=$((FETCH_ATTEMPT + 1))
     # Start each attempt from a clean dest dir so a stale PENDING (or partial
@@ -163,11 +179,32 @@ while :; do
     # re-run and re-check Play; otherwise the engine would serve the first
     # attempt's cached PENDING directory and the retry loop would never make
     # progress (see #432).
-    if ! timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
+    #
+    # Capture rc separately: an `if !` clause flips $? to 0 in its then-block,
+    # which would hide the timeout (124/137) vs real-failure distinction the
+    # retry below depends on.
+    FETCH_RC=0
+    timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env:PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
-            -o "$APK_DIR"; then
-        echo "ERROR: dagger fetch-play-store-apks failed" >&2
+            -o "$APK_DIR" || FETCH_RC=$?
+    # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
+    # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".
+    if [ "$FETCH_RC" -eq 124 ] || [ "$FETCH_RC" -eq 137 ]; then
+        FETCH_CONSECUTIVE_TIMEOUTS=$((FETCH_CONSECUTIVE_TIMEOUTS + 1))
+        NOW=$(date +%s)
+        if [ "$FETCH_CONSECUTIVE_TIMEOUTS" -ge "$FETCH_MAX_CONSECUTIVE_TIMEOUTS" ] || [ "$NOW" -ge "$FETCH_DEADLINE" ]; then
+            echo "ERROR: dagger fetch-play-store-apks timed out after ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s on ${FETCH_CONSECUTIVE_TIMEOUTS} consecutive attempt(s)" >&2
+            exit 1
+        fi
+        echo "::warning::[firebase] fetch attempt $FETCH_ATTEMPT timed out after ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s (${FETCH_CONSECUTIVE_TIMEOUTS}/${FETCH_MAX_CONSECUTIVE_TIMEOUTS} consecutive); retrying in ${FETCH_RETRY_INTERVAL_SECONDS}s ($(( FETCH_DEADLINE - NOW ))s left)" >&2
+        sleep "$FETCH_RETRY_INTERVAL_SECONDS"
+        continue
+    fi
+    # The exec answered, so any earlier stall was transient — start counting again.
+    FETCH_CONSECUTIVE_TIMEOUTS=0
+    if [ "$FETCH_RC" -ne 0 ]; then
+        echo "ERROR: dagger fetch-play-store-apks failed (exit $FETCH_RC)" >&2
         exit 1
     fi
     if [ ! -f "$APK_DIR/versionCode" ]; then

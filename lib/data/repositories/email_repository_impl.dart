@@ -4421,10 +4421,19 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Finds the path of the mailbox on [accountId] that corresponds to a move
-  /// whose source destination had the given [role] / [name]. Prefers a role
-  /// match (roles are protocol-independent); falls back to a case-insensitive
-  /// name match for role-less custom folders. Returns null when the counterpart
-  /// has no equivalent mailbox.
+  /// whose source destination had the given [role] / [name]. Matches in the
+  /// same order [AccountComparison] pairs the two protocol views of one server:
+  /// exact (role, name) first, then role alone (roles are protocol-independent),
+  /// then a case-insensitive name match for role-less custom folders. Returns
+  /// null when the counterpart has no equivalent mailbox.
+  ///
+  /// The exact pass matters because a role is not unique: Stalwart ships
+  /// "Deleted Items" as its trash folder, so a mailbox the user (or a test)
+  /// creates as "Trash" carries role `trash` too. Matching on the role alone
+  /// picked whichever of the two came first out of the DB, mirroring the move
+  /// into the *sibling* trash folder — the shared server message then sat in
+  /// both folders at once, which the single-folder local model cannot
+  /// represent, and the two accounts diverged for good (#910).
   Future<String?> _resolveCounterpartMailboxPath(
     String accountId, {
     required String? role,
@@ -4433,12 +4442,15 @@ class EmailRepositoryImpl implements EmailRepository {
     final mailboxes = await (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    final lowerName = name.toLowerCase();
+    for (final m in mailboxes) {
+      if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
+    }
     if (role != null) {
       for (final m in mailboxes) {
         if (m.role == role) return m.path;
       }
     }
-    final lowerName = name.toLowerCase();
     for (final m in mailboxes) {
       if (m.name.toLowerCase() == lowerName) return m.path;
     }
@@ -5147,15 +5159,23 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'move':
         final destMailboxId = payload['dest'] as String;
-        final srcMailboxId = payload['src'] as String;
+        // Set `mailboxIds` outright rather than patching `dest: true` plus
+        // `src: null`. `src` is the folder the row sat in when the move was
+        // queued; by flush time the server can hold the message elsewhere
+        // (another client moved it, or an earlier queued move of ours landed
+        // first). Dropping only the stale `src` then leaves it filed in two
+        // folders at once, which the single-folder local model cannot
+        // represent, so the mail sticks in a folder the local cache never
+        // shows and the account diverges permanently (#910). A replacement is
+        // also what a move means here: the mail is now in the destination and
+        // nowhere else.
         responses = await jmap.call([
           [
             'Email/set',
             setArgs({
               'update': {
                 jmapEmailId: {
-                  'mailboxIds/$destMailboxId': true,
-                  'mailboxIds/$srcMailboxId': null,
+                  'mailboxIds': {destMailboxId: true},
                 },
               },
             }),
@@ -5400,7 +5420,18 @@ class EmailRepositoryImpl implements EmailRepository {
       );
 
   @override
-  Future<int> flushOutbox(String accountId, String password) async {
+  Future<int> flushOutbox(String accountId, String password) =>
+      _flushOutbox(accountId, password);
+
+  /// Shared flush machinery for [flushOutbox] (background sync loop) and
+  /// [sendNow] (UI-initiated). [extraObserver], when supplied, is notified of
+  /// every row outcome alongside the app-log observer, letting a caller capture
+  /// the fate of a specific row without duplicating the sender/timing wiring.
+  Future<int> _flushOutbox(
+    String accountId,
+    String password, {
+    OutboxFlushObserver? extraObserver,
+  }) async {
     final account = (await _accounts.getAccount(accountId))!;
     // Per-row timing breakdowns, keyed by outbox row id, so the log observer
     // can report *why* each send took as long as it did (#801). Scoped to this
@@ -5449,7 +5480,112 @@ class EmailRepositoryImpl implements EmailRepository {
           timing.total = stopwatch.elapsed;
         }
       },
-      observer: _outboxLogObserver(accountId, timings),
+      observer: _combineObservers(
+        extraObserver,
+        _outboxLogObserver(accountId, timings),
+      ),
+    );
+  }
+
+  @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async {
+    final password = await _accounts.getPassword(accountId);
+    // Capture the target row's outcome as the guarded flush processes it, so we
+    // can report the concrete result to the user (#755). Runs alongside the
+    // app-log observer via [_combineObservers].
+    SendNowResult? captured;
+    final observer = outboxRowId == null
+        ? null
+        : OutboxFlushObserver(
+            onOk: (job) {
+              if (job.id == outboxRowId) {
+                captured = const SendNowResult(SendNowOutcome.sent);
+              }
+            },
+            onTransient: (job, error, stack, nextAttemptAt) {
+              if (job.id == outboxRowId) {
+                captured = SendNowResult(
+                  SendNowOutcome.transientFailed,
+                  message: error.toString(),
+                );
+              }
+            },
+            onPermanent: (job, error) {
+              if (job.id == outboxRowId) {
+                captured = SendNowResult(
+                  SendNowOutcome.permanentlyFailed,
+                  message: error.message,
+                );
+              }
+            },
+          );
+    final sentCount = await _flushOutbox(
+      accountId,
+      password,
+      extraObserver: observer,
+    );
+    if (captured != null) return captured!;
+    if (outboxRowId == null) {
+      // No row targeted, so report what the flush actually did, per the
+      // interface contract ("otherwise it reports whether anything was sent").
+      // Claiming `sent` unconditionally would report delivery even when the
+      // queue was empty or every row failed.
+      return SendNowResult(
+        sentCount > 0 ? SendNowOutcome.sent : SendNowOutcome.queued,
+      );
+    }
+    // The row was not processed by this flush — either a concurrent flush had
+    // already sent it (the per-account lock serialises the two, so it was gone
+    // by the time we ran) or it is not eligible yet. Derive the outcome from
+    // its current persisted state.
+    final row = await (_db.select(_db.outbox)
+          ..where((t) => t.id.equals(outboxRowId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) {
+      // Gone from the queue. Usually that means a concurrent flush delivered it,
+      // and reporting `sent` is right. It is NOT proof of delivery though: the
+      // Discard action stays enabled while a retry is in flight, so a user who
+      // discards mid-send also lands here. Distinguishing the two needs a
+      // durable per-row terminal state, which is the dedup follow-up's job.
+      return const SendNowResult(SendNowOutcome.sent);
+    }
+    if (row.status == 'failed') {
+      return SendNowResult(
+        SendNowOutcome.permanentlyFailed,
+        message: row.lastError,
+      );
+    }
+    return SendNowResult(SendNowOutcome.queued, message: row.lastError);
+  }
+
+  /// Fans a single flush's row-outcome callbacks out to two observers. Each
+  /// side is best-effort — the outbox's own `_safeNotify` already guards the
+  /// combined callback — and [first] runs before [second] so a capturing
+  /// observer records its result even if the log observer later throws.
+  OutboxFlushObserver? _combineObservers(
+    OutboxFlushObserver? first,
+    OutboxFlushObserver? second,
+  ) {
+    if (first == null) return second;
+    if (second == null) return first;
+    return OutboxFlushObserver(
+      onAttempt: (job) {
+        first.onAttempt?.call(job);
+        second.onAttempt?.call(job);
+      },
+      onOk: (job) {
+        first.onOk?.call(job);
+        second.onOk?.call(job);
+      },
+      onTransient: (job, error, stack, nextAttemptAt) {
+        first.onTransient?.call(job, error, stack, nextAttemptAt);
+        second.onTransient?.call(job, error, stack, nextAttemptAt);
+      },
+      onPermanent: (job, error) {
+        first.onPermanent?.call(job, error);
+        second.onPermanent?.call(job, error);
+      },
     );
   }
 
@@ -5619,7 +5755,48 @@ class EmailRepositoryImpl implements EmailRepository {
         // Best-effort: the message is already sent.
       }
     }
-    // Save a copy to the Sent folder via IMAP APPEND.
+    // The SMTP send above is the commit point (#755): once sendMessage returns,
+    // the message is on its way and must never be re-sent. Saving a copy to the
+    // IMAP Sent folder is best-effort from here on — swallow and log any failure
+    // rather than rethrow. If it rethrew, the outbox would treat this
+    // already-sent row as a transient failure and re-send it on the next retry,
+    // delivering the message twice and leaving the row lingering in the Sent
+    // Queue until a later attempt finally completed the append.
+    try {
+      await _appendSentCopy(
+        account,
+        password,
+        mimeMessage,
+        imapEndpoint,
+        timing,
+      );
+    } catch (e, stack) {
+      final logger = _appLogger;
+      if (logger != null) {
+        unawaited(
+          logger.warn(
+            'outbox.send.sent_copy_failed',
+            'Message sent, but saving a copy to the Sent folder failed: $e',
+            accountId: account.id,
+            error: e,
+            stack: stack,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Connects over IMAP and APPENDs [mimeMessage] to the Sent folder, creating
+  /// the folder first when the server does not pre-create it. Extracted from
+  /// [_sendEmailImap] so the caller can treat the whole Sent-copy step as one
+  /// best-effort unit that never undoes an already-completed SMTP send (#755).
+  Future<void> _appendSentCopy(
+    account_model.Account account,
+    String password,
+    imap.MimeMessage mimeMessage,
+    String imapEndpoint,
+    SendTiming timing,
+  ) async {
     // Create the folder first — many servers don't pre-create it.
     final imapClient = await _withPhase(
       'IMAP connect/login (to append Sent copy)',
