@@ -19,6 +19,11 @@ const _kAppVersion = String.fromEnvironment('GIT_HASH');
 /// report "update available" on every single check.
 const _kReleaseVersion = String.fromEnvironment('RELEASE_VERSION');
 
+/// SemVer of the running build when it came from a tagged GitHub Release,
+/// otherwise empty. Exposed so the UI can say which release is running instead
+/// of only comparing the build's commit against `main`.
+const kRunningReleaseVersion = _kReleaseVersion;
+
 const _kLatestJsonUrl = 'https://sharedinbox.de/latest.json';
 const _kLatestReleaseUrl =
     'https://api.github.com/repos/guettli/sharedinbox/releases/latest';

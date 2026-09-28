@@ -1075,13 +1075,6 @@ func (m *Ci) PublishWebsite(
 		Stdout(ctx)
 }
 
-// BuildLinux builds the Linux release bundle.
-func (m *Ci) BuildLinux() *dagger.Directory {
-	return m.setup(m.linuxSrc()).
-		WithExec([]string{"flutter", "build", "linux", "--release"}).
-		Directory("build/linux/x64/release/bundle")
-}
-
 // buildLinuxBundle builds the Linux release bundle with optional dart-defines.
 //
 // releaseVersion is set only for tagged GitHub Releases (the mise channel). It
@@ -1320,7 +1313,13 @@ done
 # Collected into a variable first: under 'set -o pipefail' a non-ELF file in
 # lib/ makes ldd exit non-zero, which would fail the pipeline and report
 # "unresolved libraries" with no matching lines to show for it.
-LDD_OUT=$({ ldd "$BIN" || true; ldd "$INSTALL_DIR"/lib/*.so || true; } 2>&1)
+#
+# LD_LIBRARY_PATH is required for the lib/ pass: the plugin .so files link
+# against libflutter_linux_gtk.so, their own sibling. Only the executable
+# carries the $ORIGIN/lib RPATH, so ldd on a plugin in isolation reports
+# "libflutter_linux_gtk.so => not found" for a library that is right there —
+# which would fail every release. Verified against a real bundle.
+LDD_OUT=$({ ldd "$BIN" || true; LD_LIBRARY_PATH="$INSTALL_DIR/lib" ldd "$INSTALL_DIR"/lib/*.so || true; } 2>&1)
 if printf '%s\n' "$LDD_OUT" | grep "not found"; then
     echo "ERROR: unresolved shared libraries (install the runtime deps listed in README.md)"
     exit 1
