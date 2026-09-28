@@ -28,6 +28,43 @@ BASE_URL = "https://sharedinbox.de"
 GITHUB_BASE = "https://github.com"
 MAX_BUILDS_PER_PLATFORM = 30
 
+# Intro for the generated _index.md.
+#
+# It lives here rather than in a committed content file because this script
+# OVERWRITES website/content/builds/_index.md on every website build — anything
+# written straight into that file is silently discarded before Hugo ever sees
+# it. The listings below are git-hash snapshots; this points readers at the
+# versioned channel instead. Keep in sync with README.md's
+# "Install on Linux with mise" section.
+MISE_INTRO = """The builds listed below are git-hash snapshots, published automatically on every
+push to main.
+
+## Linux: install with mise
+
+For a versioned install that upgrades itself, use [mise](https://mise.jdx.dev/) — it installs
+from the project's GitHub Releases:
+
+```bash
+mise use -g github:guettli/sharedinbox@latest
+sharedinbox
+```
+
+Upgrade later with `mise up github:guettli/sharedinbox` (the tool name, not `sharedinbox`).
+
+Runtime prerequisites on Ubuntu 24.04+ (the bundle needs glibc 2.39 or newer):
+
+```bash
+sudo apt install libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils
+```
+
+Debian 13 is not supported yet: it ships `libjsoncpp26`, while this build links
+`libjsoncpp.so.25`. A running keyring (gnome-keyring, KWallet, …) is required for account
+passwords. See the
+[README](https://github.com/guettli/sharedinbox#install-on-linux-with-mise) for the explicit
+mise options and for adding an application-menu entry.
+
+"""
+
 
 def list_remote_files(ssh_user: str, ssh_host: str, pattern: str) -> list[str]:
     # `mkdir -p` makes the empty-server case legitimate (find then exits 0 with
@@ -144,8 +181,8 @@ def main() -> None:
 
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # _index.md: platform sections, newest-first within each
-    index_lines = ["---\ntitle: Builds\n---\n\n"]
+    # _index.md: install instructions, then platform sections (newest-first)
+    index_lines = ["---\ntitle: Builds\n---\n\n", MISE_INTRO]
 
     index_lines.append(f"## Linux (last {MAX_BUILDS_PER_PLATFORM})\n\n")
     if linux_days:
