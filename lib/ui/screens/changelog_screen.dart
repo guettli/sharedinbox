@@ -97,6 +97,7 @@ class ChangeLogScreen extends ConsumerWidget {
         children: [
           const _StatusHeader(),
           const Divider(height: 1),
+          const _BugReportsSection(),
           Expanded(child: _buildBody(context, ref)),
         ],
       ),
@@ -207,6 +208,45 @@ class _StatusHeader extends ConsumerWidget {
           onTap: () => ChangeLogScreen._launch(_mainCommitsUrl),
         );
     }
+  }
+}
+
+/// Bug reports filed from this install, shown at the top of the ChangeLog.
+/// Only reports that opened a GitHub issue are recorded; the list is empty
+/// until the user files one. Newest first, all rows retained.
+class _BugReportsSection extends ConsumerWidget {
+  const _BugReportsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reports = ref.watch(bugReportsProvider).value ?? const [];
+    if (reports.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Bug reports from this app',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 6),
+          for (final r in reports)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: _AppLink(
+                text: r.issueNumber != null
+                    ? 'Issue #${r.issueNumber} — '
+                        '${ChangeLogScreen._formatCommitDate(r.createdAt)}'
+                    : 'Bug report — '
+                        '${ChangeLogScreen._formatCommitDate(r.createdAt)}',
+                onTap: () => ChangeLogScreen._launch(r.issueUrl),
+              ),
+            ),
+          const Divider(height: 1),
+        ],
+      ),
+    );
   }
 }
 

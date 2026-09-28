@@ -31,6 +31,7 @@ Widget _buildScreen({
   Map<String, DateTime> installedVersions = const {},
   RepoStatus? repoStatus,
   UpdateInfo? updateInfo,
+  List<BugReportInfo> bugReports = const [],
 }) {
   return ProviderScope(
     overrides: [
@@ -40,6 +41,7 @@ Widget _buildScreen({
         return db;
       }),
       installedVersionsProvider.overrideWith((ref) async => installedVersions),
+      bugReportsProvider.overrideWith((ref) async => bugReports),
       repoStatusProvider.overrideWith((ref) async => repoStatus),
       updateInfoProvider.overrideWith((ref) async => updateInfo),
     ],
@@ -201,6 +203,50 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Development build'), findsOneWidget);
+  });
+
+  testWidgets('lists bug reports newest first with issue number and date', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(
+        assets: {'assets/changelog.txt': _fakeChangelog},
+        bugReports: [
+          (
+            issueUrl: 'https://example.com/900',
+            issueNumber: 900,
+            createdAt: DateTime(2026, 3, 5),
+          ),
+          (
+            issueUrl: 'https://example.com/850',
+            issueNumber: 850,
+            createdAt: DateTime(2026, 1, 2),
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Bug reports from this app'), findsOneWidget);
+    expect(find.textContaining('Issue #900'), findsOneWidget);
+    expect(find.textContaining('5 Mar 2026'), findsOneWidget);
+    expect(find.textContaining('Issue #850'), findsOneWidget);
+
+    // Newest first: #900 must render above #850.
+    final first = tester.getTopLeft(find.textContaining('Issue #900')).dy;
+    final second = tester.getTopLeft(find.textContaining('Issue #850')).dy;
+    expect(first, lessThan(second));
+  });
+
+  testWidgets('renders no bug-report section when there are none', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildScreen(assets: {'assets/changelog.txt': _fakeChangelog}),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Bug reports from this app'), findsNothing);
   });
 
   testWidgets('shows a new-app-version line when an update is available', (
