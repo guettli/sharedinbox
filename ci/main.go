@@ -1155,11 +1155,11 @@ func linuxReleaseDirName(version string) string {
 // Layout (one top-level dir, see linuxReleaseDirName):
 //
 //	sharedinbox-<version>-linux-x86_64/
-//	  sharedinbox                                     # ELF executable
-//	  data/                                           # flutter_assets, icudtl.dat
-//	  lib/                                            # libapp.so, libflutter_linux_gtk.so, …
-//	  share/applications/sharedinbox.desktop          # menu entry (opt-in, see README)
-//	  share/icons/hicolor/512x512/apps/sharedinbox.png
+//	  sharedinbox                              # ELF executable
+//	  sharedinbox.png                          # icon, installed by linux/CMakeLists.txt
+//	  data/                                    # flutter_assets, icudtl.dat
+//	  lib/                                     # libapp.so, libflutter_linux_gtk.so, …
+//	  share/applications/sharedinbox.desktop   # menu entry (opt-in, see README)
 func (m *Ci) PackageLinuxRelease(
 	// Release version without the leading "v", e.g. "0.1.2". Must match pubspec.yaml.
 	version string,
@@ -1174,10 +1174,10 @@ func (m *Ci) PackageLinuxRelease(
 		// GNU tar: busybox tar has no --sort/--mtime/--owner.
 		WithExec([]string{"apk", "add", "--no-cache", "tar"}).
 		WithDirectory("/pkg/"+dir, m.buildLinuxBundle(commitHash, version)).
+		// The icon is already at the bundle root (linux/CMakeLists.txt installs
+		// it there), so only the .desktop file has to be added.
 		WithFile("/pkg/"+dir+"/share/applications/sharedinbox.desktop",
 			m.Source.File("linux/packaging/sharedinbox.desktop")).
-		WithFile("/pkg/"+dir+"/share/icons/hicolor/512x512/apps/sharedinbox.png",
-			m.Source.File("linux/sharedinbox.png")).
 		// --sort=name + a fixed mtime keep the tarball byte-identical across
 		// rebuilds of the same bundle, so re-running a release does not churn
 		// the published SHA256SUMS.
@@ -1203,9 +1203,11 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 else
     echo "Creating release $TAG"
     set -- "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --title "$TAG" --generate-notes
-    # --target only applies when the tag does not exist on the remote yet; a
-    # tag-triggered run already pushed it, and gh then ignores the flag.
-    [ -n "${COMMIT_HASH:-}" ] && set -- "$@" --target "$COMMIT_HASH"
+    # --target names the commit GitHub creates the tag from, and it only has an
+    # effect when the tag does not exist on the remote yet (the workflow_dispatch
+    # path); on a tag-triggered run GitHub ignores it. It must be a FULL SHA,
+    # branch or tag — the API rejects an abbreviated hash.
+    [ -n "${TARGET_COMMIT:-}" ] && set -- "$@" --target "$TARGET_COMMIT"
     gh release create "$@"
 fi
 # Fail loudly if the asset did not actually land — mise resolving @latest to a
@@ -1229,12 +1231,23 @@ func (m *Ci) ReleaseLinux(
 	githubToken *dagger.Secret,
 	// Release version without the leading "v", e.g. "0.1.2". Tag is "v$version".
 	version string,
-	// Git commit hash for the GIT_HASH dart-define and the tag target.
+	// Short git commit hash, injected as the GIT_HASH dart-define.
 	// +optional
 	commitHash string,
+	// Full commit SHA the tag is created from on the workflow_dispatch path.
+	// Must not be abbreviated — the Releases API rejects a short hash.
+	// +optional
+	targetCommit string,
 	// owner/repo to release into. Defaults to guettli/sharedinbox.
 	// +optional
 	repository string,
+	// cacheBuster forces the publish to re-run instead of returning a cached
+	// result. Without it a second run for the same version replays the first
+	// run's stdout — including its "asset landed" assertion — without ever
+	// talking to GitHub, so a re-release after fixing a broken asset would be a
+	// silent no-op (same hazard as FetchPlayStoreApks, see #432).
+	// +optional
+	cacheBuster string,
 ) (string, error) {
 	if repository == "" {
 		repository = defaultRepository
@@ -1249,7 +1262,8 @@ func (m *Ci) ReleaseLinux(
 		WithEnvVariable("VERSION", version).
 		WithEnvVariable("ASSET", asset).
 		WithEnvVariable("REPO", repository).
-		WithEnvVariable("COMMIT_HASH", commitHash).
+		WithEnvVariable("TARGET_COMMIT", targetCommit).
+		WithEnvVariable("RELEASE_CACHE_BUSTER", cacheBuster).
 		WithNewFile("/tmp/release.sh", releaseLinuxScript).
 		WithExec([]string{"sh", "/tmp/release.sh"}).
 		Stdout(ctx)
@@ -1271,7 +1285,8 @@ curl -fsSL https://mise.run | sh
 mise --version
 
 mkdir -p "$HOME/.config/mise"
-# Exactly the snippet documented in README.md — if this drifts, the docs lie.
+# The snippet documented in README.md, with the version pinned to the release
+# under test instead of "latest" — if the option names drift, the docs lie.
 cat > "$HOME/.config/mise/config.toml" <<EOF
 [tools."github:${REPO}"]
 version = "${VERSION}"
@@ -1301,7 +1316,12 @@ done
 # A missing runtime .so shows up here rather than as a mystery launch failure.
 # The plugin libraries in lib/ pull in their own dependencies (libsecret,
 # jsoncpp, …), so check them too rather than only the executable.
-if { ldd "$BIN"; ldd "$INSTALL_DIR"/lib/*.so; } | grep "not found"; then
+#
+# Collected into a variable first: under 'set -o pipefail' a non-ELF file in
+# lib/ makes ldd exit non-zero, which would fail the pipeline and report
+# "unresolved libraries" with no matching lines to show for it.
+LDD_OUT=$({ ldd "$BIN" || true; ldd "$INSTALL_DIR"/lib/*.so || true; } 2>&1)
+if printf '%s\n' "$LDD_OUT" | grep "not found"; then
     echo "ERROR: unresolved shared libraries (install the runtime deps listed in README.md)"
     exit 1
 fi
@@ -1323,13 +1343,28 @@ echo "--- app log ---"
 cat /tmp/app.log || true
 echo "OK: mise install of ${VERSION} launches and survives 12s"
 
+# The upgrade command the in-app banner tells users to run (kMiseUpgradeCommand
+# in lib/core/services/update_service.dart) must address the TOOL, not the bin.
+# "mise up sharedinbox" matches no tool and exits 0 with "All tools are up to
+# date", so a wrong name here is invisible unless it is asserted.
+UP_OUT=$(mise up "github:${REPO}" 2>&1) || { echo "ERROR: mise up failed: $UP_OUT"; exit 1; }
+printf '%s\n' "$UP_OUT"
+case "$UP_OUT" in
+    *"github:${REPO}"*|*"up to date"*) ;;
+    *) echo "ERROR: 'mise up github:${REPO}' did not recognise the tool"; exit 1 ;;
+esac
+# The negative control: the bin name alone must NOT be what we document.
+if mise up sharedinbox 2>&1 | grep -qi "sharedinbox@"; then
+    echo "NOTE: 'mise up sharedinbox' now resolves the tool too — the docs could use the short form"
+fi
+
 # The bare form (no asset_pattern/bin_path) is the one-liner in the README's
 # TL;DR. It relies on mise's autodetection, so report it rather than gate on it.
 rm -f "$HOME/.config/mise/config.toml"
-if mise use -g "github:${REPO}@${VERSION}" >/tmp/bare.log 2>&1 && mise which sharedinbox >/dev/null 2>&1; then
-    echo "OK: bare 'mise use -g github:${REPO}@${VERSION}' also resolves sharedinbox"
+if mise use -g "github:${REPO}@latest" >/tmp/bare.log 2>&1 && mise which sharedinbox >/dev/null 2>&1; then
+    echo "OK: bare 'mise use -g github:${REPO}@latest' also resolves sharedinbox"
 else
-    echo "WARN: bare 'mise use -g github:${REPO}@${VERSION}' did NOT resolve sharedinbox;"
+    echo "WARN: bare 'mise use -g github:${REPO}@latest' did NOT resolve sharedinbox;"
     echo "WARN: the explicit [tools] block from README.md is required. Output:"
     cat /tmp/bare.log || true
 fi
@@ -1346,9 +1381,15 @@ func (m *Ci) CheckMiseInstall(
 	// owner/repo to install from. Defaults to guettli/sharedinbox.
 	// +optional
 	repository string,
-	// Optional token, only to avoid anonymous GitHub API rate limits.
+	// Optional token, only to avoid anonymous GitHub API rate limits
+	// (60 requests/hour per IP, shared by everything on the Dagger engine).
 	// +optional
 	githubToken *dagger.Secret,
+	// cacheBuster forces the check to re-run instead of replaying a cached
+	// PASS. Without it, re-running the check for the same version after fixing
+	// a broken release asset would report success without installing anything.
+	// +optional
+	cacheBuster string,
 ) (string, error) {
 	if repository == "" {
 		repository = defaultRepository
@@ -1374,8 +1415,10 @@ func (m *Ci) CheckMiseInstall(
 		WithEnvVariable("HOME", "/home/tester").
 		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
 		WithEnvVariable("VERSION", version).
-		WithEnvVariable("REPO", repository)
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("MISE_CHECK_CACHE_BUSTER", cacheBuster)
 	if githubToken != nil {
+		// mise reads GITHUB_TOKEN for its GitHub API calls.
 		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
 	}
 	return ctr.

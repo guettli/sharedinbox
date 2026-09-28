@@ -25,7 +25,13 @@ const _kLatestReleaseUrl =
 
 /// Upgrade command for a mise-managed install. A mise install dir is versioned
 /// and owned by mise, so downloading a tarball over it is wrong.
-const kMiseUpgradeCommand = 'mise up sharedinbox';
+///
+/// The argument must be the TOOL name (`github:<owner>/<repo>`), not the `bin`
+/// name: `mise up sharedinbox` matches no installed tool and exits 0 with
+/// "All tools are up to date", leaving the user stranded on the old version
+/// with a banner that never clears. `CheckMiseInstall` asserts this command
+/// actually resolves the tool.
+const kMiseUpgradeCommand = 'mise up github:guettli/sharedinbox';
 
 class UpdateInfo {
   const UpdateInfo({
@@ -44,10 +50,14 @@ class UpdateInfo {
 
 /// Whether the running executable was installed by mise.
 ///
-/// mise installs tools under `<data dir>/installs/<backend>/<tool>/<version>/`;
-/// the data dir is `~/.local/share/mise` by default but relocatable via
-/// `MISE_DATA_DIR`, so match on the `installs` segment that mise always adds
-/// rather than on a fixed prefix.
+/// mise installs tools under `<data dir>/installs/<backend>/<tool>/<version>/`.
+/// This matches the `mise/installs/` tail of the default data dir
+/// (`~/.local/share/mise`, or any `MISE_DATA_DIR` ending in `mise`), which is
+/// specific enough not to fire on an unrelated path containing `installs`.
+///
+/// A `MISE_DATA_DIR` whose last segment is not `mise` is not detected; that
+/// user sees the download link instead of the upgrade command, which is a
+/// wrong hint rather than a broken app.
 @visibleForTesting
 bool isMiseInstall(String resolvedExecutable) =>
     resolvedExecutable.contains('/mise/installs/');
@@ -88,9 +98,11 @@ UpdateInfo? updateFromLatestJson({
   } catch (_) {
     return null;
   }
-  final latest = json['version'] as String?;
-  final url = json[platformKey] as String?;
-  if (latest == null || url == null) return null;
+  // Tolerate a malformed payload: these are exported for testing and must
+  // honour "returns null on junk" rather than throw a cast error.
+  final latest = json['version'];
+  final url = json[platformKey];
+  if (latest is! String || url is! String) return null;
   if (latest == runningVersion) return null;
   return UpdateInfo(latestVersion: latest, downloadUrl: url);
 }
@@ -114,11 +126,13 @@ UpdateInfo? updateFromLatestRelease({
   } catch (_) {
     return null;
   }
-  final tag = json['tag_name'] as String?;
-  if (tag == null || tag.isEmpty) return null;
+  final tag = json['tag_name'];
+  if (tag is! String || tag.isEmpty) return null;
   if (compareVersions(tag, runningVersion) <= 0) return null;
-  final url = json['html_url'] as String? ??
-      'https://github.com/guettli/sharedinbox/releases/tag/$tag';
+  final htmlUrl = json['html_url'];
+  final url = htmlUrl is String && htmlUrl.isNotEmpty
+      ? htmlUrl
+      : 'https://github.com/guettli/sharedinbox/releases/tag/$tag';
   return UpdateInfo(
     latestVersion: tag.replaceFirst(RegExp(r'^v'), ''),
     downloadUrl: url,
@@ -136,6 +150,9 @@ final updateInfoProvider = FutureProvider<UpdateInfo?>((ref) async {
           ? 'windows'
           : null;
   if (platformKey == null) return null;
+  // A local `flutter run` has neither define set; there is nothing to compare,
+  // so return before spending a network round-trip on it.
+  if (_kAppVersion.isEmpty && _kReleaseVersion.isEmpty) return null;
 
   final mise = isMiseInstall(Platform.resolvedExecutable);
 

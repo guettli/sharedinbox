@@ -208,14 +208,23 @@ tasks:
       - sh: test "$VERSION" = "$(scripts/pubspec_version.sh)"
         msg: "VERSION does not match the version: field in pubspec.yaml"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}"
+      # --target-commit must be the full SHA: the Releases API rejects an
+      # abbreviated one when it has to create the tag itself.
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        TARGET=$(git rev-parse HEAD)
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
     cmds:
       - |
         VERSION="${VERSION:-$(scripts/pubspec_version.sh)}"
-        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. check-mise-install --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}"
+        # GITHUB_TOKEN only lifts the anonymous GitHub API rate limit; the
+        # check works without it, so it stays optional for local runs.
+        TOKEN_ARG=""
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. check-mise-install --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
 
   build-android-bundle:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally

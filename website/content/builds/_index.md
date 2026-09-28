@@ -17,15 +17,15 @@ mise use -g github:guettli/sharedinbox@latest
 sharedinbox
 ```
 
-Upgrade later with `mise up sharedinbox`.
+Upgrade later with `mise up github:guettli/sharedinbox`.
 
-Runtime prerequisites on Debian 13+ / Ubuntu 24.04+ (the bundle needs glibc 2.39 or newer):
+Runtime prerequisites on Ubuntu 24.04+ (the bundle needs glibc 2.39 or newer):
 
 ```bash
 sudo apt install libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils
 ```
 
-(On Debian 13 the jsoncpp package is `libjsoncpp26`.)
+Debian 13 is not supported yet: it ships `libjsoncpp26`, while this build links `libjsoncpp.so.25`.
 
 A running keyring (gnome-keyring, KWallet, …) is required for account passwords. See the
 [README](https://github.com/guettli/sharedinbox#install-on-linux-with-mise) for the explicit mise

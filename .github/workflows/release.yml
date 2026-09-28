@@ -16,7 +16,9 @@ on:
         required: true
         type: string
 
-# Releases for two tags must not race on the same Dagger engine caches.
+# Serialize releases so two tags pushed together do not publish over each
+# other. This does not serialize against deploy.yml (group: deploy), which may
+# be doing its own Linux build on the same engine at the same time.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -63,9 +65,29 @@ jobs:
 
       # The acceptance test for the whole feature: install the release we just
       # published with mise in a clean container and confirm it launches.
-      # Needs a published release, so it cannot run on PRs.
+      #
+      # It cannot gate publication: mise only sees published, non-draft
+      # releases, so there is no way to install-test one before it goes live.
+      # The retract step below is what limits the blast radius instead.
       - name: Verify `mise use github:guettli/sharedinbox` installs it
         env:
           DAGGER_NO_NAG: "1"
           VERSION: ${{ steps.version.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: task check-mise-install
+
+      # A release that does not install is worse than no release — `@latest`
+      # would serve it to everyone. Turning it back into a draft hides it from
+      # mise immediately while keeping the tag and the artifacts for diagnosis.
+      - name: Retract the release if it does not install
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=true
+            echo "::error::Release $TAG failed verification and was converted back to a draft."
+          else
+            echo "No release $TAG to retract (it was never created)."
+          fi

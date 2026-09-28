@@ -64,7 +64,8 @@ sharedinbox
 ```
 
 If the short form above does not put `sharedinbox` on your `PATH`, spell the options out in
-`~/.config/mise/config.toml` (this exact block is what CI verifies on every release):
+`~/.config/mise/config.toml` (CI installs this block on every release, with `version` pinned to the
+release under test):
 
 ```toml
 [tools."github:guettli/sharedinbox"]
@@ -77,26 +78,28 @@ filter_bins = ["sharedinbox"]
 
 `strip_components = 1` unwraps the tarball's top-level directory so the executable keeps its
 `data/` and `lib/` siblings — the Flutter runner resolves both relative to the binary. `bin_path`
-plus `filter_bins` then put only `sharedinbox` on `PATH`, not the bundled `lib/*.so`.
+plus `filter_bins` then expose only `sharedinbox` on `PATH`, keeping the rest of the payload
+(`share/`, and any future helper binary) out of it.
 
-Upgrade with `mise up sharedinbox`. The app detects a mise install and shows that command instead
-of a download link.
+Upgrade with `mise up github:guettli/sharedinbox`. The app detects a mise install and shows that
+command instead of a download link. (The bin name alone, `mise up sharedinbox`, matches no tool and
+exits successfully without doing anything — mise wants the tool name.)
 
-**Runtime prerequisites.** mise ships the app, not system libraries. On Debian 13+ / Ubuntu 24.04+:
+**Runtime prerequisites.** mise ships the app, not system libraries. On Ubuntu 24.04+:
 
 ```bash
 sudo apt install libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils
 ```
 
-Two package names vary by distribution: on releases older than the 64-bit `time_t` transition GTK is
-`libgtk-3-0`, and Debian 13 ships jsoncpp as `libjsoncpp26` rather than `libjsoncpp25`.
-
 * **libsecret + a running keyring** (gnome-keyring, KWallet, …) is required, not optional: account
   passwords go through `flutter_secure_storage`, so without a keyring service **login fails**.
 * `zenity` (or an XDG desktop portal) backs the attachment file picker; `xdg-utils` opens
   downloaded attachments in your other apps.
-* **glibc floor: 2.39.** The release tarball is built on Ubuntu 24.04, so it runs on Ubuntu 24.04+
-  and Debian 13+. Older distributions need a build from source.
+* **glibc floor: 2.39**, because the tarball is built on Ubuntu 24.04.
+* **Debian 13 (trixie) does not work yet.** The build links `libjsoncpp.so.25` (via
+  `flutter_secure_storage`), and trixie ships only `libjsoncpp26` — a different soname, so
+  installing it does not help. Ubuntu 24.04 / 24.10 / 25.04 are the tested targets; see
+  [#896](https://github.com/guettli/sharedinbox/issues/896) for widening the reach.
 
 **Menu entry (optional).** A mise install puts nothing in your application menu. The tarball ships
 the files for it; link them into your user directories:
@@ -104,8 +107,7 @@ the files for it; link them into your user directories:
 ```bash
 DIR=$(dirname "$(mise which sharedinbox)")
 mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/512x512/apps
-cp "$DIR/share/icons/hicolor/512x512/apps/sharedinbox.png" \
-   ~/.local/share/icons/hicolor/512x512/apps/
+cp "$DIR/sharedinbox.png" ~/.local/share/icons/hicolor/512x512/apps/
 sed 's|^Exec=sharedinbox$|Exec=mise x -- sharedinbox|' \
    "$DIR/share/applications/sharedinbox.desktop" \
    > ~/.local/share/applications/sharedinbox.desktop

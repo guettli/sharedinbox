@@ -15,11 +15,21 @@ void main() {
       );
     });
 
-    test('detects a relocated MISE_DATA_DIR', () {
+    test('detects a MISE_DATA_DIR relocated to another mise/ directory', () {
       expect(
         isMiseInstall('/opt/mise/installs/github-guettli-sharedinbox/0.1.2/'
             'sharedinbox'),
         isTrue,
+      );
+    });
+
+    // Documented limitation: a data dir not named `mise` is not recognised,
+    // so that user is shown the download link rather than the upgrade command.
+    test('does not detect a data dir whose last segment is not mise', () {
+      expect(
+        isMiseInstall('/opt/tools/installs/github-guettli-sharedinbox/0.1.2/'
+            'sharedinbox'),
+        isFalse,
       );
     });
 
@@ -78,6 +88,13 @@ void main() {
       expect(info!.upgradeCommand, kMiseUpgradeCommand);
     });
 
+    // `mise up <bin>` silently matches nothing and exits 0, leaving the user on
+    // the old version with a banner that never clears. The command must name
+    // the tool. CheckMiseInstall asserts the same thing against real mise.
+    test('the upgrade command addresses the tool, not the bin', () {
+      expect(kMiseUpgradeCommand, 'mise up github:guettli/sharedinbox');
+    });
+
     test('stays quiet when the running build is current or ahead', () {
       expect(
         updateFromLatestRelease(
@@ -105,6 +122,25 @@ void main() {
           mise: false,
         ),
         isNull,
+      );
+      // A non-string tag_name must not throw out of the parser.
+      expect(
+        updateFromLatestRelease(
+          body: '{"tag_name": 12}',
+          runningVersion: '0.1.1',
+          mise: false,
+        ),
+        isNull,
+      );
+      // A non-string html_url falls back to the canonical release URL.
+      expect(
+        updateFromLatestRelease(
+          body: '{"tag_name":"v0.1.2","html_url":null}',
+          runningVersion: '0.1.1',
+          mise: false,
+        )!
+            .downloadUrl,
+        'https://github.com/guettli/sharedinbox/releases/tag/v0.1.2',
       );
       expect(
         updateFromLatestRelease(
@@ -183,6 +219,15 @@ void main() {
           body: body,
           platformKey: 'linux',
           runningVersion: '',
+        ),
+        isNull,
+      );
+      // A non-string field must not throw out of the parser.
+      expect(
+        updateFromLatestJson(
+          body: '{"version": 7, "linux": "https://example.com/x.tar.gz"}',
+          platformKey: 'linux',
+          runningVersion: 'def5678',
         ),
         isNull,
       );

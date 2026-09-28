@@ -489,9 +489,13 @@ class _UpdateBanner extends ConsumerWidget {
             leading: const Icon(Icons.system_update),
             actions: [
               TextButton(
-                onPressed: () => unawaited(
-                  Clipboard.setData(ClipboardData(text: command)),
-                ),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: command));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Copied: $command')),
+                  );
+                },
                 child: const Text('Copy command'),
               ),
             ],
