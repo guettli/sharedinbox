@@ -150,6 +150,16 @@ class _StatusHeader extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // A release build is pinned to a tag, so the "behind main" line below
+          // it is expected rather than a problem to fix — it would otherwise
+          // read as "out of date" right next to an absent update banner.
+          if (kRunningReleaseVersion.isNotEmpty) ...[
+            Text(
+              'Running release $kRunningReleaseVersion',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+          ],
           status.when(
             loading: () => const Row(
               mainAxisSize: MainAxisSize.min,
