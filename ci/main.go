@@ -1075,14 +1075,26 @@ func (m *Ci) PublishWebsite(
 		Stdout(ctx)
 }
 
-// buildLinuxBundle builds the Linux release bundle with optional dart-defines.
+// buildLinuxBundle builds the Linux release bundle.
 //
-// releaseVersion is set only for tagged GitHub Releases (the mise channel). It
-// is what update_service.dart uses to decide that it must compare against
-// GitHub Releases (SemVer) instead of latest.json (a git hash) — see
-// PackageLinuxRelease.
-func (m *Ci) buildLinuxBundle(commitHash, releaseVersion string) *dagger.Directory {
+// releaseVersion is the CalVer of the release this bundle belongs to. It is
+// what update_service.dart uses to decide it must compare against GitHub
+// Releases instead of latest.json (a git hash) — see PackageLinuxRelease.
+//
+// buildNumber is the same auto-incrementing number the Android path uses (the
+// commit timestamp). Without it `flutter build linux` produces a bundle whose
+// version.json carries no build number at all, so the About page shows a bare
+// "0.1.1+" on desktop while Android shows "0.1.1+1790…".
+//
+// DeployLinux and PackageLinuxRelease pass identical arguments for the same
+// commit, so the (expensive) Flutter build happens once and Dagger serves the
+// second caller from cache — the hourly snapshot tarball and the release asset
+// are then literally the same build.
+func (m *Ci) buildLinuxBundle(commitHash, releaseVersion, buildNumber string) *dagger.Directory {
 	args := []string{"flutter", "build", "linux", "--release"}
+	if buildNumber != "" {
+		args = append(args, "--build-number", buildNumber)
+	}
 	if commitHash != "" {
 		args = append(args, "--dart-define=GIT_HASH="+commitHash)
 	}
@@ -1099,8 +1111,14 @@ func (m *Ci) BuildLinuxRelease(
 	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
 	// +optional
 	commitHash string,
+	// CalVer of the release this commit is published as (scripts/release_version.sh).
+	// +optional
+	releaseVersion string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
 ) *dagger.Directory {
-	return m.buildLinuxBundle(commitHash, "")
+	return m.buildLinuxBundle(commitHash, releaseVersion, buildNumber)
 }
 
 // DeployLinux packages and deploys the Linux release to the server.
@@ -1111,8 +1129,16 @@ func (m *Ci) DeployLinux(
 	sshUser string,
 	sshHost string,
 	commitHash string,
+	// CalVer of the release cut from this same commit. Passing it here (rather
+	// than building a second, subtly different bundle for the release) means
+	// the snapshot tarball and the GitHub Release asset come from one build.
+	// +optional
+	releaseVersion string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
 ) (string, error) {
-	bundle := m.BuildLinuxRelease(commitHash)
+	bundle := m.buildLinuxBundle(commitHash, releaseVersion, buildNumber)
 
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
@@ -1154,11 +1180,15 @@ func linuxReleaseDirName(version string) string {
 //	  lib/                                     # libapp.so, libflutter_linux_gtk.so, …
 //	  share/applications/sharedinbox.desktop   # menu entry (opt-in, see README)
 func (m *Ci) PackageLinuxRelease(
-	// Release version without the leading "v", e.g. "0.1.2". Must match pubspec.yaml.
+	// CalVer release version without the leading "v", from
+	// scripts/release_version.sh, e.g. "2026.9.29.2013".
 	version string,
 	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
 	// +optional
 	commitHash string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
 ) *dagger.File {
 	dir := linuxReleaseDirName(version)
 	asset := dir + ".tar.gz"
@@ -1166,7 +1196,7 @@ func (m *Ci) PackageLinuxRelease(
 		From("alpine:3.21").
 		// GNU tar: busybox tar has no --sort/--mtime/--owner.
 		WithExec([]string{"apk", "add", "--no-cache", "tar"}).
-		WithDirectory("/pkg/"+dir, m.buildLinuxBundle(commitHash, version)).
+		WithDirectory("/pkg/"+dir, m.buildLinuxBundle(commitHash, version, buildNumber)).
 		// The icon is already at the bundle root (linux/CMakeLists.txt installs
 		// it there), so only the .desktop file has to be added.
 		WithFile("/pkg/"+dir+"/share/applications/sharedinbox.desktop",
@@ -1211,6 +1241,31 @@ printf '%s\n' "$ASSETS" | grep -qxF "${ASSET}" || {
 DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
 [ "$DRAFT" = "false" ] || { echo "ERROR: release $TAG is a draft — mise cannot see it"; exit 1; }
 echo "Published $TAG with ${ASSET} and SHA256SUMS"
+
+# Releases are cut automatically from every Linux deploy, so without a
+# retention bound the 16 MB assets pile up forever.
+#
+# The tag filter is a safety belt, not a nicety: only CalVer tags this script
+# creates are eligible, so the hand-made v0.0.x tags — and anything else a
+# human tagged — can never be deleted here.
+if [ "${KEEP_RELEASES:-0}" -gt 0 ]; then
+    # gh lists newest first, so everything past the keep count is surplus.
+    SURPLUS=$(gh release list --repo "$REPO" --limit 200 --json tagName \
+        --jq '.[].tagName | select(test("^v[0-9]{4}(\\.[0-9]+){3}$"))' \
+        | tail -n "+$((KEEP_RELEASES + 1))")
+    if [ -n "$SURPLUS" ]; then
+        echo "Pruning releases beyond the newest ${KEEP_RELEASES}:"
+        printf '%s\n' "$SURPLUS" | while IFS= read -r old; do
+            [ -n "$old" ] || continue
+            [ "$old" = "$TAG" ] && continue
+            echo "  deleting $old"
+            gh release delete "$old" --repo "$REPO" --yes --cleanup-tag || \
+                echo "  WARN: could not delete $old"
+        done
+    else
+        echo "Nothing to prune (at most ${KEEP_RELEASES} CalVer releases exist)."
+    fi
+fi
 `
 
 // ReleaseLinux packages the Linux bundle and publishes it as a GitHub Release
@@ -1222,11 +1277,18 @@ func (m *Ci) ReleaseLinux(
 	ctx context.Context,
 	// Needs contents:write on the repository.
 	githubToken *dagger.Secret,
-	// Release version without the leading "v", e.g. "0.1.2". Tag is "v$version".
+	// CalVer release version without the leading "v", from
+	// scripts/release_version.sh. Tag is "v$version".
 	version string,
 	// Short git commit hash, injected as the GIT_HASH dart-define.
 	// +optional
 	commitHash string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
+	// How many CalVer releases to keep. 0 disables pruning.
+	// +optional
+	keepReleases int,
 	// Full commit SHA the tag is created from on the workflow_dispatch path.
 	// Must not be abbreviated — the Releases API rejects a short hash.
 	// +optional
@@ -1250,12 +1312,13 @@ func (m *Ci) ReleaseLinux(
 	return dag.Container().
 		From("alpine:3.21").
 		WithExec([]string{"apk", "add", "--no-cache", "github-cli"}).
-		WithFile("/out/"+asset, m.PackageLinuxRelease(version, commitHash)).
+		WithFile("/out/"+asset, m.PackageLinuxRelease(version, commitHash, buildNumber)).
 		WithSecretVariable("GH_TOKEN", githubToken).
 		WithEnvVariable("VERSION", version).
 		WithEnvVariable("ASSET", asset).
 		WithEnvVariable("REPO", repository).
 		WithEnvVariable("TARGET_COMMIT", targetCommit).
+		WithEnvVariable("KEEP_RELEASES", fmt.Sprintf("%d", keepReleases)).
 		WithEnvVariable("RELEASE_CACHE_BUSTER", cacheBuster).
 		WithNewFile("/tmp/release.sh", releaseLinuxScript).
 		WithExec([]string{"sh", "/tmp/release.sh"}).
@@ -2231,9 +2294,12 @@ flowchart TD
         deployApk["deploy-apk\n(android changed)"]
         pubWeb["publish-website\n(any build succeeded)"]
 
+        relLinux["release-linux + check-mise-install\nGitHub Release for mise (auto CalVer)"]
+
         detectChanges --> buildLinux
         detectChanges --> deployPS
         detectChanges --> deployApk
+        buildLinux  --> relLinux
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
         deployApk   --> pubWeb
@@ -2243,11 +2309,8 @@ flowchart TD
         fbTest["test-android-firebase\n(alpha versionCode changed)"]
     end
 
-    subgraph gh_release ["GitHub Actions · release.yml (push tag v* + workflow_dispatch)"]
-        relLinux["release-linux\nPackageLinuxRelease → GitHub Release asset"]
-        miseCheck["check-mise-install\nmise install + Xvfb launch"]
-
-        relLinux --> miseCheck
+    subgraph gh_release ["GitHub Actions · release.yml (workflow_dispatch — manual re-release)"]
+        relManual["release-linux + check-mise-install\nversion derived from the commit"]
     end
 
     check -- "task check-dagger" --> ciCheck

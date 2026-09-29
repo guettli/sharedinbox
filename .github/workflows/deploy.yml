@@ -179,6 +179,9 @@ jobs:
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.linux == 'true'
+    # Needed to create the GitHub Release (and to prune old ones) below.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -209,6 +212,41 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: task deploy-linux
+
+      # Cut the GitHub Release that `mise use github:guettli/sharedinbox`
+      # installs. The version is derived from the commit, so this needs no tag
+      # push and no pubspec bump — every green Linux deploy becomes a version,
+      # the same way the Play Store versionCode auto-increments.
+      #
+      # deploy-linux above already built this exact bundle (same commit, same
+      # release version, same build number), so Dagger serves it from cache
+      # rather than compiling Flutter twice.
+      - name: Publish GitHub Release for mise
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task release-linux
+
+      - name: Verify `mise use github:guettli/sharedinbox` installs it
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task check-mise-install
+
+      # mise cannot see draft releases, so a broken release cannot be caught
+      # before it is public — hide it again instead.
+      - name: Retract the release if it does not install
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$(scripts/release_version.sh)"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=true
+            echo "::error::Release $TAG failed verification and was converted back to a draft."
+          else
+            echo "No release $TAG to retract (it was never created)."
+          fi
 
 
   label-deploy-health:

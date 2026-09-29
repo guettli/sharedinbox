@@ -245,26 +245,40 @@ adb install build/app/outputs/flutter-apk/app-release.apk
 
 > **Tip — split APKs for smaller size:** `flutter build apk --split-per-abi` produces three smaller APKs (one per CPU architecture). Install the one matching the device: `app-arm64-v8a-release.apk` covers almost all modern Android phones.
 
-### Cutting a Linux release (the mise channel)
+### Linux releases (the mise channel)
 
-Releases are hand-cut SemVer tags; the hourly `deploy.yml` snapshot channel
-(`sharedinbox.de/builds` + `latest.json`) is separate and keeps running untouched.
+**There is nothing to do.** Releases are cut automatically: every green hourly Linux deploy
+publishes a GitHub Release, and `mise use github:guettli/sharedinbox@latest` picks it up. No tag
+push, no `pubspec.yaml` bump.
 
-```bash
-# 1. Bump `version:` in pubspec.yaml, commit, and merge to main.
-# 2. Tag main with v<that version> — the tag must match, release.yml refuses otherwise.
-git tag v0.1.2 && git push origin v0.1.2
-```
+The version is derived from the commit timestamp as CalVer — `scripts/release_version.sh` prints
+`2026.9.29.2013` — which keeps it consistent with every other version in this project: the Play
+Store `versionCode` is `int(time.Now().Unix())` and the APK build number is the commit timestamp.
+Nothing here is hand-maintained, so a release never costs a PR. Re-running for the same commit
+republishes the same version instead of inventing a new one.
 
-The `Release` workflow then runs `task release-linux` (builds the tarball and attaches it to the
-GitHub Release) followed by `task check-mise-install`, which installs the release with mise in a
-clean Ubuntu container and fails if the app does not survive 12 seconds under Xvfb.
+`deploy.yml`'s `build-linux` job runs, in order:
+
+1. `task deploy-linux` — the snapshot tarball on `sharedinbox.de/builds` + `latest.json`.
+2. `task release-linux` — the same bundle, wrapped for mise and attached to a GitHub Release with
+   `SHA256SUMS`. It also prunes old releases, keeping the newest `KEEP_RELEASES` (default 20); only
+   CalVer tags it created are eligible, so hand-made tags are never touched.
+3. `task check-mise-install` — installs that release with real mise in a clean Ubuntu container and
+   fails unless the app survives 12 seconds under Xvfb.
+
+Both steps 1 and 2 share one Flutter compile: they pass the same commit, release version and build
+number, so Dagger serves the second from cache.
+
+If step 3 fails the release is converted back to a draft, which removes it from mise's view — mise
+never sees drafts, so a bad release cannot be caught before it is public, only withdrawn after.
+`.github/workflows/release.yml` (manual `workflow_dispatch`) re-publishes the current main if you
+need to restore one.
 
 To inspect a tarball without publishing anything:
 
 ```bash
-task package-linux-release            # → build/sharedinbox-<version>-linux-x86_64.tar.gz
-VERSION=0.1.2 task check-mise-install  # only after that version is published
+task package-linux-release   # → build/sharedinbox-<version>-linux-x86_64.tar.gz
+task check-mise-install      # only meaningful once that version is published
 ```
 
 Release builds carry a `RELEASE_VERSION` dart-define. That is what makes the in-app update check
