@@ -131,6 +131,13 @@ class TestMiseIntro(unittest.TestCase):
         self.assertIn("mise up github:guettli/sharedinbox", MISE_INTRO)
         self.assertNotIn("`mise up sharedinbox`", MISE_INTRO)
 
+    def test_release_age_caveat_documented(self):
+        # mise hides releases younger than minimum_release_age (24h) from
+        # @latest, so the headline one-liner fails for a fresh release. Telling
+        # users only the command that can fail is worse than telling them
+        # nothing.
+        self.assertIn("minimum_release_age", MISE_INTRO)
+
     def test_runtime_dependencies_listed(self):
         for pkg in ("libgtk-3-0t64", "libsecret-1-0", "libjsoncpp25"):
             self.assertIn(pkg, MISE_INTRO)

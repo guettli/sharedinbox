@@ -223,7 +223,7 @@ tasks:
         TARGET=$(git rev-parse HEAD)
         BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
         echo "Releasing v$VERSION from $HASH"
-        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --keep-days "${KEEP_DAYS:-30}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
   retract-linux-release:
     desc: Convert the release for this commit back to a draft, hiding it from mise (used when verification fails)

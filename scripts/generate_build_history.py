@@ -49,6 +49,11 @@ mise use -g github:guettli/sharedinbox@latest
 sharedinbox
 ```
 
+`@latest` lags about a day: mise will not install a release younger than 24 hours
+(`minimum_release_age`). If it reports *"no versions found … matching minimum_release_age"*,
+install the version the error names instead, e.g.
+`mise use -g github:guettli/sharedinbox@2026.9.29.0916`.
+
 Upgrade later with `mise up github:guettli/sharedinbox` (the tool name, not `sharedinbox`).
 
 Runtime prerequisites on Ubuntu 24.04+ (the bundle needs glibc 2.39 or newer):
