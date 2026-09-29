@@ -1395,6 +1395,19 @@ for required in data/flutter_assets lib/libapp.so; do
         ls -la "$INSTALL_DIR"; exit 1; }
 done
 
+# assets/changelog.txt is generated from git history before the Dagger build
+# (task generate-changelog). When that step is missing the bundle still builds
+# and launches perfectly — only the ChangeLog screen breaks at runtime with
+# 'Unable to load asset'. Nothing else would catch it, so assert it here.
+CHANGELOG="$INSTALL_DIR/data/flutter_assets/assets/changelog.txt"
+if [ ! -s "$CHANGELOG" ]; then
+    echo "ERROR: assets/changelog.txt missing or empty in the bundle — the build"
+    echo "       ran without 'task generate-changelog', so the ChangeLog screen is broken."
+    ls -la "$INSTALL_DIR/data/flutter_assets/assets/" 2>&1 || true
+    exit 1
+fi
+echo "OK: changelog asset present ($(wc -l < "$CHANGELOG") entries)"
+
 # A missing runtime .so shows up here rather than as a mystery launch failure.
 # The plugin libraries in lib/ pull in their own dependencies (libsecret,
 # jsoncpp, …), so check them too rather than only the executable.
