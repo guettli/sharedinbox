@@ -177,6 +177,12 @@ tasks:
 
   deploy-linux:
     desc: Build and deploy Linux release via Dagger
+    # assets/changelog.txt is gitignored and generated from git history, and
+    # the Dagger build containers have no .git to generate it from. Without
+    # this the bundle ships an empty assets/ and the ChangeLog screen shows
+    # 'Unable to load asset: "assets/changelog.txt"'. publish-android has
+    # depended on this all along; the Linux and APK paths had not.
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"
@@ -194,6 +200,7 @@ tasks:
 
   package-linux-release:
     desc: Build the mise-installable Linux tarball via Dagger and export it to build/ (VERSION defaults to the commit's CalVer)
+    deps: [generate-changelog]
     cmds:
       - |
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
@@ -206,6 +213,7 @@ tasks:
 
   release-linux:
     desc: Publish the Linux tarball as a GitHub Release (what `mise use github:guettli/sharedinbox` installs). Version is derived from the commit — never typed.
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$GITHUB_TOKEN"
         msg: "GITHUB_TOKEN is not set (needs contents:write)"
@@ -288,6 +296,7 @@ tasks:
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"
