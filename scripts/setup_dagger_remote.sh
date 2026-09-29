@@ -232,12 +232,12 @@ if [ "$verify_rc" -ne 0 ]; then
         echo "::error::\`dagger core --help\` timed out before the engine replied."
         echo "::error::This usually means the engine is down or unreachable; check"
         echo "::error::the engine on the remote host (gitops:"
-        echo "::error::ansible/p16/systemd/system/dagger-engine.service)."
+        echo "::error::ansible/tc/systemd/system/dagger-engine.service.j2)."
     else
         echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
         echo "::error::and the port forward is up, so this is NOT a network problem."
         echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
-        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
+        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: dagger_version in ansible/group_vars/all.yml, then re-run tc.yml and restart dagger-engine"
         echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
     fi
     echo "--- diagnostics ---"

@@ -10,11 +10,18 @@ CI and local development share a single **remote Dagger engine** running on a
 dedicated host. Sharing one engine (and its cache) across jobs is what makes
 builds fast; nothing runs a throwaway engine per job.
 
-- **Engine:** a system-wide `dagger-engine` systemd unit reading its config
-  from `/etc/dagger/engine.json`. It is **not** managed from this repo — the
-  unit, its config, and the pinned engine version are provisioned by Ansible in
-  the gitops repo (`ansible/p16.yml`). Treat that playbook as the source of
-  truth; do not duplicate its content here.
+- **Host: `tc`**, reachable from the runners over WireGuard at `10.0.0.10`.
+  The engine used to run on `p16` and was moved because p16 is a laptop — it
+  sleeps, closes its lid and changes networks, so CI depended on someone's
+  machine being awake. tc is always-on. **p16's `dagger-engine` unit has been
+  retired**, and `ansible/p16.yml` now actively stops and removes it, so tc is
+  the only engine there is.
+- **Engine:** a system-wide `dagger-engine` systemd unit running the engine as
+  a **Docker container** exposing a Unix socket. It is **not** managed from this
+  repo — the unit and the pinned engine version are provisioned by Ansible in
+  the gitops repo (`ansible/tc.yml`, template
+  `ansible/tc/systemd/system/dagger-engine.service.j2`). Treat those as the
+  source of truth; do not duplicate their content here.
 - **Access:** clients reach the engine over an SSH tunnel to its Unix socket
   (`/run/dagger/engine.sock`) and point Dagger at it via
   `_EXPERIMENTAL_DAGGER_RUNNER_HOST`. See
@@ -23,13 +30,24 @@ builds fast; nothing runs a throwaway engine per job.
 ### Version pinning
 
 The engine version is kept in lockstep with the two Dagger CLIs that talk to it
-(the `sharedinbox-arc` runner image and the local dev container). The engine
-runs `github:dagger/nix/v0.21.8#dagger` (pinned in `ansible/p16.yml`); the CLIs
-are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
+(the `sharedinbox-arc` runner image and the local dev container). The engine's
+Docker image tag is rendered from **`dagger_version` in
+`ansible/group_vars/all.yml`** (gitops) — that variable is the canonical pin;
+the CLIs are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
+The engine image is `registry.dagger.io/engine:v0.21.8`.
+
 `scripts/check_dagger_versions.sh` enforces that all three agree — the CLI and
 engine must be the exact same version, there is no fallback when they differ
-(the tunnel authenticates but the protocol handshake fails). Bumping the engine
-means bumping `ansible/p16.yml` in gitops and restarting `dagger-engine`.
+(the tunnel authenticates but the protocol handshake fails).
+
+Bumping the engine means changing `dagger_version` in gitops, re-running the tc
+playbook, and restarting `dagger-engine` on tc. **Order matters:** publish the
+new runner image *first* (it only takes effect on newly-started runner pods),
+then restart the engine — the two cannot move atomically, and that ordering
+keeps the mismatch window to seconds rather than the minutes an image build
+takes. sharedinbox CI fails for the duration; nothing else does. The unit
+template in gitops carries the full procedure and the authoritative list of
+everything that must move together.
 
 The check has two modes:
 
