@@ -59,9 +59,21 @@ plan for one-tap Google sign-in.
 package manager entry and no plugin repo required:
 
 ```bash
-mise use -g github:guettli/sharedinbox@latest   # or: @0.1.2 to pin a version
+mise use -g github:guettli/sharedinbox@latest
 sharedinbox
 ```
+
+> **`@latest` lags about a day.** mise refuses to install a release younger than
+> `minimum_release_age` (24 hours by default) — a supply-chain guard, not a bug here. If the command
+> above reports *"no versions found … matching minimum_release_age"*, every release so far is still
+> too new; install the newest one by name instead, which the error message names for you:
+>
+> ```bash
+> mise use -g github:guettli/sharedinbox@2026.9.29.0916   # pin an exact version
+> ```
+>
+> Releases are cut automatically from every Linux deploy, so `@latest` tracks roughly yesterday's
+> build. Pin a version when you want today's.
 
 If the short form above does not put `sharedinbox` on your `PATH`, spell the options out in
 `~/.config/mise/config.toml` (CI installs this block on every release, with `version` pinned to the

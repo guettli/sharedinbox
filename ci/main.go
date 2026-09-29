@@ -1245,26 +1245,36 @@ echo "Published $TAG with ${ASSET} and SHA256SUMS"
 # Releases are cut automatically from every Linux deploy, so without a
 # retention bound the 16 MB assets pile up forever.
 #
+# A release must satisfy BOTH bounds to be deleted: outside the newest
+# KEEP_RELEASES *and* older than KEEP_DAYS. Count alone is not safe. mise hides
+# releases younger than minimum_release_age (24h by default) from "@latest", so
+# if hourly deploys produced 20 releases inside a day, a keep-newest-20 rule
+# would delete every release old enough to be eligible and "@latest" would
+# resolve to nothing at all — a total install failure, not a stale version.
+#
 # The tag filter is a safety belt, not a nicety: only CalVer tags this script
 # creates are eligible, so the hand-made v0.0.x tags — and anything else a
 # human tagged — can never be deleted here.
 if [ "${KEEP_RELEASES:-0}" -gt 0 ]; then
-    # gh lists newest first, so everything past the keep count is surplus.
-    SURPLUS=$(gh release list --repo "$REPO" --limit 200 --json tagName \
-        --jq '.[].tagName | select(test("^v[0-9]{4}(\\.[0-9]+){3}$"))' \
-        | tail -n "+$((KEEP_RELEASES + 1))")
-    if [ -n "$SURPLUS" ]; then
-        echo "Pruning releases beyond the newest ${KEEP_RELEASES}:"
-        printf '%s\n' "$SURPLUS" | while IFS= read -r old; do
-            [ -n "$old" ] || continue
-            [ "$old" = "$TAG" ] && continue
-            echo "  deleting $old"
-            gh release delete "$old" --repo "$REPO" --yes --cleanup-tag || \
-                echo "  WARN: could not delete $old"
-        done
-    else
-        echo "Nothing to prune (at most ${KEEP_RELEASES} CalVer releases exist)."
-    fi
+    CUTOFF=$(( $(date -u +%s) - ${KEEP_DAYS:-30} * 86400 ))
+    # gh lists newest first. fromdateiso8601 avoids parsing dates in busybox.
+    gh release list --repo "$REPO" --limit 200 --json tagName,createdAt \
+        --jq '.[] | select(.tagName | test("^v[0-9]{4}(\\.[0-9]+){3}$"))
+              | "\(.tagName) \(.createdAt | fromdateiso8601)"' > /tmp/releases.txt
+    PRUNED=0
+    INDEX=0
+    while read -r old created; do
+        [ -n "$old" ] || continue
+        INDEX=$((INDEX + 1))
+        [ "$INDEX" -le "${KEEP_RELEASES}" ] && continue
+        [ "$created" -ge "$CUTOFF" ] && continue
+        [ "$old" = "$TAG" ] && continue
+        echo "  deleting $old (outside newest ${KEEP_RELEASES} and older than ${KEEP_DAYS:-30}d)"
+        gh release delete "$old" --repo "$REPO" --yes --cleanup-tag || \
+            echo "  WARN: could not delete $old"
+        PRUNED=$((PRUNED + 1))
+    done < /tmp/releases.txt
+    echo "Pruned ${PRUNED} release(s); $(wc -l < /tmp/releases.txt) CalVer release(s) existed."
 fi
 `
 
@@ -1286,9 +1296,14 @@ func (m *Ci) ReleaseLinux(
 	// Auto-incrementing build number — the commit timestamp, as on Android.
 	// +optional
 	buildNumber string,
-	// How many CalVer releases to keep. 0 disables pruning.
+	// How many CalVer releases to keep regardless of age. 0 disables pruning.
 	// +optional
 	keepReleases int,
+	// Minimum age in days before a release outside keepReleases may be
+	// deleted. Both bounds must be satisfied — see the prune block in
+	// releaseLinuxScript for why a count alone can break "@latest".
+	// +optional
+	keepDays int,
 	// Full commit SHA the tag is created from on the workflow_dispatch path.
 	// Must not be abbreviated — the Releases API rejects a short hash.
 	// +optional
@@ -1319,6 +1334,7 @@ func (m *Ci) ReleaseLinux(
 		WithEnvVariable("REPO", repository).
 		WithEnvVariable("TARGET_COMMIT", targetCommit).
 		WithEnvVariable("KEEP_RELEASES", fmt.Sprintf("%d", keepReleases)).
+		WithEnvVariable("KEEP_DAYS", fmt.Sprintf("%d", keepDays)).
 		WithEnvVariable("RELEASE_CACHE_BUSTER", cacheBuster).
 		WithNewFile("/tmp/release.sh", releaseLinuxScript).
 		WithExec([]string{"sh", "/tmp/release.sh"}).
@@ -1430,15 +1446,24 @@ if mise up sharedinbox 2>&1 | grep -qi "sharedinbox@"; then
     echo "NOTE: 'mise up sharedinbox' now resolves the tool too — the docs could use the short form"
 fi
 
-# The bare form (no asset_pattern/bin_path) is the one-liner in the README's
-# TL;DR. It relies on mise's autodetection, so report it rather than gate on it.
+# The bare "@latest" form is the one-liner in the README's TL;DR, and it is the
+# command most users will actually run, so a real failure here must be loud.
+#
+# One failure is expected rather than broken: mise hides releases younger than
+# minimum_release_age (24h by default) from "@latest", so a release published
+# minutes ago is deliberately invisible. Distinguish that from everything else
+# — an install that is merely young is fine, an unresolvable "@latest" is not.
 rm -f "$HOME/.config/mise/config.toml"
 if mise use -g "github:${REPO}@latest" >/tmp/bare.log 2>&1 && mise which sharedinbox >/dev/null 2>&1; then
-    echo "OK: bare 'mise use -g github:${REPO}@latest' also resolves sharedinbox"
+    echo "OK: bare 'mise use -g github:${REPO}@latest' resolves sharedinbox"
+elif grep -q "minimum_release_age" /tmp/bare.log; then
+    echo "EXPECTED: '@latest' currently hides this release (mise minimum_release_age, 24h)."
+    echo "          Users installing today must pin the version; @latest picks it up tomorrow."
+    grep -o "eligible [^)]*" /tmp/bare.log | head -1 || true
 else
-    echo "WARN: bare 'mise use -g github:${REPO}@latest' did NOT resolve sharedinbox;"
-    echo "WARN: the explicit [tools] block from README.md is required. Output:"
+    echo "ERROR: bare 'mise use -g github:${REPO}@latest' failed for an unexpected reason:"
     cat /tmp/bare.log || true
+    exit 1
 fi
 `
 
