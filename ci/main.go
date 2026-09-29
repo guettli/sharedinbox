@@ -1354,7 +1354,17 @@ EOF
 cat "$HOME/.config/mise/config.toml"
 
 mise install
-BIN=$(mise which sharedinbox)
+SHIM=$(mise which sharedinbox)
+echo "mise which: $SHIM"
+
+# filter_bins makes mise expose the tool through a symlink farm
+# (<install>/.mise-bins/sharedinbox -> <install>/./sharedinbox), and
+# 'mise which' returns the symlink. Resolve it before looking for the bundle's
+# data/ and lib/, which sit next to the REAL binary. The app itself is fine
+# either way — the Flutter runner resolves asset paths through
+# /proc/self/exe, which follows symlinks — so checking the symlink's own
+# directory would fail a release that works perfectly.
+BIN=$(readlink -f "$SHIM")
 echo "resolved: $BIN"
 case "$BIN" in
     */mise/installs/*) ;;
@@ -1431,6 +1441,61 @@ else
     cat /tmp/bare.log || true
 fi
 `
+
+// retractLinuxReleaseScript hides a release that failed verification.
+//
+// Converting it back to a draft is what removes it from mise: the github
+// backend enumerates published releases only, so a draft is invisible to
+// `@latest`. The tag and the assets survive for diagnosis.
+const retractLinuxReleaseScript = `#!/bin/sh
+set -eu
+TAG="v${VERSION}"
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    gh release edit "$TAG" --repo "$REPO" --draft=true
+    echo "Retracted $TAG — converted back to a draft, mise can no longer see it."
+else
+    echo "No release $TAG to retract (it was never created)."
+fi
+`
+
+// RetractLinuxRelease converts a release back to a draft after a failed
+// verification.
+//
+// This runs in a container rather than on the CI runner because the runner
+// image ships no gh (arc-runner-image/Dockerfile installs only jq, python3,
+// openssh-client, curl and git). An inline `gh release edit` on the runner
+// fails with "command not found", and if that call is guarded by
+// `gh release view … >/dev/null 2>&1` it silently reports "nothing to
+// retract" — leaving a broken release public. That is exactly what happened
+// on the first real release.
+func (m *Ci) RetractLinuxRelease(
+	ctx context.Context,
+	// Needs contents:write on the repository.
+	githubToken *dagger.Secret,
+	// CalVer release version without the leading "v".
+	version string,
+	// owner/repo. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// cacheBuster forces the retract to re-run instead of replaying a cached
+	// result; without it a second attempt would report success without acting.
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "github-cli"}).
+		WithSecretVariable("GH_TOKEN", githubToken).
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("RETRACT_CACHE_BUSTER", cacheBuster).
+		WithNewFile("/tmp/retract.sh", retractLinuxReleaseScript).
+		WithExec([]string{"sh", "/tmp/retract.sh"}).
+		Stdout(ctx)
+}
 
 // CheckMiseInstall installs a published release with mise inside a clean
 // Ubuntu container and asserts it launches. Needs the release to exist on
