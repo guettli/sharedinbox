@@ -1538,10 +1538,17 @@ func (m *Ci) RetractLinuxRelease(
 // GuiTestRelease drives the packaged release through its accessibility tree
 // and asserts the app actually works — not merely that the process survives.
 //
-// This covers a gap nothing else can. TestIntegration builds its own binary
-// from the working tree, so it cannot see a bug introduced while *packaging*;
-// CheckMiseInstall only proves the process does not exit. A release shipped
-// with the ChangeLog screen broken while all three were green (#932).
+// The idea is not new here: SmokeTestRelease boots the signed APK on an
+// emulator, and TestAndroidFirebase runs a robo crawl against the Play Store
+// binary — both deliberately test what users install rather than a debug
+// build. Two things were missing. Linux had no equivalent at all, and no test
+// on any platform *asserts* anything about what the packaged app shows: the
+// robo crawl hunts for crashes (FATAL EXCEPTION, "has died"), so a screen that
+// renders an error message instead of its content passes.
+//
+// That is precisely how a release shipped with the ChangeLog screen broken
+// (#932) while TestIntegration (a build of the working tree), CheckMiseInstall
+// (does the process survive 12s?) and CI were all green.
 //
 // Driving through AT-SPI rather than pixels or OCR means the assertions are on
 // exact strings, real roles and widget states — and that a control shipped
