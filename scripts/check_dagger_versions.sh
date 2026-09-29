@@ -3,12 +3,12 @@
 #
 # Three "deployment" pins say which Dagger CLI to install. They MUST all be the
 # same, and must match the engine they talk to. The engine itself is pinned
-# out-of-repo (gitops: ansible/p16/systemd/system/dagger-engine.service) and the
+# out-of-repo (gitops: ansible/tc/systemd/system/dagger-engine.service.j2) and the
 # CLI<->engine match is enforced at runtime by scripts/setup_dagger_remote.sh.
 # CLI and engine must be identical -- there is no fallback when they differ.
 #   - arc-runner-image/Dockerfile  (CLI baked into the sharedinbox-arc CI runner)
 #   - Dockerfile.dev               (CLI in the local dev container)
-#   - DAGGER.md                    (engine tag in the example systemd unit)
+#   - DAGGER.md                    (engine Docker image tag)
 #
 # A fourth pin lives in ci/dagger.json ("engineVersion"): the *minimum* Dagger
 # version the module supports. It is allowed to lag the deployment pins, so we
@@ -56,9 +56,9 @@ arc_runner=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/arc-runner-
   | head -n1 | cut -d= -f2)
 dockerfile_dev=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/Dockerfile.dev" \
   | head -n1 | cut -d= -f2)
-# DAGGER.md — engine image tag in the example systemd unit.
-dagger_md=$(grep -oE 'dagger/nix/v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
-  | head -n1 | sed -E 's@.*/v@@')
+# DAGGER.md — the engine's Docker image tag (registry.dagger.io/engine:vX.Y.Z).
+dagger_md=$(grep -oE 'registry\.dagger\.io/engine:v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
+  | head -n1 | sed -E 's@.*:v@@')
 # ci/dagger.json — strip leading "v" for comparison.
 dagger_json=$(grep -oE '"engineVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/ci/dagger.json" \
   | sed -E 's/.*"v?([^"]+)"$/\1/')
@@ -90,7 +90,8 @@ if [ "$arc_runner" != "$dockerfile_dev" ] || [ "$arc_runner" != "$dagger_md" ]; 
     echo "         Dockerfile.dev              : $dockerfile_dev"
     echo "         DAGGER.md                   : $dagger_md"
     echo "       When bumping, also update the engine in gitops:"
-    echo "         ansible/p16/systemd/system/dagger-engine.service"
+    echo "         dagger_version in ansible/group_vars/all.yml (rendered into"
+    echo "         ansible/tc/systemd/system/dagger-engine.service.j2 on tc)"
   } >&2
   exit 1
 fi
@@ -192,7 +193,7 @@ if [ "$lower" != "$dagger_json" ]; then
     echo "       module with:"
     echo "         module requires dagger v$dagger_json, but you have v$engine"
     echo "       FIX: either lower engineVersion, or bump the engine first in gitops"
-    echo "       (ansible/p16/systemd/system/dagger-engine.service, then"
+    echo "       (dagger_version in ansible/group_vars/all.yml, re-run tc.yml, then"
     echo "       systemctl restart dagger-engine). See guettli/gitops#112."
   } >&2
   exit 1
@@ -209,7 +210,7 @@ if [ "$arc_runner" != "$engine" ]; then
     echo "       lock-stepped; there is no fallback when they differ."
     echo "       FIX: set both to the same version --"
     echo "         sharedinbox: arc-runner-image/Dockerfile, then republish the runner image"
-    echo "         gitops:      ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
+    echo "         gitops:      dagger_version in ansible/group_vars/all.yml, re-run tc.yml, then restart dagger-engine"
   } >&2
   exit 1
 fi
