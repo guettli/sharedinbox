@@ -2,9 +2,14 @@
 """Drive the *packaged* Linux release and assert it actually works.
 
 Run by GuiTestRelease in ci/main.go against a release installed with mise —
-the same bytes a user gets — not against a build of the working tree. Source
-level tests cannot cover this: `integration_test/` builds its own binary, so a
-bug introduced while *packaging* is invisible to it.
+the same bytes a user gets — not against a build of the working tree.
+`integration_test/` builds its own binary, so a bug introduced while
+*packaging* is invisible to it.
+
+Android already tests its packaged artifact (SmokeTestRelease boots the signed
+APK; TestAndroidFirebase robo-crawls the Play Store build). What neither does
+is *assert* anything: they look for crashes, so a screen that renders an error
+message where its content belongs passes both.
 
 That is not hypothetical. The bundle shipped without assets/changelog.txt, so
 the ChangeLog screen failed at runtime with 'Unable to load asset' while every
