@@ -105,7 +105,9 @@ sudo apt install libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg
 the files for it; link them into your user directories:
 
 ```bash
-DIR=$(dirname "$(mise which sharedinbox)")
+# readlink -f is needed: `mise which` prints a symlink in .mise-bins/, while
+# the icon and the .desktop file sit next to the real binary.
+DIR=$(dirname "$(readlink -f "$(mise which sharedinbox)")")
 mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/512x512/apps
 cp "$DIR/sharedinbox.png" ~/.local/share/icons/hicolor/512x512/apps/
 sed 's|^Exec=sharedinbox$|Exec=mise x -- sharedinbox|' \

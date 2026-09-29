@@ -53,15 +53,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: task check-mise-install
 
+      # Goes through Dagger because the runner image ships no gh; an inline
+      # `gh release edit` here fails with "command not found" and, when
+      # guarded, silently reports success while leaving the release public.
       - name: Retract the release if it does not install
         if: failure()
         env:
-          GH_TOKEN: ${{ github.token }}
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          TAG="v$(scripts/release_version.sh)"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=true
-            echo "::error::Release $TAG failed verification and was converted back to a draft."
-          else
-            echo "No release $TAG to retract (it was never created)."
-          fi
+          task retract-linux-release
+          echo "::error::Release v$(scripts/release_version.sh) failed verification and was converted back to a draft."

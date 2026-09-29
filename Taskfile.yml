@@ -225,6 +225,17 @@ tasks:
         echo "Releasing v$VERSION from $HASH"
         scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
+  retract-linux-release:
+    desc: Convert the release for this commit back to a draft, hiding it from mise (used when verification fails)
+    preconditions:
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN is not set (needs contents:write)"
+    cmds:
+      # Runs in a container: the CI runner image has no gh.
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. retract-linux-release --github-token env:GITHUB_TOKEN --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
     cmds:
