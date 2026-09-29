@@ -1535,6 +1535,75 @@ func (m *Ci) RetractLinuxRelease(
 		Stdout(ctx)
 }
 
+// GuiTestRelease drives the packaged release through its accessibility tree
+// and asserts the app actually works — not merely that the process survives.
+//
+// This covers a gap nothing else can. TestIntegration builds its own binary
+// from the working tree, so it cannot see a bug introduced while *packaging*;
+// CheckMiseInstall only proves the process does not exit. A release shipped
+// with the ChangeLog screen broken while all three were green (#932).
+//
+// Driving through AT-SPI rather than pixels or OCR means the assertions are on
+// exact strings, real roles and widget states — and that a control shipped
+// without a semantic label fails the run, which makes this an accessibility
+// test as well.
+func (m *Ci) GuiTestRelease(
+	ctx context.Context,
+	// Release version to install, or "latest".
+	version string,
+	// owner/repo to install from. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// Optional token, only to avoid anonymous GitHub API rate limits.
+	// +optional
+	githubToken *dagger.Secret,
+	// cacheBuster forces the run instead of replaying a cached pass.
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/gui_driver.py", "scripts/gui_release_test.py",
+			"scripts/gui_test_entrypoint.sh"},
+	})
+
+	ctr := dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl socat " +
+				// the app's own runtime dependencies (README's apt line)
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// virtual display + screenshots
+				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
+				// accessibility: at-spi plus the GSettings machinery Flutter
+				// consults before it will build a semantics tree at all
+				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
+				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithExec([]string{"install", "-d", "-o", "tester", "/shots"}).
+		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithEnvVariable("GUI_SHOT_DIR", "/shots").
+		WithEnvVariable("RELEASE_VERSION", version).
+		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster).
+		WithExec([]string{"/bin/sh", "-c",
+			`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
+				`curl -fsSL https://mise.run | sh >/dev/null; ` +
+				`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
+	if githubToken != nil {
+		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
+	}
+
+	return m.WithStalwart(ctr).
+		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
+		Stdout(ctx)
+}
+
 // CheckMiseInstall installs a published release with mise inside a clean
 // Ubuntu container and asserts it launches. Needs the release to exist on
 // GitHub and real network access, so it is deliberately NOT part of check-fast

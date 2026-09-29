@@ -244,6 +244,15 @@ tasks:
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
         timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. retract-linux-release --github-token env:GITHUB_TOKEN --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
+  gui-test-release:
+    desc: Drive the packaged release through its accessibility tree against a live Stalwart (needs a published release + network)
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        TOKEN_ARG=""
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
     cmds:
