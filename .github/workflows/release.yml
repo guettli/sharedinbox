@@ -1,24 +1,18 @@
 name: Release
 
-# Publishes the Linux tarball as a GitHub Release asset, which is what
-# `mise use -g github:guettli/sharedinbox@latest` installs (see README).
+# Manual escape hatch for the Linux release that
+# `mise use -g github:guettli/sharedinbox@latest` installs.
 #
-# Deliberately separate from deploy.yml: the hourly build keeps shipping git-hash
-# snapshots to sharedinbox.de/builds + latest.json, while a release happens only
-# when a human pushes a `v<pubspec version>` tag.
+# Releases are normally cut automatically: deploy.yml's build-linux job
+# publishes one on every green hourly Linux deploy, with the version derived
+# from the commit (scripts/release_version.sh). Use this workflow to re-publish
+# the current main — for example after a release was retracted to a draft, or
+# to restore an asset someone deleted. It is deliberately not tag-triggered:
+# the version is computed, never typed, so there is no tag to push.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version without the leading v (must match pubspec.yaml), e.g. 0.1.2'
-        required: true
-        type: string
 
-# Serialize releases so two tags pushed together do not publish over each
-# other. This does not serialize against deploy.yml (group: deploy), which may
-# be doing its own Linux build on the same engine at the same time.
+# Do not race the deploy that may be publishing the same version.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -42,49 +36,29 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: scripts/setup_dagger_remote.sh
 
-      - name: Resolve version
-        id: version
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          VERSION="${INPUT_VERSION:-${REF_NAME#v}}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing $VERSION (pubspec: $(scripts/pubspec_version.sh))"
+      - name: Show the version that will be published
+        run: echo "Releasing v$(scripts/release_version.sh) from $(git rev-parse --short HEAD)"
 
-      # task release-linux refuses to publish when VERSION and pubspec.yaml
-      # disagree, so a mistyped tag fails here instead of shipping a release
-      # whose About page shows a different version.
       - name: Build and publish the GitHub Release
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: task release-linux
 
-      # The acceptance test for the whole feature: install the release we just
-      # published with mise in a clean container and confirm it launches.
-      #
-      # It cannot gate publication: mise only sees published, non-draft
-      # releases, so there is no way to install-test one before it goes live.
-      # The retract step below is what limits the blast radius instead.
+      # mise only sees published, non-draft releases, so the install cannot be
+      # verified before it goes live. The retract step below bounds the damage.
       - name: Verify `mise use github:guettli/sharedinbox` installs it
         env:
           DAGGER_NO_NAG: "1"
-          VERSION: ${{ steps.version.outputs.version }}
           GITHUB_TOKEN: ${{ github.token }}
         run: task check-mise-install
 
-      # A release that does not install is worse than no release — `@latest`
-      # would serve it to everyone. Turning it back into a draft hides it from
-      # mise immediately while keeping the tag and the artifacts for diagnosis.
       - name: Retract the release if it does not install
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.version.outputs.version }}
         run: |
+          TAG="v$(scripts/release_version.sh)"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=true
             echo "::error::Release $TAG failed verification and was converted back to a draft."

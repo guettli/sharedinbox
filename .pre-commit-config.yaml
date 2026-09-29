@@ -101,12 +101,12 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)/scripts" && python3 -m unittest test_generate_build_history -q'
         pass_filenames: false
         files: ^scripts/(generate_build_history|test_generate_build_history)\.py$
-      - id: pubspec-version-tests
-        name: pubspec_version.sh unit tests
+      - id: release-version-tests
+        name: release_version.sh unit tests
         language: system
-        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_pubspec_version.sh'
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_release_version.sh'
         pass_filenames: false
-        files: ^(scripts/(pubspec_version|test_pubspec_version)\.sh|pubspec\.yaml)$
+        files: ^scripts/(release_version|test_release_version)\.sh$
       - id: run-firebase-test-fetch-tests
         name: run_firebase_test.sh APK-fetch retry tests
         language: system
