@@ -348,6 +348,83 @@ void main() {
       expect(find.text('Welcome to sharedinbox.de'), findsOneWidget);
     });
 
+    testWidgets('IMAP save keeps the SSL switches off', (tester) async {
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final repo = FakeAccountRepository();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/add',
+          overrides: baseOverrides(
+            discovery: UnknownDiscovery(),
+            accountRepository: repo,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('emailField')),
+        'user@example.com',
+      );
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('IMAP / SMTP'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Display name'),
+        'Alice',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Password'),
+        'secret',
+      );
+      // localhost is what reveals the SSL switches at all.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Host').first,
+        'localhost',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Port').first,
+        '1430',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Host').last,
+        'localhost',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Port').last,
+        '1025',
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(SwitchListTile).first);
+      await tester.tap(find.byType(SwitchListTile).last);
+      await tester.pumpAndSettle();
+      for (final s in tester.widgetList<SwitchListTile>(
+        find.byType(SwitchListTile),
+      )) {
+        expect(s.value, isFalse);
+      }
+
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final saved = repo.accounts.single;
+      expect(saved.imapSsl, isFalse);
+      expect(saved.smtpSsl, isFalse);
+      expect(saved.imapPort, 1430);
+      expect(saved.smtpPort, 1025);
+      // Filled in from the connection test -- the one thing the rebuilt
+      // account was there for.
+      expect(saved.username, 'user@example.com');
+    });
+
     testWidgets(
       'IMAP form hides SSL toggle for non-localhost, shows for localhost',
       (tester) async {
