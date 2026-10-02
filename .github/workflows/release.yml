@@ -56,26 +56,17 @@ jobs:
       # Goes through Dagger because the runner image ships no gh; an inline
       # `gh release edit` here fails with "command not found" and, when
       # guarded, silently reports success while leaving the release public.
-      # Same non-blocking GUI drive as deploy.yml. This workflow is the path
-      # used right after a retract, so skipping it here would verify a
-      # re-release less thoroughly than an automatic one.
-      - name: Drive the release GUI (non-blocking)
-        id: gui_test
-        continue-on-error: true
+      # Same blocking GUI drive as deploy.yml. This workflow is the path used
+      # right after a retract, so skipping it would verify a re-release less
+      # thoroughly than an automatic one.
+      - name: Drive the release GUI
         timeout-minutes: 12
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ github.token }}
         run: task gui-test-release
 
-      - name: Flag a failed GUI run
-        if: steps.gui_test.outcome == 'failure'
-        run: |
-          echo "::warning title=Release GUI test failed::task gui-test-release failed for \
-          v$(scripts/release_version.sh). The release was NOT retracted (this step is \
-          non-blocking). See the step log above."
-
-      - name: Retract the release if it does not install
+      - name: Retract the release if it fails verification
         if: failure()
         env:
           DAGGER_NO_NAG: "1"
