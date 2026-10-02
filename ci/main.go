@@ -1705,6 +1705,32 @@ func (m *Ci) BuildAndroidApk(
 		File("build/app/outputs/flutter-apk/app-release.apk")
 }
 
+// BuildAndroidDebugApk builds a debug APK for manual testing on a real device.
+//
+// Debug rather than release because that is what makes layout bugs visible: a
+// debug build paints the striped overflow banner and logs "A RenderFlex
+// overflowed by N pixels" to logcat, which a release build suppresses.
+//
+// Needs no keystore secrets — Gradle signs debug builds with a key it generates
+// per container. That key differs between runs, so reinstalling over a previous
+// debug build needs an uninstall first.
+func (m *Ci) BuildAndroidDebugApk(
+	// Becomes the APK's versionCode, so a rebuild is distinguishable on the
+	// device — the commit timestamp, as on the release path.
+	buildNumber string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	args := []string{"flutter", "build", "apk", "--debug", "--no-pub", "--build-number", buildNumber}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	return m.androidBase().
+		WithExec(args).
+		File("build/app/outputs/flutter-apk/app-debug.apk")
+}
+
 // DeployApk builds and deploys the APK to the server.
 func (m *Ci) DeployApk(
 	ctx context.Context,
