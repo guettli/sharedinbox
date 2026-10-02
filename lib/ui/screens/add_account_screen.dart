@@ -98,12 +98,14 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         case ImapSmtpDiscovery(
             :final imapHost,
             :final imapPort,
+            :final imapSsl,
             :final smtpHost,
             :final smtpPort,
             :final smtpSsl,
           ):
           _imapHostCtrl.text = imapHost;
           _imapPortCtrl.text = imapPort.toString();
+          _imapSsl = imapSsl;
           _smtpHostCtrl.text = smtpHost;
           _smtpPortCtrl.text = smtpPort.toString();
           _smtpSsl = smtpSsl;
@@ -205,15 +207,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               ),
         );
       }
-      final accountToSave = Account(
-        id: account.id,
-        displayName: account.displayName,
-        email: account.email,
-        username:
-            account.username.isNotEmpty ? account.username : result.username,
-        type: account.type,
-        jmapUrl: account.jmapUrl,
-      );
+      // Only the username may differ from the built account -- say exactly
+      // that, rather than re-listing every field (which is how imapSsl once
+      // went missing on the IMAP path, see #936).
+      final accountToSave = account.username.isEmpty
+          ? account.copyWith(username: result.username)
+          : account;
       await ref
           .read(accountRepositoryProvider)
           .addAccount(accountToSave, _passwordCtrl.text);
@@ -248,21 +247,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
-      final accountToSave = Account(
-        id: account.id,
-        displayName: account.displayName,
-        email: account.email,
-        username:
-            account.username.isNotEmpty ? account.username : result.username,
-        imapHost: account.imapHost,
-        imapPort: account.imapPort,
-        smtpHost: account.smtpHost,
-        smtpPort: account.smtpPort,
-        smtpSsl: account.smtpSsl,
-        manageSieveHost: account.manageSieveHost,
-        manageSievePort: account.manageSievePort,
-        manageSieveSsl: account.manageSieveSsl,
-      );
+      // Only the username may differ from the built account. Listing the
+      // fields by hand dropped imapSsl silently (#936).
+      final accountToSave = account.username.isEmpty
+          ? account.copyWith(username: result.username)
+          : account;
       await ref
           .read(accountRepositoryProvider)
           .addAccount(accountToSave, _passwordCtrl.text);

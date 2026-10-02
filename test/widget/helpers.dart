@@ -73,6 +73,9 @@ class FakeAccountRepository implements AccountRepository {
   final List<Account> _accounts;
   bool hasPassword = true;
 
+  /// What the screen under test actually persisted, for save-path assertions.
+  List<Account> get accounts => List.unmodifiable(_accounts);
+
   @override
   Stream<List<Account>> observeAccounts() => Stream.value(List.of(_accounts));
 
@@ -963,6 +966,7 @@ List<Override> baseOverrides({
   DiscoveryResult? discovery,
   Exception? connectionError,
   String? connectionIdentityWarning,
+  AccountRepository? accountRepository,
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
@@ -971,7 +975,8 @@ List<Override> baseOverrides({
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
+        accountRepository ??
+            (FakeAccountRepository(accounts)..hasPassword = hasStoredPassword),
       ),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
