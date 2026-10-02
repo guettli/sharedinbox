@@ -32,6 +32,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _passwordCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController();
+  var _imapSsl = true;
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = true;
@@ -81,6 +82,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _usernameCtrl.text = account.username;
     _imapHostCtrl.text = account.imapHost;
     _imapPortCtrl.text = account.imapPort.toString();
+    _imapSsl = account.imapSsl;
     _smtpHostCtrl.text = account.smtpHost;
     _smtpPortCtrl.text = account.smtpPort.toString();
     _smtpSsl = account.smtpSsl;
@@ -139,7 +141,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       type: account.type,
       imapHost: imapHost,
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
-      imapSsl: isLocalhost(imapHost) ? account.imapSsl : true,
+      imapSsl: isLocalhost(imapHost) ? _imapSsl : true,
       smtpHost: smtpHost,
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
       smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
@@ -225,25 +227,11 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
           );
         }
         // Persist the discovered effective username when none was explicit.
+        // Only the username changes here -- listing the fields by hand is what
+        // dropped imapSsl on the add path (#936), and this copy dropped both
+        // imapSsl and signature the same way.
         if (updated.username.isEmpty) {
-          updated = Account(
-            id: updated.id,
-            displayName: updated.displayName,
-            email: updated.email,
-            username: result.username,
-            type: updated.type,
-            imapHost: updated.imapHost,
-            imapPort: updated.imapPort,
-            smtpHost: updated.smtpHost,
-            smtpPort: updated.smtpPort,
-            smtpSsl: updated.smtpSsl,
-            manageSieveHost: updated.manageSieveHost,
-            manageSievePort: updated.manageSievePort,
-            manageSieveSsl: updated.manageSieveSsl,
-            manageSieveAvailable: updated.manageSieveAvailable,
-            jmapUrl: updated.jmapUrl,
-            verbose: updated.verbose,
-          );
+          updated = updated.copyWith(username: result.username);
         }
       }
       await ref
@@ -341,12 +329,15 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ],
             if (account.type == AccountType.imap) ...[
               const Divider(height: 32),
-              Text(
-                'IMAP (SSL/TLS)',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
               _field(_imapHostCtrl, 'Host', validator: validateHostname),
               _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
+              if (isLocalhost(_imapHostCtrl.text.trim()))
+                SwitchListTile(
+                  title: const Text('SSL/TLS'),
+                  value: _imapSsl,
+                  onChanged: (v) => setState(() => _imapSsl = v),
+                ),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host', validator: validateHostname),

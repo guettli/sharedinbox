@@ -19,6 +19,17 @@ ImapSmtpDiscovery _imapDiscovery() => ImapSmtpDiscovery(
       smtpSsl: false,
     );
 
+/// Discovery pointing at a local server — the only shape whose SSL flags
+/// survive `_buildImapAccount()`, and so the only one that can be asserted.
+ImapSmtpDiscovery _localhostDiscovery() => ImapSmtpDiscovery(
+      imapHost: 'localhost',
+      imapPort: 1430,
+      imapSsl: false,
+      smtpHost: 'localhost',
+      smtpPort: 1025,
+      smtpSsl: false,
+    );
+
 /// Pumps the add-account screen at step 1 with [overrides] in place.
 Future<void> _pumpAddAccount(
   WidgetTester tester, {
@@ -155,6 +166,25 @@ void main() {
       expect(find.text('IMAP / SMTP'), findsWidgets);
       expect(find.text('imap.example.com'), findsOneWidget);
       expect(find.text('smtp.example.com'), findsOneWidget);
+    });
+
+    testWidgets('IMAP discovery seeds both SSL switches', (tester) async {
+      _useTallViewport(tester);
+
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _localhostDiscovery()),
+      );
+
+      // Both switches are shown (localhost hosts) and carry what discovery
+      // reported, rather than the field defaults.
+      final switches = tester.widgetList<SwitchListTile>(
+        find.byType(SwitchListTile),
+      );
+      expect(switches.length, 2);
+      for (final s in switches) {
+        expect(s.value, isFalse);
+      }
     });
 
     testWidgets('choose-type: tapping JMAP shows JMAP form', (tester) async {

@@ -98,12 +98,14 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         case ImapSmtpDiscovery(
             :final imapHost,
             :final imapPort,
+            :final imapSsl,
             :final smtpHost,
             :final smtpPort,
             :final smtpSsl,
           ):
           _imapHostCtrl.text = imapHost;
           _imapPortCtrl.text = imapPort.toString();
+          _imapSsl = imapSsl;
           _smtpHostCtrl.text = smtpHost;
           _smtpPortCtrl.text = smtpPort.toString();
           _smtpSsl = smtpSsl;
