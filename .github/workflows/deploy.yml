@@ -233,56 +233,32 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: task check-mise-install
 
-      # Drive the published release through its accessibility tree against a
-      # live Stalwart: does the app actually render and work, not merely start.
-      # check-mise-install above proves the process survives 12 seconds; this
-      # is what catches a release that launches fine and shows an error where
-      # a screen's content belongs (#932).
+      # Blocking. A release that starts but renders an error where a screen's
+      # content belongs is exactly what shipped in #932, and check-mise-install
+      # (does the process survive 12s?) cannot see it.
       #
-      # Deliberately non-blocking for now. The step is young and depends on a
-      # real mise download, a virtual display and a Stalwart service, so a
-      # false failure must not trip the retract step below and withdraw a
-      # perfectly good release. continue-on-error gives exactly that: the
-      # step's *conclusion* becomes success, so `failure()` below stays false.
+      # The asymmetry favours gating. A wrong retraction converts the release
+      # to a draft: the tag and assets survive, one click undoes it, the next
+      # hourly Linux deploy cuts another, and mise's 24h minimum_release_age
+      # means no user is served it for a day regardless — so there is a day to
+      # notice. A missed defect, by contrast, becomes @latest and installs.
       #
-      # timeout-minutes is not optional here. continue-on-error does nothing
-      # for a step that HANGS: the task's own budget plus dagger_with_retry
-      # could outlast this job's timeout-minutes, and a cancelled job does not
-      # satisfy `failure()` either — so the retract step would be skipped and
-      # an unverified release would stay public. That is the exact harm this
-      # step is supposed to avoid, so bound it well under the job's 60.
-      #
-      # To promote it to a gate: drop continue-on-error, drop "(non-blocking)"
-      # from the name, and reword the retract step below — its name and error
-      # message both say "install", which would no longer be the only reason.
-      - name: Drive the release GUI (non-blocking)
-        id: gui_test
-        continue-on-error: true
+      # It does NOT gate on a harness that could not run: task gui-test-release
+      # maps exit 75 (setup failed) and 124 (engine timeout) to a ::warning::
+      # and success, so only a real assertion failure withdraws a release.
+      - name: Drive the release GUI
         timeout-minutes: 12
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ github.token }}
         run: task gui-test-release
 
-      # Without this the step is invisible: continue-on-error keeps the job
-      # green, so label-deploy-health still reports CI/Full-Pass and
-      # ci-monitor.sh returns early on a successful run. A permanently red
-      # non-blocking step would look exactly like a healthy one, and "run it
-      # green for a while, then promote it" needs someone to be able to see
-      # that it is green.
-      - name: Flag a failed GUI run
-        if: steps.gui_test.outcome == 'failure'
-        run: |
-          echo "::warning title=Release GUI test failed::task gui-test-release failed for \
-          v$(scripts/release_version.sh). The release was NOT retracted (this step is \
-          non-blocking). See the step log above; it cannot be promoted to a gate while red."
-
       # mise cannot see draft releases, so a broken release cannot be caught
       # before it is public — hide it again instead.
       # Goes through Dagger because the runner image ships no gh; an inline
       # `gh release edit` here fails with "command not found" and, when
       # guarded, silently reports success while leaving the release public.
-      - name: Retract the release if it does not install
+      - name: Retract the release if it fails verification
         if: failure()
         env:
           DAGGER_NO_NAG: "1"

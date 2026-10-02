@@ -252,15 +252,29 @@ tasks:
         TOKEN_ARG=""
         [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
         # No dagger_with_retry and a tight budget, unlike the other release
-        # tasks: this is a non-blocking signal in deploy.yml, so retrying it
-        # three times buys nothing and three 30-minute attempts would outlast
-        # the job's own timeout — which cancels the job, and a cancelled job
-        # skips the retract step. Fail fast instead.
+        # tasks: three 30-minute attempts would outlast the job's own timeout,
+        # and a cancelled job skips the retract step. Fail fast instead.
         #
-        # Not -q: on success dagger_with_retry/-q print nothing, and a step
-        # whose green looks identical to "asserted nothing" cannot earn its
-        # way to being a gate.
+        # Not -q: a green whose output is suppressed looks identical to
+        # "asserted nothing", which is no basis for gating a release.
+        #
+        # This task gates a release, so it distinguishes a broken release from
+        # a harness that could not run (see the exit-code contract in
+        # scripts/gui_test_entrypoint.sh). 75 is the harness failing to start;
+        # 124 is `timeout` firing, which the engine causes far more often than
+        # the app does — the python assertions have their own 20s budgets and
+        # fail long before the outer one. Neither is evidence about the
+        # release, so both warn instead of withdrawing it.
+        set +e
         timeout --kill-after=10 600 dagger call --progress=plain -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+        rc=$?
+        set -e
+        case "$rc" in
+          0) ;;
+          75) echo "::warning title=Release GUI harness could not run::Setup failed before any assertion (exit 75). Not treated as a release defect; the release stands unverified." ;;
+          124) echo "::warning title=Release GUI harness timed out::Exceeded its 600s budget (exit 124), which is usually the Dagger engine rather than the app. Not treated as a release defect; the release stands unverified." ;;
+          *) echo "::error title=Release GUI test failed::The packaged release failed a GUI assertion (exit $rc)."; exit "$rc" ;;
+        esac
 
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
