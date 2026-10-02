@@ -513,6 +513,56 @@ void main() {
     }
   });
 
+  // #918: the user sends a mail, opens Sent, and it has to be there — not only
+  // after the background loop next happens to sync that folder.
+  test('sendEmail shows the mail in Sent right away, exactly once', () async {
+    final subject = 'sent-now-${DateTime.now().millisecondsSinceEpoch}';
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    // The Sent folder is resolved by role, so the cache row has to exist —
+    // this is what the mailbox sync writes from Stalwart's \Sent SPECIAL-USE
+    // flag.
+    await r.db.into(r.db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'test:Sent',
+            accountId: 'test',
+            path: 'Sent',
+            name: 'Sent',
+            role: const Value('sent'),
+          ),
+        );
+
+    await r.emails.sendEmail(
+      'test',
+      EmailDraft(
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(name: user.email, email: user.email)],
+        cc: [],
+        subject: subject,
+        body: 'Integration test message',
+      ),
+    );
+
+    var matching = (await r.emails.observeEmails('test', 'Sent').first)
+        .where((e) => e.subject == subject)
+        .toList();
+    expect(
+      matching,
+      hasLength(1),
+      reason: 'the sent copy must be visible without any sync',
+    );
+
+    // Stalwart supports UIDPLUS, so the row we wrote carries the server's UID
+    // and the sync that fetches it updates that row instead of adding a second.
+    await r.emails.syncEmails('test', 'Sent');
+    matching = (await r.emails.observeEmails('test', 'Sent').first)
+        .where((e) => e.subject == subject)
+        .toList();
+    expect(matching, hasLength(1));
+    expect(matching.single.isLocal, isFalse);
+  });
+
   test('searchEmails returns messages matching query', () async {
     final uniqueWord = 'searchable-${DateTime.now().millisecondsSinceEpoch}';
     await appendToInbox(uniqueWord);
