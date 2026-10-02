@@ -251,7 +251,16 @@ tasks:
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
         TOKEN_ARG=""
         [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
-        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+        # No dagger_with_retry and a tight budget, unlike the other release
+        # tasks: this is a non-blocking signal in deploy.yml, so retrying it
+        # three times buys nothing and three 30-minute attempts would outlast
+        # the job's own timeout — which cancels the job, and a cancelled job
+        # skips the retract step. Fail fast instead.
+        #
+        # Not -q: on success dagger_with_retry/-q print nothing, and a step
+        # whose green looks identical to "asserted nothing" cannot earn its
+        # way to being a gate.
+        timeout --kill-after=10 600 dagger call --progress=plain -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
 
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
