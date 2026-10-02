@@ -1597,14 +1597,24 @@ func (m *Ci) GuiTestRelease(
 		WithEnvVariable("HOME", "/home/tester").
 		WithEnvVariable("GUI_SHOT_DIR", "/shots").
 		WithEnvVariable("RELEASE_VERSION", version).
-		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster).
-		WithExec([]string{"/bin/sh", "-c",
-			`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
-				`curl -fsSL https://mise.run | sh >/dev/null; ` +
-				`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
+		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster)
+
+	// The secret has to go on BEFORE the install exec, not after: a Dagger
+	// env/secret variable applies only to *subsequent* execs. Attached
+	// afterwards it reaches the test entrypoint — which has no use for it —
+	// while the mise install, release lookup, asset download and attestation
+	// checks all run anonymously against a 60 req/hour-per-IP limit shared by
+	// everything on the engine. The step then goes red for a reason that has
+	// nothing to do with the release. CheckMiseInstall gets this ordering
+	// right; this one did not.
 	if githubToken != nil {
 		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
 	}
+
+	ctr = ctr.WithExec([]string{"/bin/sh", "-c",
+		`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
+			`curl -fsSL https://mise.run | sh >/dev/null; ` +
+			`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
 
 	return m.WithStalwart(ctr).
 		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
@@ -2474,11 +2484,13 @@ flowchart TD
         pubWeb["publish-website\n(any build succeeded)"]
 
         relLinux["release-linux + check-mise-install\nGitHub Release for mise (auto CalVer)"]
+        relGui["gui-test-release\nAT-SPI drive vs Stalwart (non-blocking)"]
 
         detectChanges --> buildLinux
         detectChanges --> deployPS
         detectChanges --> deployApk
         buildLinux  --> relLinux
+        relLinux    --> relGui
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
         deployApk   --> pubWeb
