@@ -293,6 +293,16 @@ tasks:
       - mkdir -p build/app/outputs/bundle/release
       - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. build-android-release --commit-hash "$HASH" -o build/app/outputs/bundle/release/app-release.aab
 
+  build-android-debug-apk:
+    desc: Build a debug APK via Dagger for manual testing on a device (shows overflow banners; release builds hide them)
+    cmds:
+      - mkdir -p build/app/outputs/flutter-apk
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. build-android-debug-apk --build-number "$BUILD_NUMBER" --commit-hash "$HASH" -o build/app/outputs/flutter-apk/app-debug.apk
+      - echo "Install with 'adb install -r build/app/outputs/flutter-apk/app-debug.apk' (uninstall first if a previous debug build is present)"
+
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger
     preconditions:
