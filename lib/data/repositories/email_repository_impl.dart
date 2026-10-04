@@ -2527,102 +2527,161 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// Upper bound on how many ids `Email/changes` may report per request
+  /// (RFC 8620 §5.2 `maxChanges`). Without it a long-dormant mailbox hands
+  /// back its entire backlog in one response, which then has to be fetched in
+  /// one `Email/get` — see [_jmapGetBatchSize].
+  static const _jmapMaxChanges = 200;
+
+  /// Upper bound on how many ids go into a single `Email/get`.
+  ///
+  /// The incremental sweep asks for full bodies (`fetchHTMLBodyValues` /
+  /// `fetchTextBodyValues`) plus attachment metadata, so one request for an
+  /// unbounded id list makes the server serialize every body before it can
+  /// answer. That blows past the client's request timeout, the cycle dies with
+  /// a misleading "could not reach the mail server", and because no state is
+  /// checkpointed the next cycle asks for the same oversized page again — the
+  /// account never catches up (issue #967).
+  static const _jmapGetBatchSize = 50;
+
   Future<model.SyncEmailsResult> _jmapIncrementalEmailSync(
     String accountId,
     JmapClient jmap,
     String sinceState, {
     String? mailboxJmapId,
   }) async {
-    final responses = await jmap.call([
-      [
-        'Email/changes',
-        {'accountId': jmap.accountId, 'sinceState': sinceState},
-        '0',
-      ],
-    ]);
-
-    // RFC 8620 §5.2: when the server can no longer resolve the sinceState
-    // token (e.g. GC after long inactivity) it returns an error method
-    // response with type=cannotCalculateChanges. Recover by discarding the
-    // stored state and falling through to a full sync, which also runs a
-    // deletion reconciliation.
-    final triple = responses[0] as List<dynamic>;
-    if (triple[0] == 'error') {
-      final err = triple[1] as Map<String, dynamic>;
-      final type = err['type'] as String?;
-      log(
-        'JMAP-sync: Email/changes error type=$type mailbox=$mailboxJmapId '
-        'sinceState=$sinceState — falling back to full sync',
-      );
-      if (type == 'cannotCalculateChanges') {
-        await _clearJmapSyncState(accountId, mailboxJmapId);
-        if (mailboxJmapId != null) {
-          return _jmapFullEmailSync(accountId, jmap, mailboxJmapId);
-        }
-      }
-      throw JmapException('Email/changes error: $type');
-    }
-
-    final changes = triple[1] as Map<String, dynamic>;
-    final newState = changes['newState'] as String;
-    final created = List<String>.from(changes['created'] as List? ?? []);
-    final updated = List<String>.from(changes['updated'] as List? ?? []);
-    final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
-
-    log(
-      'JMAP-sync: incremental mailbox=$mailboxJmapId '
-      '$sinceState → $newState '
-      'created=${_briefIds(created)} '
-      'updated=${_briefIds(updated)} '
-      'destroyed=${_briefIds(destroyed)}',
-    );
-
     var fetched = 0;
     var bytes = 0;
-    final toFetch = [...created, ...updated];
-    if (toFetch.isNotEmpty) {
-      final getResponses = await jmap.call([
+    var state = sinceState;
+
+    // RFC 8620 §5.2: /changes is a paged API. Ask for a bounded window and
+    // keep going while the server reports `hasMoreChanges`, so a backlog is
+    // drained over several small requests that each finish well inside the
+    // request timeout.
+    while (true) {
+      final responses = await jmap.call([
         [
-          'Email/get',
+          'Email/changes',
           {
             'accountId': jmap.accountId,
-            'ids': toFetch,
-            'properties': _emailProperties,
-            ..._emailGetBodyOptions,
+            'sinceState': state,
+            'maxChanges': _jmapMaxChanges,
           },
-          '1',
+          '0',
         ],
       ]);
-      final getResult = _responseArgs(getResponses, 0, 'Email/get');
-      final list = getResult['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(
-        accountId,
-        list,
-        currentMailboxJmapId: mailboxJmapId,
-      );
-      fetched += list.length;
 
-      // Any id we asked to fetch but did not receive back is treated by the
-      // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
-      // don't linger.
-      final returnedIds = <String>{
-        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
-      };
-      for (final jmapId in toFetch) {
-        if (!returnedIds.contains(jmapId)) {
-          await _deleteJmapEmailById(accountId, jmapId);
+      // RFC 8620 §5.2: when the server can no longer resolve the sinceState
+      // token (e.g. GC after long inactivity) it returns an error method
+      // response with type=cannotCalculateChanges. Recover by discarding the
+      // stored state and falling through to a full sync, which also runs a
+      // deletion reconciliation.
+      final triple = responses[0] as List<dynamic>;
+      if (triple[0] == 'error') {
+        final err = triple[1] as Map<String, dynamic>;
+        final type = err['type'] as String?;
+        log(
+          'JMAP-sync: Email/changes error type=$type mailbox=$mailboxJmapId '
+          'sinceState=$state — falling back to full sync',
+        );
+        if (type == 'cannotCalculateChanges') {
+          await _clearJmapSyncState(accountId, mailboxJmapId);
+          if (mailboxJmapId != null) {
+            // Keep whatever earlier pages already stored: the full sync is
+            // exhaustive, but its counters only cover what it fetched itself.
+            final full =
+                await _jmapFullEmailSync(accountId, jmap, mailboxJmapId);
+            return model.SyncEmailsResult(
+              fetched: fetched + full.fetched,
+              skipped: full.skipped,
+              bytesTransferred: bytes + full.bytesTransferred,
+            );
+          }
+        }
+        throw JmapException('Email/changes error: $type');
+      }
+
+      final changes = triple[1] as Map<String, dynamic>;
+      final newState = changes['newState'] as String;
+      final created = List<String>.from(changes['created'] as List? ?? []);
+      final updated = List<String>.from(changes['updated'] as List? ?? []);
+      final destroyed = List<String>.from(changes['destroyed'] as List? ?? []);
+      final hasMoreChanges = changes['hasMoreChanges'] as bool? ?? false;
+
+      log(
+        'JMAP-sync: incremental mailbox=$mailboxJmapId '
+        '$state → $newState '
+        'created=${_briefIds(created)} '
+        'updated=${_briefIds(updated)} '
+        'destroyed=${_briefIds(destroyed)} '
+        'hasMoreChanges=$hasMoreChanges',
+      );
+
+      final toFetch = [...created, ...updated];
+      for (var i = 0; i < toFetch.length; i += _jmapGetBatchSize) {
+        final batch = toFetch.sublist(
+          i,
+          math.min(i + _jmapGetBatchSize, toFetch.length),
+        );
+        final getResponses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': batch,
+              'properties': _emailProperties,
+              ..._emailGetBodyOptions,
+            },
+            '1',
+          ],
+        ]);
+        final getResult = _responseArgs(getResponses, 0, 'Email/get');
+        final list = getResult['list'] as List<dynamic>;
+        bytes += await _upsertJmapEmails(
+          accountId,
+          list,
+          currentMailboxJmapId: mailboxJmapId,
+        );
+        fetched += list.length;
+
+        // Any id we asked to fetch but did not receive back is treated by the
+        // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
+        // don't linger.
+        final returnedIds = <String>{
+          for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+        };
+        for (final jmapId in batch) {
+          if (!returnedIds.contains(jmapId)) {
+            await _deleteJmapEmailById(accountId, jmapId);
+          }
         }
       }
+
+      for (final jmapId in destroyed) {
+        await _deleteJmapEmailById(accountId, jmapId);
+      }
+
+      // Checkpoint every page. A failure in a later page then costs only that
+      // page on the next cycle instead of replaying the whole backlog.
+      await _saveSyncState(accountId, 'Email', newState);
+      if (mailboxJmapId != null) {
+        await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', newState);
+      }
+
+      // A server that reports more changes without advancing the state token
+      // would spin this loop forever; stop instead and let the next cycle
+      // retry. Verified against Stalwart 0.14, which always advances.
+      if (newState == state) {
+        log(
+          'JMAP-sync: Email/changes did not advance state ($state) while '
+          'reporting hasMoreChanges=$hasMoreChanges — stopping this page run',
+        );
+        break;
+      }
+      state = newState;
+      if (!hasMoreChanges) break;
     }
 
-    for (final jmapId in destroyed) {
-      await _deleteJmapEmailById(accountId, jmapId);
-    }
-
-    await _saveSyncState(accountId, 'Email', newState);
-    if (mailboxJmapId != null) {
-      await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', newState);
-    }
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
