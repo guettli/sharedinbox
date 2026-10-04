@@ -65,16 +65,19 @@ class JmapClient {
   /// a server that has not answered within this long is not about to.
   static const metadataTimeout = Duration(seconds: 10);
 
-  /// Request timeout for an API call that makes the server materialize message
-  /// bodies: `Email/get` with `fetchTextBodyValues` / `fetchHTMLBodyValues` has
-  /// to read and serialize every requested message before it can reply.
+  /// Request timeout for an API call the server cannot answer from an index
+  /// alone, and so needs a far larger budget than a metadata round trip:
   ///
-  /// This needs a far larger budget than a metadata round trip. One flat 10 s
-  /// for both was enough to fail a routine catch-up against a demonstrably
-  /// healthy server, and because the failure surfaced as a `TimeoutException`
-  /// it was reported to the user as "could not reach the mail server"
-  /// (issue #967).
-  static const bodyTimeout = Duration(seconds: 60);
+  /// - `Email/get` with `fetchTextBodyValues` / `fetchHTMLBodyValues`, which
+  ///   has to read and serialize every requested message first;
+  /// - `Email/query` with `calculateTotal`, which forces a server-side count
+  ///   of the whole result set.
+  ///
+  /// One flat 10 s for everything was enough to fail a routine catch-up
+  /// against a demonstrably healthy server, and because the failure surfaced
+  /// as a `TimeoutException` it was reported to the user as "could not reach
+  /// the mail server" (issue #967).
+  static const slowRequestTimeout = Duration(seconds: 60);
 
   /// Timeout for moving a whole blob in or out (attachment upload/download).
   /// Bounded by the attachment size and the user's uplink, not by server
@@ -150,8 +153,8 @@ class JmapClient {
   /// the `using` declaration (required for `EmailSubmission/set` calls).
   ///
   /// Pass [timeout] to override the budget this call is given. By default it is
-  /// derived from the request: [bodyTimeout] when any method call asks the
-  /// server to materialize message bodies, [metadataTimeout] otherwise.
+  /// derived from the request: [slowRequestTimeout] when a method call asks
+  /// the server for real work, [metadataTimeout] otherwise.
   ///
   /// Throws [JmapException] on HTTP errors or a top-level JMAP error response.
   Future<List<dynamic>> call(
@@ -205,8 +208,12 @@ class JmapClient {
   /// Picks the request budget from what [methodCalls] asks the server to do.
   ///
   /// Deliberately derived here rather than passed in at each of the ~40 call
-  /// sites: a new body-fetching call then cannot forget to ask for the larger
+  /// sites: a new expensive call then cannot forget to ask for the larger
   /// budget, which is how the original flat 10 s went unnoticed.
+  ///
+  /// Response-shaped only — it says nothing about how long a large *upload*
+  /// (an `Email/set` with inline `bodyValues`, a `SieveScript/set`) takes the
+  /// server to accept. Those keep the short budget, as they always had.
   @visibleForTesting
   static Duration defaultTimeoutFor(List<List<dynamic>> methodCalls) {
     for (final methodCall in methodCalls) {
@@ -215,8 +222,9 @@ class JmapClient {
       if (args is! Map) continue;
       if (args['fetchTextBodyValues'] == true ||
           args['fetchHTMLBodyValues'] == true ||
-          args['fetchAllBodyValues'] == true) {
-        return bodyTimeout;
+          args['fetchAllBodyValues'] == true ||
+          args['calculateTotal'] == true) {
+        return slowRequestTimeout;
       }
     }
     return metadataTimeout;

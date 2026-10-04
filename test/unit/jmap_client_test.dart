@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -273,14 +274,17 @@ void main() {
       );
     });
 
-    test('a request that materializes bodies gets the long budget', () {
+    test('a request the server must do real work for gets the long budget', () {
       expect(
         JmapClient.defaultTimeoutFor([
           ['Email/get', emailGet(), '0'],
         ]),
-        JmapClient.bodyTimeout,
+        JmapClient.slowRequestTimeout,
       );
-      expect(JmapClient.bodyTimeout, greaterThan(JmapClient.metadataTimeout));
+      expect(
+        JmapClient.slowRequestTimeout,
+        greaterThan(JmapClient.metadataTimeout),
+      );
     });
 
     test('one body fetch in a batch lifts the whole request', () {
@@ -293,7 +297,7 @@ void main() {
           ],
           ['Email/get', emailGet(), '1'],
         ]),
-        JmapClient.bodyTimeout,
+        JmapClient.slowRequestTimeout,
       );
     });
 
@@ -310,7 +314,7 @@ void main() {
             '0',
           ],
         ]),
-        JmapClient.bodyTimeout,
+        JmapClient.slowRequestTimeout,
       );
     });
 
@@ -331,6 +335,104 @@ void main() {
         ]),
         JmapClient.metadataTimeout,
       );
+    });
+
+    test('Email/query with calculateTotal gets the long budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/query',
+            {
+              'accountId': _accountId,
+              'filter': {'inMailbox': 'a'},
+              'limit': 500,
+              'calculateTotal': true,
+            },
+            '0',
+          ],
+        ]),
+        JmapClient.slowRequestTimeout,
+        reason: 'a server-side count of the whole mailbox is not a cheap '
+            'metadata lookup',
+      );
+    });
+
+    // Pins the wiring, not just the derivation: reverting `call` to one flat
+    // budget would leave every assertion above green.
+    test('call applies the derived budget to the request', () {
+      fakeAsync((async) {
+        // A server that always takes 30s — longer than the metadata budget,
+        // shorter than the slow-request budget.
+        final httpClient = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(jsonEncode(_sessionBody()), 200);
+          }
+          await Future<void>.delayed(const Duration(seconds: 30));
+          return http.Response(
+            jsonEncode({'sessionState': 'st1', 'methodResponses': <dynamic>[]}),
+            200,
+          );
+        });
+
+        JmapClient? client;
+        unawaited(
+          JmapClient.connect(
+            httpClient: httpClient,
+            jmapUrl: Uri.parse(_sessionUrl),
+            username: 'alice',
+            password: 'secret',
+          ).then((c) => client = c),
+        );
+        async.elapse(const Duration(milliseconds: 1));
+        expect(client, isNotNull, reason: 'the session fetch is immediate');
+
+        Object? metadataError;
+        unawaited(
+          client!.call([
+            [
+              'Email/changes',
+              {'accountId': _accountId, 'sinceState': 's0'},
+              '0',
+            ],
+          ]).then<void>(
+            (_) {},
+            onError: (Object e) {
+              metadataError = e;
+            },
+          ),
+        );
+
+        Object? bodyError;
+        var bodyDone = false;
+        unawaited(
+          client!.call([
+            ['Email/get', emailGet(), '0'],
+          ]).then<void>(
+            (_) {
+              bodyDone = true;
+            },
+            onError: (Object e) {
+              bodyError = e;
+            },
+          ),
+        );
+
+        // Past the metadata budget: the metadata call has given up, the body
+        // fetch has not.
+        async.elapse(JmapClient.metadataTimeout + const Duration(seconds: 1));
+        expect(metadataError, isA<TimeoutException>());
+        expect(bodyError, isNull);
+        expect(bodyDone, isFalse);
+
+        // The server answers at 30s, inside the slow-request budget.
+        async.elapse(const Duration(seconds: 30));
+        expect(bodyError, isNull);
+        expect(
+          bodyDone,
+          isTrue,
+          reason: 'a body fetch must survive past the metadata budget',
+        );
+      });
     });
 
     test('an explicit timeout overrides the derived one', () async {
