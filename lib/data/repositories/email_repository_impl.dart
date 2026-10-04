@@ -2448,13 +2448,37 @@ class EmailRepositoryImpl implements EmailRepository {
     JmapClient jmap,
     String mailboxJmapId,
   ) async {
+    // Capture the Email state before paging, so a change that lands during a
+    // long full sync is picked up by the next incremental sweep instead of
+    // being missed.
+    //
+    // `Email/get` with an empty `ids` list returns the state and nothing else
+    // (RFC 8621 §4.1 — note `ids: null` would mean *every* email, so the empty
+    // list matters). Reading the state off the first body fetch, as this used
+    // to, only worked because that fetch was chained to the first query;
+    // an empty mailbox fetches nothing and would have no state to read.
+    final stateResponses = await jmap.call([
+      [
+        'Email/get',
+        {'accountId': jmap.accountId, 'ids': <String>[]},
+        '0',
+      ],
+    ]);
+    final state =
+        _responseArgs(stateResponses, 0, 'Email/get')['state'] as String;
+
     int position = 0;
-    String? firstState;
     var fetched = 0;
     var bytes = 0;
     final seenIds = <String>{};
 
     while (true) {
+      // Ids only. This query used to chain `Email/get` straight onto its
+      // result, which asked the server for up to `_jmapPageSize` (500) full
+      // message bodies in a single request — ten times the batch the
+      // incremental sweep settled on, and the same request shape that timed
+      // out in #967. A bare query is cheap; the bodies follow in bounded
+      // batches below.
       final responses = await jmap.call([
         [
           'Email/query',
@@ -2470,32 +2494,21 @@ class EmailRepositoryImpl implements EmailRepository {
           },
           '0',
         ],
-        [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            '#ids': {'resultOf': '0', 'name': 'Email/query', 'path': '/ids'},
-            'properties': _emailProperties,
-            ..._emailGetBodyOptions,
-          },
-          '1',
-        ],
       ]);
 
       final queryResult = _responseArgs(responses, 0, 'Email/query');
-      final ids = queryResult['ids'] as List<dynamic>;
+      final ids = List<String>.from(queryResult['ids'] as List);
       final total = queryResult['total'] as int?;
-      seenIds.addAll(ids.cast<String>());
+      seenIds.addAll(ids);
 
-      final getResult = _responseArgs(responses, 1, 'Email/get');
-      firstState ??= getResult['state'] as String;
-      final list = getResult['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(
+      final batched = await _fetchJmapEmailBatches(
         accountId,
-        list,
-        currentMailboxJmapId: mailboxJmapId,
+        jmap,
+        ids,
+        mailboxJmapId: mailboxJmapId,
       );
-      fetched += list.length;
+      fetched += batched.fetched;
+      bytes += batched.bytes;
 
       position += ids.length;
       if (ids.isEmpty || total == null || position >= total) break;
@@ -2508,10 +2521,10 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     log(
       'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
-      'newState=$firstState',
+      'newState=$state',
     );
 
-    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', firstState);
+    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', state);
     // Record that we've just done an exhaustive reconciliation so the periodic
     // pass in _maybeReconcileJmapMailbox doesn't repeat it immediately.
     await _saveSyncState(

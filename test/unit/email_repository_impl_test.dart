@@ -95,30 +95,44 @@ http.Client _mockJmapEmails({
   });
 }
 
-Map<String, dynamic> _emailGetResponse({
+/// The request sequence a full sync makes, as separate API calls.
+///
+/// It used to be a single call per page: `Email/query` with `Email/get` chained
+/// onto its result, which asked the server for a whole page of full message
+/// bodies at once — the request shape that timed out in #967. The sweep now
+/// captures the state with one id-less `Email/get`, then per page issues an
+/// ids-only `Email/query` followed by batched `Email/get`s.
+///
+/// Each entry in [pages] is one `Email/query` page; with fewer than 50 emails
+/// per page each is fetched in a single batch.
+List<Map<String, dynamic>> _fullSyncResponses({
   required String state,
-  required List<Map<String, dynamic>> list,
+  required List<List<Map<String, dynamic>>> pages,
   int? total,
-}) =>
-    {
-      'sessionState': 'sess1',
-      'methodResponses': [
-        [
-          'Email/query',
-          {
-            'accountId': 'acct1',
-            'ids': list.map((e) => e['id']).toList(),
-            'total': total ?? list.length,
-          },
-          '0',
+}) {
+  final every = [for (final page in pages) ...page];
+  return [
+    // The id-less Email/get that captures the state.
+    _emailGetOnly(state: state, list: const []),
+    for (final page in pages) ...[
+      {
+        'sessionState': 'sess1',
+        'methodResponses': [
+          [
+            'Email/query',
+            {
+              'accountId': 'acct1',
+              'ids': [for (final e in page) e['id']],
+              'total': total ?? every.length,
+            },
+            '0',
+          ],
         ],
-        [
-          'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '1',
-        ],
-      ],
-    };
+      },
+      _emailGetOnly(state: state, list: page),
+    ],
+  ];
+}
 
 /// An `Email/changes` refusal. RFC 8620 §5.2 uses one error type both for a
 /// `sinceState` the server can no longer resolve and for one it cannot step to
@@ -4561,10 +4575,10 @@ void main() {
     test('full sync upserts emails and persists state', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
                 _jmapEmail(
                   id: 'e2',
@@ -4573,8 +4587,8 @@ void main() {
                   seen: true,
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4716,10 +4730,11 @@ void main() {
       ];
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(state: 'est1', list: page1, total: 4),
-            _emailGetResponse(state: 'est1', list: page2, total: 4),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [page1, page2],
+            total: 4,
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4879,14 +4894,12 @@ void main() {
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
-            apiResponses: [
-              _emailGetResponse(
-                state: 'est1',
-                list: [
-                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept'),
-                ],
-              ),
-            ],
+            apiResponses: _fullSyncResponses(
+              state: 'est1',
+              pages: [
+                [_jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept')],
+              ],
+            ),
           ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4923,11 +4936,17 @@ void main() {
               // state is genuinely unresolvable refuses this one too, which is
               // what tells the client to give up and resync.
               _cannotCalculateChanges(),
-              // Call 3: full sync Email/query + Email/get
-              _emailGetResponse(
+              // Calls 3+: the full sync it falls back to.
+              ..._fullSyncResponses(
                 state: 'est-new',
-                list: [
-                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                pages: [
+                  [
+                    _jmapEmail(
+                      id: 'e-live',
+                      mailboxId: 'mbx1',
+                      subject: 'live',
+                    ),
+                  ],
                 ],
               ),
             ],
@@ -6017,10 +6036,10 @@ void main() {
     test('full sync caches bodies when bodyValues are present', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 jmapEmailWithBody(
                   id: 'e1',
                   mailboxId: 'mbx1',
@@ -6028,8 +6047,8 @@ void main() {
                   htmlContent: '<p>Hello</p>',
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -6044,12 +6063,12 @@ void main() {
     test('full sync does not write body row when bodyValues absent', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
-            ),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
