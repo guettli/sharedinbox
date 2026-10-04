@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -242,6 +243,120 @@ void main() {
         ],
       ]);
       expect(using(), isNot(contains('urn:ietf:params:jmap:submission')));
+    });
+  });
+
+  // Regression coverage for issue #967: every API call was capped at a flat
+  // 10 s, including `Email/get` requests that make the server read and
+  // serialize full message bodies before it can answer. A routine catch-up
+  // against a healthy server therefore timed out, and because the failure
+  // surfaced as a TimeoutException the user was told the mail server was
+  // unreachable.
+  group('JmapClient request budget', () {
+    Map<String, dynamic> emailGet({bool bodies = true}) => {
+          'accountId': _accountId,
+          'ids': ['e1'],
+          if (bodies) 'fetchTextBodyValues': true,
+          if (bodies) 'fetchHTMLBodyValues': true,
+        };
+
+    test('a metadata-only request gets the short budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/changes',
+            {'accountId': _accountId, 'sinceState': 's0', 'maxChanges': 200},
+            '0',
+          ],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('a request that materializes bodies gets the long budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get', emailGet(), '0'],
+        ]),
+        JmapClient.bodyTimeout,
+      );
+      expect(JmapClient.bodyTimeout, greaterThan(JmapClient.metadataTimeout));
+    });
+
+    test('one body fetch in a batch lifts the whole request', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/query',
+            {'accountId': _accountId, 'limit': 500},
+            '0',
+          ],
+          ['Email/get', emailGet(), '1'],
+        ]),
+        JmapClient.bodyTimeout,
+      );
+    });
+
+    test('fetchAllBodyValues also counts as a body fetch', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/get',
+            {
+              'accountId': _accountId,
+              'ids': ['e1'],
+              'fetchAllBodyValues': true,
+            },
+            '0',
+          ],
+        ]),
+        JmapClient.bodyTimeout,
+      );
+    });
+
+    test('an Email/get without body options stays on the short budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get', emailGet(bodies: false), '0'],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('a malformed method call does not throw', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get'],
+          ['Email/get', 'not-a-map', '0'],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('an explicit timeout overrides the derived one', () async {
+      final httpClient = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        }
+        // Slower than the explicit budget, faster than the derived one.
+        await Future<void>.delayed(const Duration(seconds: 2));
+        return http.Response('{}', 200);
+      });
+      final client = await JmapClient.connect(
+        httpClient: httpClient,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      await expectLater(
+        client.call(
+          [
+            ['Email/get', emailGet(), '0'],
+          ],
+          timeout: const Duration(milliseconds: 50),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
     });
   });
 }
