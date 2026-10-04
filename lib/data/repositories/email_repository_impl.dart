@@ -2544,6 +2544,99 @@ class EmailRepositoryImpl implements EmailRepository {
   /// account never catches up (issue #967).
   static const _jmapGetBatchSize = 50;
 
+  /// How many `Email/changes` pages one `syncEmails` call will drain.
+  ///
+  /// Checkpointing per page means stopping early costs nothing — the next
+  /// cycle resumes from the stored token — so a huge backlog is drained over
+  /// several cycles instead of one run long enough for a background job to be
+  /// killed in the middle of. Also bounds the loop against a server that
+  /// hands out a fresh token on every page while never clearing
+  /// `hasMoreChanges`.
+  static const _jmapMaxPagesPerSync = 20;
+
+  /// Fetches [ids] in `Email/get` batches of [_jmapGetBatchSize], upserting
+  /// each batch as it arrives. Returns how many emails were stored and how
+  /// many bytes that was.
+  ///
+  /// Batched because the request also asks for full bodies: one `Email/get`
+  /// for an unbounded id list makes the server read and serialize every
+  /// message before it can answer, which is what blew past the request
+  /// timeout in #967.
+  Future<({int fetched, int bytes})> _fetchJmapEmailBatches(
+    String accountId,
+    JmapClient jmap,
+    List<String> ids, {
+    String? mailboxJmapId,
+  }) async {
+    var fetched = 0;
+    var bytes = 0;
+    for (var i = 0; i < ids.length; i += _jmapGetBatchSize) {
+      final batch = ids.sublist(
+        i,
+        math.min(i + _jmapGetBatchSize, ids.length),
+      );
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': batch,
+            'properties': _emailProperties,
+            ..._emailGetBodyOptions,
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Email/get');
+      final list = result['list'] as List<dynamic>;
+      bytes += await _upsertJmapEmails(
+        accountId,
+        list,
+        currentMailboxJmapId: mailboxJmapId,
+      );
+      fetched += list.length;
+
+      // Any id we asked to fetch but did not receive back is treated by the
+      // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
+      // don't linger.
+      final returnedIds = <String>{
+        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+      };
+      for (final jmapId in batch) {
+        if (!returnedIds.contains(jmapId)) {
+          await _deleteJmapEmailById(accountId, jmapId);
+        }
+      }
+    }
+    return (fetched: fetched, bytes: bytes);
+  }
+
+  /// Requests one page of `Email/changes`.
+  ///
+  /// [maxChanges] is nullable so the caller can retry unbounded: RFC 8620 §5.2
+  /// allows a server to answer `cannotCalculateChanges` when it cannot produce
+  /// an update to an intermediate state, which a bounded request is what asks
+  /// it for. Retrying without the bound tells a server that merely dislikes
+  /// windowing apart from one whose stored state is genuinely too old.
+  Future<List<dynamic>> _jmapEmailChanges(
+    JmapClient jmap,
+    String sinceState, {
+    required int? maxChanges,
+  }) async {
+    final responses = await jmap.call([
+      [
+        'Email/changes',
+        {
+          'accountId': jmap.accountId,
+          'sinceState': sinceState,
+          if (maxChanges != null) 'maxChanges': maxChanges,
+        },
+        '0',
+      ],
+    ]);
+    return responses[0] as List<dynamic>;
+  }
+
   Future<model.SyncEmailsResult> _jmapIncrementalEmailSync(
     String accountId,
     JmapClient jmap,
@@ -2558,25 +2651,28 @@ class EmailRepositoryImpl implements EmailRepository {
     // keep going while the server reports `hasMoreChanges`, so a backlog is
     // drained over several small requests that each finish well inside the
     // request timeout.
-    while (true) {
-      final responses = await jmap.call([
-        [
-          'Email/changes',
-          {
-            'accountId': jmap.accountId,
-            'sinceState': state,
-            'maxChanges': _jmapMaxChanges,
-          },
-          '0',
-        ],
-      ]);
+    for (var page = 0; page < _jmapMaxPagesPerSync; page++) {
+      var triple = await _jmapEmailChanges(
+        jmap,
+        state,
+        maxChanges: _jmapMaxChanges,
+      );
 
-      // RFC 8620 §5.2: when the server can no longer resolve the sinceState
-      // token (e.g. GC after long inactivity) it returns an error method
-      // response with type=cannotCalculateChanges. Recover by discarding the
-      // stored state and falling through to a full sync, which also runs a
-      // deletion reconciliation.
-      final triple = responses[0] as List<dynamic>;
+      // RFC 8620 §5.2 lists cannotCalculateChanges both for a sinceState the
+      // server can no longer resolve (GC after long inactivity) and for one it
+      // cannot step to an intermediate state from. Only the bounded request
+      // can provoke the second, so retry unbounded before concluding the
+      // stored state is dead and forcing a full resync.
+      if (triple[0] == 'error' &&
+          (triple[1] as Map<String, dynamic>)['type'] ==
+              'cannotCalculateChanges') {
+        log(
+          'JMAP-sync: Email/changes refused a bounded window for '
+          'mailbox=$mailboxJmapId — retrying without maxChanges',
+        );
+        triple = await _jmapEmailChanges(jmap, state, maxChanges: null);
+      }
+
       if (triple[0] == 'error') {
         final err = triple[1] as Map<String, dynamic>;
         final type = err['type'] as String?;
@@ -2617,71 +2713,53 @@ class EmailRepositoryImpl implements EmailRepository {
         'hasMoreChanges=$hasMoreChanges',
       );
 
-      final toFetch = [...created, ...updated];
-      for (var i = 0; i < toFetch.length; i += _jmapGetBatchSize) {
-        final batch = toFetch.sublist(
-          i,
-          math.min(i + _jmapGetBatchSize, toFetch.length),
-        );
-        final getResponses = await jmap.call([
-          [
-            'Email/get',
-            {
-              'accountId': jmap.accountId,
-              'ids': batch,
-              'properties': _emailProperties,
-              ..._emailGetBodyOptions,
-            },
-            '1',
-          ],
-        ]);
-        final getResult = _responseArgs(getResponses, 0, 'Email/get');
-        final list = getResult['list'] as List<dynamic>;
-        bytes += await _upsertJmapEmails(
-          accountId,
-          list,
-          currentMailboxJmapId: mailboxJmapId,
-        );
-        fetched += list.length;
-
-        // Any id we asked to fetch but did not receive back is treated by the
-        // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
-        // don't linger.
-        final returnedIds = <String>{
-          for (final e in list) (e as Map<String, dynamic>)['id'] as String,
-        };
-        for (final jmapId in batch) {
-          if (!returnedIds.contains(jmapId)) {
-            await _deleteJmapEmailById(accountId, jmapId);
-          }
-        }
-      }
+      final batched = await _fetchJmapEmailBatches(
+        accountId,
+        jmap,
+        [...created, ...updated],
+        mailboxJmapId: mailboxJmapId,
+      );
+      fetched += batched.fetched;
+      bytes += batched.bytes;
 
       for (final jmapId in destroyed) {
         await _deleteJmapEmailById(accountId, jmapId);
       }
 
-      // Checkpoint every page. A failure in a later page then costs only that
-      // page on the next cycle instead of replaying the whole backlog.
+      // Checkpoint every page. A failure in a later page then costs one page
+      // on the next cycle instead of replaying the whole backlog — which is
+      // the half of #967 that made the account never catch up.
       await _saveSyncState(accountId, 'Email', newState);
       if (mailboxJmapId != null) {
         await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', newState);
       }
 
+      // Caught up.
+      if (!hasMoreChanges) {
+        return model.SyncEmailsResult(
+          fetched: fetched,
+          skipped: 0,
+          bytesTransferred: bytes,
+        );
+      }
+
       // A server that reports more changes without advancing the state token
-      // would spin this loop forever; stop instead and let the next cycle
-      // retry. Verified against Stalwart 0.14, which always advances.
+      // would spin this loop forever. Stop and let the next cycle retry.
+      // (Verified against Stalwart 0.14, which always advances.)
       if (newState == state) {
         log(
-          'JMAP-sync: Email/changes did not advance state ($state) while '
-          'reporting hasMoreChanges=$hasMoreChanges — stopping this page run',
+          'JMAP-sync: Email/changes reported hasMoreChanges without advancing '
+          'state ($state) for mailbox=$mailboxJmapId — stopping this run',
         );
         break;
       }
       state = newState;
-      if (!hasMoreChanges) break;
     }
 
+    // Out of pages. The state is checkpointed, so the next cycle resumes from
+    // here rather than starting over; draining a large backlog over several
+    // cycles beats one request run that a background job will be killed in
+    // the middle of.
     return model.SyncEmailsResult(
       fetched: fetched,
       skipped: 0,
@@ -2703,12 +2781,20 @@ class EmailRepositoryImpl implements EmailRepository {
     String accountId,
     String? mailboxJmapId,
   ) async {
+    // Scoped to the one mailbox when we have it. Clearing every
+    // `JMAP:Email:%` row would force a full resync of every folder in the
+    // account over one folder's unresolvable state — and bounded
+    // `Email/changes` requests make that error reachable where it was not
+    // before (#967).
     await (_db.delete(_db.syncStates)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                (t.resourceType.equals('Email') |
-                    t.resourceType.like('JMAP:Email:%')),
+                (mailboxJmapId == null
+                    ? (t.resourceType.equals('Email') |
+                        t.resourceType.like('JMAP:Email:%'))
+                    : (t.resourceType.equals('Email') |
+                        t.resourceType.equals('JMAP:Email:$mailboxJmapId'))),
           ))
         .go();
   }
