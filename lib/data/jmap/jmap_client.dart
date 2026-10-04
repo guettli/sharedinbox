@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
@@ -59,6 +60,30 @@ class JmapClient {
   /// SSE push URL advertised by the server, or null if push is unsupported.
   String? get eventSourceUrl => _eventSourceUrl;
 
+  /// Request timeout for an API call that only moves metadata — ids, flags,
+  /// mailboxes, state tokens. Those payloads are small in both directions, so
+  /// a server that has not answered within this long is not about to.
+  static const metadataTimeout = Duration(seconds: 10);
+
+  /// Request timeout for an API call the server cannot answer from an index
+  /// alone, and so needs a far larger budget than a metadata round trip:
+  ///
+  /// - `Email/get` with `fetchTextBodyValues` / `fetchHTMLBodyValues`, which
+  ///   has to read and serialize every requested message first;
+  /// - `Email/query` with `calculateTotal`, which forces a server-side count
+  ///   of the whole result set.
+  ///
+  /// One flat 10 s for everything was enough to fail a routine catch-up
+  /// against a demonstrably healthy server, and because the failure surfaced
+  /// as a `TimeoutException` it was reported to the user as "could not reach
+  /// the mail server" (issue #967).
+  static const slowRequestTimeout = Duration(seconds: 60);
+
+  /// Timeout for moving a whole blob in or out (attachment upload/download).
+  /// Bounded by the attachment size and the user's uplink, not by server
+  /// think-time.
+  static const blobTimeout = Duration(seconds: 30);
+
   /// Fetches the JMAP Session object from [jmapUrl] and returns a connected
   /// client. Throws [JmapException] on HTTP errors or missing capabilities.
   static Future<JmapClient> connect({
@@ -76,7 +101,7 @@ class JmapClient {
         headers: {
           'Authorization': 'Basic $credentials',
         },
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(metadataTimeout);
       if (resp.statusCode != 429 || attempt >= 4) {
         break;
       }
@@ -127,11 +152,16 @@ class JmapClient {
   /// Pass [withSubmission] to include `urn:ietf:params:jmap:submission` in
   /// the `using` declaration (required for `EmailSubmission/set` calls).
   ///
+  /// Pass [timeout] to override the budget this call is given. By default it is
+  /// derived from the request: [slowRequestTimeout] when a method call asks
+  /// the server for real work, [metadataTimeout] otherwise.
+  ///
   /// Throws [JmapException] on HTTP errors or a top-level JMAP error response.
   Future<List<dynamic>> call(
     List<List<dynamic>> methodCalls, {
     bool withSubmission = false,
     bool withSieve = false,
+    Duration? timeout,
   }) async {
     final using = [
       ..._coreUsing,
@@ -149,7 +179,7 @@ class JmapClient {
           },
           body: body,
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(timeout ?? defaultTimeoutFor(methodCalls));
 
     final log = Zone.current[verboseLogKey] as StringBuffer?;
     if (log != null) {
@@ -175,6 +205,31 @@ class JmapClient {
     return decoded['methodResponses'] as List<dynamic>;
   }
 
+  /// Picks the request budget from what [methodCalls] asks the server to do.
+  ///
+  /// Deliberately derived here rather than passed in at each of the ~40 call
+  /// sites: a new expensive call then cannot forget to ask for the larger
+  /// budget, which is how the original flat 10 s went unnoticed.
+  ///
+  /// Response-shaped only — it says nothing about how long a large *upload*
+  /// (an `Email/set` with inline `bodyValues`, a `SieveScript/set`) takes the
+  /// server to accept. Those keep the short budget, as they always had.
+  @visibleForTesting
+  static Duration defaultTimeoutFor(List<List<dynamic>> methodCalls) {
+    for (final methodCall in methodCalls) {
+      if (methodCall.length < 2) continue;
+      final args = methodCall[1];
+      if (args is! Map) continue;
+      if (args['fetchTextBodyValues'] == true ||
+          args['fetchHTMLBodyValues'] == true ||
+          args['fetchAllBodyValues'] == true ||
+          args['calculateTotal'] == true) {
+        return slowRequestTimeout;
+      }
+    }
+    return metadataTimeout;
+  }
+
   /// Uploads [data] as a blob and returns the server-assigned `blobId`.
   ///
   /// Used to attach files to outgoing emails before calling `Email/set`.
@@ -194,7 +249,7 @@ class JmapClient {
           },
           body: data,
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(blobTimeout);
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw JmapException('Blob upload failed (HTTP ${resp.statusCode})');
     }
@@ -227,7 +282,7 @@ class JmapClient {
       headers: {
         'Authorization': 'Basic $_credentials',
       },
-    ).timeout(const Duration(seconds: 30));
+    ).timeout(blobTimeout);
     if (resp.statusCode != 200) {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
     }
