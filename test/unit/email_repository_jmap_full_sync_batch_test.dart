@@ -35,8 +35,8 @@ import 'helpers/jmap_test_server.dart';
 const _jmapAccountId = 'u1';
 const _mailbox = 'mbox-1';
 
-/// Two full `Email/query` pages plus a short one, so the test covers paging as
-/// well as batching within a page.
+/// One full `Email/query` page (500) plus a short one, so a single sweep has
+/// to page the query *and* batch each page's body fetches.
 const _total = 620;
 
 /// The client's own bounds, asserted absolutely.
@@ -64,7 +64,14 @@ class _Observed {
   var sawStateProbe = false;
 }
 
-http.Client _fullSyncServer(_Observed observed, {int total = _total}) {
+/// [omitFromGet] makes `Email/get` leave an id out of its `list` even though
+/// `Email/query` listed it — the shape that decides whether a full sync
+/// deletes the local row or leaves it to the guarded prune.
+http.Client _fullSyncServer(
+  _Observed observed, {
+  int total = _total,
+  String? omitFromGet,
+}) {
   final ids = [for (var i = 0; i < total; i++) 'e$i'];
 
   return MockClient((req) async {
@@ -104,29 +111,33 @@ http.Client _fullSyncServer(_Observed observed, {int total = _total}) {
         if (requested.isEmpty && !args.containsKey('#ids')) {
           // The id-less state probe.
           observed.sawStateProbe = true;
-          methodResponses.add([
-            'Email/get',
-            {
-              'accountId': _jmapAccountId,
-              'state': 'est-full',
-              'list': <dynamic>[],
-              'notFound': <String>[],
-            },
-            callId,
-          ]);
+          methodResponses.add(
+            jmapEmailGetResponse(
+              accountId: _jmapAccountId,
+              state: 'est-full',
+              list: const [],
+              callId: callId,
+            ),
+          );
           continue;
         }
         observed.getBatchSizes.add(requested.length);
-        methodResponses.add([
-          'Email/get',
-          {
-            'accountId': _jmapAccountId,
-            'state': 'est-full',
-            'list': [for (final id in requested) _email(id)],
-            'notFound': <String>[],
-          },
-          callId,
-        ]);
+        methodResponses.add(
+          jmapEmailGetResponse(
+            accountId: _jmapAccountId,
+            state: 'est-full',
+            list: [
+              for (final id in requested)
+                if (id != omitFromGet)
+                  jmapEmailObject(
+                    id: id,
+                    mailboxId: _mailbox,
+                    subject: 'full $id',
+                  ),
+            ],
+            callId: callId,
+          ),
+        );
         continue;
       }
 
@@ -141,42 +152,12 @@ http.Client _fullSyncServer(_Observed observed, {int total = _total}) {
   });
 }
 
-Map<String, dynamic> _email(String id) => {
-      'id': id,
-      'threadId': 't-$id',
-      'mailboxIds': {_mailbox: true},
-      'subject': 'full $id',
-      'receivedAt': '2026-10-04T10:00:00Z',
-      'from': [
-        {'email': 'bob@example.com'},
-      ],
-      'keywords': <String, dynamic>{},
-      'preview': 'hi',
-      'textBody': [
-        {'partId': '1', 'type': 'text/plain'},
-      ],
-      'htmlBody': <dynamic>[],
-      'bodyValues': {
-        '1': {'value': 'body of $id'},
-      },
-      'attachments': <dynamic>[],
-    };
-
 void main() {
   setUpAll(configureSqliteForTests);
 
   late Directory cacheDir;
   setUp(() => cacheDir = Directory.systemTemp.createTempSync('jmap_full_'));
   tearDown(() => cacheDir.deleteSync(recursive: true));
-
-  /// The stored checkpoint for [_mailbox]. The test database holds exactly
-  /// one account, so the resource type alone identifies the row.
-  Future<String?> storedState(AppDatabase db) async {
-    final row = await (db.select(db.syncStates)
-          ..where((t) => t.resourceType.equals('JMAP:Email:$_mailbox')))
-        .getSingleOrNull();
-    return row?.state;
-  }
 
   test('a first sync batches its body fetches', () async {
     final observed = _Observed();
@@ -209,10 +190,15 @@ void main() {
     );
     expect(
       observed.queryLimits.length,
-      greaterThan(1),
-      reason: 'a mailbox larger than one query page must be paged',
+      2,
+      reason: '620 emails is one full 500-id query page plus a short one',
     );
-    expect(await storedState(r.db), 'est-full');
+    expect(
+      observed.getBatchSizes.length,
+      13,
+      reason: '500 ids in batches of 50, then 120 in three more',
+    );
+    expect(await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'), 'est-full');
 
     await r.db.close();
   });
@@ -237,9 +223,47 @@ void main() {
       reason: 'the state has to come from somewhere when no body is fetched',
     );
     expect(
-      await storedState(r.db),
+      await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
       'est-full',
       reason: 'without a checkpoint the next cycle would full-sync again',
+    );
+
+    await r.db.close();
+  });
+
+  // A full sync must not delete on its own. Its reconciler is
+  // `_pruneJmapMailboxToServerIds`, which keeps everything `Email/query`
+  // listed and — unlike a bare delete — skips local-only rows (#545) and rows
+  // carrying an unflushed optimistic move or snooze. Batching the body fetches
+  // brought a delete-the-ids-`Email/get`-omitted step along with it from the
+  // incremental path; letting that run here would pre-empt the prune with
+  // neither guard.
+  test('does not delete a row for an id Email/get omits', () async {
+    final observed = _Observed();
+    final r = await openJmapTestRepos(
+      httpClient: _fullSyncServer(observed, total: 3, omitFromGet: 'e1'),
+      account: _jmapAccount,
+      cacheDir: cacheDir,
+    );
+    // A row with an unflushed move queued against it — exactly what the
+    // prune's in-flight guard exists to protect.
+    await r.db.into(r.db.emails).insert(
+          EmailsCompanion.insert(
+            id: '${_jmapAccount.id}:e1',
+            accountId: _jmapAccount.id,
+            mailboxPath: _mailbox,
+            uid: 0,
+            receivedAt: DateTime(2026),
+          ),
+        );
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id).toSet();
+    expect(
+      ids,
+      contains('${_jmapAccount.id}:e1'),
+      reason: 'the full sync must leave this to the guarded prune',
     );
 
     await r.db.close();

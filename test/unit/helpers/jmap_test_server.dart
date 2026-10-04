@@ -124,3 +124,69 @@ Future<JmapTestRepos> openJmapTestRepos({
   await accounts.addAccount(account, password);
   return JmapTestRepos(db: db, accounts: accounts, emails: emails);
 }
+
+/// One `Email` object as a JMAP server returns it, with a text body and no
+/// attachments.
+///
+/// Enough properties for `_upsertJmapEmails` to store a row and cache a body;
+/// suites that need a specific shape (attachments, missing `blobId`, …) should
+/// build their own rather than widen this.
+Map<String, dynamic> jmapEmailObject({
+  required String id,
+  required String mailboxId,
+  String? subject,
+  String receivedAt = '2026-10-04T10:00:00Z',
+  String from = 'bob@example.com',
+}) {
+  return {
+    'id': id,
+    'threadId': 't-$id',
+    'mailboxIds': {mailboxId: true},
+    'subject': subject ?? 'subject $id',
+    'receivedAt': receivedAt,
+    'from': [
+      {'email': from},
+    ],
+    'keywords': <String, dynamic>{},
+    'preview': 'hi',
+    'textBody': [
+      {'partId': '1', 'type': 'text/plain'},
+    ],
+    'htmlBody': <dynamic>[],
+    'bodyValues': {
+      '1': {'value': 'body of $id'},
+    },
+    'attachments': <dynamic>[],
+  };
+}
+
+/// The `Email/get` method response a fake server answers with.
+List<dynamic> jmapEmailGetResponse({
+  required String accountId,
+  required String state,
+  required List<Map<String, dynamic>> list,
+  Object callId = '0',
+}) {
+  return [
+    'Email/get',
+    {
+      'accountId': accountId,
+      'state': state,
+      'list': list,
+      'notFound': <String>[],
+    },
+    callId,
+  ];
+}
+
+/// The value stored under [resourceType] for the one account a test database
+/// holds, or null when nothing has been checkpointed yet.
+Future<String?> jmapStoredSyncState(
+  AppDatabase db,
+  String resourceType,
+) async {
+  final row = await (db.select(db.syncStates)
+        ..where((t) => t.resourceType.equals(resourceType)))
+      .getSingleOrNull();
+  return row?.state;
+}

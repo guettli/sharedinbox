@@ -2448,24 +2448,10 @@ class EmailRepositoryImpl implements EmailRepository {
     JmapClient jmap,
     String mailboxJmapId,
   ) async {
-    // Capture the Email state before paging, so a change that lands during a
-    // long full sync is picked up by the next incremental sweep instead of
-    // being missed.
-    //
-    // `Email/get` with an empty `ids` list returns the state and nothing else
-    // (RFC 8621 §4.1 — note `ids: null` would mean *every* email, so the empty
-    // list matters). Reading the state off the first body fetch, as this used
-    // to, only worked because that fetch was chained to the first query;
-    // an empty mailbox fetches nothing and would have no state to read.
-    final stateResponses = await jmap.call([
-      [
-        'Email/get',
-        {'accountId': jmap.accountId, 'ids': <String>[]},
-        '0',
-      ],
-    ]);
-    final state =
-        _responseArgs(stateResponses, 0, 'Email/get')['state'] as String;
+    // Captured on the first page below, before any body is fetched, so a
+    // change landing during a long full sync is picked up by the next
+    // incremental sweep instead of being missed.
+    late final String state;
 
     int position = 0;
     var fetched = 0;
@@ -2473,6 +2459,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final seenIds = <String>{};
 
     while (true) {
+      final firstPage = position == 0;
       // Ids only. This query used to chain `Email/get` straight onto its
       // result, which asked the server for up to `_jmapPageSize` (500) full
       // message bodies in a single request — ten times the batch the
@@ -2494,18 +2481,38 @@ class EmailRepositoryImpl implements EmailRepository {
           },
           '0',
         ],
+        // `Email/get` with an empty `ids` list returns the Email state and
+        // nothing else (RFC 8620 §5.1 — `ids: null` would mean *every* email,
+        // so the empty list is load-bearing). Riding along with the first
+        // query costs no extra round trip and inherits that request's larger
+        // timeout budget; a standalone probe would be classified as metadata
+        // and given 10s to gate the whole full sync.
+        //
+        // The state used to be read off the `Email/get` chained onto this
+        // query. With that gone there is nothing to read it from on an empty
+        // mailbox, which fetches no bodies at all.
+        if (firstPage)
+          [
+            'Email/get',
+            {'accountId': jmap.accountId, 'ids': <String>[]},
+            '1',
+          ],
       ]);
 
       final queryResult = _responseArgs(responses, 0, 'Email/query');
       final ids = List<String>.from(queryResult['ids'] as List);
       final total = queryResult['total'] as int?;
       seenIds.addAll(ids);
+      if (firstPage) {
+        state = _responseArgs(responses, 1, 'Email/get')['state'] as String;
+      }
 
       final batched = await _fetchJmapEmailBatches(
         accountId,
         jmap,
         ids,
         mailboxJmapId: mailboxJmapId,
+        deleteMissing: false,
       );
       fetched += batched.fetched;
       bytes += batched.bytes;
@@ -2575,11 +2582,18 @@ class EmailRepositoryImpl implements EmailRepository {
   /// for an unbounded id list makes the server read and serialize every
   /// message before it can answer, which is what blew past the request
   /// timeout in #967.
+  /// Set [deleteMissing] false when the caller has its own, safer reconciler.
+  /// The full sync finishes with [_pruneJmapMailboxToServerIds], which keeps
+  /// everything `Email/query` listed and skips rows that are local-only
+  /// (#545) or carry an unflushed optimistic move/snooze. Deleting here would
+  /// pre-empt that with neither guard, so a pending offline move of a message
+  /// another client had already destroyed would take the local row with it.
   Future<({int fetched, int bytes})> _fetchJmapEmailBatches(
     String accountId,
     JmapClient jmap,
     List<String> ids, {
     String? mailboxJmapId,
+    bool deleteMissing = true,
   }) async {
     var fetched = 0;
     var bytes = 0;
@@ -2609,8 +2623,9 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       fetched += list.length;
 
+      if (!deleteMissing) continue;
       // Any id we asked to fetch but did not receive back is treated by the
-      // server as gone (RFC 8620 §5.1 notFound); clean it up so stale rows
+      // server as gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows
       // don't linger.
       final returnedIds = <String>{
         for (final e in list) (e as Map<String, dynamic>)['id'] as String,
@@ -3665,6 +3680,14 @@ class EmailRepositoryImpl implements EmailRepository {
     if (method == 'error') {
       final err = triple[1] as Map<String, dynamic>;
       throw JmapException('$expectedMethod error: ${err['type']}');
+    }
+    // [expectedMethod] used to be for the error message only, so a response
+    // list that had slipped out of step returned another method's arguments
+    // and surfaced as an opaque TypeError further down. Say what happened.
+    if (method != expectedMethod) {
+      throw JmapException(
+        'JMAP response $index is $method, expected $expectedMethod',
+      );
     }
     return triple[1] as Map<String, dynamic>;
   }

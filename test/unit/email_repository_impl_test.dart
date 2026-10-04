@@ -110,11 +110,21 @@ List<Map<String, dynamic>> _fullSyncResponses({
   required List<List<Map<String, dynamic>>> pages,
   int? total,
 }) {
+  // One Email/get response per page assumes the page fits in a single batch; a
+  // larger page makes production issue a second Email/get, which would consume
+  // the next page's Email/query response and fail somewhere unhelpful.
+  for (final page in pages) {
+    if (page.length > 50) {
+      throw ArgumentError.value(
+        page.length,
+        'pages',
+        'a page must fit one Email/get batch (50)',
+      );
+    }
+  }
   final every = [for (final page in pages) ...page];
   return [
-    // The id-less Email/get that captures the state.
-    _emailGetOnly(state: state, list: const []),
-    for (final page in pages) ...[
+    for (var i = 0; i < pages.length; i++) ...[
       {
         'sessionState': 'sess1',
         'methodResponses': [
@@ -122,14 +132,22 @@ List<Map<String, dynamic>> _fullSyncResponses({
             'Email/query',
             {
               'accountId': 'acct1',
-              'ids': [for (final e in page) e['id']],
+              'ids': [for (final e in pages[i]) e['id']],
               'total': total ?? every.length,
             },
             '0',
           ],
+          // The id-less Email/get that captures the state rides along with
+          // the first page's query.
+          if (i == 0)
+            [
+              'Email/get',
+              {'accountId': 'acct1', 'state': state, 'list': <dynamic>[]},
+              '1',
+            ],
         ],
       },
-      _emailGetOnly(state: state, list: page),
+      _emailGetOnly(state: state, list: pages[i]),
     ],
   ];
 }

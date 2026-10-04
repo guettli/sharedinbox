@@ -116,16 +116,21 @@ http.Client _pagingServer(
         if (failGetFromOffset != null && first >= failGetFromOffset) {
           return http.Response('upstream too slow', 503);
         }
-        methodResponses.add([
-          'Email/get',
-          {
-            'accountId': _jmapAccountId,
-            'state': 's$_backlog',
-            'list': [for (final id in requested) _email(id)],
-            'notFound': <String>[],
-          },
-          callId,
-        ]);
+        methodResponses.add(
+          jmapEmailGetResponse(
+            accountId: _jmapAccountId,
+            state: 's$_backlog',
+            list: [
+              for (final id in requested)
+                jmapEmailObject(
+                  id: id,
+                  mailboxId: _mailbox,
+                  subject: 'backlog $id',
+                ),
+            ],
+            callId: callId,
+          ),
+        );
         continue;
       }
 
@@ -139,27 +144,6 @@ http.Client _pagingServer(
     return jmapApiResponse(methodResponses);
   });
 }
-
-Map<String, dynamic> _email(String id) => {
-      'id': id,
-      'threadId': 't-$id',
-      'mailboxIds': {_mailbox: true},
-      'subject': 'backlog $id',
-      'receivedAt': '2026-10-04T10:00:00Z',
-      'from': [
-        {'email': 'bob@example.com'},
-      ],
-      'keywords': <String, dynamic>{},
-      'preview': 'hi',
-      'textBody': [
-        {'partId': '1', 'type': 'text/plain'},
-      ],
-      'htmlBody': <dynamic>[],
-      'bodyValues': {
-        '1': {'value': 'body of $id'},
-      },
-      'attachments': <dynamic>[],
-    };
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -185,15 +169,6 @@ void main() {
             ),
           );
     }
-  }
-
-  /// The stored checkpoint for [_mailbox]. The test database holds exactly
-  /// one account, so the resource type alone identifies the row.
-  Future<String?> storedState(AppDatabase db) async {
-    final row = await (db.select(db.syncStates)
-          ..where((t) => t.resourceType.equals('JMAP:Email:$_mailbox')))
-        .getSingleOrNull();
-    return row?.state;
   }
 
   test('pages Email/changes and batches Email/get', () async {
@@ -238,7 +213,8 @@ void main() {
       ['s0', 's200', 's400'],
       reason: 'each page must resume from the previous newState, never replay',
     );
-    expect(await storedState(r.db), 's$_backlog');
+    expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'), 's$_backlog');
 
     await r.db.close();
   });
@@ -262,7 +238,7 @@ void main() {
     );
 
     expect(
-      await storedState(r.db),
+      await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
       's200',
       reason: 'the first page completed, so the next cycle must resume after '
           'it instead of replaying the whole backlog',
@@ -295,7 +271,8 @@ void main() {
       isNot(contains('s0')),
       reason: 'the checkpoint must be honoured, not restarted from scratch',
     );
-    expect(await storedState(r.db), 's$_backlog');
+    expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'), 's$_backlog');
 
     await r.db.close();
   });
