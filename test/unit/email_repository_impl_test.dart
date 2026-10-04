@@ -120,6 +120,21 @@ Map<String, dynamic> _emailGetResponse({
       ],
     };
 
+/// An `Email/changes` refusal. RFC 8620 §5.2 uses one error type both for a
+/// `sinceState` the server can no longer resolve and for one it cannot step to
+/// an intermediate state from, so the client cannot tell them apart from the
+/// response alone — see the retry in `_jmapIncrementalEmailSync` (#967).
+Map<String, dynamic> _cannotCalculateChanges() => {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'error',
+          {'type': 'cannotCalculateChanges'},
+          '0',
+        ],
+      ],
+    };
+
 Map<String, dynamic> _emailChangesResponse({
   required String oldState,
   required String newState,
@@ -4902,18 +4917,13 @@ void main() {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
             apiResponses: [
-              // Call 1: Email/changes with error
-              {
-                'sessionState': 'sess1',
-                'methodResponses': [
-                  [
-                    'error',
-                    {'type': 'cannotCalculateChanges'},
-                    '0',
-                  ],
-                ],
-              },
-              // Call 2: full sync Email/query + Email/get
+              // Call 1: bounded Email/changes, refused.
+              _cannotCalculateChanges(),
+              // Call 2: the unbounded retry (#967) — a server whose stored
+              // state is genuinely unresolvable refuses this one too, which is
+              // what tells the client to give up and resync.
+              _cannotCalculateChanges(),
+              // Call 3: full sync Email/query + Email/get
               _emailGetResponse(
                 state: 'est-new',
                 list: [
@@ -4959,6 +4969,71 @@ void main() {
               ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
             .getSingle();
         expect(emailState.state, 'est-new');
+      },
+    );
+
+    // #967: sending `maxChanges` makes RFC 8620 §5.2's "cannot produce an
+    // intermediate state" refusal reachable where it was not before. A server
+    // that merely dislikes a bounded window must not cost a full resync of the
+    // folder on every single cycle.
+    test(
+      'incremental sync retries unbounded before falling back to full sync',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              // Call 1: the bounded request is refused …
+              _cannotCalculateChanges(),
+              // Call 2: … but the same state resolves fine unbounded.
+              _emailChangesResponse(
+                oldState: 'est-ancient',
+                newState: 'est-new',
+                updated: ['e-live'],
+              ),
+              // Call 3: Email/get for the one changed id.
+              _emailGetOnly(
+                state: 'est-new',
+                list: [
+                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Email:mbx1',
+                state: 'est-ancient',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        // Fresh stamp so the 15-minutely reconcile pass stays out of the way.
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final subjects = (await r.emails.observeEmails('jmap-1', 'mbx1').first)
+            .map((e) => e.subject)
+            .toSet();
+        expect(
+          subjects,
+          {'live'},
+          reason: 'the unbounded retry must carry the sweep, not a full resync',
+        );
+
+        final state = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+            .getSingle();
+        expect(state.state, 'est-new');
       },
     );
 
