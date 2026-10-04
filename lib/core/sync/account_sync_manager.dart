@@ -28,11 +28,8 @@ bool _isTimeoutError(Object e) => e is TimeoutException;
 
 /// True when [e] is a routine "device is offline / cannot reach the host"
 /// failure: DNS, connect, TLS.
-bool _isUnreachableError(Object e) {
-  return e is SocketException ||
-      e is HttpException ||
-      e is HandshakeException;
-}
+bool _isUnreachableError(Object e) =>
+    e is SocketException || e is HttpException || e is HandshakeException;
 
 /// True when [e] is a routine "device is offline / network hiccup" failure.
 /// Sync failures of this shape are expected on mobile and must not be logged
@@ -54,12 +51,15 @@ bool _isTransientNetworkError(Object e) =>
 /// cause was a request the client had made too large to answer in time
 /// (issue #967). Report what happened — that the server was slow — so the
 /// next report points at the request, not at the network.
+///
+/// Deliberately short and free of the words "network" and "DNS": it is
+/// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
+/// longer, and the half that would be cut is the actionable half.
 @visibleForTesting
 String syncErrorMessage(Object e) {
   if (_isTimeoutError(e)) {
-    return 'The mail server did not answer in time. It was reachable, so '
-        'this is not a network or DNS problem — the request it was asked to '
-        'answer took too long. Will retry automatically.';
+    return 'The mail server was reached but did not answer in time — the '
+        'request took too long. Will retry automatically.';
   }
   if (_isUnreachableError(e)) {
     return 'Could not reach the mail server — temporary network or DNS '

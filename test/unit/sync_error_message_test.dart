@@ -42,14 +42,29 @@ void main() {
     });
 
     test('does not blame the network for a timeout', () {
-      final timeout = syncErrorMessage(TimeoutException('too slow'));
+      final timeout =
+          syncErrorMessage(TimeoutException('too slow')).toLowerCase();
       expect(
         timeout,
-        isNot(contains('Could not reach')),
+        isNot(contains('could not reach')),
         reason: 'the server was reached — saying otherwise misdirects '
             'the next investigation (#967)',
       );
-      expect(timeout.toLowerCase(), isNot(contains('dns problem')));
+      expect(
+        timeout,
+        isNot(contains('dns')),
+        reason: 'not even to deny it: the words are what readers remember',
+      );
+      expect(timeout, isNot(contains('network')));
+    });
+
+    test('stays short enough for the two-line sync banner', () {
+      expect(
+        syncErrorMessage(TimeoutException('too slow')).length,
+        lessThan(120),
+        reason: 'EmailListScreen ellipses the banner after two lines, and '
+            'the actionable half is at the end',
+      );
     });
 
     test('a timeout and an unreachable host read differently', () {
