@@ -273,12 +273,95 @@ void main() {
           lastError: lastError,
         );
 
+    // The three rendered states of the health row. 'Discrepancies found' is
+    // six characters longer than 'Healthy' and adds detail lines beneath, and
+    // the verifying row pairs a fixed-size spinner with its label, so all
+    // three need the same overflow guarantee.
+    final healthVariants = [
+      (
+        name: 'healthy',
+        marker: 'Healthy',
+        row: healthRow(isHealthy: true),
+        verifying: const <String>{},
+      ),
+      (
+        name: 'discrepancies',
+        marker: 'Discrepancies found',
+        row: healthRow(
+          isHealthy: false,
+          discrepancySummary:
+              '{"INBOX":{"missingLocally":3,"missingOnServer":0,'
+              '"flagMismatches":1}}',
+        ),
+        verifying: const <String>{},
+      ),
+      (
+        name: 'verifying',
+        marker: 'verifying',
+        row: healthRow(isHealthy: true),
+        verifying: {kTestAccount.id},
+      ),
+    ];
+
     testWidgets('shows Healthy when sync health is healthy', (tester) async {
       await _pumpAccountList(tester, syncHealth: healthRow(isHealthy: true));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Healthy'), findsOneWidget);
+      expect(
+        find.textContaining('Healthy', findRichText: true),
+        findsOneWidget,
+      );
     });
+
+    // Regression: the health row used to be a Row whose 'Sync health: ' label
+    // and trailing date were sized to their intrinsic widths. At accessibility
+    // text scales they squeezed the status to zero width and overflowed — by
+    // 52px on a Galaxy A80 at font_scale 1.8, and by far more on the narrow
+    // surface used here. Every other test in this file runs at the default
+    // 800x600 logical surface, where even scale 2.0 fits, which is why none of
+    // them caught it. takeException() is a catch-all, so this also fails on
+    // any unrelated reported error, which is fine for a smoke assertion.
+    for (final variant in healthVariants) {
+      testWidgets('${variant.name} row does not overflow at large text scale',
+          (tester) async {
+        // 360x800 logical, i.e. a compact phone — the row gets 360 - 72 indent
+        // - 16 trailing = 272px.
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+        await _pumpAccountList(
+          tester,
+          syncHealth: variant.row,
+          verifying: variant.verifying,
+        );
+        // pump, not pumpAndSettle: the verifying row holds a
+        // CircularProgressIndicator, whose animation never ends, so
+        // pumpAndSettle simulates its full 10-minute timeout and throws.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // Guard the precondition. Without the scale actually reaching the
+        // widget the old Row fits in 272px and this test would pass against
+        // the very bug it exists to catch. The bound is deliberately loose:
+        // since Flutter 3.16 the platform text scaler is non-linear, so a
+        // system factor of 2.0 renders a 14px font at ~18.8px, not 28px. All
+        // this has to prove is that the override arrived and is not identity.
+        final scaler = MediaQuery.textScalerOf(
+          tester.element(find.text('sharedinbox.de')),
+        );
+        expect(scaler.scale(14), greaterThan(16));
+        // ...and that the row under test actually rendered, so a silently
+        // empty screen cannot masquerade as "no overflow".
+        expect(
+          find.textContaining(variant.marker, findRichText: true),
+          findsOneWidget,
+        );
+
+        expect(tester.takeException(), isNull);
+      });
+    }
 
     testWidgets('shows discrepancy details when sync health has discrepancies',
         (
@@ -292,7 +375,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Discrepancies found'), findsOneWidget);
+      expect(
+        find.textContaining('Discrepancies found', findRichText: true),
+        findsOneWidget,
+      );
       expect(find.text('missing locally: 3'), findsOneWidget);
       expect(find.text('flag mismatches: 1'), findsOneWidget);
       // Zero-valued metrics are not listed.
@@ -309,7 +395,10 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.text('Discrepancies found'), findsOneWidget);
+        expect(
+          find.textContaining('Discrepancies found', findRichText: true),
+          findsOneWidget,
+        );
         expect(find.textContaining('missing locally'), findsNothing);
       },
     );
@@ -413,7 +502,9 @@ void main() {
       await tester.pumpAndSettle();
 
       final namePos = tester.getTopLeft(find.text('Alice')).dy;
-      final healthPos = tester.getTopLeft(find.textContaining('Healthy')).dy;
+      final healthPos = tester
+          .getTopLeft(find.textContaining('Healthy', findRichText: true))
+          .dy;
       expect(healthPos, greaterThan(namePos));
     });
   });
