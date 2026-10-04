@@ -18,7 +18,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
 
 import 'helpers/jmap_test_server.dart';
 
@@ -119,33 +118,15 @@ http.Client _pagingServer(
 void main() {
   final cacheDir = useJmapTestEnv('jmap_inc_');
 
-  /// Puts the sweep on the incremental path from [state], and stamps a fresh
-  /// reconcile marker so the periodic `Email/query` safety net stays out of
-  /// the way.
-  Future<void> seedSyncState(AppDatabase db, String state) async {
-    for (final row in {
-      'JMAP:Email:$_mailbox': state,
-      'JMAP:Reconcile:$_mailbox': DateTime.now().toIso8601String(),
-    }.entries) {
-      await db.into(db.syncStates).insert(
-            SyncStatesCompanion.insert(
-              accountId: _jmapAccount.id,
-              resourceType: row.key,
-              state: row.value,
-              syncedAt: DateTime.now(),
-            ),
-          );
-    }
-  }
-
   test('pages Email/changes and batches Email/get', () async {
     final observed = _Observed();
-    final r = await openJmapTestRepos(
+    final r = await openJmapTestReposOnIncrementalPath(
       httpClient: _pagingServer(observed),
       account: _jmapAccount,
       cacheDir: cacheDir(),
+      mailboxJmapId: _mailbox,
+      syncState: 's0',
     );
-    await seedSyncState(r.db, 's0');
 
     final result = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 
@@ -194,12 +175,13 @@ void main() {
   // backlog and failed the same way, forever.
   test('a mid-sweep failure keeps the pages that already landed', () async {
     final observed = _Observed();
-    final r = await openJmapTestRepos(
+    final r = await openJmapTestReposOnIncrementalPath(
       httpClient: _pagingServer(observed, failGetFromOffset: 200),
       account: _jmapAccount,
       cacheDir: cacheDir(),
+      mailboxJmapId: _mailbox,
+      syncState: 's0',
     );
-    await seedSyncState(r.db, 's0');
 
     await expectLater(
       r.emails.syncEmails(_jmapAccount.id, _mailbox),
@@ -223,13 +205,14 @@ void main() {
 
   test('a later cycle resumes from the checkpoint and finishes', () async {
     final observed = _Observed();
-    final r = await openJmapTestRepos(
+    // Stand in for a previous cycle that got as far as page one.
+    final r = await openJmapTestReposOnIncrementalPath(
       httpClient: _pagingServer(observed),
       account: _jmapAccount,
       cacheDir: cacheDir(),
+      mailboxJmapId: _mailbox,
+      syncState: 's200',
     );
-    // Stand in for a previous cycle that got as far as page one.
-    await seedSyncState(r.db, 's200');
 
     final result = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 

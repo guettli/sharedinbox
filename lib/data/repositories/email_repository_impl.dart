@@ -1759,17 +1759,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // these rows look orphaned from both the old and new mailbox until the
     // server applies the change and we remap to the destination UID. Skipping
     // them here avoids wiping the row mid-flight.
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const ['move', 'snooze', 'unsnooze'],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _rowsWithUnflushedMove(accountId);
 
     final serverUidSet = serverUids.toSet();
     final affectedThreads = <String>{};
@@ -2624,16 +2614,34 @@ class EmailRepositoryImpl implements EmailRepository {
       fetched += list.length;
 
       if (!deleteMissing) continue;
-      // Any id we asked to fetch but did not receive back is treated by the
-      // server as gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows
-      // don't linger.
+      // An id we asked for but did not get back is treated by the server as
+      // gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows don't
+      // linger.
+      //
+      // Guarded, because this is an *omission* rather than an explicit
+      // `destroyed`: a row carrying an unflushed optimistic move or snooze is
+      // left alone, exactly as [_pruneJmapMailboxToServerIds] does. Otherwise
+      // a pending offline move of a message another client had already
+      // deleted would take the local row with it, and strand the queued
+      // change against a row that no longer exists.
       final returnedIds = <String>{
         for (final e in list) (e as Map<String, dynamic>)['id'] as String,
       };
-      for (final jmapId in batch) {
-        if (!returnedIds.contains(jmapId)) {
-          await _deleteJmapEmailById(accountId, jmapId);
+      final missing = [
+        for (final jmapId in batch)
+          if (!returnedIds.contains(jmapId)) jmapId,
+      ];
+      if (missing.isEmpty) continue;
+      final inFlight = await _rowsWithUnflushedMove(accountId);
+      for (final jmapId in missing) {
+        if (inFlight.contains('$accountId:$jmapId')) {
+          log(
+            'JMAP-sync: Email/get omitted $jmapId but a move/snooze is still '
+            'queued for it — keeping the row',
+          );
+          continue;
         }
+        await _deleteJmapEmailById(accountId, jmapId);
       }
     }
     return (fetched: fetched, bytes: bytes);
@@ -2799,6 +2807,11 @@ class EmailRepositoryImpl implements EmailRepository {
     final dbId = '$accountId:$jmapId';
     final email = await getEmail(dbId);
     if (email == null) return;
+    // Local self-sent "virtual" rows have no server counterpart and must
+    // survive until the real message arrives and dissolves them (#545). They
+    // carry no JMAP id, so reaching one here means the id collided with a
+    // local row — delete it and the user's sent mail vanishes from the view.
+    if (email.isLocal) return;
     final tid = email.threadId ?? dbId;
     final mailbox = email.mailboxPath;
     await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
@@ -2827,6 +2840,22 @@ class EmailRepositoryImpl implements EmailRepository {
         .go();
   }
 
+  /// Row ids whose optimistic move/snooze has not been flushed to the server
+  /// yet, so a reconciler must not delete them mid-flight.
+  Future<Set<String>> _rowsWithUnflushedMove(String accountId) async {
+    final ids = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const ['move', 'snooze', 'unsnooze'],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    return ids.toSet();
+  }
+
   /// Deletes local email rows for [mailboxJmapId] whose id isn't in the
   /// authoritative [serverIds] set. Returns the number of rows removed.
   ///
@@ -2846,17 +2875,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .get();
 
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const ['move', 'snooze', 'unsnooze'],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _rowsWithUnflushedMove(accountId);
 
     final affectedThreads = <String>{};
     var removed = 0;
