@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
@@ -123,4 +126,193 @@ Future<JmapTestRepos> openJmapTestRepos({
   );
   await accounts.addAccount(account, password);
   return JmapTestRepos(db: db, accounts: accounts, emails: emails);
+}
+
+/// One `Email` object as a JMAP server returns it, with a text body and no
+/// attachments.
+///
+/// Enough properties for `_upsertJmapEmails` to store a row and cache a body;
+/// suites that need a specific shape (attachments, missing `blobId`, …) should
+/// build their own rather than widen this.
+Map<String, dynamic> jmapEmailObject({
+  required String id,
+  required String mailboxId,
+  String? subject,
+  String receivedAt = '2026-10-04T10:00:00Z',
+  String from = 'bob@example.com',
+}) {
+  return {
+    'id': id,
+    'threadId': 't-$id',
+    'mailboxIds': {mailboxId: true},
+    'subject': subject ?? 'subject $id',
+    'receivedAt': receivedAt,
+    'from': [
+      {'email': from},
+    ],
+    'keywords': <String, dynamic>{},
+    'preview': 'hi',
+    'textBody': [
+      {'partId': '1', 'type': 'text/plain'},
+    ],
+    'htmlBody': <dynamic>[],
+    'bodyValues': {
+      '1': {'value': 'body of $id'},
+    },
+    'attachments': <dynamic>[],
+  };
+}
+
+/// The `Email/get` method response a fake server answers with.
+List<dynamic> jmapEmailGetResponse({
+  required String accountId,
+  required String state,
+  required List<Map<String, dynamic>> list,
+  Object? callId = '0',
+}) {
+  return [
+    'Email/get',
+    {
+      'accountId': accountId,
+      'state': state,
+      'list': list,
+      'notFound': <String>[],
+    },
+    callId,
+  ];
+}
+
+/// The value stored under [resourceType] for the one account a test database
+/// holds, or null when nothing has been checkpointed yet.
+Future<String?> jmapStoredSyncState(
+  AppDatabase db,
+  String resourceType,
+) async {
+  final row = await (db.select(db.syncStates)
+        ..where((t) => t.resourceType.equals(resourceType)))
+      .getSingleOrNull();
+  return row?.state;
+}
+
+/// One `[method, args, callId]` triple from a JMAP API request.
+class JmapCall {
+  JmapCall(this.method, this.args, this.callId);
+
+  final String method;
+  final Map<String, dynamic> args;
+  final Object? callId;
+
+  /// `ids` as a list of strings, empty when absent. An empty list is how a
+  /// client asks for nothing (an `Email/get` state probe); `null` would mean
+  /// *every* record, so the two must not be conflated.
+  List<String> get ids =>
+      ((args['ids'] as List<dynamic>?) ?? const []).cast<String>();
+
+  /// Whether the call back-references another call's result (`#ids`) rather
+  /// than naming the ids itself.
+  bool get isBackReferenced => args.containsKey('#ids');
+}
+
+/// Thrown by a handler to answer at the HTTP level instead of with a method
+/// response — for the failures (503, a malformed body) a method response
+/// cannot express.
+class JmapRawResponse implements Exception {
+  JmapRawResponse(this.response);
+
+  final http.Response response;
+}
+
+/// A fake JMAP server: answers the session fetch, then routes every method
+/// call in a request to [handle].
+///
+/// [handle] returns the method response for a call it recognises, or null to
+/// let the server answer `unknownMethod` — so a suite scripts only the methods
+/// it cares about and an unexpected call fails loudly rather than being
+/// silently absorbed. Throw [JmapRawResponse] from it to answer at the HTTP
+/// level. [handleRaw] sees non-API requests (blob download/upload) first.
+http.Client jmapFakeServer({
+  required String accountId,
+  required FutureOr<List<dynamic>?> Function(JmapCall call) handle,
+  FutureOr<http.Response?> Function(http.BaseRequest request)? handleRaw,
+  String? downloadUrl,
+  String? uploadUrl,
+}) {
+  return MockClient((req) async {
+    if (req.url.path.contains('well-known')) {
+      return jmapSessionResponse(
+        accountId: accountId,
+        downloadUrl: downloadUrl,
+        uploadUrl: uploadUrl,
+      );
+    }
+    if (handleRaw != null) {
+      final raw = await handleRaw(req);
+      if (raw != null) return raw;
+    }
+
+    final methodResponses = <List<dynamic>>[];
+    try {
+      for (final call in jmapMethodCalls(req)) {
+        final parsed = JmapCall(
+          call[0] as String,
+          call[1] as Map<String, dynamic>,
+          call[2],
+        );
+        final response = await handle(parsed);
+        methodResponses.add(
+          response ??
+              [
+                'error',
+                {'type': 'unknownMethod'},
+                parsed.callId,
+              ],
+        );
+      }
+    } on JmapRawResponse catch (e) {
+      return e.response;
+    }
+    return jmapApiResponse(methodResponses);
+  });
+}
+
+/// An `Email/get` response rendering each of [ids] with [jmapEmailObject],
+/// skipping anything in [omit] so a suite can make the server leave an id out
+/// of a response it was asked for.
+List<dynamic> jmapEmailGetResponseFor({
+  required String accountId,
+  required String state,
+  required Iterable<String> ids,
+  required String mailboxId,
+  String subjectPrefix = 'subject',
+  Set<String> omit = const {},
+  Object? callId = '0',
+}) {
+  return jmapEmailGetResponse(
+    accountId: accountId,
+    state: state,
+    list: [
+      for (final id in ids)
+        if (!omit.contains(id))
+          jmapEmailObject(
+            id: id,
+            mailboxId: mailboxId,
+            subject: '$subjectPrefix $id',
+          ),
+    ],
+    callId: callId,
+  );
+}
+
+/// Per-test setup every JMAP repository suite needs: sqlite configured once,
+/// and a temp body-cache directory created and removed around each test.
+///
+/// Registers `setUpAll`/`setUp`/`tearDown`, so call it from inside `main()`.
+/// Returns an accessor rather than the directory, because the directory does
+/// not exist until `setUp` runs.
+Directory Function() useJmapTestEnv(String cachePrefix) {
+  setUpAll(configureSqliteForTests);
+  late Directory dir;
+  setUp(() => dir = Directory.systemTemp.createTempSync(cachePrefix));
+  tearDown(() => dir.deleteSync(recursive: true));
+  return () => dir;
 }

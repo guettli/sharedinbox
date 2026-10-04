@@ -19,12 +19,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
-import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
 
 const _accountId = 'acct1';
@@ -45,42 +43,24 @@ const _jmapAccount = Account(
 /// a spec-compliant server (RFC 8621 §4.1.4). A body fetch that forgets to
 /// request `blobId` therefore gets an attachment with no id to download.
 http.Client _jmapServer() {
-  return MockClient((req) async {
-    // Session object.
-    if (req.url.path.contains('well-known')) {
-      return jmapSessionResponse(
-        accountId: _accountId,
-        downloadUrl: 'https://jmap.example.com/download/'
-            '{accountId}/{blobId}/{name}?type={type}',
-        uploadUrl: 'https://jmap.example.com/upload/{accountId}',
-      );
-    }
-
-    // Blob download.
-    if (req.method == 'GET' && req.url.path.contains('/download/')) {
-      return http.Response.bytes(_pdfBytes, 200);
-    }
-
-    // API request (Email/get).
-    final methodResponses = <List<dynamic>>[];
-    for (final call in jmapMethodCalls(req)) {
-      final method = call[0] as String;
-      final args = call[1] as Map<String, dynamic>;
-      final callId = call[2];
-
-      if (method != 'Email/get') {
-        methodResponses.add([
-          'error',
-          {'type': 'unknownMethod'},
-          callId,
-        ]);
-        continue;
+  return jmapFakeServer(
+    accountId: _accountId,
+    downloadUrl: 'https://jmap.example.com/download/'
+        '{accountId}/{blobId}/{name}?type={type}',
+    uploadUrl: 'https://jmap.example.com/upload/{accountId}',
+    handleRaw: (req) {
+      if (req.method == 'GET' && req.url.path.contains('/download/')) {
+        return http.Response.bytes(_pdfBytes, 200);
       }
+      return null;
+    },
+    handle: (call) {
+      if (call.method != 'Email/get') return null;
 
       // Return only the body properties the client requested — a real server
       // never volunteers `blobId` unless it is asked for.
       final bodyProperties =
-          ((args['bodyProperties'] as List<dynamic>?) ?? const [])
+          ((call.args['bodyProperties'] as List<dynamic>?) ?? const [])
               .cast<String>();
       const fullAttachment = {
         'partId': '2',
@@ -95,48 +75,38 @@ http.Client _jmapServer() {
           if (fullAttachment.containsKey(prop)) prop: fullAttachment[prop],
       };
 
-      methodResponses.add([
-        'Email/get',
-        {
-          'accountId': _accountId,
-          'state': 'st1',
-          'list': [
-            {
-              'id': 'email-1',
-              'headers': <dynamic>[],
-              'textBody': [
-                {'partId': '1', 'type': 'text/plain'},
-              ],
-              'htmlBody': <dynamic>[],
-              'bodyValues': {
-                '1': {'value': 'see attached'},
-              },
-              'attachments': [attachment],
-              'bodyStructure': <String, dynamic>{},
+      return jmapEmailGetResponse(
+        accountId: _accountId,
+        state: 'st1',
+        list: [
+          {
+            'id': 'email-1',
+            'headers': <dynamic>[],
+            'textBody': [
+              {'partId': '1', 'type': 'text/plain'},
+            ],
+            'htmlBody': <dynamic>[],
+            'bodyValues': {
+              '1': {'value': 'see attached'},
             },
-          ],
-          'notFound': <String>[],
-        },
-        callId,
-      ]);
-    }
-
-    return jmapApiResponse(methodResponses);
-  });
+            'attachments': [attachment],
+            'bodyStructure': <String, dynamic>{},
+          },
+        ],
+        callId: call.callId,
+      );
+    },
+  );
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
-  late Directory cacheDir;
-  setUp(() => cacheDir = Directory.systemTemp.createTempSync('jmap_att_test_'));
-  tearDown(() => cacheDir.deleteSync(recursive: true));
+  final cacheDir = useJmapTestEnv('jmap_att_test_');
 
   test('JMAP attachments can be downloaded after opening the email', () async {
     final r = await openJmapTestRepos(
       httpClient: _jmapServer(),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
 
     const emailId = 'jmap-att:email-1';
