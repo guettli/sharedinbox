@@ -21,25 +21,47 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn, connectImap, verboseLogKey;
 import 'package:sharedinbox/data/imap/tls_error.dart' show isTlsConfigError;
 
+/// True when [e] means the server never answered in time, as opposed to never
+/// being reached at all. Kept separate from [_isUnreachableError] because the
+/// two have different causes and different fixes — see [syncErrorMessage].
+bool _isTimeoutError(Object e) => e is TimeoutException;
+
+/// True when [e] is a routine "device is offline / cannot reach the host"
+/// failure: DNS, connect, TLS.
+bool _isUnreachableError(Object e) {
+  return e is SocketException ||
+      e is HttpException ||
+      e is HandshakeException;
+}
+
 /// True when [e] is a routine "device is offline / network hiccup" failure.
 /// Sync failures of this shape are expected on mobile and must not be logged
 /// at `error` level (which would flood the app log with red entries and
 /// suggest a bug where there is none — regression #355).
-bool _isTransientNetworkError(Object e) {
-  return e is SocketException ||
-      e is HttpException ||
-      e is HandshakeException ||
-      e is TimeoutException;
-}
+bool _isTransientNetworkError(Object e) =>
+    _isUnreachableError(e) || _isTimeoutError(e);
 
 /// Message shown in the Sync Entry's error field. For a transient network
 /// failure the raw exception (e.g. "SocketException: Failed host lookup:
 /// 'imap.gmail.com' ... errno = 7", #609) reads like a bug to users whose
 /// connection is fine, so we show a friendly hint instead. The raw exception
 /// and stack trace are still recorded in the app log for debugging.
+///
+/// A timeout gets its own wording. It used to share the "could not reach the
+/// mail server — temporary network or DNS problem" text, which is actively
+/// misleading: the server had been reached, it just had not finished the
+/// request. That message sent a real investigation at DNS while the actual
+/// cause was a request the client had made too large to answer in time
+/// (issue #967). Report what happened — that the server was slow — so the
+/// next report points at the request, not at the network.
 @visibleForTesting
 String syncErrorMessage(Object e) {
-  if (_isTransientNetworkError(e)) {
+  if (_isTimeoutError(e)) {
+    return 'The mail server did not answer in time. It was reachable, so '
+        'this is not a network or DNS problem — the request it was asked to '
+        'answer took too long. Will retry automatically.';
+  }
+  if (_isUnreachableError(e)) {
     return 'Could not reach the mail server — temporary network or DNS '
         'problem. Will retry automatically.';
   }
