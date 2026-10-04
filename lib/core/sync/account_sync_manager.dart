@@ -750,29 +750,37 @@ class _AccountSync implements _SyncLoop {
         await _idle();
       } catch (e, st) {
         _onSyncEnd?.call();
-        final isPermanent = _isPermanentError(e);
+        // A cycle that finished most of its folders still did real work. Log
+        // what landed rather than the hardcoded zeros that made the Sync Entry
+        // read as "nothing happened" (#967), and classify the cycle by the
+        // underlying failure rather than by the wrapper.
+        final partial = e is _PartialSyncException ? e : null;
+        final cause = partial?.cause ?? e;
+        final stats = partial?.stats;
+        final isPermanent = _isPermanentError(cause);
         var syncLogId = 0;
         try {
           syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
-            errorMessage: syncErrorMessage(e),
-            stackTrace: st.toString(),
+            errorMessage: partial?.message ?? syncErrorMessage(e),
+            stackTrace: (partial?.causeStackTrace ?? st).toString(),
             isPermanent: isPermanent,
             protocol: 'imap',
-            emailsFetched: 0,
-            emailsSkipped: 0,
-            mailboxesSynced: 0,
-            pendingFlushed: 0,
-            bytesTransferred: 0,
+            emailsFetched: stats?.emailsFetched ?? 0,
+            emailsSkipped: stats?.emailsSkipped ?? 0,
+            mailboxesSynced: stats?.mailboxesSynced ?? 0,
+            pendingFlushed: stats?.pendingFlushed ?? 0,
+            bytesTransferred: stats?.bytesTransferred ?? 0,
             startedAt: startedAt,
             finishedAt: DateTime.now(),
+            mailboxStats: stats?.mailboxStats ?? const [],
             protocolLog: _lastFailureLog,
           );
         } catch (logErr) {
           log('Failed to write IMAP sync log entry: $logErr');
         }
-        final isTransient = _isTransientNetworkError(e);
+        final isTransient = _isTransientNetworkError(cause);
         unawaited(
           isTransient
               ? _appLogger.warn(
@@ -883,38 +891,62 @@ class _AccountSync implements _SyncLoop {
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
     final mailboxStats = <MailboxSyncStats>[];
+    final failures = <_MailboxFailure>[];
+    var attempted = 0;
     for (final mailbox in mailboxes) {
       if (!_running) break;
       // Skip folders that just duplicate other folders (Gmail's "All Mail"),
       // otherwise every message is downloaded twice (#691).
       if (isDuplicateOfOtherFolders(mailbox)) continue;
+      attempted++;
       final mailboxStart = DateTime.now();
-      final r = await _emails.syncEmails(account.id, mailbox.path);
-      emailResult += r;
-      mailboxStats.add(
-        MailboxSyncStats(
-          mailboxPath: mailbox.path,
-          mailboxName: mailbox.name,
-          mailboxDisplayPath: mailbox.displayPath,
-          fetched: r.fetched,
-          skipped: r.skipped,
-          bytesTransferred: r.bytesTransferred,
-          duration: DateTime.now().difference(mailboxStart),
-        ),
-      );
+      try {
+        final r = await _emails.syncEmails(account.id, mailbox.path);
+        emailResult += r;
+        mailboxStats.add(
+          MailboxSyncStats(
+            mailboxPath: mailbox.path,
+            mailboxName: mailbox.name,
+            mailboxDisplayPath: mailbox.displayPath,
+            fetched: r.fetched,
+            skipped: r.skipped,
+            bytesTransferred: r.bytesTransferred,
+            duration: DateTime.now().difference(mailboxStart),
+          ),
+        );
+      } catch (e, st) {
+        // One folder must not stop the folders behind it from being tried,
+        // nor discard what earlier folders already synced (#967). Collect the
+        // failure and report it once the loop is done.
+        failures.add(_MailboxFailure(mailbox.displayPath, e, st));
+      }
     }
     await _emails.applySieveRules(account.id);
     // Fire notifications for any newly stored mail that matches the account's
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
-    return _SyncStats(
+    final stats = _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
       bytesTransferred: emailResult.bytesTransferred,
       mailboxStats: mailboxStats,
+    );
+    if (failures.isEmpty) return stats;
+    // Every folder failed: that is an account-level outage, not a partial
+    // cycle, so report it as the underlying error with its original stack.
+    if (failures.length == attempted) {
+      Error.throwWithStackTrace(
+        failures.first.error,
+        failures.first.stackTrace,
+      );
+    }
+    throw _PartialSyncException(
+      stats: stats,
+      failures: failures,
+      attempted: attempted,
     );
   }
 
@@ -1105,28 +1137,36 @@ class _JmapAccountSync implements _SyncLoop {
         await _wait();
       } catch (e, st) {
         _onSyncEnd?.call();
-        final isPermanent = _isPermanentError(e);
+        // A cycle that finished most of its folders still did real work. Log
+        // what landed rather than the hardcoded zeros that made the Sync Entry
+        // read as "nothing happened" (#967), and classify the cycle by the
+        // underlying failure rather than by the wrapper.
+        final partial = e is _PartialSyncException ? e : null;
+        final cause = partial?.cause ?? e;
+        final stats = partial?.stats;
+        final isPermanent = _isPermanentError(cause);
         var syncLogId = 0;
         try {
           syncLogId = await _syncLog.log(
             accountId: account.id,
             success: false,
-            errorMessage: syncErrorMessage(e),
-            stackTrace: st.toString(),
+            errorMessage: partial?.message ?? syncErrorMessage(e),
+            stackTrace: (partial?.causeStackTrace ?? st).toString(),
             isPermanent: isPermanent,
             protocol: 'jmap',
-            emailsFetched: 0,
-            emailsSkipped: 0,
-            mailboxesSynced: 0,
-            pendingFlushed: 0,
-            bytesTransferred: 0,
+            emailsFetched: stats?.emailsFetched ?? 0,
+            emailsSkipped: stats?.emailsSkipped ?? 0,
+            mailboxesSynced: stats?.mailboxesSynced ?? 0,
+            pendingFlushed: stats?.pendingFlushed ?? 0,
+            bytesTransferred: stats?.bytesTransferred ?? 0,
             startedAt: startedAt,
             finishedAt: DateTime.now(),
+            mailboxStats: stats?.mailboxStats ?? const [],
           );
         } catch (logErr) {
           log('Failed to write JMAP sync log entry: $logErr');
         }
-        final isTransient = _isTransientNetworkError(e);
+        final isTransient = _isTransientNetworkError(cause);
         unawaited(
           isTransient
               ? _appLogger.warn(
@@ -1229,38 +1269,62 @@ class _JmapAccountSync implements _SyncLoop {
     final mailboxes = await _mailboxes.observeMailboxes(account.id).first;
     var emailResult = SyncEmailsResult.zero;
     final mailboxStats = <MailboxSyncStats>[];
+    final failures = <_MailboxFailure>[];
+    var attempted = 0;
     for (final mailbox in mailboxes) {
       if (!_running) break;
       // Skip folders that just duplicate other folders (Gmail's "All Mail"),
       // otherwise every message is downloaded twice (#691).
       if (isDuplicateOfOtherFolders(mailbox)) continue;
+      attempted++;
       final mailboxStart = DateTime.now();
-      final r = await _emails.syncEmails(account.id, mailbox.path);
-      emailResult += r;
-      mailboxStats.add(
-        MailboxSyncStats(
-          mailboxPath: mailbox.path,
-          mailboxName: mailbox.name,
-          mailboxDisplayPath: mailbox.displayPath,
-          fetched: r.fetched,
-          skipped: r.skipped,
-          bytesTransferred: r.bytesTransferred,
-          duration: DateTime.now().difference(mailboxStart),
-        ),
-      );
+      try {
+        final r = await _emails.syncEmails(account.id, mailbox.path);
+        emailResult += r;
+        mailboxStats.add(
+          MailboxSyncStats(
+            mailboxPath: mailbox.path,
+            mailboxName: mailbox.name,
+            mailboxDisplayPath: mailbox.displayPath,
+            fetched: r.fetched,
+            skipped: r.skipped,
+            bytesTransferred: r.bytesTransferred,
+            duration: DateTime.now().difference(mailboxStart),
+          ),
+        );
+      } catch (e, st) {
+        // One folder must not stop the folders behind it from being tried,
+        // nor discard what earlier folders already synced (#967). Collect the
+        // failure and report it once the loop is done.
+        failures.add(_MailboxFailure(mailbox.displayPath, e, st));
+      }
     }
     await _emails.applySieveRules(account.id);
     // Fire notifications for any newly stored mail that matches the account's
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
-    return _SyncStats(
+    final stats = _SyncStats(
       emailsFetched: emailResult.fetched,
       emailsSkipped: emailResult.skipped,
       mailboxesSynced: mailboxesSynced,
       pendingFlushed: pendingFlushed,
       bytesTransferred: emailResult.bytesTransferred,
       mailboxStats: mailboxStats,
+    );
+    if (failures.isEmpty) return stats;
+    // Every folder failed: that is an account-level outage, not a partial
+    // cycle, so report it as the underlying error with its original stack.
+    if (failures.length == attempted) {
+      Error.throwWithStackTrace(
+        failures.first.error,
+        failures.first.stackTrace,
+      );
+    }
+    throw _PartialSyncException(
+      stats: stats,
+      failures: failures,
+      attempted: attempted,
     );
   }
 
@@ -1371,6 +1435,62 @@ class _JmapAccountSync implements _SyncLoop {
       _stopSignal = null;
     }
   }
+}
+
+/// One mailbox that failed during a cycle, kept so the cycle can finish the
+/// rest and still report what broke.
+class _MailboxFailure {
+  _MailboxFailure(this.mailboxLabel, this.error, this.stackTrace);
+
+  final String mailboxLabel;
+  final Object error;
+  final StackTrace stackTrace;
+}
+
+/// Raised when a sync cycle ran every mailbox it could but at least one failed.
+///
+/// A plain throw out of the mailbox loop discarded the entire cycle: the Sync
+/// Entry recorded 0 fetched / 0 mailboxes even though earlier folders had
+/// synced fine, and every folder behind the failing one was never tried at all
+/// (#967). The loop now carries on and reports the work that landed alongside
+/// the folders that did not.
+///
+/// A cycle in which *every* mailbox failed is an account-level outage, not a
+/// partial cycle, and is reported as the underlying error instead.
+class _PartialSyncException implements Exception {
+  _PartialSyncException({
+    required this.stats,
+    required this.failures,
+    required this.attempted,
+  });
+
+  /// The work the cycle did manage to do.
+  final _SyncStats stats;
+
+  /// One entry per failed mailbox, in the order they were attempted.
+  final List<_MailboxFailure> failures;
+
+  /// How many mailboxes the cycle attempted, for the "N of M" wording.
+  final int attempted;
+
+  /// The failure the cycle is classified by. Permanence and transience are
+  /// properties of the server or the credentials rather than of one folder,
+  /// so the first failure is representative.
+  Object get cause => failures.first.error;
+
+  StackTrace get causeStackTrace => failures.first.stackTrace;
+
+  /// Message for the Sync Entry: which folders failed, and why.
+  String get message {
+    final labels = [for (final f in failures) f.mailboxLabel];
+    final shown = labels.take(3).join(', ');
+    final more = labels.length > 3 ? ' and ${labels.length - 3} more' : '';
+    return '${failures.length} of $attempted folders failed '
+        '($shown$more): ${syncErrorMessage(cause)}';
+  }
+
+  @override
+  String toString() => message;
 }
 
 class _SyncStats {
