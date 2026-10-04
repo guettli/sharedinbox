@@ -14,16 +14,12 @@
 // `Email/changes` with `maxChanges`, fetches each page in bounded `Email/get`
 // batches, and checkpoints the state after every page.
 
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
-import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
 
 const _jmapAccountId = 'u1';
@@ -74,26 +70,18 @@ http.Client _pagingServer(
   final ids = [for (var i = 0; i < _backlog; i++) 'e$i'];
   final offsetOf = {for (var i = 0; i < _backlog; i++) 'e$i': i};
 
-  return MockClient((req) async {
-    if (req.url.path.contains('well-known')) {
-      return jmapSessionResponse(accountId: _jmapAccountId);
-    }
-
-    final methodResponses = <List<dynamic>>[];
-    for (final call in jmapMethodCalls(req)) {
-      final method = call[0] as String;
-      final args = call[1] as Map<String, dynamic>;
-      final callId = call[2];
-
-      if (method == 'Email/changes') {
-        final sinceState = args['sinceState'] as String;
-        final maxChanges = args['maxChanges'] as int?;
+  return jmapFakeServer(
+    accountId: _jmapAccountId,
+    handle: (call) {
+      if (call.method == 'Email/changes') {
+        final sinceState = call.args['sinceState'] as String;
+        final maxChanges = call.args['maxChanges'] as int?;
         observed.changesSinceStates.add(sinceState);
         observed.changesMaxChanges.add(maxChanges);
 
         final offset = int.parse(sinceState.substring(1));
         final end = (offset + (maxChanges ?? _backlog)).clamp(0, _backlog);
-        methodResponses.add([
+        return [
           'Email/changes',
           {
             'accountId': _jmapAccountId,
@@ -104,53 +92,32 @@ http.Client _pagingServer(
             'updated': <String>[],
             'destroyed': <String>[],
           },
-          callId,
-        ]);
-        continue;
+          call.callId,
+        ];
       }
 
-      if (method == 'Email/get') {
-        final requested = (args['ids'] as List<dynamic>).cast<String>();
-        observed.getBatchSizes.add(requested.length);
-        final first = offsetOf[requested.first] ?? 0;
-        if (failGetFromOffset != null && first >= failGetFromOffset) {
-          return http.Response('upstream too slow', 503);
-        }
-        methodResponses.add(
-          jmapEmailGetResponse(
-            accountId: _jmapAccountId,
-            state: 's$_backlog',
-            list: [
-              for (final id in requested)
-                jmapEmailObject(
-                  id: id,
-                  mailboxId: _mailbox,
-                  subject: 'backlog $id',
-                ),
-            ],
-            callId: callId,
-          ),
-        );
-        continue;
+      if (call.method != 'Email/get') return null;
+
+      observed.getBatchSizes.add(call.ids.length);
+      final first = offsetOf[call.ids.first] ?? 0;
+      if (failGetFromOffset != null && first >= failGetFromOffset) {
+        // The server that could not answer in time, as an HTTP failure.
+        throw JmapRawResponse(http.Response('upstream too slow', 503));
       }
-
-      methodResponses.add([
-        'error',
-        {'type': 'unknownMethod'},
-        callId,
-      ]);
-    }
-
-    return jmapApiResponse(methodResponses);
-  });
+      return jmapEmailGetResponseFor(
+        accountId: _jmapAccountId,
+        state: 's$_backlog',
+        ids: call.ids,
+        mailboxId: _mailbox,
+        subjectPrefix: 'backlog',
+        callId: call.callId,
+      );
+    },
+  );
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
-  late Directory cacheDir;
-  setUp(() => cacheDir = Directory.systemTemp.createTempSync('jmap_inc_'));
-  tearDown(() => cacheDir.deleteSync(recursive: true));
+  final cacheDir = useJmapTestEnv('jmap_inc_');
 
   /// Puts the sweep on the incremental path from [state], and stamps a fresh
   /// reconcile marker so the periodic `Email/query` safety net stays out of
@@ -176,7 +143,7 @@ void main() {
     final r = await openJmapTestRepos(
       httpClient: _pagingServer(observed),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
     await seedSyncState(r.db, 's0');
 
@@ -214,7 +181,9 @@ void main() {
       reason: 'each page must resume from the previous newState, never replay',
     );
     expect(
-        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'), 's$_backlog');
+      await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+      's$_backlog',
+    );
 
     await r.db.close();
   });
@@ -228,7 +197,7 @@ void main() {
     final r = await openJmapTestRepos(
       httpClient: _pagingServer(observed, failGetFromOffset: 200),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
     await seedSyncState(r.db, 's0');
 
@@ -257,7 +226,7 @@ void main() {
     final r = await openJmapTestRepos(
       httpClient: _pagingServer(observed),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
     // Stand in for a previous cycle that got as far as page one.
     await seedSyncState(r.db, 's200');
@@ -272,7 +241,9 @@ void main() {
       reason: 'the checkpoint must be honoured, not restarted from scratch',
     );
     expect(
-        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'), 's$_backlog');
+      await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+      's$_backlog',
+    );
 
     await r.db.close();
   });

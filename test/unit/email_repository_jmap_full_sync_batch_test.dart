@@ -20,16 +20,12 @@
 // accepted as an `Email/changes` sinceState, and is identical to the state a
 // body-fetching `Email/get` reports.
 
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
-import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
 
 const _jmapAccountId = 'u1';
@@ -74,23 +70,15 @@ http.Client _fullSyncServer(
 }) {
   final ids = [for (var i = 0; i < total; i++) 'e$i'];
 
-  return MockClient((req) async {
-    if (req.url.path.contains('well-known')) {
-      return jmapSessionResponse(accountId: _jmapAccountId);
-    }
-
-    final methodResponses = <List<dynamic>>[];
-    for (final call in jmapMethodCalls(req)) {
-      final method = call[0] as String;
-      final args = call[1] as Map<String, dynamic>;
-      final callId = call[2];
-
-      if (method == 'Email/query') {
-        observed.queryLimits.add(args['limit'] as int?);
-        final position = (args['position'] as int?) ?? 0;
-        final limit = (args['limit'] as int?) ?? total;
+  return jmapFakeServer(
+    accountId: _jmapAccountId,
+    handle: (call) {
+      if (call.method == 'Email/query') {
+        observed.queryLimits.add(call.args['limit'] as int?);
+        final position = (call.args['position'] as int?) ?? 0;
+        final limit = (call.args['limit'] as int?) ?? total;
         final end = (position + limit).clamp(0, total);
-        methodResponses.add([
+        return [
           'Email/query',
           {
             'accountId': _jmapAccountId,
@@ -99,72 +87,50 @@ http.Client _fullSyncServer(
             'total': total,
             'ids': ids.sublist(position, end),
           },
-          callId,
-        ]);
-        continue;
+          call.callId,
+        ];
       }
 
-      if (method == 'Email/get') {
-        if (args.containsKey('#ids')) observed.sawChainedGet = true;
-        final requested =
-            ((args['ids'] as List<dynamic>?) ?? const []).cast<String>();
-        if (requested.isEmpty && !args.containsKey('#ids')) {
-          // The id-less state probe.
-          observed.sawStateProbe = true;
-          methodResponses.add(
-            jmapEmailGetResponse(
-              accountId: _jmapAccountId,
-              state: 'est-full',
-              list: const [],
-              callId: callId,
-            ),
-          );
-          continue;
-        }
-        observed.getBatchSizes.add(requested.length);
-        methodResponses.add(
-          jmapEmailGetResponse(
-            accountId: _jmapAccountId,
-            state: 'est-full',
-            list: [
-              for (final id in requested)
-                if (id != omitFromGet)
-                  jmapEmailObject(
-                    id: id,
-                    mailboxId: _mailbox,
-                    subject: 'full $id',
-                  ),
-            ],
-            callId: callId,
-          ),
+      if (call.method != 'Email/get') return null;
+
+      if (call.isBackReferenced) {
+        observed.sawChainedGet = true;
+        return null;
+      }
+      if (call.ids.isEmpty) {
+        // The id-less state probe.
+        observed.sawStateProbe = true;
+        return jmapEmailGetResponse(
+          accountId: _jmapAccountId,
+          state: 'est-full',
+          list: const [],
+          callId: call.callId,
         );
-        continue;
       }
 
-      methodResponses.add([
-        'error',
-        {'type': 'unknownMethod'},
-        callId,
-      ]);
-    }
-
-    return jmapApiResponse(methodResponses);
-  });
+      observed.getBatchSizes.add(call.ids.length);
+      return jmapEmailGetResponseFor(
+        accountId: _jmapAccountId,
+        state: 'est-full',
+        ids: call.ids,
+        mailboxId: _mailbox,
+        subjectPrefix: 'full',
+        omit: {if (omitFromGet != null) omitFromGet},
+        callId: call.callId,
+      );
+    },
+  );
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
-  late Directory cacheDir;
-  setUp(() => cacheDir = Directory.systemTemp.createTempSync('jmap_full_'));
-  tearDown(() => cacheDir.deleteSync(recursive: true));
+  final cacheDir = useJmapTestEnv('jmap_full_');
 
   test('a first sync batches its body fetches', () async {
     final observed = _Observed();
     final r = await openJmapTestRepos(
       httpClient: _fullSyncServer(observed),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
 
     // No stored state → the full-sync path.
@@ -210,7 +176,7 @@ void main() {
     final r = await openJmapTestRepos(
       httpClient: _fullSyncServer(observed, total: 0),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
 
     final result = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
@@ -243,7 +209,7 @@ void main() {
     final r = await openJmapTestRepos(
       httpClient: _fullSyncServer(observed, total: 3, omitFromGet: 'e1'),
       account: _jmapAccount,
-      cacheDir: cacheDir,
+      cacheDir: cacheDir(),
     );
     // A row with an unflushed move queued against it — exactly what the
     // prune's in-flight guard exists to protect.
