@@ -5,8 +5,8 @@ import 'package:sharedinbox/core/models/account.dart';
 
 import 'helpers.dart';
 
-/// A localhost IMAP account — the only shape where the SSL/TLS switches show.
-/// `imapSsl` defaults to true, which is the state accounts saved before #936
+/// A localhost IMAP account, where `imapSsl: false` means plaintext rather
+/// than STARTTLS (#954). `imapSsl` defaults to true, which is the state accounts saved before #936
 /// was fixed are stuck in.
 const _kLocalhostAccount = Account(
   id: 'acc-1',
@@ -50,8 +50,9 @@ Future<void> _pumpEditAccount(
   await tester.pumpAndSettle();
 }
 
-/// The IMAP/SMTP SSL switches, which share the title the sections scope.
-Finder _sslSwitches() => find.widgetWithText(SwitchListTile, 'SSL/TLS');
+/// The IMAP / SMTP SSL switches. They share a title, so tests find them by key.
+Finder _imapSslSwitch() => find.byKey(const Key('imapSslSwitch'));
+Finder _smtpSslSwitch() => find.byKey(const Key('smtpSslSwitch'));
 
 void main() {
   group('EditAccountScreen', () {
@@ -176,21 +177,43 @@ void main() {
       expect(find.textContaining('Save failed'), findsOneWidget);
     });
 
-    testWidgets('no IMAP SSL switch for a non-localhost host', (tester) async {
-      // kTestAccount's hosts are both remote, where implicit TLS is forced.
+    testWidgets('IMAP and SMTP SSL switches show for remote hosts', (
+      tester,
+    ) async {
+      // Remote `*Ssl: false` means STARTTLS now (#954), so the switches are no
+      // longer localhost-only.
       await _pumpEditAccount(tester);
 
-      expect(_sslSwitches(), findsNothing);
+      expect(_imapSslSwitch(), findsOneWidget);
+      expect(_smtpSslSwitch(), findsOneWidget);
     });
+
+    testWidgets(
+      'turning the SSL switches off for a remote host is persisted',
+      (tester) async {
+        final repo = FakeAccountRepository([kTestAccount]);
+        await _pumpEditAccount(tester, accountRepository: repo);
+
+        await tester.tap(_imapSslSwitch());
+        await tester.tap(_smtpSslSwitch());
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+
+        final saved = repo.accounts.single;
+        expect(saved.imapHost, isNot('localhost'));
+        expect(saved.imapSsl, isFalse);
+        expect(saved.smtpSsl, isFalse);
+      },
+    );
 
     testWidgets(
         'IMAP SSL switch shows for localhost and reflects the stored '
         'value', (tester) async {
       await _pumpEditAccount(tester, account: _kLocalhostAccount);
 
-      // Only the IMAP host is localhost, so this is the IMAP switch.
-      expect(_sslSwitches(), findsOneWidget);
-      expect(tester.widget<SwitchListTile>(_sslSwitches()).value, isTrue);
+      expect(_imapSslSwitch(), findsOneWidget);
+      expect(tester.widget<SwitchListTile>(_imapSslSwitch()).value, isTrue);
     });
 
     testWidgets('turning the IMAP SSL switch off is persisted', (tester) async {
@@ -201,9 +224,9 @@ void main() {
         accountRepository: repo,
       );
 
-      await tester.tap(_sslSwitches());
+      await tester.tap(_imapSslSwitch());
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(_sslSwitches()).value, isFalse);
+      expect(tester.widget<SwitchListTile>(_imapSslSwitch()).value, isFalse);
 
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -224,7 +247,7 @@ void main() {
           accountRepository: repo,
         );
 
-        await tester.tap(_sslSwitches());
+        await tester.tap(_imapSslSwitch());
         await tester.pumpAndSettle();
         await tester.enterText(
           find.byKey(const Key('editPasswordField')),

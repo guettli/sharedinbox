@@ -110,6 +110,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           _smtpPortCtrl.text = smtpPort.toString();
           _smtpSsl = smtpSsl;
           setState(() => _step = _Step.imapForm);
+        case UnsupportedDiscovery(:final message):
+          setState(() {
+            _errorMessage = message;
+            _step = _Step.chooseType;
+          });
         case UnknownDiscovery():
           setState(() => _step = _Step.chooseType);
       }
@@ -138,10 +143,10 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       username: _usernameCtrl.text.trim(),
       imapHost: imapHost,
       imapPort: int.parse(_imapPortCtrl.text),
-      imapSsl: isLocalhost(imapHost) ? _imapSsl : true,
+      imapSsl: _imapSsl,
       smtpHost: smtpHost,
       smtpPort: int.parse(_smtpPortCtrl.text),
-      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
+      smtpSsl: _smtpSsl,
     );
   }
 
@@ -365,6 +370,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             'Choose account type:',
           ),
           const SizedBox(height: AppSpacing.xl),
+          if (_errorMessage != null) _errorBanner(),
           FilledButton(
             onPressed: () => setState(() {
               _jmapApiUrlCtrl.clear();
@@ -448,22 +454,24 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
             _field(_imapHostCtrl, 'Host', validator: validateHostname),
             _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
-            if (isLocalhost(_imapHostCtrl.text.trim()))
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _imapSsl,
-                onChanged: (v) => setState(() => _imapSsl = v),
-              ),
+            SwitchListTile(
+              key: const Key('imapSslSwitch'),
+              title: const Text('SSL/TLS'),
+              subtitle: const Text('Off: upgrade with STARTTLS (IMAP 143)'),
+              value: _imapSsl,
+              onChanged: (v) => setState(() => _imapSsl = v),
+            ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host', validator: validateHostname),
             _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-            if (isLocalhost(_smtpHostCtrl.text.trim()))
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _smtpSsl,
-                onChanged: (v) => setState(() => _smtpSsl = v),
-              ),
+            SwitchListTile(
+              key: const Key('smtpSslSwitch'),
+              title: const Text('SSL/TLS'),
+              subtitle: const Text('Off: upgrade with STARTTLS (SMTP 587)'),
+              value: _smtpSsl,
+              onChanged: (v) => setState(() => _smtpSsl = v),
+            ),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),
               testing: _tryTesting,

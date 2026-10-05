@@ -57,7 +57,53 @@ Future<void> connectWithRetry(Future<void> Function() connect) async {
 /// print override.
 const verboseLogKey = #verboseProtocolLog;
 
+/// True when connecting [account] over IMAP must upgrade the plaintext
+/// connection with STARTTLS before logging in.
+///
+/// `imapSsl: false` means "STARTTLS required" — except on localhost, where
+/// plaintext stays legitimate for the dev Stalwart (`stalwart-dev/`,
+/// `test/backend/stalwart_harness.dart`), which has no certificate configured.
+@visibleForTesting
+bool imapNeedsStartTls(Account account) =>
+    !account.imapSsl && !isLocalhost(account.imapHost);
+
+/// Issues `STARTTLS` on an already-connected plaintext [client] and requires
+/// the upgrade to succeed. No plaintext fallback: a server that does not
+/// advertise STARTTLS on this port is a misconfiguration, not something to
+/// silently downgrade.
+@visibleForTesting
+Future<void> upgradeImapToStartTls(
+  ImapClient client,
+  String host,
+  int port,
+) async {
+  // The greeting only populates capabilities when it carries a
+  // `[CAPABILITY …]` response code; ask explicitly otherwise.
+  final caps = client.serverInfo.capabilities;
+  if (caps == null || caps.isEmpty) {
+    await client.capability();
+  }
+  if (!client.serverInfo.supportsStartTls) {
+    throw Exception(
+      'Server at $host:$port does not advertise STARTTLS — turn SSL/TLS on '
+      'and use the implicit-TLS port (usually 993), or point at a port that '
+      'offers STARTTLS.',
+    );
+  }
+  try {
+    await client.startTls();
+  } catch (e, st) {
+    rethrowAsTlsHint(e, st, host, port, hint: 'IMAP STARTTLS upgrade');
+  }
+}
+
 /// Opens an authenticated IMAP client for [account] using [username].
+///
+/// When [account.imapSsl] is false, STARTTLS is required and the connection
+/// fails if the server does not support it — except on localhost, where
+/// plaintext is allowed for the dev server (see [imapNeedsStartTls]). The
+/// post-STARTTLS capability list is refreshed by `login()`, satisfying RFC
+/// 3501's rule to discard capabilities learned before the upgrade.
 ///
 /// When the current [Zone] carries a capture sink under [verboseLogKey],
 /// IMAP trace logging is enabled so each command/response is captured there.
@@ -71,11 +117,6 @@ Future<ImapClient> connectImap(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseSink != null,
   );
-  if (!account.imapSsl && !isLocalhost(account.imapHost)) {
-    throw Exception(
-      'Plain-text IMAP is only allowed for localhost connections',
-    );
-  }
   try {
     await connectWithRetry(
       () => client.connectToServer(
@@ -86,6 +127,9 @@ Future<ImapClient> connectImap(
     );
   } catch (e, st) {
     rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
+  }
+  if (imapNeedsStartTls(account)) {
+    await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
   }
   await client.login(username, password);
   return client;
@@ -108,11 +152,6 @@ Future<SmtpClient> connectSmtp(
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  if (!account.smtpSsl && !isLocalhost(account.smtpHost)) {
-    throw Exception(
-      'Plain-text SMTP is only allowed for localhost connections',
-    );
-  }
   final client = SmtpClient(clientDomain);
   try {
     await connectWithRetry(
