@@ -316,3 +316,76 @@ Directory Function() useJmapTestEnv(String cachePrefix) {
   tearDown(() => dir.deleteSync(recursive: true));
   return () => dir;
 }
+
+/// Inserts a minimal cached email row, for a suite that needs the row to
+/// already exist before a sweep runs.
+Future<void> insertJmapEmailRow(
+  AppDatabase db, {
+  required String accountId,
+  required String jmapId,
+  required String mailboxPath,
+  DateTime? receivedAt,
+}) async {
+  await db.into(db.emails).insert(
+        EmailsCompanion.insert(
+          id: '$accountId:$jmapId',
+          accountId: accountId,
+          mailboxPath: mailboxPath,
+          uid: 0,
+          receivedAt: receivedAt ?? DateTime(2026),
+        ),
+      );
+}
+
+/// Puts a mailbox on the incremental sync path from [state].
+///
+/// Also stamps a fresh `JMAP:Reconcile` marker, so the 15-minutely
+/// `Email/query` safety net stays out of the way of whatever the suite is
+/// actually testing.
+Future<void> seedJmapSyncState(
+  AppDatabase db, {
+  required String accountId,
+  required String mailboxJmapId,
+  required String state,
+}) async {
+  final now = DateTime.now();
+  for (final row in {
+    'JMAP:Email:$mailboxJmapId': state,
+    'JMAP:Reconcile:$mailboxJmapId': now.toIso8601String(),
+  }.entries) {
+    await db.into(db.syncStates).insert(
+          SyncStatesCompanion.insert(
+            accountId: accountId,
+            resourceType: row.key,
+            state: row.value,
+            syncedAt: now,
+          ),
+        );
+  }
+}
+
+/// [openJmapTestRepos] plus [seedJmapSyncState]: repositories wired to
+/// [httpClient] with [mailboxJmapId] already on the incremental sync path.
+///
+/// The combination is what every suite exercising an incremental sweep needs —
+/// a sweep with no stored state takes the full-sync path instead.
+Future<JmapTestRepos> openJmapTestReposOnIncrementalPath({
+  required http.Client httpClient,
+  required Account account,
+  required Directory cacheDir,
+  required String mailboxJmapId,
+  required String syncState,
+}) async {
+  final repos = await openJmapTestRepos(
+    httpClient: httpClient,
+    account: account,
+    cacheDir: cacheDir,
+  );
+  await seedJmapSyncState(
+    repos.db,
+    accountId: account.id,
+    mailboxJmapId: mailboxJmapId,
+    state: syncState,
+  );
+  return repos;
+}

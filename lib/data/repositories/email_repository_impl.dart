@@ -1759,17 +1759,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // these rows look orphaned from both the old and new mailbox until the
     // server applies the change and we remap to the destination UID. Skipping
     // them here avoids wiping the row mid-flight.
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const ['move', 'snooze', 'unsnooze'],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _rowsWithUnflushedMoveOrSnooze(accountId);
 
     final serverUidSet = serverUids.toSet();
     final affectedThreads = <String>{};
@@ -2624,16 +2614,44 @@ class EmailRepositoryImpl implements EmailRepository {
       fetched += list.length;
 
       if (!deleteMissing) continue;
-      // Any id we asked to fetch but did not receive back is treated by the
-      // server as gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows
-      // don't linger.
+      // An id we asked for but did not get back is treated by the server as
+      // gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows don't
+      // linger.
+      //
+      // Guarded, because an omission is the server being *silent* where
+      // `destroyed` is the server being *authoritative*. A row carrying any
+      // unflushed user edit is held back until something authoritative says
+      // it is gone, rather than being dropped on the strength of a response
+      // that merely did not mention it.
+      //
+      // The guard is "has an unflushed mutation of any kind", not the
+      // move/snooze subset [_pruneJmapMailboxToServerIds] uses. That subset is
+      // right for a *mailbox-scoped* walk, where an optimistic move has
+      // already rewritten `mailboxPath` and makes the row look orphaned from
+      // both folders. This path is keyed by id and not mailbox-scoped, so the
+      // only thing that matters is whether the user has an edit in flight —
+      // an unflushed star counts just as much as an unflushed move.
       final returnedIds = <String>{
         for (final e in list) (e as Map<String, dynamic>)['id'] as String,
       };
-      for (final jmapId in batch) {
-        if (!returnedIds.contains(jmapId)) {
-          await _deleteJmapEmailById(accountId, jmapId);
+      final missing = [
+        for (final jmapId in batch)
+          if (!returnedIds.contains(jmapId)) jmapId,
+      ];
+      if (missing.isEmpty) continue;
+      // Deliberately inside the loop: `_upsertJmapEmails` can enqueue changes
+      // of its own via the #545 dissolve, so hoisting this lookup out would
+      // read a stale set.
+      final inFlight = await _inFlightFlagResourceIds(accountId);
+      for (final jmapId in missing) {
+        if (inFlight.contains('$accountId:$jmapId')) {
+          log(
+            'JMAP-sync: Email/get omitted $jmapId but an edit is still queued '
+            'for it — keeping the row until the server says it is destroyed',
+          );
+          continue;
         }
+        await _deleteJmapEmailById(accountId, jmapId);
       }
     }
     return (fetched: fetched, bytes: bytes);
@@ -2795,6 +2813,13 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// Deletes the row for a server-side id.
+  ///
+  /// Unlike [_pruneJmapMailboxToServerIds] this needs no `isLocal` guard: that
+  /// one walks every row in a mailbox, where local self-sent "virtual" rows
+  /// (#545) genuinely appear, whereas this is keyed by an id the server gave
+  /// us and a virtual row's id is `<account>:__local__:<message-id>`, which no
+  /// server can produce.
   Future<void> _deleteJmapEmailById(String accountId, String jmapId) async {
     final dbId = '$accountId:$jmapId';
     final email = await getEmail(dbId);
@@ -2827,6 +2852,27 @@ class EmailRepositoryImpl implements EmailRepository {
         .go();
   }
 
+  /// Row ids whose optimistic move, snooze or unsnooze has not been flushed
+  /// yet, so a mailbox-scoped reconciler must not delete them mid-flight: the
+  /// move has already rewritten `mailboxPath`, which makes the row look
+  /// orphaned from the folder it left and the one it has not arrived in.
+  ///
+  /// For a guard that only needs "does the user have an edit in flight", use
+  /// [_inFlightFlagResourceIds] — it covers flag edits and deletes too.
+  Future<Set<String>> _rowsWithUnflushedMoveOrSnooze(String accountId) async {
+    final ids = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.changeType.isIn(
+                  const ['move', 'snooze', 'unsnooze'],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    return ids.toSet();
+  }
+
   /// Deletes local email rows for [mailboxJmapId] whose id isn't in the
   /// authoritative [serverIds] set. Returns the number of rows removed.
   ///
@@ -2846,17 +2892,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .get();
 
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const ['move', 'snooze', 'unsnooze'],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _rowsWithUnflushedMoveOrSnooze(accountId);
 
     final affectedThreads = <String>{};
     var removed = 0;
@@ -2973,24 +3009,7 @@ class EmailRepositoryImpl implements EmailRepository {
       for (final r in localRows) r.id.substring('$accountId:'.length): r,
     };
 
-    final inFlightIds = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.changeType.isIn(
-                  const [
-                    'flag_seen',
-                    'flag_flagged',
-                    'move',
-                    'snooze',
-                    'unsnooze',
-                    'delete',
-                  ],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    final inFlightSet = inFlightIds.toSet();
+    final inFlightSet = await _inFlightFlagResourceIds(accountId);
 
     final toCheck = [
       for (final jmapId in localByJmapId.keys)

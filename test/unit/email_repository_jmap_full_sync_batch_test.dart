@@ -24,7 +24,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
 
 import 'helpers/jmap_test_server.dart';
 
@@ -211,17 +210,12 @@ void main() {
       account: _jmapAccount,
       cacheDir: cacheDir(),
     );
-    // A row with an unflushed move queued against it — exactly what the
-    // prune's in-flight guard exists to protect.
-    await r.db.into(r.db.emails).insert(
-          EmailsCompanion.insert(
-            id: '${_jmapAccount.id}:e1',
-            accountId: _jmapAccount.id,
-            mailboxPath: _mailbox,
-            uid: 0,
-            receivedAt: DateTime(2026),
-          ),
-        );
+    await insertJmapEmailRow(
+      r.db,
+      accountId: _jmapAccount.id,
+      jmapId: 'e1',
+      mailboxPath: _mailbox,
+    );
 
     await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 
