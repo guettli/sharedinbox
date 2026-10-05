@@ -101,7 +101,7 @@ class _ProgressBody extends StatelessWidget {
           const SizedBox(height: AppSpacing.lg),
           Text('Mailboxes', style: theme.textTheme.titleMedium),
           const SizedBox(height: AppSpacing.sm),
-          for (final s in progress.mailboxStats) _MailboxRow(stats: s),
+          for (final s in progress.mailboxStats) MailboxProgressRow(stats: s),
         ],
         if (progress.error != null) ...[
           const SizedBox(height: AppSpacing.lg),
@@ -196,8 +196,18 @@ class _Totals extends StatelessWidget {
   }
 }
 
-class _MailboxRow extends StatelessWidget {
-  const _MailboxRow({required this.stats});
+/// One mailbox's line in the force-resync progress list.
+///
+/// Named ...ProgressRow, not MailboxRow: that name is already taken by the
+/// Drift data class (lib/data/db/database.dart), and in this codebase a
+/// trailing `Row` means "database row".
+///
+/// Public and [visibleForTesting] so the overflow regression test can pump it
+/// directly: the surrounding screen needs a live sync manager, which would
+/// make a pure layout test far heavier than the thing it checks.
+@visibleForTesting
+class MailboxProgressRow extends StatelessWidget {
+  const MailboxProgressRow({required this.stats, super.key});
 
   final MailboxSyncStats stats;
 
@@ -209,9 +219,15 @@ class _MailboxRow extends StatelessWidget {
         children: [
           Expanded(child: Text(stats.mailboxName ?? stats.mailboxPath)),
           const SizedBox(width: AppSpacing.sm),
-          Text(
-            'new ${stats.fetched} · skipped ${stats.skipped}',
-            style: Theme.of(context).textTheme.bodySmall,
+          // Flexible, not a bare Text: an unconstrained trailing child takes
+          // its intrinsic width, which at large text scales squeezes the
+          // Expanded mailbox name to nothing and then overflows the row
+          // anyway (same shape as the sync-health row fixed in #965).
+          Flexible(
+            child: Text(
+              'new ${stats.fetched} · skipped ${stats.skipped}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         ],
       ),
