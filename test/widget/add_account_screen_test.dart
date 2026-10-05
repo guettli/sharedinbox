@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/discovery_result.dart';
 
+import 'account_form_helpers.dart';
 import 'helpers.dart';
 
 /// The discovery fixtures the tests below hand to [baseOverrides].
@@ -349,13 +350,7 @@ void main() {
       );
 
       await _fillCredentials(tester);
-      await tester.tap(find.text('Save'));
-      await tester.pumpAndSettle();
-
-      final saved = repo.accounts.single;
-      expect(saved.imapHost, 'imap.example.com');
-      expect(saved.imapSsl, isFalse);
-      expect(saved.smtpSsl, isFalse);
+      await saveAndExpectRemoteStartTls(tester, repo);
     });
 
     testWidgets('remote host: switching SSL off persists ssl=false', (
@@ -384,12 +379,7 @@ void main() {
       await tester.tap(find.byKey(const Key('smtpSslSwitch')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Save'));
-      await tester.pumpAndSettle();
-
-      final saved = repo.accounts.single;
-      expect(saved.imapSsl, isFalse);
-      expect(saved.smtpSsl, isFalse);
+      await saveAndExpectRemoteStartTls(tester, repo);
     });
 
     testWidgets('unencrypted autoconfig shows the reason on choose-type', (

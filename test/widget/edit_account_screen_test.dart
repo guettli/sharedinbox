@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 
+import 'account_form_helpers.dart';
 import 'helpers.dart';
 
 /// A localhost IMAP account, where `imapSsl: false` means plaintext rather
@@ -204,13 +205,7 @@ void main() {
       await tester.tap(_smtpSslSwitch());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Save'));
-      await tester.pumpAndSettle();
-
-      final saved = repo.accounts.single;
-      expect(saved.imapHost, 'imap.example.com');
-      expect(saved.imapSsl, isFalse);
-      expect(saved.smtpSsl, isFalse);
+      await saveAndExpectRemoteStartTls(tester, repo);
     });
 
     testWidgets('turning the IMAP SSL switch off is persisted', (tester) async {
