@@ -24,3 +24,10 @@ final class ImapSmtpDiscovery extends DiscoveryResult {
 }
 
 final class UnknownDiscovery extends DiscoveryResult {}
+
+/// Autoconfig was found but advertises an unencrypted connection, which we
+/// refuse to configure. [message] is user-facing.
+final class UnsupportedDiscovery extends DiscoveryResult {
+  final String message;
+  UnsupportedDiscovery(this.message);
+}

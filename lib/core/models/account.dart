@@ -9,6 +9,13 @@ class Account {
   // Used when type == AccountType.imap
   final String imapHost;
   final int imapPort;
+
+  /// `true` = implicit TLS. `false` = STARTTLS required, except on localhost,
+  /// where it means plaintext (the dev Stalwart has no certificate). So this
+  /// boolean carries three effective states, resolved by host. A `TlsMode`
+  /// enum is the shape to adopt if a further case — e.g. plaintext to a
+  /// remote host, which we refuse on purpose today — is ever genuinely needed.
+  /// [smtpSsl] follows the same rule.
   final bool imapSsl;
   final String smtpHost;
   final int smtpPort;

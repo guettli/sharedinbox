@@ -27,6 +27,26 @@ http.Client _clientFor(Map<String, http.Response> responses) {
   });
 }
 
+/// Autoconfig XML with the given `socketType` values; `null` omits the tag.
+String _autoconfigWith({String? imapSocket, String? smtpSocket}) {
+  String tag(String? v) => v == null ? '' : '<socketType>$v</socketType>';
+  return '''<?xml version="1.0"?>
+<clientConfig>
+  <emailProvider>
+    <incomingServer type="imap">
+      <hostname>imap.example.com</hostname>
+      <port>143</port>
+      ${tag(imapSocket)}
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>smtp.example.com</hostname>
+      <port>587</port>
+      ${tag(smtpSocket)}
+    </outgoingServer>
+  </emailProvider>
+</clientConfig>''';
+}
+
 AccountDiscoveryService _service(Map<String, http.Response> responses) =>
     AccountDiscoveryServiceImpl(_clientFor(responses));
 
@@ -195,6 +215,71 @@ void main() {
       });
       final result = await svc.discover('user@example.com');
       expect(result, isA<UnknownDiscovery>());
+    });
+  });
+
+  group('autoconfig socketType', () {
+    const autoconfigUrl = 'https://autoconfig.example.com/mail/config-v1.1.xml';
+    const mxUrl = 'https://dns.google/resolve?name=example.com&type=MX';
+    final mxResponse = http.Response(
+      '{"Status":0,"Answer":[{"type":15,"data":"10 mail.example.com."}]}',
+      200,
+    );
+
+    Future<DiscoveryResult> discoverWith({
+      String? imapSocket,
+      String? smtpSocket,
+    }) =>
+        _service({
+          autoconfigUrl: http.Response(
+            _autoconfigWith(imapSocket: imapSocket, smtpSocket: smtpSocket),
+            200,
+          ),
+          mxUrl: mxResponse,
+        }).discover('user@example.com');
+
+    test('SSL maps to implicit TLS', () async {
+      final result = await discoverWith(imapSocket: 'SSL', smtpSocket: 'ssl');
+      final imap = result as ImapSmtpDiscovery;
+      expect(imap.imapSsl, isTrue);
+      expect(imap.smtpSsl, isTrue);
+    });
+
+    test('STARTTLS maps to ssl=false (STARTTLS required)', () async {
+      final result = await discoverWith(
+        imapSocket: 'STARTTLS',
+        smtpSocket: 'starttls',
+      );
+      final imap = result as ImapSmtpDiscovery;
+      expect(imap.imapSsl, isFalse);
+      expect(imap.smtpSsl, isFalse);
+    });
+
+    test(
+      'plain is unsupported and does not fall through to the MX guess',
+      () async {
+        final result = await discoverWith(
+          imapSocket: 'plain',
+          smtpSocket: 'STARTTLS',
+        );
+        expect(result, isA<UnsupportedDiscovery>());
+        expect(
+          (result as UnsupportedDiscovery).message,
+          allOf(contains('example.com'), contains('unencrypted')),
+        );
+      },
+    );
+
+    test('plain SMTP is unsupported too', () async {
+      final result = await discoverWith(imapSocket: 'SSL', smtpSocket: 'plain');
+      expect(result, isA<UnsupportedDiscovery>());
+    });
+
+    test('unrecognised or missing socketType fails safe to TLS', () async {
+      final result = await discoverWith(imapSocket: 'bogus');
+      final imap = result as ImapSmtpDiscovery;
+      expect(imap.imapSsl, isTrue);
+      expect(imap.smtpSsl, isTrue);
     });
   });
 }

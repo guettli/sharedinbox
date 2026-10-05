@@ -77,7 +77,10 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
     }
   }
 
-  Future<ImapSmtpDiscovery?> _tryImapAutoconfig(String domain) async {
+  /// Returns an [UnsupportedDiscovery] when the autoconfig advertises
+  /// plaintext, so [discover] stops there instead of falling through to the
+  /// MX fallback and silently guessing 993/SSL.
+  Future<DiscoveryResult?> _tryImapAutoconfig(String domain) async {
     final urls = [
       Uri.https('autoconfig.$domain', '/mail/config-v1.1.xml'),
       Uri.https(domain, '/.well-known/autoconfig/mail/config-v1.1.xml'),
@@ -86,7 +89,7 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
       try {
         final resp = await _client.get(url).timeout(const Duration(seconds: 5));
         if (resp.statusCode != 200) continue;
-        final result = _parseAutoconfig(resp.body);
+        final result = _parseAutoconfig(resp.body, domain);
         if (result != null) return result;
       } catch (_) {
         continue;
@@ -95,7 +98,7 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
     return null;
   }
 
-  ImapSmtpDiscovery? _parseAutoconfig(String xml) {
+  DiscoveryResult? _parseAutoconfig(String xml, String domain) {
     final imapBlock = RegExp(
       r'<incomingServer\s+type="imap"[^>]*>([\s\S]*?)</incomingServer>',
     ).firstMatch(xml)?.group(1);
@@ -108,13 +111,23 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
 
     final imapHost = _tag(imapBlock, 'hostname');
     final imapPort = int.tryParse(_tag(imapBlock, 'port') ?? '') ?? 993;
-    final imapSsl = _tag(imapBlock, 'socketType')?.toUpperCase() == 'SSL';
+    final imapSsl = _sslFromSocketType(_tag(imapBlock, 'socketType'));
 
     final smtpHost = _tag(smtpBlock, 'hostname');
     final smtpPort = int.tryParse(_tag(smtpBlock, 'port') ?? '') ?? 587;
-    final smtpSsl = _tag(smtpBlock, 'socketType')?.toUpperCase() == 'SSL';
+    final smtpSsl = _sslFromSocketType(_tag(smtpBlock, 'socketType'));
 
     if (imapHost == null || smtpHost == null) return null;
+    if (imapSsl == null || smtpSsl == null) {
+      return UnsupportedDiscovery(
+        'The autoconfig for $domain advertises an unencrypted IMAP/SMTP '
+        'connection. SharedInbox requires TLS — ask the provider for an '
+        'SSL/TLS or STARTTLS port, or enter the settings manually.',
+      );
+    }
+
+    // `false` means "STARTTLS required" — connectImap/connectSmtp upgrade the
+    // plaintext connection and refuse to continue without TLS.
 
     return ImapSmtpDiscovery(
       imapHost: imapHost,
@@ -124,6 +137,17 @@ class AccountDiscoveryServiceImpl implements AccountDiscoveryService {
       smtpPort: smtpPort,
       smtpSsl: smtpSsl,
     );
+  }
+
+  /// Maps an autoconfig `socketType` to the account's SSL flag: `SSL` →
+  /// implicit TLS (`true`), `STARTTLS` → upgrade (`false`), `plain` → `null`
+  /// (unsupported). Anything unrecognised or missing fails safe to implicit
+  /// TLS.
+  bool? _sslFromSocketType(String? raw) {
+    final value = raw?.toUpperCase();
+    if (value == 'STARTTLS') return false;
+    if (value == 'PLAIN') return null;
+    return true;
   }
 
   String? _tag(String block, String tag) =>

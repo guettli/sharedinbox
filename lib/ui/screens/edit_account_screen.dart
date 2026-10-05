@@ -141,10 +141,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       type: account.type,
       imapHost: imapHost,
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
-      imapSsl: isLocalhost(imapHost) ? _imapSsl : true,
+      imapSsl: _imapSsl,
       smtpHost: smtpHost,
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
-      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
+      smtpSsl: _smtpSsl,
       manageSieveHost: sieveHost,
       manageSievePort: sievePort,
       manageSieveSsl: isLocalhost(effectiveSieveHost) ? _sieveSsl : true,
@@ -332,22 +332,28 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
               _field(_imapHostCtrl, 'Host', validator: validateHostname),
               _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
-              if (isLocalhost(_imapHostCtrl.text.trim()))
-                SwitchListTile(
-                  title: const Text('SSL/TLS'),
-                  value: _imapSsl,
-                  onChanged: (v) => setState(() => _imapSsl = v),
+              SwitchListTile(
+                key: const Key('imapSslSwitch'),
+                title: const Text('SSL/TLS'),
+                subtitle: const Text(
+                  'Off: upgrade with STARTTLS (usually port 143)',
                 ),
+                value: _imapSsl,
+                onChanged: (v) => setState(() => _imapSsl = v),
+              ),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host', validator: validateHostname),
               _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-              if (isLocalhost(_smtpHostCtrl.text.trim()))
-                SwitchListTile(
-                  title: const Text('SSL/TLS'),
-                  value: _smtpSsl,
-                  onChanged: (v) => setState(() => _smtpSsl = v),
+              SwitchListTile(
+                key: const Key('smtpSslSwitch'),
+                title: const Text('SSL/TLS'),
+                subtitle: const Text(
+                  'Off: upgrade with STARTTLS (usually port 587)',
                 ),
+                value: _smtpSsl,
+                onChanged: (v) => setState(() => _smtpSsl = v),
+              ),
               const Divider(height: 32),
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
@@ -373,6 +379,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                         : _imapHostCtrl.text.trim(),
                   ))
                     SwitchListTile(
+                      key: const Key('sieveSslSwitch'),
                       title: const Text('SSL/TLS'),
                       value: _sieveSsl,
                       onChanged: (v) => setState(() => _sieveSsl = v),

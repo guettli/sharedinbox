@@ -57,7 +57,51 @@ Future<void> connectWithRetry(Future<void> Function() connect) async {
 /// print override.
 const verboseLogKey = #verboseProtocolLog;
 
+/// True when [connectImap] must upgrade a plaintext connection to [host] via
+/// STARTTLS: `imapSsl: false` means "STARTTLS required" for every remote host,
+/// while localhost keeps plaintext for the dev Stalwart (`stalwart-dev/`,
+/// `test/backend/stalwart_harness.dart`), which has no certificate.
+@visibleForTesting
+bool imapNeedsStartTls({required bool imapSsl, required String host}) =>
+    !imapSsl && !isLocalhost(host);
+
+/// Issues `STARTTLS` on an already-connected plaintext [client] and requires
+/// the upgrade to succeed. No plaintext fallback: a server that does not
+/// advertise STARTTLS on this port is a misconfiguration, not something to
+/// silently downgrade.
+@visibleForTesting
+Future<void> upgradeImapToStartTls(
+  ImapClient client,
+  String host,
+  int port,
+) async {
+  final capabilities = client.serverInfo.capabilities;
+  if (capabilities == null || capabilities.isEmpty) {
+    // The greeting only carries capabilities when the server includes a
+    // `[CAPABILITY …]` response code, so ask explicitly otherwise.
+    await client.capability();
+  }
+  if (!client.serverInfo.supportsStartTls) {
+    throw Exception(
+      'Server at $host:$port does not advertise STARTTLS — turn SSL/TLS on '
+      'and use the implicit-TLS port (usually 993), or point at a port that '
+      'offers STARTTLS.',
+    );
+  }
+  try {
+    await client.startTls();
+  } catch (e, st) {
+    rethrowAsTlsHint(e, st, host, port, hint: 'IMAP STARTTLS upgrade');
+  }
+}
+
 /// Opens an authenticated IMAP client for [account] using [username].
+///
+/// When [Account.imapSsl] is false, STARTTLS is required and the connection
+/// fails if the server does not support it — except on localhost, where
+/// plaintext stays legitimate for the dev Stalwart (see [imapNeedsStartTls]).
+/// RFC 3501 requires discarding pre-TLS capabilities after STARTTLS; `login()`
+/// repopulates them from the server's post-login CAPABILITY response.
 ///
 /// When the current [Zone] carries a capture sink under [verboseLogKey],
 /// IMAP trace logging is enabled so each command/response is captured there.
@@ -71,11 +115,6 @@ Future<ImapClient> connectImap(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseSink != null,
   );
-  if (!account.imapSsl && !isLocalhost(account.imapHost)) {
-    throw Exception(
-      'Plain-text IMAP is only allowed for localhost connections',
-    );
-  }
   try {
     await connectWithRetry(
       () => client.connectToServer(
@@ -86,6 +125,9 @@ Future<ImapClient> connectImap(
     );
   } catch (e, st) {
     rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
+  }
+  if (imapNeedsStartTls(imapSsl: account.imapSsl, host: account.imapHost)) {
+    await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
   }
   await client.login(username, password);
   return client;
@@ -108,11 +150,6 @@ Future<SmtpClient> connectSmtp(
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  if (!account.smtpSsl && !isLocalhost(account.smtpHost)) {
-    throw Exception(
-      'Plain-text SMTP is only allowed for localhost connections',
-    );
-  }
   final client = SmtpClient(clientDomain);
   try {
     await connectWithRetry(
