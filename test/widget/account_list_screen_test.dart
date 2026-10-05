@@ -344,10 +344,10 @@ void main() {
 
         // Guard the precondition. Without the scale actually reaching the
         // widget the old Row fits in 272px and this test would pass against
-        // the very bug it exists to catch. The bound is deliberately loose:
-        // since Flutter 3.16 the platform text scaler is non-linear, so a
-        // system factor of 2.0 renders a 14px font at ~18.8px, not 28px. All
-        // this has to prove is that the override arrived and is not identity.
+        // the very bug it exists to catch. The bound is deliberately loose: the
+        // effective scale observed inside the app tree has not always matched
+        // the raw factor, so all this has to prove is that the override
+        // arrived and is not identity.
         final scaler = MediaQuery.textScalerOf(
           tester.element(find.text('sharedinbox.de')),
         );
