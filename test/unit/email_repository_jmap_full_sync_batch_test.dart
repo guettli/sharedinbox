@@ -212,16 +212,15 @@ void main() {
     );
     await insertJmapEmailRow(
       r.db,
-      accountId: _jmapAccount.id,
-      jmapId: 'e1',
+      _jmapAccount.id,
+      'e1',
       mailboxPath: _mailbox,
     );
 
     await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 
-    final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id).toSet();
     expect(
-      ids,
+      await jmapLocalEmailIds(r.db),
       contains('${_jmapAccount.id}:e1'),
       reason: 'the full sync must leave this to the guarded prune',
     );

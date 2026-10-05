@@ -5083,7 +5083,7 @@ void main() {
     );
 
     test(
-      'incremental sync drops row that Email/get omits (server treats as gone)',
+      'incremental sync drops row that Email/get disclaims as notFound',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
