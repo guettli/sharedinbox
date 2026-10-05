@@ -15,11 +15,30 @@ TRACKS = ("alpha",)
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
+# How many fresh edits to try before giving up when Play deletes the one we are
+# working in (see EditDeletedError).
+_MAX_EDIT_ATTEMPTS = 6
 # Env var pointing at the R8 mapping file (build/app/outputs/mapping/release/mapping.txt).
 # CI (ci/main.go UploadToPlayStore) sets this. Mandatory: uploading a release
 # without a matching mapping file breaks Play Console's stack-trace
 # deobfuscation, so the script refuses to deploy when it is missing.
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
+
+
+class EditDeletedError(RuntimeError):
+    """Play deleted the edit we were working in.
+
+    Opening a new edit invalidates any edit already open for the same app, and
+    the Firebase Tests workflow opens one roughly every minute for up to 90
+    minutes while it polls the alpha track (scripts/fetch_playstore_apks.py).
+    A deploy that overlaps that window gets "400 This Edit has been deleted."
+    on whichever call follows the other workflow's POST .../edits -- which is
+    how every Play deploy between 2026-10-05 12:20 and 13:45 failed (#982).
+
+    The request itself is fine; only the edit is gone. So this is the one 4xx
+    worth retrying -- but in a NEW edit, from the start: the bundle, mapping
+    and track assignment all lived in the deleted one.
+    """
 
 
 def _raise_for_status(resp, what):
@@ -38,7 +57,10 @@ def _raise_for_status(resp, what):
         body = (resp.text or "").strip()
         if len(body) > 2000:
             body = body[:2000] + "… (truncated)"
-        raise RuntimeError(
+        error_cls = RuntimeError
+        if "edit has been deleted" in body.lower():
+            error_cls = EditDeletedError
+        raise error_cls(
             f"{what} failed: {exc}\nPlay API response body: {body or '(empty)'}"
         ) from exc
 
@@ -125,22 +147,9 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
     return resp.json() if resp.content else {}
 
 
-def main():
-    config_json = os.environ.get("PLAY_STORE_CONFIG_JSON")
-    if not config_json:
-        print("Error: PLAY_STORE_CONFIG_JSON environment variable not set", file=sys.stderr)
-        sys.exit(1)
-
-    if not os.path.exists(AAB_PATH):
-        print(f"Error: AAB not found at {AAB_PATH}", file=sys.stderr)
-        sys.exit(1)
-
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(config_json),
-        scopes=["https://www.googleapis.com/auth/androidpublisher"],
-    )
-    session = AuthorizedSession(creds)
-
+def _publish(session, mapping_path):
+    """Run one complete publish -- upload, mapping, track, commit -- in a new
+    edit. Raises EditDeletedError if Play deletes the edit along the way."""
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
     _raise_for_status(edit_resp, "creating the Play edit")
     edit_id = edit_resp.json()["id"]
@@ -153,6 +162,8 @@ def main():
         try:
             bundle = _upload_aab_resumable(session, PACKAGE_NAME, edit_id, AAB_PATH)
             break
+        except EditDeletedError:
+            raise
         except Exception as exc:
             last_exc = exc
             if not _is_retryable(exc):
@@ -181,21 +192,6 @@ def main():
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
-    if not mapping_path:
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
-            "its R8 mapping file so Play Console can deobfuscate crash traces.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not os.path.exists(mapping_path):
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
-            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     mapping_size = os.path.getsize(mapping_path)
     last_exc = None
     uploaded = False
@@ -206,6 +202,8 @@ def main():
             )
             uploaded = True
             break
+        except EditDeletedError:
+            raise
         except Exception as exc:
             last_exc = exc
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
@@ -235,6 +233,61 @@ def main():
         timeout=30,
     )
     _raise_for_status(commit_resp, "committing the Play edit")
+    return version_code
+
+
+def main():
+    config_json = os.environ.get("PLAY_STORE_CONFIG_JSON")
+    if not config_json:
+        print("Error: PLAY_STORE_CONFIG_JSON environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    if not os.path.exists(AAB_PATH):
+        print(f"Error: AAB not found at {AAB_PATH}", file=sys.stderr)
+        sys.exit(1)
+
+    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
+    if not mapping_path:
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
+            "its R8 mapping file so Play Console can deobfuscate crash traces.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not os.path.exists(mapping_path):
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
+            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    creds = service_account.Credentials.from_service_account_info(
+        json.loads(config_json),
+        scopes=["https://www.googleapis.com/auth/androidpublisher"],
+    )
+    session = AuthorizedSession(creds)
+
+    for attempt in range(_MAX_EDIT_ATTEMPTS):
+        try:
+            version_code = _publish(session, mapping_path)
+            break
+        except EditDeletedError as exc:
+            if attempt == _MAX_EDIT_ATTEMPTS - 1:
+                raise RuntimeError(
+                    f"Play deleted the edit on all {_MAX_EDIT_ATTEMPTS} attempts "
+                    "-- is another client (e.g. the Firebase Tests workflow) "
+                    "opening edits for this app?"
+                ) from exc
+            # Not a power of two: the competing poller opens an edit about
+            # every 66s, and a growing, uneven delay keeps us from landing in
+            # the same spot of its cycle every time.
+            delay = 15 * (attempt + 1)
+            print(
+                f"Play deleted edit attempt {attempt + 1} (another client opened "
+                f"a new edit):\n{exc}\nRestarting in a fresh edit in {delay}s…"
+            )
+            time.sleep(delay)
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
 

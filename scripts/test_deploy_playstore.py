@@ -302,6 +302,121 @@ class TestRaiseForStatus(unittest.TestCase):
         mock_sleep.assert_has_calls([call(10), call(20)])
 
 
+class TestEditDeleted(unittest.TestCase):
+    """Another client opening an edit deletes ours (#982: the Firebase Tests
+    poller opens one every ~66s). That must restart the publish in a fresh
+    edit rather than fail the deploy."""
+
+    _DELETED_BODY = (
+        '{"error":{"code":400,"message":"This Edit has been deleted.",'
+        '"status":"FAILED_PRECONDITION"}}'
+    )
+
+    def _deleted(self):
+        return deploy_playstore.EditDeletedError("uploading the AAB failed: 400")
+
+    def _run_main(self, upload_side_effects, post_side_effects):
+        import tempfile
+
+        mock_session = MagicMock()
+        mock_session.post.side_effect = post_side_effects
+        mock_session.put.return_value = MagicMock()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+
+        env = {
+            "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
+            "MAPPING_TXT_PATH": mapping_path,
+        }
+        real_exists = os.path.exists
+        sleep_mock = MagicMock()
+        patches = [
+            patch.dict(os.environ, env, clear=True),
+            patch("deploy_playstore.os.path.exists",
+                  side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)),
+            patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
+            patch("deploy_playstore.AuthorizedSession", return_value=mock_session),
+            patch("deploy_playstore._upload_aab_resumable", side_effect=upload_side_effects),
+            patch("deploy_playstore._upload_deobfuscation_file", return_value={}),
+            patch("deploy_playstore.time.sleep", sleep_mock),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            deploy_playstore.main()
+        finally:
+            for p in patches:
+                p.stop()
+            os.unlink(mapping_path)
+        return mock_session, sleep_mock
+
+    @staticmethod
+    def _edit(edit_id):
+        return MagicMock(**{"json.return_value": {"id": edit_id}})
+
+    def test_body_classifies_as_edit_deleted(self):
+        import requests
+
+        resp = MagicMock(text=self._DELETED_BODY)
+        resp.raise_for_status.side_effect = requests.HTTPError(
+            "400 Client Error", response=resp
+        )
+        with self.assertRaises(deploy_playstore.EditDeletedError):
+            deploy_playstore._raise_for_status(resp, "uploading the AAB")
+
+    def test_other_400_is_not_edit_deleted(self):
+        import requests
+
+        resp = MagicMock(text='{"error":{"message":"Version code 7 already used"}}')
+        resp.raise_for_status.side_effect = requests.HTTPError(
+            "400 Client Error", response=resp
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            deploy_playstore._raise_for_status(resp, "uploading the AAB")
+        self.assertNotIsInstance(ctx.exception, deploy_playstore.EditDeletedError)
+
+    def test_upload_restarts_in_a_fresh_edit(self):
+        session, sleep_mock = self._run_main(
+            upload_side_effects=[self._deleted(), {"versionCode": 5}],
+            post_side_effects=[self._edit("edit-1"), self._edit("edit-2"), MagicMock()],
+        )
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        self.assertTrue(post_urls[0].endswith("/edits"))
+        self.assertTrue(post_urls[1].endswith("/edits"))
+        self.assertIn("/edits/edit-2:commit", post_urls[2])
+        sleep_mock.assert_called_once_with(15)
+
+    def test_track_assignment_in_deleted_edit_restarts(self):
+        """The edit can vanish after the upload, too -- the whole publish must
+        be redone, since the bundle lived in the deleted edit."""
+        session = MagicMock()
+        deleted_put = MagicMock(text=self._DELETED_BODY)
+        import requests
+        deleted_put.raise_for_status.side_effect = requests.HTTPError(
+            "400 Client Error", response=deleted_put
+        )
+        upload_mock = MagicMock(return_value={"versionCode": 5})
+        with patch("deploy_playstore._upload_aab_resumable", upload_mock):
+            with patch("deploy_playstore._upload_deobfuscation_file", return_value={}):
+                session.post.side_effect = [self._edit("edit-1")]
+                session.put.side_effect = [deleted_put]
+                with self.assertRaises(deploy_playstore.EditDeletedError):
+                    deploy_playstore._publish(session, "/dev/null")
+        self.assertEqual(upload_mock.call_count, 1)
+
+    def test_gives_up_after_max_edit_attempts(self):
+        n = deploy_playstore._MAX_EDIT_ATTEMPTS
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main(
+                upload_side_effects=[self._deleted()] * n,
+                post_side_effects=[self._edit(f"edit-{i}") for i in range(n)],
+            )
+        self.assertIn(f"all {n} attempts", str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, deploy_playstore.EditDeletedError)
+
+
 class TestUploadAabResumable(unittest.TestCase):
     def test_initiates_and_uploads(self):
         mock_session = MagicMock()
