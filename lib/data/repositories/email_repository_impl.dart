@@ -2614,9 +2614,21 @@ class EmailRepositoryImpl implements EmailRepository {
       fetched += list.length;
 
       if (!deleteMissing) continue;
-      // An id we asked for but did not get back is treated by the server as
-      // gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows don't
-      // linger.
+      // RFC 8620 §5.1: the server names every requested id it does not have
+      // in `notFound`. Only those are deleted.
+      //
+      // This used to infer absence by subtracting the returned ids from the
+      // batch, which quietly treated *any* short response as a deletion
+      // order — a truncated list, or one object the server failed to
+      // serialize, and the mail was gone locally. `notFound` is the server
+      // actually saying so. Verified against Stalwart 0.14.1, which populates
+      // it for absent and destroyed ids alike, including alongside the body
+      // options this request sends.
+      //
+      // A server that omits an id without naming it keeps its row: the
+      // 15-minutely `_maybeReconcileJmapMailbox` prune still catches genuine
+      // ghosts, so erring this way costs a stale row for a few minutes
+      // instead of costing mail.
       //
       // Guarded, because an omission is the server being *silent* where
       // `destroyed` is the server being *authoritative*. A row carrying any
@@ -2631,14 +2643,31 @@ class EmailRepositoryImpl implements EmailRepository {
       // both folders. This path is keyed by id and not mailbox-scoped, so the
       // only thing that matters is whether the user has an edit in flight —
       // an unflushed star counts just as much as an unflushed move.
-      final returnedIds = <String>{
-        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+      final notFound = <String>{
+        ...?(result['notFound'] as List<dynamic>?)?.cast<String>(),
       };
       final missing = [
         for (final jmapId in batch)
-          if (!returnedIds.contains(jmapId)) jmapId,
+          if (notFound.contains(jmapId)) jmapId,
       ];
-      if (missing.isEmpty) continue;
+      if (missing.isEmpty) {
+        // Unaccounted-for ids mean the server neither returned nor disclaimed
+        // them. Nothing is deleted, but say so — silently keeping rows is how
+        // a ghost mailbox goes unnoticed.
+        final returnedIds = <String>{
+          for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+        };
+        final unaccounted = batch.where(
+          (id) => !returnedIds.contains(id) && !notFound.contains(id),
+        );
+        if (unaccounted.isNotEmpty) {
+          log(
+            'JMAP-sync: Email/get neither returned nor disclaimed '
+            '${_briefIds(unaccounted.toList())} — keeping those rows',
+          );
+        }
+        continue;
+      }
       // Deliberately inside the loop: `_upsertJmapEmails` can enqueue changes
       // of its own via the #545 dissolve, so hoisting this lookup out would
       // read a stale set.

@@ -44,6 +44,7 @@ http.Client _server({
   List<String> updated = const [],
   List<String> destroyed = const [],
   Set<String> omit = const {},
+  bool omitSilently = false,
 }) {
   return jmapFakeServer(
     accountId: _jmapAccountId,
@@ -70,6 +71,7 @@ http.Client _server({
         ids: call.ids,
         mailboxId: _mailbox,
         omit: omit,
+        omitSilently: omitSilently,
         callId: call.callId,
       );
     },
@@ -168,6 +170,25 @@ void main() {
       await localIds(r),
       contains('${_jmapAccount.id}:e1'),
       reason: 'an unflushed star is as much a user edit as an unflushed move',
+    );
+
+    await r.db.close();
+  });
+
+  // The server omitting an id without naming it in `notFound` is not the
+  // server saying it is gone. Deleting on that inference meant any short or
+  // truncated response was read as a deletion order.
+  test('an id omitted without being disclaimed keeps its row', () async {
+    final r = await seeded(
+      _server(updated: ['e1'], omit: {'e1'}, omitSilently: true),
+    );
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    expect(
+      await localIds(r),
+      contains('${_jmapAccount.id}:e1'),
+      reason: 'only an id named in notFound is the server saying it is gone',
     );
 
     await r.db.close();

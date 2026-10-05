@@ -164,10 +164,16 @@ Map<String, dynamic> jmapEmailObject({
 }
 
 /// The `Email/get` method response a fake server answers with.
+///
+/// [notFound] must name every requested id missing from [list] — that is what
+/// a real server does (RFC 8620 §5.1), and the client deletes on the strength
+/// of it. A fake that omits an id without naming it here is modelling a
+/// *non-compliant* server, which is a different test.
 List<dynamic> jmapEmailGetResponse({
   required String accountId,
   required String state,
   required List<Map<String, dynamic>> list,
+  List<String> notFound = const [],
   Object? callId = '0',
 }) {
   return [
@@ -176,7 +182,7 @@ List<dynamic> jmapEmailGetResponse({
       'accountId': accountId,
       'state': state,
       'list': list,
-      'notFound': <String>[],
+      'notFound': notFound,
     },
     callId,
   ];
@@ -277,7 +283,8 @@ http.Client jmapFakeServer({
 
 /// An `Email/get` response rendering each of [ids] with [jmapEmailObject],
 /// skipping anything in [omit] so a suite can make the server leave an id out
-/// of a response it was asked for.
+/// of a response it was asked for. Omitted ids are named in `notFound`, as a
+/// compliant server does, unless [omitSilently] is set.
 List<dynamic> jmapEmailGetResponseFor({
   required String accountId,
   required String state,
@@ -285,6 +292,7 @@ List<dynamic> jmapEmailGetResponseFor({
   required String mailboxId,
   String subjectPrefix = 'subject',
   Set<String> omit = const {},
+  bool omitSilently = false,
   Object? callId = '0',
 }) {
   return jmapEmailGetResponse(
@@ -299,6 +307,14 @@ List<dynamic> jmapEmailGetResponseFor({
             subject: '$subjectPrefix $id',
           ),
     ],
+    // A compliant server names what it left out. Set [omitSilently] to model
+    // one that does not.
+    notFound: omitSilently
+        ? const []
+        : [
+            for (final id in ids)
+              if (omit.contains(id)) id,
+          ],
     callId: callId,
   );
 }
