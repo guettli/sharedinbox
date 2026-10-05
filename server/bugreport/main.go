@@ -316,6 +316,17 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
 			return
 		}
+		// The public fields reach an agent-watched issue, so a report must not
+		// smuggle in agentloop's managed-block markers (#930).
+		for _, f := range []struct{ name, value string }{
+			{"title", title}, {"description", description}, {"about_info", aboutInfo},
+		} {
+			if agentloopMarkerRe.MatchString(f.value) {
+				writeJSONError(w, http.StatusBadRequest,
+					fmt.Sprintf("%s must not contain agentloop markers (<!-- agentloop… -->).", f.name))
+				return
+			}
+		}
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
 		metaFiles := r.MultipartForm.File["encrypted_metadata"]
 
@@ -426,12 +437,19 @@ func blobURL(baseURL, id, filename string) string {
 // (mail, metadata, screenshots) are never inlined — only links to their
 // encrypted downloads. Each of them is optional: a general no-mail report is
 // just the description plus system info (#847).
+//
+// Title, description and system info come from an unauthenticated endpoint,
+// so they are rendered defensively (#930): the title is flattened to one line,
+// the description is fenced as a code block, system info has HTML comments
+// neutralized, and all three are capped.
 func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []string) (title, body string) {
-	title = "Bug report: " + report.Title
+	title = "Bug report: " + sanitizeTitle(report.Title)
 	var b bytes.Buffer
+	b.WriteString(untrustedNotice)
 	if report.Description != "" {
-		b.WriteString(report.Description)
-		b.WriteString("\n\n---\n\n")
+		b.WriteString("### Reported by the user\n\n")
+		b.WriteString(fenceCode(neutralizeMarkers(truncateRunes(report.Description, maxDescriptionRunes))))
+		b.WriteString("\n---\n\n")
 	}
 	if mailURL != "" {
 		b.WriteString("📎 **Encrypted mail:** ")
@@ -457,7 +475,7 @@ func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []
 	}
 	if report.AboutInfo != "" {
 		b.WriteString("\n<details><summary>System info</summary>\n\n")
-		b.WriteString(report.AboutInfo)
+		b.WriteString(neutralizeMarkers(truncateRunes(report.AboutInfo, maxAboutInfoRunes)))
 		b.WriteString("\n</details>\n")
 	}
 	return title, b.String()

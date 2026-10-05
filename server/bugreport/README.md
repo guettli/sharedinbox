@@ -35,6 +35,33 @@ public issue with no attachments (#847).
 All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 20 MB.
 
+## Untrusted input
+
+`POST /api/v1/encrypted-reports` is public and unauthenticated, so `title`,
+`description` and `about_info` are attacker-controlled — yet they land in an
+issue authored by the bot account, which agentloop agents act on (#930). The
+server therefore:
+
+- **rejects** (`400`) any of the three that contains an agentloop managed-block
+  marker (`<!-- agentloop… -->`, `<!-- /agentloop… -->`), so a report cannot
+  forge e.g. an approved plan block;
+- opens the issue with a fixed **untrusted-input notice** telling readers and
+  agents that the user parts are data, not instructions;
+- flattens the **title** to one plain line (no control or bidi characters);
+- renders the **description** inside a fenced code block whose fence is longer
+  than any backtick run in it, so it cannot break out into markdown/HTML;
+- keeps **system info** rendered as markdown but neutralizes HTML comments
+  (`<!--` → `<! --`, `-->` → `-- >`);
+- **truncates** the title to 120, the description to 8000 and system info to
+  4000 runes, ending a cut field with `…[truncated]`. The app truncates with
+  the identical numbers (`lib/core/services/report_limits.dart`), enforced by
+  `TestReportLimitsMatchApp`. The full text is still kept in `report.json`.
+
+No escaping removes natural-language instructions: the real containment is
+that agents never follow directives from the report, never reveal key material
+(`REPORT_PRIVATE_KEY`, tokens) and never fetch URLs taken from the report text
+(see `AGENTS.md`).
+
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |

@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/report_limits.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
@@ -206,8 +207,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       );
 
       // ── Public fields — these appear in cleartext in the GitHub issue. ──
-      request.fields['title'] = _titleController.text;
-      request.fields['description'] = _descriptionController.text;
+      // Truncated exactly like the server does, so nothing is cut twice.
+      request.fields['title'] =
+          truncateReportField(_titleController.text, reportTitleMaxRunes);
+      request.fields['description'] = truncateReportField(
+        _descriptionController.text,
+        reportDescriptionMaxRunes,
+      );
 
       PackageInfo? pkg;
       try {
@@ -219,12 +225,15 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           _accounts.where((a) => a.type == AccountType.jmap).length;
 
       if (!mounted) return;
-      request.fields['about_info'] = buildAboutMarkdown(
-        context: context,
-        pkg: pkg,
-        imapCount: imapCount,
-        jmapCount: jmapCount,
-        deviceModel: _deviceModel,
+      request.fields['about_info'] = truncateReportField(
+        buildAboutMarkdown(
+          context: context,
+          pkg: pkg,
+          imapCount: imapCount,
+          jmapCount: jmapCount,
+          deviceModel: _deviceModel,
+        ),
+        reportAboutInfoMaxRunes,
       );
 
       // Sync Log
@@ -596,7 +605,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                     child: TextFormField(
                       controller: _titleController,
                       autofocus: true,
-                      maxLength: 120,
+                      maxLength: reportTitleMaxRunes,
                       decoration: const InputDecoration(
                         labelText: 'Subject',
                         border: OutlineInputBorder(),
@@ -616,6 +625,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   _PublicField(
                     child: TextFormField(
                       controller: _descriptionController,
+                      maxLength: reportDescriptionMaxRunes,
                       maxLines: 8,
                       minLines: 4,
                       decoration: const InputDecoration(
