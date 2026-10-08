@@ -5,34 +5,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 
+import 'helpers.dart';
+
 Widget _wrap(Widget child) => ProviderScope(
       child: MaterialApp(
         home: Scaffold(body: child),
       ),
     );
-
-// Collects every gesture recognizer attached to any TextSpan under [text],
-// so tests can invoke the exact same tap callback that a real tap would.
-List<GestureRecognizer> _recognizersFor(WidgetTester tester, String text) {
-  final richText = tester.widget<Text>(
-    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
-  );
-  final root = richText.textSpan!;
-  final recognizers = <GestureRecognizer>[];
-  void walk(InlineSpan span) {
-    if (span is TextSpan) {
-      if (span.text == text && span.recognizer != null) {
-        recognizers.add(span.recognizer!);
-      }
-      for (final child in span.children ?? const <InlineSpan>[]) {
-        walk(child);
-      }
-    }
-  }
-
-  walk(root);
-  return recognizers;
-}
 
 void main() {
   group('LinkifiedText', () {
@@ -70,7 +49,7 @@ void main() {
       );
       expect(w.textSpan, isNotNull);
 
-      final rec = _recognizersFor(tester, 'https://example.com');
+      final rec = linkRecognizersFor(tester, 'https://example.com');
       expect(rec, hasLength(1));
     });
 
@@ -79,7 +58,7 @@ void main() {
         _wrap(const LinkifiedText('open https://example.com now')),
       );
 
-      final rec = _recognizersFor(tester, 'https://example.com').single
+      final rec = linkRecognizersFor(tester, 'https://example.com').single
           as TapGestureRecognizer;
       rec.onTap!();
       await tester.pumpAndSettle();
@@ -98,7 +77,7 @@ void main() {
         _wrap(const LinkifiedText('open https://example.com now')),
       );
 
-      final rec = _recognizersFor(tester, 'https://example.com').single
+      final rec = linkRecognizersFor(tester, 'https://example.com').single
           as TapGestureRecognizer;
       rec.onTap!();
       await tester.pumpAndSettle();
@@ -122,6 +101,27 @@ void main() {
         ),
       );
       expect(w.style, style);
+    });
+
+    testWidgets('linkStyle overrides the default link style', (tester) async {
+      const linkStyle = TextStyle(color: Color(0xFF00FF00));
+      await tester.pumpWidget(
+        _wrap(
+          const LinkifiedText(
+            'see https://example.com',
+            linkStyle: linkStyle,
+          ),
+        ),
+      );
+
+      final w = tester.widget<Text>(
+        find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+      );
+      final link = (w.textSpan! as TextSpan)
+          .children!
+          .whereType<TextSpan>()
+          .singleWhere((s) => s.text == 'https://example.com');
+      expect(link.style, linkStyle);
     });
   });
 }
