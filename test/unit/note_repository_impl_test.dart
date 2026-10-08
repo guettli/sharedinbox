@@ -392,6 +392,55 @@ Future<AppDatabase> _freshSeededDb(
   return db;
 }
 
+/// Seeds a `q-v1`/`e-v1` notes checkpoint, runs one incremental sync that
+/// answers with the given queryChanges/changes and fetched [emails], and
+/// returns the note ids left in the database afterwards.
+Future<Set<String>> _runIncrementalNotesSync(
+  AppDatabase db, {
+  required List<Map<String, dynamic>> added,
+  required List<String> removed,
+  required List<String> created,
+  required List<String> destroyed,
+  required List<Map<String, dynamic>> emails,
+}) async {
+  await db.into(db.syncStates).insertOnConflictUpdate(
+        SyncStatesCompanion.insert(
+          accountId: _account.id,
+          resourceType: 'notes',
+          state: jsonEncode({'queryState': 'q-v1', 'emailState': 'e-v1'}),
+          syncedAt: DateTime(2026),
+        ),
+      );
+
+  final script = _JmapScript([
+    _Turn('Mailbox/get', _mailboxGetResponse()),
+    _Turn(
+      'Email/queryChanges',
+      _incrementalResponse(
+        newQueryState: 'q-v2',
+        added: added,
+        removed: removed,
+        newEmailState: 'e-v2',
+        created: created,
+        updated: const [],
+        destroyed: destroyed,
+      ),
+    ),
+    _Turn('Email/get', _emailGetResponse(state: 'e-v2', list: emails)),
+  ]);
+
+  final repo = NoteRepositoryImpl(
+    db,
+    _StubAccounts(),
+    httpClient: script.build(),
+  );
+
+  await repo.syncAllNotes(_account.id);
+
+  final rows = await db.select(db.emailNotes).get();
+  return rows.map((r) => r.id).toSet();
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -486,60 +535,26 @@ void main() {
                 createdAt: DateTime(2026),
               ),
             );
-        await db.into(db.syncStates).insertOnConflictUpdate(
-              SyncStatesCompanion.insert(
-                accountId: _account.id,
-                resourceType: 'notes',
-                state: jsonEncode(
-                  {'queryState': 'q-v1', 'emailState': 'e-v1'},
-                ),
-                syncedAt: DateTime(2026),
-              ),
-            );
-
-        final script = _JmapScript([
-          _Turn('Mailbox/get', _mailboxGetResponse()),
-          _Turn(
-            'Email/queryChanges',
-            _incrementalResponse(
-              newQueryState: 'q-v2',
-              added: [
-                {'id': 'e-new', 'index': 0},
-              ],
-              removed: const [],
-              newEmailState: 'e-v2',
-              created: const ['e-new'],
-              updated: const [],
-              destroyed: const ['e-old'],
-            ),
-          ),
-          _Turn(
-            'Email/get',
-            _emailGetResponse(
-              state: 'e-v2',
-              list: [
-                _noteEmail(
-                  id: 'e-new',
-                  noteId: 'n-new',
-                  messageId: '<m3@ex.com>',
-                  body: 'third',
-                ),
-              ],
-            ),
-          ),
-        ]);
-
-        final repo = NoteRepositoryImpl(
+        final ids = await _runIncrementalNotesSync(
           db,
-          _StubAccounts(),
-          httpClient: script.build(),
+          added: [
+            {'id': 'e-new', 'index': 0},
+          ],
+          removed: const [],
+          created: const ['e-new'],
+          destroyed: const ['e-old'],
+          emails: [
+            _noteEmail(
+              id: 'e-new',
+              noteId: 'n-new',
+              messageId: '<m3@ex.com>',
+              body: 'third',
+            ),
+          ],
         );
 
-        await repo.syncAllNotes(_account.id);
-
-        final rows = await db.select(db.emailNotes).get();
         expect(
-          rows.map((r) => r.id).toSet(),
+          ids,
           {'n-existing', 'n-new'},
           reason: 'n-old should be gone (destroyed), n-new should be present',
         );
@@ -584,58 +599,26 @@ void main() {
                 createdAt: DateTime(2026),
               ),
             );
-        await db.into(db.syncStates).insertOnConflictUpdate(
-              SyncStatesCompanion.insert(
-                accountId: _account.id,
-                resourceType: 'notes',
-                state: jsonEncode({'queryState': 'q-v1', 'emailState': 'e-v1'}),
-                syncedAt: DateTime(2026),
-              ),
-            );
-
-        final script = _JmapScript([
-          _Turn('Mailbox/get', _mailboxGetResponse()),
-          _Turn(
-            'Email/queryChanges',
-            _incrementalResponse(
-              newQueryState: 'q-v2',
-              added: [
-                {'id': 'e-new', 'index': 0},
-              ],
-              removed: const ['e-new', 'e-moved'],
-              newEmailState: 'e-v2',
-              created: const ['e-new'],
-              updated: const [],
-              destroyed: const [],
-            ),
-          ),
-          _Turn(
-            'Email/get',
-            _emailGetResponse(
-              state: 'e-v2',
-              list: [
-                _noteEmail(
-                  id: 'e-new',
-                  noteId: 'n-new',
-                  messageId: '<m1@ex.com>',
-                  body: 'just added',
-                ),
-              ],
-            ),
-          ),
-        ]);
-
-        final repo = NoteRepositoryImpl(
+        final ids = await _runIncrementalNotesSync(
           db,
-          _StubAccounts(),
-          httpClient: script.build(),
+          added: [
+            {'id': 'e-new', 'index': 0},
+          ],
+          removed: const ['e-new', 'e-moved'],
+          created: const ['e-new'],
+          destroyed: const [],
+          emails: [
+            _noteEmail(
+              id: 'e-new',
+              noteId: 'n-new',
+              messageId: '<m1@ex.com>',
+              body: 'just added',
+            ),
+          ],
         );
 
-        await repo.syncAllNotes(_account.id);
-
-        final rows = await db.select(db.emailNotes).get();
         expect(
-          rows.map((r) => r.id).toSet(),
+          ids,
           {'n-new'},
           reason: 'n-new is re-listed in added so it must stay; '
               'n-moved left the query so it must go',
