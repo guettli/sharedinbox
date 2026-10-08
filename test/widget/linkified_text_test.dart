@@ -13,6 +13,19 @@ Widget _wrap(Widget child) => ProviderScope(
       ),
     );
 
+/// Pumps a [LinkifiedText] containing one URL, taps the link and waits for
+/// the confirmation dialog to appear.
+Future<void> _openLinkDialog(WidgetTester tester) async {
+  await tester.pumpWidget(
+    _wrap(const LinkifiedText('open https://example.com now')),
+  );
+
+  final rec = linkRecognizersFor(tester, 'https://example.com').single
+      as TapGestureRecognizer;
+  rec.onTap!();
+  await tester.pumpAndSettle();
+}
+
 void main() {
   group('LinkifiedText', () {
     testWidgets('wraps plain text in a SelectionArea so it can be selected', (
@@ -54,14 +67,7 @@ void main() {
     });
 
     testWidgets('opens confirmation dialog on link tap', (tester) async {
-      await tester.pumpWidget(
-        _wrap(const LinkifiedText('open https://example.com now')),
-      );
-
-      final rec = linkRecognizersFor(tester, 'https://example.com').single
-          as TapGestureRecognizer;
-      rec.onTap!();
-      await tester.pumpAndSettle();
+      await _openLinkDialog(tester);
 
       expect(find.text('Open link?'), findsOneWidget);
       // The URL is shown inside the dialog so users can verify it.
@@ -73,14 +79,7 @@ void main() {
     testWidgets('Cancel dismisses the dialog without launching', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        _wrap(const LinkifiedText('open https://example.com now')),
-      );
-
-      final rec = linkRecognizersFor(tester, 'https://example.com').single
-          as TapGestureRecognizer;
-      rec.onTap!();
-      await tester.pumpAndSettle();
+      await _openLinkDialog(tester);
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
