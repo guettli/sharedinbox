@@ -2450,22 +2450,75 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// How many `Email/query` pages one full-sync invocation drains before
+  /// handing back, so the next cycle continues from [_jmapFullSyncKey].
+  ///
+  /// #973 split the chained `Email/get` into bounded batches, which took a
+  /// 10 000-mail mailbox from ~20 requests to ~220. Running all of that in one
+  /// invocation only to lose it to a backgrounded app or a dropped connection
+  /// is the "never catches up" shape of #967 again, relocated from a
+  /// per-request timeout to total run length.
+  static const _jmapFullSyncPagesPerRun = 4;
+
+  /// Where an unfinished full sync stores its resume point.
+  ///
+  /// Deliberately *not* `JMAP:Email:<mailbox>`: writing that mid-run would
+  /// send the next cycle down the incremental path, which has no idea the
+  /// mailbox has only been half paged and would never fetch the rest.
+  static String _jmapFullSyncKey(String mailboxJmapId) =>
+      'JMAP:FullSync:$mailboxJmapId';
+
   Future<model.SyncEmailsResult> _jmapFullEmailSync(
     String accountId,
     JmapClient jmap,
     String mailboxJmapId,
   ) async {
-    // Captured on the first page below, before any body is fetched, so a
-    // change landing during a long full sync is picked up by the next
-    // incremental sweep instead of being missed.
-    late final String state;
+    final resumeKey = _jmapFullSyncKey(mailboxJmapId);
 
+    // Resume where the last invocation stopped. The stored state token is
+    // reused rather than re-probed: it was captured before the first page, so
+    // keeping it means a change that landed while this mailbox was being paged
+    // is still picked up by the first incremental sweep afterwards.
     int position = 0;
+    String? storedState;
+    final stored = await _loadSyncState(accountId, resumeKey);
+    if (stored != null) {
+      try {
+        final decoded = jsonDecode(stored) as Map<String, dynamic>;
+        final at = decoded['position'] as int?;
+        final token = decoded['state'] as String?;
+        if (at != null && at > 0 && token != null) {
+          position = at;
+          storedState = token;
+        }
+      } catch (e) {
+        log(
+          'JMAP-sync: unreadable full-sync resume point for '
+          'mailbox=$mailboxJmapId ($e) — starting over',
+        );
+      }
+    }
+    // Whether this run inherited work from an earlier one, which decides
+    // whether the end-of-sync prune can be trusted (see below).
+    final resumedFromEarlierRun = position > 0;
+    if (resumedFromEarlierRun) {
+      log(
+        'JMAP-sync: resuming full sync mailbox=$mailboxJmapId '
+        'position=$position',
+      );
+    }
+
+    // Captured on the first page below, before any body is fetched.
+    late final String state;
+    if (storedState != null) state = storedState;
+
     var fetched = 0;
     var bytes = 0;
+    var pages = 0;
+    var drained = false;
     final seenIds = <String>{};
 
-    while (true) {
+    while (pages < _jmapFullSyncPagesPerRun) {
       final firstPage = position == 0;
       // Ids only. This query used to chain `Email/get` straight onto its
       // result, which asked the server for up to `_jmapPageSize` (500) full
@@ -2525,27 +2578,80 @@ class EmailRepositoryImpl implements EmailRepository {
       bytes += batched.bytes;
 
       position += ids.length;
-      if (ids.isEmpty || total == null || position >= total) break;
+      pages++;
+      if (ids.isEmpty || total == null || position >= total) {
+        drained = true;
+        break;
+      }
+
+      // Checkpoint the page boundary so the next invocation picks up here.
+      await _saveSyncState(
+        accountId,
+        resumeKey,
+        jsonEncode({'position': position, 'state': state}),
+      );
     }
 
-    final pruned = await _pruneJmapMailboxToServerIds(
-      accountId,
-      mailboxJmapId,
-      seenIds,
-    );
+    if (!drained) {
+      // Out of pages for this run. No `JMAP:Email:` state and no prune yet —
+      // the mailbox is only partly paged, so pruning to the ids seen so far
+      // would delete everything below this position.
+      await _saveSyncState(
+        accountId,
+        resumeKey,
+        jsonEncode({'position': position, 'state': state}),
+      );
+      log(
+        'JMAP-sync: full mailbox=$mailboxJmapId paused at position=$position '
+        'after $pages page(s), fetched=$fetched',
+      );
+      return model.SyncEmailsResult(
+        fetched: fetched,
+        skipped: 0,
+        bytesTransferred: bytes,
+      );
+    }
+
+    // Drained. `seenIds` only covers the pages *this* invocation walked, so a
+    // run that inherited a position cannot prune: the ids from earlier runs
+    // are not in it and every one of them would look absent. Hand that job to
+    // the periodic reconcile instead, which re-lists the mailbox from scratch
+    // and prunes against the full set — by leaving its marker unstamped so it
+    // runs on the next cycle.
+    var pruned = 0;
+    if (!resumedFromEarlierRun) {
+      pruned = await _pruneJmapMailboxToServerIds(
+        accountId,
+        mailboxJmapId,
+        seenIds,
+      );
+    }
     log(
       'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
-      'newState=$state',
+      'newState=$state resumed=$resumedFromEarlierRun',
     );
 
     await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', state);
-    // Record that we've just done an exhaustive reconciliation so the periodic
-    // pass in _maybeReconcileJmapMailbox doesn't repeat it immediately.
-    await _saveSyncState(
-      accountId,
-      'JMAP:Reconcile:$mailboxJmapId',
-      DateTime.now().toIso8601String(),
-    );
+    await _clearSyncState(accountId, resumeKey);
+    final reconcileKey = 'JMAP:Reconcile:$mailboxJmapId';
+    if (resumedFromEarlierRun) {
+      // Make the reconcile due *now*, rather than merely declining to stamp
+      // it: an earlier run in this same resume sequence already triggered one
+      // and stamped the marker, so leaving it alone would hold the pruning off
+      // for a further interval. `_syncEmailsJmap` runs the reconcile right
+      // after this returns, so clearing it means the mailbox is pruned against
+      // a fresh listing in this very cycle.
+      await _clearSyncState(accountId, reconcileKey);
+    } else {
+      // Record that we've just done an exhaustive reconciliation so the
+      // periodic pass in _maybeReconcileJmapMailbox doesn't repeat it
+      // immediately.
+      await _saveSyncState(
+        accountId,
+        reconcileKey,
+        DateTime.now().toIso8601String(),
+      );
+    }
     await _sweepOrphanThreads(accountId, mailboxJmapId);
     return model.SyncEmailsResult(
       fetched: fetched,
@@ -3490,6 +3596,18 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .getSingleOrNull();
     return row?.state;
+  }
+
+  /// Removes one sync-state row, for a checkpoint that has served its purpose
+  /// (an unfinished full sync's resume point once the mailbox is drained).
+  Future<void> _clearSyncState(String accountId, String resourceType) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
+        .go();
   }
 
   Future<void> _saveSyncState(

@@ -20,6 +20,8 @@
 // accepted as an `Email/changes` sinceState, and is identical to the state a
 // body-fetching `Email/get` reports.
 
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -49,6 +51,7 @@ const _jmapAccount = Account(
 class _Observed {
   final getBatchSizes = <int>[];
   final queryLimits = <int?>[];
+  final queryPositions = <int>[];
 
   /// True when a request chained `Email/get` onto an `Email/query` result
   /// instead of asking for ids it had already received — the shape that made
@@ -75,6 +78,7 @@ http.Client _fullSyncServer(
       if (call.method == 'Email/query') {
         observed.queryLimits.add(call.args['limit'] as int?);
         final position = (call.args['position'] as int?) ?? 0;
+        observed.queryPositions.add(position);
         final limit = (call.args['limit'] as int?) ?? total;
         final end = (position + limit).clamp(0, total);
         return [
@@ -226,5 +230,119 @@ void main() {
     );
 
     await r.db.close();
+  });
+
+  // #973 took a full sync of a large mailbox from ~20 requests to ~220 by
+  // batching the body fetches. The state was still written only after the
+  // whole run, so an interruption restarted from position 0 — the "never
+  // catches up" shape of #967 again, moved from a per-request timeout to
+  // total run length. A run now stops at a page boundary and the next one
+  // continues from a resume key.
+  group('a full sync too large for one run', () {
+    // Five 500-id pages against a four-page-per-run cap.
+    const big = 2300;
+
+    Future<JmapTestRepos> open(_Observed observed) => openJmapTestRepos(
+          httpClient: _fullSyncServer(observed, total: big),
+          account: _jmapAccount,
+          cacheDir: cacheDir(),
+        );
+
+    Future<String?> resumePoint(JmapTestRepos r) =>
+        jmapStoredSyncState(r.db, 'JMAP:FullSync:$_mailbox');
+
+    test('stops at a page boundary, then continues in the same database',
+        () async {
+      final observed = _Observed();
+      final r = await open(observed);
+
+      // --- first run -------------------------------------------------------
+      final first = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(first.fetched, 2000, reason: 'four 500-id pages, then hand back');
+      final point = await resumePoint(r);
+      expect(point, isNotNull, reason: 'the next run has to know where to go');
+      expect(jsonDecode(point!), {'position': 2000, 'state': 'est-full'});
+      expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+        isNull,
+        reason: 'a half-paged mailbox must not look incrementally synced, or '
+            'the next cycle would never fetch the rest',
+      );
+      expect(await jmapLocalEmailIds(r.db), hasLength(2000));
+
+      // A row the server does not have, to prove the deferred prune runs.
+      await insertJmapEmailRow(
+        r.db,
+        _jmapAccount.id,
+        'ghost',
+        mailboxPath: _mailbox,
+      );
+      final positionsBefore = observed.queryPositions.length;
+
+      // --- second run, same database ---------------------------------------
+      final second = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(
+        observed.queryPositions[positionsBefore],
+        2000,
+        reason: 'resume, do not restart',
+      );
+      expect(second.fetched, big - 2000);
+      expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+        'est-full',
+        reason: 'drained now, so the incremental path takes over',
+      );
+      expect(
+        await resumePoint(r),
+        isNull,
+        reason: 'the resume point has served its purpose',
+      );
+
+      final ids = await jmapLocalEmailIds(r.db);
+      // The run that finishes the mailbox has only seen its own pages, so
+      // pruning to those would delete everything the earlier run fetched.
+      expect(
+        ids,
+        hasLength(big),
+        reason: 'the first run\'s 2000 messages must survive the second run',
+      );
+      expect(
+        ids,
+        contains('${_jmapAccount.id}:e0'),
+        reason: 'e0 came from page one of the first run',
+      );
+      // Pruning is deferred to the periodic reconcile instead, which this
+      // cycle runs because the resumed run left its marker unstamped.
+      expect(
+        ids,
+        isNot(contains('${_jmapAccount.id}:ghost')),
+        reason: 'a resumed run defers pruning to the reconcile, which must '
+            'then actually happen',
+      );
+
+      await r.db.close();
+    });
+
+    test('a run that drains the mailbox prunes and stamps as before', () async {
+      final r = await openJmapTestRepos(
+        httpClient: _fullSyncServer(_Observed(), total: 3),
+        account: _jmapAccount,
+        cacheDir: cacheDir(),
+      );
+
+      await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(await resumePoint(r), isNull);
+      expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Reconcile:$_mailbox'),
+        isNotNull,
+        reason: 'an unresumed run pruned exhaustively, so the periodic pass '
+            'does not need to repeat it immediately',
+      );
+
+      await r.db.close();
+    });
   });
 }
