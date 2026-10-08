@@ -2917,6 +2917,84 @@ void main() {
       expect(data['permanent'], true);
     });
 
+    // A bulk delete runs in one transaction and kicks the sync loop once,
+    // instead of once per message (#917) — while still trashing, queueing and
+    // logging every message exactly like deleteEmail.
+    test('deleteEmails trashes, queues and logs every message, kicks once',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      final ids = [for (var i = 1; i <= 50; i++) 'acc-1:$i'];
+      for (var i = 1; i <= 50; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                threadId: Value('t$i'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+      final kicks = <String>[];
+      final sub = r.emails.onChangesQueued.listen(kicks.add);
+      addTearDown(sub.cancel);
+
+      final dest = await r.emails.deleteEmails(ids);
+      await pumpEventQueue();
+
+      expect(dest, 'Trash');
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows, hasLength(50));
+      expect(rows.every((e) => e.mailboxPath == 'Trash'), isTrue);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(50));
+      expect(changes.every((c) => c.changeType == 'move'), isTrue);
+      final threads = await r.db.select(r.db.threads).get();
+      expect(threads.where((t) => t.mailboxPath == 'INBOX'), isEmpty);
+      expect(threads.where((t) => t.mailboxPath == 'Trash'), hasLength(50));
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.trash'), hasLength(50));
+      expect(kicks, ['acc-1']);
+    });
+
+    test('deleteEmails hard-deletes when there is no Trash folder', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      for (var i = 1; i <= 3; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      final dest = await r.emails.deleteEmails(['acc-1:1', 'acc-1:3', 'nope']);
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:2']);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => c.changeType), ['delete', 'delete']);
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.delete'), hasLength(2));
+    });
+
     test('snoozeEmail records an email.snooze entry', () async {
       final r = makeLoggedRepos();
       await r.accounts.addAccount(_account, 'pw');

@@ -36,6 +36,54 @@ class EmailThreadListController extends ChangeNotifier {
   bool get isSelecting => _selected.isNotEmpty;
   int get selectionCount => _selected.length;
 
+  String? _busyLabel;
+
+  /// Whether a batch action on the selection is still running. The selection
+  /// bottom bar shows [busyLabel] with a spinner in place of its buttons
+  /// meanwhile, so a slow bulk action is visibly in progress (#917).
+  bool get isBusy => _busyLabel != null;
+
+  /// What the running batch action is doing, e.g. "Deleting 80 conversations…".
+  String? get busyLabel => _busyLabel;
+
+  /// Runs [body] as the selection's batch action, then clears the selection
+  /// and calls [onDone] with the thread ids that were targeted. With a
+  /// [busyLabel] the controller is busy while [body] runs; pass one only for
+  /// actions that open no dialog, which the busy bar would sit behind.
+  /// Ignored while another busy action is running.
+  void runBatch(
+    Future<void> Function() body, {
+    String? busyLabel,
+    void Function(List<String> actedThreadIds)? onDone,
+  }) {
+    if (isBusy) return;
+    final actedIds = selectedThreads.map((t) => t.threadId).toList();
+    _busyLabel = busyLabel;
+    if (busyLabel != null) notifyListeners();
+    unawaited(() async {
+      try {
+        await body();
+      } finally {
+        // The host screen may have been closed while the action ran.
+        if (_busyLabel != null && !_disposed) {
+          _busyLabel = null;
+          notifyListeners();
+        }
+      }
+      if (_disposed) return;
+      clear();
+      onDone?.call(actedIds);
+    }());
+  }
+
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   bool isSelected(EmailThread t) => _selected.contains(t.threadId);
 
   void toggle(EmailThread t) {
@@ -550,13 +598,27 @@ Widget buildSelectionBottomBar(
   String? currentFolderRole,
   void Function(List<String> actedThreadIds)? onAfterAction,
 }) {
-  void run(Future<void> Function() body) {
-    final actedIds = controller.selectedThreads.map((t) => t.threadId).toList();
-    unawaited(() async {
-      await body();
-      controller.clear();
-      onAfterAction?.call(actedIds);
-    }());
+  void run(Future<void> Function() body, {String? busyLabel}) =>
+      controller.runBatch(body, busyLabel: busyLabel, onDone: onAfterAction);
+
+  // While a batch action runs, the bar shows what it is doing instead of the
+  // buttons — so a large delete visibly makes progress and cannot be fired
+  // twice (#917).
+  final busyLabel = controller.busyLabel;
+  if (busyLabel != null) {
+    return BottomAppBar(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox.square(
+            dimension: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 16),
+          Flexible(child: Text(busyLabel, overflow: TextOverflow.ellipsis)),
+        ],
+      ),
+    );
   }
 
   // In Junk/Trash the destructive action becomes a "move back to Inbox" button;
@@ -629,6 +691,7 @@ Widget buildSelectionBottomBar(
               haptic: HapticFeedback.heavyImpact,
               onPressed: () => run(
                 () => batchDelete(ref, threads: controller.selectedThreads),
+                busyLabel: 'Deleting ${_conversations(selected.length)}…',
               ),
             ),
         if (includeSpam)
@@ -679,6 +742,8 @@ Widget buildSelectionBottomBar(
     ),
   );
 }
+
+String _conversations(int n) => n == 1 ? '1 conversation' : '$n conversations';
 
 /// Bulk-select destructive action button.
 ///

@@ -510,6 +510,9 @@ class FakeEmailRepository implements EmailRepository {
   Future<String?> deleteEmail(String emailId) async => null;
 
   @override
+  Future<String?> deleteEmails(List<String> emailIds) async => null;
+
+  @override
   Stream<String> get onChangesQueued => const Stream.empty();
 
   @override
