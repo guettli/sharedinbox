@@ -650,9 +650,21 @@ final bugReportsProvider = FutureProvider<List<BugReportInfo>>((ref) async {
   ];
 });
 
-/// Stream of notes for a specific email, identified by (accountId, messageId).
-final notesProvider =
-    StreamProvider.autoDispose.family<List<EmailNote>, (String, String)>(
-  (ref, params) =>
-      ref.watch(noteRepositoryProvider).observeNotes(params.$1, params.$2),
-);
+/// Notes of every mail in the conversation of one email, so a note added to
+/// the Sent copy shows up when reading the reply (#870). Key is
+/// `(accountId, messageId, threadId)`; without a thread only the mail's own
+/// notes are returned.
+final conversationNotesProvider = StreamProvider.autoDispose
+    .family<List<EmailNote>, (String, String, String?)>((ref, key) {
+  final (accountId, messageId, threadId) = key;
+  final repo = ref.watch(noteRepositoryProvider);
+  if (threadId == null) return repo.observeNotes(accountId, messageId);
+  final emails = ref.watch(threadEmailsProvider((accountId, threadId))).value ??
+      const <Email>[];
+  final ids = {
+    messageId,
+    for (final e in emails)
+      if (e.messageId != null) e.messageId!,
+  };
+  return repo.observeNotesForMessages(accountId, ids);
+});

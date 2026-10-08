@@ -812,6 +812,42 @@ void main() {
     });
   });
 
+  group('NoteRepositoryImpl observeNotesForMessages', () {
+    late AppDatabase db;
+
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
+
+    test('returns notes of all related mails, oldest first (#870)', () async {
+      Future<void> addRow(String id, String messageId, DateTime at) =>
+          db.into(db.emailNotes).insert(
+                EmailNotesCompanion.insert(
+                  id: id,
+                  accountId: _account.id,
+                  messageId: messageId,
+                  noteText: id,
+                  serverId: '',
+                  createdAt: at,
+                ),
+              );
+      await addRow('on-reply', '<reply@ex.com>', DateTime(2026, 2));
+      await addRow('on-sent', '<sent@ex.com>', DateTime(2026));
+      await addRow('unrelated', '<other@ex.com>', DateTime(2026, 3));
+
+      final repo = NoteRepositoryImpl(db, _StubAccounts());
+      final notes = await repo.observeNotesForMessages(
+        _account.id,
+        ['<reply@ex.com>', '<sent@ex.com>'],
+      ).first;
+
+      expect(notes.map((n) => n.id), ['on-sent', 'on-reply']);
+      expect(
+        await repo.observeNotesForMessages(_account.id, const []).first,
+        isEmpty,
+      );
+    });
+  });
+
   group('NoteRepositoryImpl add logging', () {
     late AppDatabase db;
 

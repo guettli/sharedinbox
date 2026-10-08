@@ -865,6 +865,13 @@ class _FakeNotes implements NoteRepository {
       const Stream.empty();
 
   @override
+  Stream<List<EmailNote>> observeNotesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) =>
+      const Stream.empty();
+
+  @override
   Future<void> syncAllNotes(String accountId) async {
     syncAllCounts[accountId] = (syncAllCounts[accountId] ?? 0) + 1;
     final err = throwOnSync;
