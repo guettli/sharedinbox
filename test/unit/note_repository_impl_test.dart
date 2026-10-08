@@ -558,6 +558,91 @@ void main() {
       },
     );
 
+    test(
+      'id listed in both removed and added survives the incremental sync',
+      () async {
+        // Regression for #998: a freshly added note vanished a few seconds
+        // later because the server reported its id in both `removed` and
+        // `added` of Email/queryChanges (allowed by RFC 8620 §5.6).
+        await db.into(db.emailNotes).insert(
+              EmailNotesCompanion.insert(
+                id: 'n-new',
+                accountId: _account.id,
+                messageId: '<m1@ex.com>',
+                noteText: 'just added',
+                serverId: 'e-new',
+                createdAt: DateTime(2026),
+              ),
+            );
+        await db.into(db.emailNotes).insert(
+              EmailNotesCompanion.insert(
+                id: 'n-moved',
+                accountId: _account.id,
+                messageId: '<m2@ex.com>',
+                noteText: 'moved out of Notes',
+                serverId: 'e-moved',
+                createdAt: DateTime(2026),
+              ),
+            );
+        await db.into(db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: _account.id,
+                resourceType: 'notes',
+                state: jsonEncode({'queryState': 'q-v1', 'emailState': 'e-v1'}),
+                syncedAt: DateTime(2026),
+              ),
+            );
+
+        final script = _JmapScript([
+          _Turn('Mailbox/get', _mailboxGetResponse()),
+          _Turn(
+            'Email/queryChanges',
+            _incrementalResponse(
+              newQueryState: 'q-v2',
+              added: [
+                {'id': 'e-new', 'index': 0},
+              ],
+              removed: const ['e-new', 'e-moved'],
+              newEmailState: 'e-v2',
+              created: const ['e-new'],
+              updated: const [],
+              destroyed: const [],
+            ),
+          ),
+          _Turn(
+            'Email/get',
+            _emailGetResponse(
+              state: 'e-v2',
+              list: [
+                _noteEmail(
+                  id: 'e-new',
+                  noteId: 'n-new',
+                  messageId: '<m1@ex.com>',
+                  body: 'just added',
+                ),
+              ],
+            ),
+          ),
+        ]);
+
+        final repo = NoteRepositoryImpl(
+          db,
+          _StubAccounts(),
+          httpClient: script.build(),
+        );
+
+        await repo.syncAllNotes(_account.id);
+
+        final rows = await db.select(db.emailNotes).get();
+        expect(
+          rows.map((r) => r.id).toSet(),
+          {'n-new'},
+          reason: 'n-new is re-listed in added so it must stay; '
+              'n-moved left the query so it must go',
+        );
+      },
+    );
+
     test('cannotCalculateChanges falls back to a full sync', () async {
       await db.into(db.syncStates).insertOnConflictUpdate(
             SyncStatesCompanion.insert(
