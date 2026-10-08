@@ -168,6 +168,93 @@ void main() {
       expect(find.text('smtp.example.com'), findsOneWidget);
     });
 
+    // Regression for #979. Discovery committed the user to whichever protocol
+    // it found: neither form offered a way to pick the other, and the chooser
+    // was reachable only when detection failed. A server speaking both could
+    // therefore only be added over the detected one.
+    testWidgets('each form offers a switch to the other protocol',
+        (tester) async {
+      _useTallViewport(tester);
+
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _jmapDiscovery()),
+      );
+      expect(find.text('JMAP API URL'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('switchToImapButton')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('switchToJmapButton')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('switchToJmapButton')));
+      await tester.pumpAndSettle();
+      expect(find.text('JMAP API URL'), findsOneWidget);
+    });
+
+    // Switching away and back must not destroy what auto-detection found:
+    // nothing re-runs discovery, so the only recovery would be abandoning the
+    // whole flow. smtpPort 587 is the load-bearing value here — it is the one
+    // detected setting that differs from the form's own default of 465, so a
+    // blind reset to defaults is visible and an assertion on 993 would not be.
+    testWidgets('round trip keeps the detected IMAP settings', (tester) async {
+      _useTallViewport(tester);
+
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _imapDiscovery()),
+      );
+      expect(find.text('587'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('switchToJmapButton')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('switchToImapButton')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('imap.example.com'), findsOneWidget);
+      expect(find.text('smtp.example.com'), findsOneWidget);
+      expect(find.text('587'), findsOneWidget);
+      expect(find.text('465'), findsNothing);
+    });
+
+    testWidgets('round trip keeps the detected JMAP session URL',
+        (tester) async {
+      _useTallViewport(tester);
+
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _jmapDiscovery()),
+      );
+
+      await tester.tap(find.byKey(const Key('switchToImapButton')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('switchToJmapButton')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('https://mail.example.com/jmap'), findsOneWidget);
+    });
+
+    // The Try-connection banner renders from shared state on both forms, so a
+    // result from the protocol just abandoned would otherwise sit above Save
+    // claiming success for settings that are no longer on screen.
+    testWidgets('switching clears a Try-connection result', (tester) async {
+      _useTallViewport(tester);
+
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _jmapDiscovery()),
+      );
+      await tester.enterText(find.byType(TextFormField).at(0), 'Display');
+      await tester.enterText(find.byType(TextFormField).at(3), 'pw');
+      await tester.tap(find.byKey(const Key('tryConnectionButton')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Connected as'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('switchToImapButton')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Connected as'), findsNothing);
+    });
+
     testWidgets('IMAP discovery seeds both SSL switches', (tester) async {
       _useTallViewport(tester);
 
