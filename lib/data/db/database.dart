@@ -211,7 +211,8 @@ class PendingChanges extends Table {
       text().references(Accounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get resourceType => text()();
   TextColumn get resourceId => text()();
-  // "flag_seen" | "flag_flagged" | "move" | "delete"
+  // "flag_seen" | "flag_flagged" | "move" | "delete" | "snooze"
+  //   | "unsnooze"
   TextColumn get changeType => text()();
   // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
   TextColumn get payload => text()();
@@ -470,6 +471,19 @@ class InstalledVersions extends Table {
   Set<Column> get primaryKey => {gitHash};
 }
 
+/// Bug reports filed from this install that produced a GitHub issue.
+/// Only the encrypted-mail submission path yields an [issueUrl]; confidential
+/// reports (UUID only, no URL) are intentionally not recorded here.
+/// Added in schema v58.
+@DataClassName('BugReportRow')
+class BugReports extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get issueUrl => text()();
+  IntColumn get issueNumber => integer().nullable()();
+  TextColumn get reportId => text().nullable()(); // server UUID
+  DateTimeColumn get createdAt => dateTime()();
+}
+
 /// General-purpose application event log.
 /// Distinct from [SyncLogs], which is a per-cycle sync audit trail.
 /// Rows are tagged with optional context (screen / account / folder / mail /
@@ -584,6 +598,7 @@ class UserPreferences extends Table {
     ImageTrustedSenders,
     EmailNotes,
     InstalledVersions,
+    BugReports,
     DraftTombstones,
     AppLogs,
     Outbox,
@@ -1264,6 +1279,10 @@ class AppDatabase extends _$AppDatabase {
               ),
             );
           }
+          if (from < 58) {
+            // Local record of bug reports that opened a GitHub issue (#835).
+            await m.createTable(bugReports);
+          }
         },
       );
 
@@ -1284,6 +1303,30 @@ class AppDatabase extends _$AppDatabase {
   Future<Map<String, DateTime>> loadInstalledVersions() async {
     final rows = await select(installedVersions).get();
     return {for (final r in rows) r.gitHash: r.installedAt};
+  }
+
+  /// Records a bug report that produced a GitHub issue on this install.
+  Future<void> recordBugReport({
+    required String issueUrl,
+    int? issueNumber,
+    String? reportId,
+    required DateTime createdAt,
+  }) async {
+    await into(bugReports).insert(
+      BugReportsCompanion.insert(
+        issueUrl: issueUrl,
+        issueNumber: Value(issueNumber),
+        reportId: Value(reportId),
+        createdAt: createdAt,
+      ),
+    );
+  }
+
+  /// Returns all recorded bug reports, newest first.
+  Future<List<BugReportRow>> loadBugReports() async {
+    return (select(bugReports)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
   }
 
   /// Reads the subset of `emails` columns the historical thread-rebuild

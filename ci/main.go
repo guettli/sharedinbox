@@ -1075,10 +1075,34 @@ func (m *Ci) PublishWebsite(
 		Stdout(ctx)
 }
 
-// BuildLinux builds the Linux release bundle.
-func (m *Ci) BuildLinux() *dagger.Directory {
+// buildLinuxBundle builds the Linux release bundle.
+//
+// releaseVersion is the CalVer of the release this bundle belongs to. It is
+// what update_service.dart uses to decide it must compare against GitHub
+// Releases instead of latest.json (a git hash) — see PackageLinuxRelease.
+//
+// buildNumber is the same auto-incrementing number the Android path uses (the
+// commit timestamp). Without it `flutter build linux` produces a bundle whose
+// version.json carries no build number at all, so the About page shows a bare
+// "0.1.1+" on desktop while Android shows "0.1.1+1790…".
+//
+// DeployLinux and PackageLinuxRelease pass identical arguments for the same
+// commit, so the (expensive) Flutter build happens once and Dagger serves the
+// second caller from cache — the hourly snapshot tarball and the release asset
+// are then literally the same build.
+func (m *Ci) buildLinuxBundle(commitHash, releaseVersion, buildNumber string) *dagger.Directory {
+	args := []string{"flutter", "build", "linux", "--release"}
+	if buildNumber != "" {
+		args = append(args, "--build-number", buildNumber)
+	}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	if releaseVersion != "" {
+		args = append(args, "--dart-define=RELEASE_VERSION="+releaseVersion)
+	}
 	return m.setup(m.linuxSrc()).
-		WithExec([]string{"flutter", "build", "linux", "--release"}).
+		WithExec(args).
 		Directory("build/linux/x64/release/bundle")
 }
 
@@ -1087,14 +1111,14 @@ func (m *Ci) BuildLinuxRelease(
 	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
 	// +optional
 	commitHash string,
+	// CalVer of the release this commit is published as (scripts/release_version.sh).
+	// +optional
+	releaseVersion string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
 ) *dagger.Directory {
-	args := []string{"flutter", "build", "linux", "--release"}
-	if commitHash != "" {
-		args = append(args, "--dart-define=GIT_HASH="+commitHash)
-	}
-	return m.setup(m.linuxSrc()).
-		WithExec(args).
-		Directory("build/linux/x64/release/bundle")
+	return m.buildLinuxBundle(commitHash, releaseVersion, buildNumber)
 }
 
 // DeployLinux packages and deploys the Linux release to the server.
@@ -1105,8 +1129,16 @@ func (m *Ci) DeployLinux(
 	sshUser string,
 	sshHost string,
 	commitHash string,
+	// CalVer of the release cut from this same commit. Passing it here (rather
+	// than building a second, subtly different bundle for the release) means
+	// the snapshot tarball and the GitHub Release asset come from one build.
+	// +optional
+	releaseVersion string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
 ) (string, error) {
-	bundle := m.BuildLinuxRelease(commitHash)
+	bundle := m.buildLinuxBundle(commitHash, releaseVersion, buildNumber)
 
 	datePath := time.Now().Format("2006/01/02")
 	remoteDir := fmt.Sprintf("public_html/builds/%s", datePath)
@@ -1117,6 +1149,532 @@ func (m *Ci) DeployLinux(
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("tar -czf /tmp/%s -C /bundle .", tarball)}).
 		WithExec([]string{"ssh", "-i", "/home/deploy/.ssh/id_ed25519", fmt.Sprintf("%s@%s", sshUser, sshHost), fmt.Sprintf("mkdir -p %s", remoteDir)}).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf("scp -i /home/deploy/.ssh/id_ed25519 /tmp/%s %s@%s:%s/%s", tarball, sshUser, sshHost, remoteDir, tarball)}).
+		Stdout(ctx)
+}
+
+// defaultRepository is the GitHub repo that hosts the Releases mise installs
+// from. Overridable on the release/check functions so a fork can test the whole
+// flow against its own repo.
+const defaultRepository = "guettli/sharedinbox"
+
+// linuxReleaseDirName is the single top-level directory inside the release
+// tarball. mise extracts the whole archive, so `strip_components = 1` lands the
+// executable next to its `data/` and `lib/` siblings — which the Flutter Linux
+// runner requires, because it resolves asset paths relative to /proc/self/exe.
+func linuxReleaseDirName(version string) string {
+	return fmt.Sprintf("sharedinbox-%s-linux-x86_64", version)
+}
+
+// PackageLinuxRelease builds the Linux bundle and packs it into the tarball
+// that gets attached to a GitHub Release.
+//
+// The asset name carries "linux" and "x86_64" so mise's os/arch autodetection
+// matches it even once an aarch64 asset exists alongside it.
+//
+// Layout (one top-level dir, see linuxReleaseDirName):
+//
+//	sharedinbox-<version>-linux-x86_64/
+//	  sharedinbox                              # ELF executable
+//	  sharedinbox.png                          # icon, installed by linux/CMakeLists.txt
+//	  data/                                    # flutter_assets, icudtl.dat
+//	  lib/                                     # libapp.so, libflutter_linux_gtk.so, …
+//	  share/applications/sharedinbox.desktop   # menu entry (opt-in, see README)
+func (m *Ci) PackageLinuxRelease(
+	// CalVer release version without the leading "v", from
+	// scripts/release_version.sh, e.g. "2026.9.29.2013".
+	version string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
+) *dagger.File {
+	dir := linuxReleaseDirName(version)
+	asset := dir + ".tar.gz"
+	return dag.Container().
+		From("alpine:3.21").
+		// GNU tar: busybox tar has no --sort/--mtime/--owner.
+		WithExec([]string{"apk", "add", "--no-cache", "tar"}).
+		WithDirectory("/pkg/"+dir, m.buildLinuxBundle(commitHash, version, buildNumber)).
+		// The icon is already at the bundle root (linux/CMakeLists.txt installs
+		// it there), so only the .desktop file has to be added.
+		WithFile("/pkg/"+dir+"/share/applications/sharedinbox.desktop",
+			m.Source.File("linux/packaging/sharedinbox.desktop")).
+		// --sort=name + a fixed mtime keep the tarball byte-identical across
+		// rebuilds of the same bundle, so re-running a release does not churn
+		// the published SHA256SUMS.
+		WithExec([]string{"tar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+			"-czf", "/tmp/" + asset, "-C", "/pkg", dir}).
+		File("/tmp/" + asset)
+}
+
+// releaseLinuxScript publishes the tarball + checksums to the GitHub Release
+// for tag v$VERSION, creating the release when it does not exist yet.
+//
+// The release must not be a draft: mise's github backend enumerates published
+// releases only, so a draft is invisible to `mise use …@latest`.
+const releaseLinuxScript = `#!/bin/sh
+set -eu
+TAG="v${VERSION}"
+cd /out
+sha256sum "${ASSET}" > SHA256SUMS
+cat SHA256SUMS
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    echo "Release $TAG exists — uploading assets"
+    gh release upload "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --clobber
+else
+    echo "Creating release $TAG"
+    set -- "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --title "$TAG" --generate-notes
+    # --target names the commit GitHub creates the tag from, and it only has an
+    # effect when the tag does not exist on the remote yet (the workflow_dispatch
+    # path); on a tag-triggered run GitHub ignores it. It must be a FULL SHA,
+    # branch or tag — the API rejects an abbreviated hash.
+    [ -n "${TARGET_COMMIT:-}" ] && set -- "$@" --target "$TARGET_COMMIT"
+    gh release create "$@"
+fi
+# Fail loudly if the asset did not actually land — mise resolving @latest to a
+# release without a matching asset is the failure this guards against.
+ASSETS=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+printf '%s\n' "$ASSETS" | grep -qxF "${ASSET}" || {
+    echo "ERROR: ${ASSET} missing from release $TAG. Assets: $ASSETS"; exit 1; }
+DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
+[ "$DRAFT" = "false" ] || { echo "ERROR: release $TAG is a draft — mise cannot see it"; exit 1; }
+echo "Published $TAG with ${ASSET} and SHA256SUMS"
+
+# Releases are cut automatically from every Linux deploy, so without a
+# retention bound the 16 MB assets pile up forever.
+#
+# A release must satisfy BOTH bounds to be deleted: outside the newest
+# KEEP_RELEASES *and* older than KEEP_DAYS. Count alone is not safe. mise hides
+# releases younger than minimum_release_age (24h by default) from "@latest", so
+# if hourly deploys produced 20 releases inside a day, a keep-newest-20 rule
+# would delete every release old enough to be eligible and "@latest" would
+# resolve to nothing at all — a total install failure, not a stale version.
+#
+# The tag filter is a safety belt, not a nicety: only CalVer tags this script
+# creates are eligible, so the hand-made v0.0.x tags — and anything else a
+# human tagged — can never be deleted here.
+if [ "${KEEP_RELEASES:-0}" -gt 0 ]; then
+    CUTOFF=$(( $(date -u +%s) - ${KEEP_DAYS:-30} * 86400 ))
+    # gh lists newest first. fromdateiso8601 avoids parsing dates in busybox.
+    gh release list --repo "$REPO" --limit 200 --json tagName,createdAt \
+        --jq '.[] | select(.tagName | test("^v[0-9]{4}(\\.[0-9]+){3}$"))
+              | "\(.tagName) \(.createdAt | fromdateiso8601)"' > /tmp/releases.txt
+    PRUNED=0
+    INDEX=0
+    while read -r old created; do
+        [ -n "$old" ] || continue
+        INDEX=$((INDEX + 1))
+        [ "$INDEX" -le "${KEEP_RELEASES}" ] && continue
+        [ "$created" -ge "$CUTOFF" ] && continue
+        [ "$old" = "$TAG" ] && continue
+        echo "  deleting $old (outside newest ${KEEP_RELEASES} and older than ${KEEP_DAYS:-30}d)"
+        gh release delete "$old" --repo "$REPO" --yes --cleanup-tag || \
+            echo "  WARN: could not delete $old"
+        PRUNED=$((PRUNED + 1))
+    done < /tmp/releases.txt
+    echo "Pruned ${PRUNED} release(s); $(wc -l < /tmp/releases.txt) CalVer release(s) existed."
+fi
+`
+
+// ReleaseLinux packages the Linux bundle and publishes it as a GitHub Release
+// asset, so `mise use -g github:guettli/sharedinbox@<version>` can install it.
+//
+// This is additive: the hourly sharedinbox.de/builds + latest.json channel
+// (DeployLinux) is untouched.
+func (m *Ci) ReleaseLinux(
+	ctx context.Context,
+	// Needs contents:write on the repository.
+	githubToken *dagger.Secret,
+	// CalVer release version without the leading "v", from
+	// scripts/release_version.sh. Tag is "v$version".
+	version string,
+	// Short git commit hash, injected as the GIT_HASH dart-define.
+	// +optional
+	commitHash string,
+	// Auto-incrementing build number — the commit timestamp, as on Android.
+	// +optional
+	buildNumber string,
+	// How many CalVer releases to keep regardless of age. 0 disables pruning.
+	// +optional
+	keepReleases int,
+	// Minimum age in days before a release outside keepReleases may be
+	// deleted. Both bounds must be satisfied — see the prune block in
+	// releaseLinuxScript for why a count alone can break "@latest".
+	// +optional
+	keepDays int,
+	// Full commit SHA the tag is created from on the workflow_dispatch path.
+	// Must not be abbreviated — the Releases API rejects a short hash.
+	// +optional
+	targetCommit string,
+	// owner/repo to release into. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// cacheBuster forces the publish to re-run instead of returning a cached
+	// result. Without it a second run for the same version replays the first
+	// run's stdout — including its "asset landed" assertion — without ever
+	// talking to GitHub, so a re-release after fixing a broken asset would be a
+	// silent no-op (same hazard as FetchPlayStoreApks, see #432).
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	asset := linuxReleaseDirName(version) + ".tar.gz"
+
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "github-cli"}).
+		WithFile("/out/"+asset, m.PackageLinuxRelease(version, commitHash, buildNumber)).
+		WithSecretVariable("GH_TOKEN", githubToken).
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("ASSET", asset).
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("TARGET_COMMIT", targetCommit).
+		WithEnvVariable("KEEP_RELEASES", fmt.Sprintf("%d", keepReleases)).
+		WithEnvVariable("KEEP_DAYS", fmt.Sprintf("%d", keepDays)).
+		WithEnvVariable("RELEASE_CACHE_BUSTER", cacheBuster).
+		WithNewFile("/tmp/release.sh", releaseLinuxScript).
+		WithExec([]string{"sh", "/tmp/release.sh"}).
+		Stdout(ctx)
+}
+
+// checkMiseInstallScript installs the published release through mise exactly
+// the way the README tells users to, then proves the result actually runs.
+//
+// The launch test is the point of the whole check: a wrong strip_components /
+// bin_path lands `sharedinbox` without its sibling data/ and lib/, which no
+// amount of `command -v` checking would catch — the binary exists and then dies
+// on startup.
+const checkMiseInstallScript = `#!/bin/bash
+set -euo pipefail
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+export MISE_YES=1
+
+curl -fsSL https://mise.run | sh
+mise --version
+
+mkdir -p "$HOME/.config/mise"
+# The snippet documented in README.md, with the version pinned to the release
+# under test instead of "latest" — if the option names drift, the docs lie.
+cat > "$HOME/.config/mise/config.toml" <<EOF
+[tools."github:${REPO}"]
+version = "${VERSION}"
+asset_pattern = "sharedinbox-*-linux-x86_64.tar.gz"
+strip_components = 1
+bin_path = "."
+filter_bins = ["sharedinbox"]
+EOF
+cat "$HOME/.config/mise/config.toml"
+
+mise install
+SHIM=$(mise which sharedinbox)
+echo "mise which: $SHIM"
+
+# filter_bins makes mise expose the tool through a symlink farm
+# (<install>/.mise-bins/sharedinbox -> <install>/./sharedinbox), and
+# 'mise which' returns the symlink. Resolve it before looking for the bundle's
+# data/ and lib/, which sit next to the REAL binary. The app itself is fine
+# either way — the Flutter runner resolves asset paths through
+# /proc/self/exe, which follows symlinks — so checking the symlink's own
+# directory would fail a release that works perfectly.
+BIN=$(readlink -f "$SHIM")
+echo "resolved: $BIN"
+case "$BIN" in
+    */mise/installs/*) ;;
+    *) echo "ERROR: sharedinbox did not resolve into a mise install dir: $BIN"; exit 1 ;;
+esac
+[ -x "$BIN" ] || { echo "ERROR: $BIN is not executable"; exit 1; }
+
+INSTALL_DIR=$(dirname "$BIN")
+for required in data/flutter_assets lib/libapp.so; do
+    [ -e "$INSTALL_DIR/$required" ] || {
+        echo "ERROR: $required missing next to the executable — tarball layout or strip_components is wrong"
+        ls -la "$INSTALL_DIR"; exit 1; }
+done
+
+# assets/changelog.txt is generated from git history before the Dagger build
+# (task generate-changelog). When that step is missing the bundle still builds
+# and launches perfectly — only the ChangeLog screen breaks at runtime with
+# 'Unable to load asset'. Nothing else would catch it, so assert it here.
+CHANGELOG="$INSTALL_DIR/data/flutter_assets/assets/changelog.txt"
+if [ ! -s "$CHANGELOG" ]; then
+    echo "ERROR: assets/changelog.txt missing or empty in the bundle — the build"
+    echo "       ran without 'task generate-changelog', so the ChangeLog screen is broken."
+    ls -la "$INSTALL_DIR/data/flutter_assets/assets/" 2>&1 || true
+    exit 1
+fi
+echo "OK: changelog asset present ($(wc -l < "$CHANGELOG") entries)"
+
+# A missing runtime .so shows up here rather than as a mystery launch failure.
+# The plugin libraries in lib/ pull in their own dependencies (libsecret,
+# jsoncpp, …), so check them too rather than only the executable.
+#
+# Collected into a variable first: under 'set -o pipefail' a non-ELF file in
+# lib/ makes ldd exit non-zero, which would fail the pipeline and report
+# "unresolved libraries" with no matching lines to show for it.
+#
+# LD_LIBRARY_PATH is required for the lib/ pass: the plugin .so files link
+# against libflutter_linux_gtk.so, their own sibling. Only the executable
+# carries the $ORIGIN/lib RPATH, so ldd on a plugin in isolation reports
+# "libflutter_linux_gtk.so => not found" for a library that is right there —
+# which would fail every release. Verified against a real bundle.
+LDD_OUT=$({ ldd "$BIN" || true; LD_LIBRARY_PATH="$INSTALL_DIR/lib" ldd "$INSTALL_DIR"/lib/*.so || true; } 2>&1)
+if printf '%s\n' "$LDD_OUT" | grep "not found"; then
+    echo "ERROR: unresolved shared libraries (install the runtime deps listed in README.md)"
+    exit 1
+fi
+
+echo "Launching under Xvfb…"
+set +e
+xvfb-run -a timeout 20 "$BIN" >/tmp/app.log 2>&1 &
+APP=$!
+sleep 12
+if ! kill -0 "$APP" 2>/dev/null; then
+    wait "$APP"; rc=$?
+    echo "ERROR: sharedinbox exited after less than 12s (rc=$rc)"
+    cat /tmp/app.log
+    exit 1
+fi
+kill "$APP" 2>/dev/null
+set -e
+echo "--- app log ---"
+cat /tmp/app.log || true
+echo "OK: mise install of ${VERSION} launches and survives 12s"
+
+# The upgrade command the in-app banner tells users to run (kMiseUpgradeCommand
+# in lib/core/services/update_service.dart) must address the TOOL, not the bin.
+# "mise up sharedinbox" matches no tool and exits 0 with "All tools are up to
+# date", so a wrong name here is invisible unless it is asserted.
+UP_OUT=$(mise up "github:${REPO}" 2>&1) || { echo "ERROR: mise up failed: $UP_OUT"; exit 1; }
+printf '%s\n' "$UP_OUT"
+case "$UP_OUT" in
+    *"github:${REPO}"*|*"up to date"*) ;;
+    *) echo "ERROR: 'mise up github:${REPO}' did not recognise the tool"; exit 1 ;;
+esac
+# The negative control: the bin name alone must NOT be what we document.
+if mise up sharedinbox 2>&1 | grep -qi "sharedinbox@"; then
+    echo "NOTE: 'mise up sharedinbox' now resolves the tool too — the docs could use the short form"
+fi
+
+# The bare "@latest" form is the one-liner in the README's TL;DR, and it is the
+# command most users will actually run, so a real failure here must be loud.
+#
+# One failure is expected rather than broken: mise hides releases younger than
+# minimum_release_age (24h by default) from "@latest", so a release published
+# minutes ago is deliberately invisible. Distinguish that from everything else
+# — an install that is merely young is fine, an unresolvable "@latest" is not.
+rm -f "$HOME/.config/mise/config.toml"
+if mise use -g "github:${REPO}@latest" >/tmp/bare.log 2>&1 && mise which sharedinbox >/dev/null 2>&1; then
+    echo "OK: bare 'mise use -g github:${REPO}@latest' resolves sharedinbox"
+elif grep -q "minimum_release_age" /tmp/bare.log; then
+    echo "EXPECTED: '@latest' currently hides this release (mise minimum_release_age, 24h)."
+    echo "          Users installing today must pin the version; @latest picks it up tomorrow."
+    grep -o "eligible [^)]*" /tmp/bare.log | head -1 || true
+else
+    echo "ERROR: bare 'mise use -g github:${REPO}@latest' failed for an unexpected reason:"
+    cat /tmp/bare.log || true
+    exit 1
+fi
+`
+
+// retractLinuxReleaseScript hides a release that failed verification.
+//
+// Converting it back to a draft is what removes it from mise: the github
+// backend enumerates published releases only, so a draft is invisible to
+// `@latest`. The tag and the assets survive for diagnosis.
+const retractLinuxReleaseScript = `#!/bin/sh
+set -eu
+TAG="v${VERSION}"
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    gh release edit "$TAG" --repo "$REPO" --draft=true
+    echo "Retracted $TAG — converted back to a draft, mise can no longer see it."
+else
+    echo "No release $TAG to retract (it was never created)."
+fi
+`
+
+// RetractLinuxRelease converts a release back to a draft after a failed
+// verification.
+//
+// This runs in a container rather than on the CI runner because the runner
+// image ships no gh (arc-runner-image/Dockerfile installs only jq, python3,
+// openssh-client, curl and git). An inline `gh release edit` on the runner
+// fails with "command not found", and if that call is guarded by
+// `gh release view … >/dev/null 2>&1` it silently reports "nothing to
+// retract" — leaving a broken release public. That is exactly what happened
+// on the first real release.
+func (m *Ci) RetractLinuxRelease(
+	ctx context.Context,
+	// Needs contents:write on the repository.
+	githubToken *dagger.Secret,
+	// CalVer release version without the leading "v".
+	version string,
+	// owner/repo. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// cacheBuster forces the retract to re-run instead of replaying a cached
+	// result; without it a second attempt would report success without acting.
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	return dag.Container().
+		From("alpine:3.21").
+		WithExec([]string{"apk", "add", "--no-cache", "github-cli"}).
+		WithSecretVariable("GH_TOKEN", githubToken).
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("RETRACT_CACHE_BUSTER", cacheBuster).
+		WithNewFile("/tmp/retract.sh", retractLinuxReleaseScript).
+		WithExec([]string{"sh", "/tmp/retract.sh"}).
+		Stdout(ctx)
+}
+
+// GuiTestRelease drives the packaged release through its accessibility tree
+// and asserts the app actually works — not merely that the process survives.
+//
+// The idea is not new here: SmokeTestRelease boots the signed APK on an
+// emulator, and TestAndroidFirebase runs a robo crawl against the Play Store
+// binary — both deliberately test what users install rather than a debug
+// build. Two things were missing. Linux had no equivalent at all, and no test
+// on any platform *asserts* anything about what the packaged app shows: the
+// robo crawl hunts for crashes (FATAL EXCEPTION, "has died"), so a screen that
+// renders an error message instead of its content passes.
+//
+// That is precisely how a release shipped with the ChangeLog screen broken
+// (#932) while TestIntegration (a build of the working tree), CheckMiseInstall
+// (does the process survive 12s?) and CI were all green.
+//
+// Driving through AT-SPI rather than pixels or OCR means the assertions are on
+// exact strings, real roles and widget states — and that a control shipped
+// without a semantic label fails the run, which makes this an accessibility
+// test as well.
+func (m *Ci) GuiTestRelease(
+	ctx context.Context,
+	// Release version to install, or "latest".
+	version string,
+	// owner/repo to install from. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// Optional token, only to avoid anonymous GitHub API rate limits.
+	// +optional
+	githubToken *dagger.Secret,
+	// cacheBuster forces the run instead of replaying a cached pass.
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/gui_driver.py", "scripts/gui_release_test.py",
+			"scripts/gui_test_entrypoint.sh"},
+	})
+
+	ctr := dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl socat " +
+				// the app's own runtime dependencies (README's apt line)
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// virtual display + screenshots
+				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
+				// accessibility: at-spi plus the GSettings machinery Flutter
+				// consults before it will build a semantics tree at all
+				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
+				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithExec([]string{"install", "-d", "-o", "tester", "/shots"}).
+		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithEnvVariable("GUI_SHOT_DIR", "/shots").
+		WithEnvVariable("RELEASE_VERSION", version).
+		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster)
+
+	// The secret has to go on BEFORE the install exec, not after: a Dagger
+	// env/secret variable applies only to *subsequent* execs. Attached
+	// afterwards it reaches the test entrypoint — which has no use for it —
+	// while the mise install, release lookup, asset download and attestation
+	// checks all run anonymously against a 60 req/hour-per-IP limit shared by
+	// everything on the engine. The step then goes red for a reason that has
+	// nothing to do with the release. CheckMiseInstall gets this ordering
+	// right; this one did not.
+	if githubToken != nil {
+		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
+	}
+
+	ctr = ctr.WithExec([]string{"/bin/sh", "-c",
+		`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
+			`curl -fsSL https://mise.run | sh >/dev/null; ` +
+			`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
+
+	return m.WithStalwart(ctr).
+		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
+		Stdout(ctx)
+}
+
+// CheckMiseInstall installs a published release with mise inside a clean
+// Ubuntu container and asserts it launches. Needs the release to exist on
+// GitHub and real network access, so it is deliberately NOT part of check-fast
+// or the PR gate — .github/workflows/release.yml runs it right after publishing.
+func (m *Ci) CheckMiseInstall(
+	ctx context.Context,
+	// Release version without the leading "v", or "latest".
+	version string,
+	// owner/repo to install from. Defaults to guettli/sharedinbox.
+	// +optional
+	repository string,
+	// Optional token, only to avoid anonymous GitHub API rate limits
+	// (60 requests/hour per IP, shared by everything on the Dagger engine).
+	// +optional
+	githubToken *dagger.Secret,
+	// cacheBuster forces the check to re-run instead of replaying a cached
+	// PASS. Without it, re-running the check for the same version after fixing
+	// a broken release asset would report success without installing anything.
+	// +optional
+	cacheBuster string,
+) (string, error) {
+	if repository == "" {
+		repository = defaultRepository
+	}
+
+	ctr := dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		// Runtime dependencies only — deliberately NOT the -dev packages the
+		// build image installs. This container is the proof that the README's
+		// apt line is sufficient for a user who only ever installs via mise.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl git " +
+				// README runtime deps. libjsoncpp25 is Ubuntu 24.04's name for
+				// the jsoncpp the flutter_secure_storage plugin links against.
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// headless GL so the GTK window can be created under Xvfb.
+				// xauth is what xvfb-run needs and is only a Recommends of xvfb.
+				"xvfb xauth libosmesa6 libegl1"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithEnvVariable("LIBGL_ALWAYS_SOFTWARE", "1").
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("REPO", repository).
+		WithEnvVariable("MISE_CHECK_CACHE_BUSTER", cacheBuster)
+	if githubToken != nil {
+		// mise reads GITHUB_TOKEN for its GitHub API calls.
+		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
+	}
+	return ctr.
+		WithNewFile("/tmp/check_mise_install.sh", checkMiseInstallScript).
+		WithExec([]string{"bash", "/tmp/check_mise_install.sh"}).
 		Stdout(ctx)
 }
 
@@ -1145,6 +1703,32 @@ func (m *Ci) BuildAndroidApk(
 	return m.setupKeystore(keystoreBase64, keystorePassword).
 		WithExec(args).
 		File("build/app/outputs/flutter-apk/app-release.apk")
+}
+
+// BuildAndroidDebugApk builds a debug APK for manual testing on a real device.
+//
+// Debug rather than release because that is what makes layout bugs visible: a
+// debug build paints the striped overflow banner and logs "A RenderFlex
+// overflowed by N pixels" to logcat, which a release build suppresses.
+//
+// Needs no keystore secrets — Gradle signs debug builds with a key it generates
+// per container. That key differs between runs, so reinstalling over a previous
+// debug build needs an uninstall first.
+func (m *Ci) BuildAndroidDebugApk(
+	// Becomes the APK's versionCode, so a rebuild is distinguishable on the
+	// device — the commit timestamp, as on the release path.
+	buildNumber string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	args := []string{"flutter", "build", "apk", "--debug", "--no-pub", "--build-number", buildNumber}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	return m.androidBase().
+		WithExec(args).
+		File("build/app/outputs/flutter-apk/app-debug.apk")
 }
 
 // DeployApk builds and deploys the APK to the server.
@@ -1925,9 +2509,14 @@ flowchart TD
         deployApk["deploy-apk\n(android changed)"]
         pubWeb["publish-website\n(any build succeeded)"]
 
+        relLinux["release-linux + check-mise-install\nGitHub Release for mise (auto CalVer)"]
+        relGui["gui-test-release\nAT-SPI drive vs Stalwart (non-blocking)"]
+
         detectChanges --> buildLinux
         detectChanges --> deployPS
         detectChanges --> deployApk
+        buildLinux  --> relLinux
+        relLinux    --> relGui
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
         deployApk   --> pubWeb
@@ -1935,6 +2524,10 @@ flowchart TD
 
     subgraph gh_firebase ["GitHub Actions · firebase-tests.yml (daily cron + workflow_dispatch)"]
         fbTest["test-android-firebase\n(alpha versionCode changed)"]
+    end
+
+    subgraph gh_release ["GitHub Actions · release.yml (workflow_dispatch — manual re-release)"]
+        relManual["release-linux + check-mise-install\nversion derived from the commit"]
     end
 
     check -- "task check-dagger" --> ciCheck

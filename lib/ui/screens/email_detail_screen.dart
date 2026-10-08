@@ -1247,9 +1247,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         if (email.sentAt != null)
           Row(
             children: [
-              Text(
-                _dateFmt.format(email.sentAt!),
-                style: Theme.of(ctx).textTheme.bodySmall,
+              // Flexible: the date led this row unconstrained, taking its
+              // intrinsic width. Measured at text scale 2.0 on a 320dp screen
+              // it renders 270.6px wide inside a 288px row, leaving ~9px for
+              // the folder label after the gap — the label is already starved,
+              // and a slightly narrower screen or larger scale overflows.
+              Flexible(
+                child: Text(
+                  _dateFmt.format(email.sentAt!),
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
               ),
               if (folderLabel.isNotEmpty) ...[
                 const SizedBox(width: AppSpacing.sm),

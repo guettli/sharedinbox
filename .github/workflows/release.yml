@@ -1,0 +1,76 @@
+name: Release
+
+# Manual escape hatch for the Linux release that
+# `mise use -g github:guettli/sharedinbox@latest` installs.
+#
+# Releases are normally cut automatically: deploy.yml's build-linux job
+# publishes one on every green hourly Linux deploy, with the version derived
+# from the commit (scripts/release_version.sh). Use this workflow to re-publish
+# the current main — for example after a release was retracted to a draft, or
+# to restore an asset someone deleted. It is deliberately not tag-triggered:
+# the version is computed, never typed, so there is no tag to push.
+on:
+  workflow_dispatch:
+
+# Do not race the deploy that may be publishing the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-linux:
+    name: Publish Linux Release
+    runs-on: sharedinbox-arc
+    timeout-minutes: 60
+    if: github.server_url == 'https://github.com'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 100
+
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
+
+      - name: Show the version that will be published
+        run: echo "Releasing v$(scripts/release_version.sh) from $(git rev-parse --short HEAD)"
+
+      - name: Build and publish the GitHub Release
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task release-linux
+
+      # mise only sees published, non-draft releases, so the install cannot be
+      # verified before it goes live. The retract step below bounds the damage.
+      - name: Verify `mise use github:guettli/sharedinbox` installs it
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task check-mise-install
+
+      # Goes through Dagger because the runner image ships no gh; an inline
+      # `gh release edit` here fails with "command not found" and, when
+      # guarded, silently reports success while leaving the release public.
+      # Same blocking GUI drive as deploy.yml. This workflow is the path used
+      # right after a retract, so skipping it would verify a re-release less
+      # thoroughly than an automatic one.
+      - name: Drive the release GUI
+        timeout-minutes: 12
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task gui-test-release
+
+      - name: Retract the release if it fails verification
+        if: failure()
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          task retract-linux-release
+          echo "::error::Release v$(scripts/release_version.sh) failed verification and was converted back to a draft."

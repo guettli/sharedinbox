@@ -177,19 +177,131 @@ tasks:
 
   deploy-linux:
     desc: Build and deploy Linux release via Dagger
+    # assets/changelog.txt is gitignored and generated from git history, and
+    # the Dagger build containers have no .git to generate it from. Without
+    # this the bundle ships an empty assets/ and the ChangeLog screen shows
+    # 'Unable to load asset: "assets/changelog.txt"'. publish-android has
+    # depended on this all along; the Linux and APK paths had not.
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"
       - sh: test -n "$SSH_KNOWN_HOSTS"
         msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+      # Passing the same release version and build number the release path uses
+      # means the snapshot tarball and the GitHub Release asset are one build,
+      # served from the Dagger cache the second time.
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --release-version "$VERSION" --build-number "$BUILD_NUMBER"
+
+  package-linux-release:
+    desc: Build the mise-installable Linux tarball via Dagger and export it to build/ (VERSION defaults to the commit's CalVer)
+    deps: [generate-changelog]
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        HASH=$(git rev-parse --short HEAD)
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        ASSET="sharedinbox-$VERSION-linux-x86_64.tar.gz"
+        mkdir -p build
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. package-linux-release --version "$VERSION" --commit-hash "$HASH" --build-number "$BUILD_NUMBER" -o "build/$ASSET"
+        echo "Wrote build/$ASSET"
+
+  release-linux:
+    desc: Publish the Linux tarball as a GitHub Release (what `mise use github:guettli/sharedinbox` installs). Version is derived from the commit — never typed.
+    deps: [generate-changelog]
+    preconditions:
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN is not set (needs contents:write)"
+    cmds:
+      # The version is computed, not supplied: every other version in this repo
+      # auto-increments from the clock, and a release that needed a hand-edited
+      # pubspec.yaml would make each one cost a PR. Re-running for the same
+      # commit re-publishes the same version rather than inventing a new one.
+      #
+      # --target-commit must be the full SHA: the Releases API rejects an
+      # abbreviated one when it has to create the tag itself.
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        HASH=$(git rev-parse --short HEAD)
+        TARGET=$(git rev-parse HEAD)
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        echo "Releasing v$VERSION from $HASH"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --keep-days "${KEEP_DAYS:-30}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+
+  retract-linux-release:
+    desc: Convert the release for this commit back to a draft, hiding it from mise (used when verification fails)
+    preconditions:
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN is not set (needs contents:write)"
+    cmds:
+      # Runs in a container: the CI runner image has no gh.
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. retract-linux-release --github-token env:GITHUB_TOKEN --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+
+  gui-test-release:
+    desc: Drive the packaged release through its accessibility tree against a live Stalwart (needs a published release + network)
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        TOKEN_ARG=""
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        # No dagger_with_retry and a tight budget, unlike the other release
+        # tasks: three 30-minute attempts would outlast the job's own timeout,
+        # and a cancelled job skips the retract step. Fail fast instead.
+        #
+        # Not -q: a green whose output is suppressed looks identical to
+        # "asserted nothing", which is no basis for gating a release.
+        #
+        # This task gates a release, so it distinguishes a broken release from
+        # a harness that could not run (see the exit-code contract in
+        # scripts/gui_test_entrypoint.sh). 75 is the harness failing to start;
+        # 124 is `timeout` firing, which the engine causes far more often than
+        # the app does — the python assertions have their own 20s budgets and
+        # fail long before the outer one. Neither is evidence about the
+        # release, so both warn instead of withdrawing it.
+        set +e
+        timeout --kill-after=10 600 dagger call --progress=plain -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+        rc=$?
+        set -e
+        case "$rc" in
+          0) ;;
+          75) echo "::warning title=Release GUI harness could not run::Setup failed before any assertion (exit 75). Not treated as a release defect; the release stands unverified." ;;
+          124) echo "::warning title=Release GUI harness timed out::Exceeded its 600s budget (exit 124), which is usually the Dagger engine rather than the app. Not treated as a release defect; the release stands unverified." ;;
+          *) echo "::error title=Release GUI test failed::The packaged release failed a GUI assertion (exit $rc)."; exit "$rc" ;;
+        esac
+
+  check-mise-install:
+    desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
+    cmds:
+      - |
+        VERSION="${VERSION:-$(scripts/release_version.sh)}"
+        # GITHUB_TOKEN only lifts the anonymous GitHub API rate limit; the
+        # check works without it, so it stays optional for local runs.
+        TOKEN_ARG=""
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. check-mise-install --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
 
   build-android-bundle:
     desc: Build AAB via Dagger (cached, versionCode=1 placeholder) and export locally
     cmds:
       - mkdir -p build/app/outputs/bundle/release
       - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. build-android-release --commit-hash "$HASH" -o build/app/outputs/bundle/release/app-release.aab
+
+  build-android-debug-apk:
+    desc: Build a debug APK via Dagger for manual testing on a device (shows overflow banners; release builds hide them)
+    cmds:
+      - mkdir -p build/app/outputs/flutter-apk
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. build-android-debug-apk --build-number "$BUILD_NUMBER" --commit-hash "$HASH" -o build/app/outputs/flutter-apk/app-debug.apk
+      - echo "Install with 'adb install -r build/app/outputs/flutter-apk/app-debug.apk' (uninstall first if a previous debug build is present)"
 
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger
@@ -226,6 +338,7 @@ tasks:
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
+    deps: [generate-changelog]
     preconditions:
       - sh: test -n "$SSH_PRIVATE_KEY"
         msg: "SSH_PRIVATE_KEY is not set"

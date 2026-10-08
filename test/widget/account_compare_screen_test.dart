@@ -67,6 +67,32 @@ Future<void> _pump(
 }
 
 void main() {
+  // Regression for the row-overflow class fixed in #965: this banner paired a
+  // fixed-size icon with an unconstrained label, so at accessibility text
+  // scales the label took its intrinsic width and overflowed the row instead
+  // of wrapping beside the icon. The default 800x600 test surface is wide
+  // enough to hide it, so the surface is narrowed to a compact phone here.
+  testWidgets('identical banner does not overflow at large text scale',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400); // 360x800 logical
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    await _pump(tester, _resultWith([]));
+
+    // Prove the scale actually reached the widget, otherwise this passes
+    // against the bug. The bound is loose on purpose: the effective scale
+    // observed inside the app tree has not always matched the raw factor, so
+    // this asserts only that the override arrived and is not identity.
+    final scaler = MediaQuery.textScalerOf(
+      tester.element(find.text('Local DBs are identical')),
+    );
+    expect(scaler.scale(14), greaterThan(16));
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('collapses equal fields to a single "(equal)" row',
       (tester) async {
     // A and B agree on everything except the seen flag.

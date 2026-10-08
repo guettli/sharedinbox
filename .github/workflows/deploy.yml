@@ -107,8 +107,8 @@ jobs:
             --run-id "$GITHUB_RUN_ID"
 
       # Gate the release on a KVM launch smoke test BEFORE uploading to Play
-      # Store: boot the signed release APK on an emulator inside Dagger (p16
-      # engine) and fail if it crashes on launch. Catches release-only R8 /
+      # Store: boot the signed release APK on an emulator inside Dagger (the
+      # tc engine) and fail if it crashes on launch. Catches release-only R8 /
       # NoClassDefFound / NoSuchMethod crashes (e.g. #100) before users can
       # install. Runs here at deploy time — not on every PR — so merges to main
       # stay fast; only the few changes that actually ship a release pay for it.
@@ -179,6 +179,9 @@ jobs:
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.linux == 'true'
+    # Needed to create the GitHub Release (and to prune old ones) below.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -209,6 +212,60 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: task deploy-linux
+
+      # Cut the GitHub Release that `mise use github:guettli/sharedinbox`
+      # installs. The version is derived from the commit, so this needs no tag
+      # push and no pubspec bump — every green Linux deploy becomes a version,
+      # the same way the Play Store versionCode auto-increments.
+      #
+      # deploy-linux above already built this exact bundle (same commit, same
+      # release version, same build number), so Dagger serves it from cache
+      # rather than compiling Flutter twice.
+      - name: Publish GitHub Release for mise
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task release-linux
+
+      - name: Verify `mise use github:guettli/sharedinbox` installs it
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task check-mise-install
+
+      # Blocking. A release that starts but renders an error where a screen's
+      # content belongs is exactly what shipped in #932, and check-mise-install
+      # (does the process survive 12s?) cannot see it.
+      #
+      # The asymmetry favours gating. A wrong retraction converts the release
+      # to a draft: the tag and assets survive, one click undoes it, the next
+      # hourly Linux deploy cuts another, and mise's 24h minimum_release_age
+      # means no user is served it for a day regardless — so there is a day to
+      # notice. A missed defect, by contrast, becomes @latest and installs.
+      #
+      # It does NOT gate on a harness that could not run: task gui-test-release
+      # maps exit 75 (setup failed) and 124 (engine timeout) to a ::warning::
+      # and success, so only a real assertion failure withdraws a release.
+      - name: Drive the release GUI
+        timeout-minutes: 12
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task gui-test-release
+
+      # mise cannot see draft releases, so a broken release cannot be caught
+      # before it is public — hide it again instead.
+      # Goes through Dagger because the runner image ships no gh; an inline
+      # `gh release edit` here fails with "command not found" and, when
+      # guarded, silently reports success while leaving the release public.
+      - name: Retract the release if it fails verification
+        if: failure()
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          task retract-linux-release
+          echo "::error::Release v$(scripts/release_version.sh) failed verification and was converted back to a draft."
 
 
   label-deploy-health:

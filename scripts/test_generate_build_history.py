@@ -4,7 +4,12 @@ import re
 import unittest
 from unittest.mock import patch
 
-from generate_build_history import MAX_BUILDS_PER_PLATFORM, parse_builds, render_entries
+from generate_build_history import (
+    MAX_BUILDS_PER_PLATFORM,
+    MISE_INTRO,
+    parse_builds,
+    render_entries,
+)
 
 LINUX_RE = re.compile(
     r"public_html/builds/(\d{4})/(\d{2})/(\d{2})/(sharedinbox-linux-amd64-(.+)\.tar\.gz)$"
@@ -107,6 +112,40 @@ class TestRenderEntries(unittest.TestCase):
         out = render_entries(entries, "Download")
         for i in range(3):
             self.assertIn(f"commit {i}", out)
+
+
+class TestMiseIntro(unittest.TestCase):
+    """The intro must carry the install instructions.
+
+    This script overwrites website/content/builds/_index.md, so documentation
+    written into that file is discarded before Hugo runs — the only way it
+    reaches sharedinbox.de/builds/ is through MISE_INTRO. These assertions stop
+    it from being dropped or drifting back to a command that does nothing.
+    """
+
+    def test_install_command_present(self):
+        self.assertIn("mise use -g github:guettli/sharedinbox@latest", MISE_INTRO)
+
+    def test_upgrade_command_names_the_tool_not_the_bin(self):
+        # `mise up sharedinbox` matches no tool and exits 0 without upgrading.
+        self.assertIn("mise up github:guettli/sharedinbox", MISE_INTRO)
+        self.assertNotIn("`mise up sharedinbox`", MISE_INTRO)
+
+    def test_release_age_caveat_documented(self):
+        # mise hides releases younger than minimum_release_age (24h) from
+        # @latest, so the headline one-liner fails for a fresh release. Telling
+        # users only the command that can fail is worse than telling them
+        # nothing.
+        self.assertIn("minimum_release_age", MISE_INTRO)
+
+    def test_runtime_dependencies_listed(self):
+        for pkg in ("libgtk-3-0t64", "libsecret-1-0", "libjsoncpp25"):
+            self.assertIn(pkg, MISE_INTRO)
+
+    def test_no_hugo_front_matter(self):
+        # The caller prepends the front matter; a second `---` block would
+        # render as a horizontal rule and a stray `title:` line.
+        self.assertFalse(MISE_INTRO.lstrip().startswith("---"))
 
 
 if __name__ == "__main__":
