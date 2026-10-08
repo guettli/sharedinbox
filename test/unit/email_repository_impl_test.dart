@@ -193,16 +193,24 @@ Map<String, dynamic> _emailChangesResponse({
       ],
     };
 
+/// [notFound] must name every requested id missing from [list], as a real
+/// server does (RFC 8620 §5.1) — the client deletes on the strength of it.
 Map<String, dynamic> _emailGetOnly({
   required String state,
   required List<Map<String, dynamic>> list,
+  List<String> notFound = const [],
 }) =>
     {
       'sessionState': 'sess1',
       'methodResponses': [
         [
           'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
+          {
+            'accountId': 'acct1',
+            'state': state,
+            'list': list,
+            'notFound': notFound,
+          },
           '1',
         ],
       ],
@@ -5075,7 +5083,7 @@ void main() {
     );
 
     test(
-      'incremental sync drops row that Email/get omits (server treats as gone)',
+      'incremental sync drops row that Email/get disclaims as notFound',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
@@ -5087,7 +5095,8 @@ void main() {
               ),
               _emailGetOnly(
                 state: 'est2',
-                // e-gone omitted — server no longer has it.
+                // e-gone omitted and disclaimed — server no longer has it.
+                notFound: ['e-gone'],
                 list: [
                   _jmapEmail(
                     id: 'e-live',

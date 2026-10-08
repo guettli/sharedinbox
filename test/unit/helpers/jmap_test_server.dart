@@ -164,10 +164,16 @@ Map<String, dynamic> jmapEmailObject({
 }
 
 /// The `Email/get` method response a fake server answers with.
+///
+/// [notFound] must name every requested id missing from [list] — that is what
+/// a real server does (RFC 8620 §5.1), and the client deletes on the strength
+/// of it. A fake that omits an id without naming it here is modelling a
+/// *non-compliant* server, which is a different test.
 List<dynamic> jmapEmailGetResponse({
   required String accountId,
   required String state,
   required List<Map<String, dynamic>> list,
+  List<String> notFound = const [],
   Object? callId = '0',
 }) {
   return [
@@ -176,7 +182,7 @@ List<dynamic> jmapEmailGetResponse({
       'accountId': accountId,
       'state': state,
       'list': list,
-      'notFound': <String>[],
+      'notFound': notFound,
     },
     callId,
   ];
@@ -277,7 +283,9 @@ http.Client jmapFakeServer({
 
 /// An `Email/get` response rendering each of [ids] with [jmapEmailObject],
 /// skipping anything in [omit] so a suite can make the server leave an id out
-/// of a response it was asked for.
+/// of a response it was asked for. Omitted ids are named in `notFound`, as a
+/// compliant server does, except those also listed in [omitSilently], which
+/// are dropped without being named.
 List<dynamic> jmapEmailGetResponseFor({
   required String accountId,
   required String state,
@@ -285,6 +293,7 @@ List<dynamic> jmapEmailGetResponseFor({
   required String mailboxId,
   String subjectPrefix = 'subject',
   Set<String> omit = const {},
+  Set<String> omitSilently = const {},
   Object? callId = '0',
 }) {
   return jmapEmailGetResponse(
@@ -292,12 +301,19 @@ List<dynamic> jmapEmailGetResponseFor({
     state: state,
     list: [
       for (final id in ids)
-        if (!omit.contains(id))
+        if (!omit.contains(id) && !omitSilently.contains(id))
           jmapEmailObject(
             id: id,
             mailboxId: mailboxId,
             subject: '$subjectPrefix $id',
           ),
+    ],
+    // A compliant server names what it left out. Ids in [omitSilently] are
+    // dropped without being named, modelling one that does not — which can be
+    // mixed with disclaimed ids in the same response.
+    notFound: [
+      for (final id in ids)
+        if (omit.contains(id) && !omitSilently.contains(id)) id,
     ],
     callId: callId,
   );
@@ -320,9 +336,9 @@ Directory Function() useJmapTestEnv(String cachePrefix) {
 /// Inserts a minimal cached email row, for a suite that needs the row to
 /// already exist before a sweep runs.
 Future<void> insertJmapEmailRow(
-  AppDatabase db, {
-  required String accountId,
-  required String jmapId,
+  AppDatabase db,
+  String accountId,
+  String jmapId, {
   required String mailboxPath,
   DateTime? receivedAt,
 }) async {
@@ -342,16 +358,21 @@ Future<void> insertJmapEmailRow(
 /// Also stamps a fresh `JMAP:Reconcile` marker, so the 15-minutely
 /// `Email/query` safety net stays out of the way of whatever the suite is
 /// actually testing.
+///
+/// [reconcileStamp] overrides that marker. Backdate it past
+/// `_jmapReconcileInterval` (15 minutes) to let the prune run — tests that
+/// need to observe the safety net rather than keep it out of the way.
 Future<void> seedJmapSyncState(
   AppDatabase db, {
   required String accountId,
   required String mailboxJmapId,
   required String state,
+  DateTime? reconcileStamp,
 }) async {
   final now = DateTime.now();
   for (final row in {
     'JMAP:Email:$mailboxJmapId': state,
-    'JMAP:Reconcile:$mailboxJmapId': now.toIso8601String(),
+    'JMAP:Reconcile:$mailboxJmapId': (reconcileStamp ?? now).toIso8601String(),
   }.entries) {
     await db.into(db.syncStates).insert(
           SyncStatesCompanion.insert(
@@ -375,6 +396,7 @@ Future<JmapTestRepos> openJmapTestReposOnIncrementalPath({
   required Directory cacheDir,
   required String mailboxJmapId,
   required String syncState,
+  DateTime? reconcileStamp,
 }) async {
   final repos = await openJmapTestRepos(
     httpClient: httpClient,
@@ -386,6 +408,11 @@ Future<JmapTestRepos> openJmapTestReposOnIncrementalPath({
     accountId: account.id,
     mailboxJmapId: mailboxJmapId,
     state: syncState,
+    reconcileStamp: reconcileStamp,
   );
   return repos;
 }
+
+/// Every cached email row id, for asserting on what a sync kept or removed.
+Future<Set<String>> jmapLocalEmailIds(AppDatabase db) async =>
+    (await db.select(db.emails).get()).map((e) => e.id).toSet();

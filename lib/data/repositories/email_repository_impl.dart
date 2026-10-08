@@ -2409,28 +2409,45 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
-    final model.SyncEmailsResult result;
-    if (storedMailboxState == null) {
-      log('JMAP-sync: full sync mailbox=$mailboxJmapId (no stored state)');
-      result = await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
-    } else {
+    try {
+      if (storedMailboxState == null) {
+        log('JMAP-sync: full sync mailbox=$mailboxJmapId (no stored state)');
+        return await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
+      }
       log(
         'JMAP-sync: incremental sync mailbox=$mailboxJmapId '
         'sinceState=$storedMailboxState',
       );
-      result = await _jmapIncrementalEmailSync(
+      return await _jmapIncrementalEmailSync(
         account.id,
         jmap,
         storedMailboxState,
         mailboxJmapId: mailboxJmapId,
       );
+    } finally {
+      // Defence-in-depth: periodically diff the local cache against a bare
+      // Email/query to catch server-side edge cases where Email/changes
+      // under-reports deletions (see #262). Cheap: ids only, no bodies.
+      //
+      // In a `finally` because this is the only cleanup that ever reaches a
+      // row the server silently omitted — `Email/changes` will not re-report
+      // it once the page is checkpointed. Sequenced after the sync, a folder
+      // that throws every cycle (`_syncFolders` catches per folder and moves
+      // on) would never be reconciled at all, and its ghosts would be
+      // permanent.
+      //
+      // Its own failure must not replace the sync's: a throw out of a
+      // `finally` discards the exception in flight.
+      try {
+        await _maybeReconcileJmapMailbox(account.id, jmap, mailboxJmapId);
+      } catch (e, stack) {
+        log(
+          'JMAP-sync: reconcile failed for mailbox=$mailboxJmapId',
+          error: e,
+          stackTrace: stack,
+        );
+      }
     }
-
-    // Defence-in-depth: periodically diff the local cache against a bare
-    // Email/query to catch server-side edge cases where Email/changes
-    // under-reports deletions (see #262). Cheap: ids only, no bodies.
-    await _maybeReconcileJmapMailbox(account.id, jmap, mailboxJmapId);
-    return result;
   }
 
   Future<model.SyncEmailsResult> _jmapFullEmailSync(
@@ -2614,31 +2631,92 @@ class EmailRepositoryImpl implements EmailRepository {
       fetched += list.length;
 
       if (!deleteMissing) continue;
-      // An id we asked for but did not get back is treated by the server as
-      // gone (RFC 8620 §5.1 `notFound`); clean it up so stale rows don't
-      // linger.
+      // RFC 8620 §5.1: the server names every requested id it does not have,
+      // in `notFound`. Only ids it names there are deleted.
       //
-      // Guarded, because an omission is the server being *silent* where
-      // `destroyed` is the server being *authoritative*. A row carrying any
-      // unflushed user edit is held back until something authoritative says
-      // it is gone, rather than being dropped on the strength of a response
-      // that merely did not mention it.
+      // This used to infer absence by subtracting the returned ids from the
+      // batch, which read *any* short response as a deletion order — a
+      // truncated list, or one object the server failed to serialize, and the
+      // mail was gone locally. Verified against Stalwart 0.14.1, which
+      // populates the field for absent and destroyed ids alike, including
+      // alongside the body options this request sends.
+      //
+      // Parsed defensively on purpose: this field was inert before, and a
+      // throw here would escape before the page's state is checkpointed,
+      // stalling the mailbox permanently on the same page — the failure shape
+      // [_jmapGetBatchSize] exists to prevent. Junk therefore means "delete
+      // nothing".
+      //
+      // Keeping a row the server merely omitted costs a stale row rather than
+      // costing mail: the periodic [_maybeReconcileJmapMailbox] prune clears
+      // genuine ghosts. Not instantly and not unconditionally, though — the
+      // interval is 15 minutes *per successful sync of that mailbox*, so on a
+      // device syncing in the background the real window is longer, and a
+      // mailbox the sync loop skips entirely (`isDuplicateOfOtherFolders`,
+      // i.e. role `all`) is never reconciled at all. Worth it for a stale
+      // row; it would not be worth it for lost mail, which is the trade.
+      final rawNotFound = result['notFound'];
+      final notFound = rawNotFound is List
+          ? rawNotFound.whereType<String>().toSet()
+          : const <String>{};
+
+      final returnedIds = <String>{
+        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
+      };
+
+      // An id the server both returned and disclaimed is contradictory; keep
+      // what it handed over. Without this the row would be upserted above and
+      // deleted below, losing a message the server did supply — worse than
+      // the subtraction this replaced.
+      final missing = [
+        for (final jmapId in batch)
+          if (notFound.contains(jmapId) && !returnedIds.contains(jmapId))
+            jmapId,
+      ];
+
+      // Computed for every batch, not just when nothing was disclaimed: a
+      // response that names one id and silently drops another is exactly the
+      // partial response this change is about, and it has a non-empty
+      // `missing`.
+      final unaccounted = [
+        for (final jmapId in batch)
+          if (!returnedIds.contains(jmapId) && !notFound.contains(jmapId))
+            jmapId,
+      ];
+      if (unaccounted.isNotEmpty) {
+        unawaited(
+          _appLogger?.warn(
+            'jmap_sync.email_get_incomplete',
+            'Email/get neither returned nor disclaimed '
+                '${unaccounted.length} of ${batch.length} requested ids — '
+                'keeping those rows',
+            accountId: accountId,
+            data: {
+              'mailbox': mailboxJmapId,
+              'requested': batch.length,
+              'returned': returnedIds.length,
+              'notFound': notFound.length,
+              'unaccounted': _briefIds(unaccounted),
+            },
+          ),
+        );
+      }
+
+      if (missing.isEmpty) continue;
+      // Guarded: a row carrying any unflushed user edit is held back, so a
+      // queued change always has a row to apply to. Not a promise the mail
+      // survives — the unguarded `destroyed` loop below deletes it once the
+      // server reports it explicitly, and the periodic prune clears it
+      // otherwise. It delays deletion until something else confirms it.
       //
       // The guard is "has an unflushed mutation of any kind", not the
       // move/snooze subset [_pruneJmapMailboxToServerIds] uses. That subset is
       // right for a *mailbox-scoped* walk, where an optimistic move has
       // already rewritten `mailboxPath` and makes the row look orphaned from
-      // both folders. This path is keyed by id and not mailbox-scoped, so the
-      // only thing that matters is whether the user has an edit in flight —
-      // an unflushed star counts just as much as an unflushed move.
-      final returnedIds = <String>{
-        for (final e in list) (e as Map<String, dynamic>)['id'] as String,
-      };
-      final missing = [
-        for (final jmapId in batch)
-          if (!returnedIds.contains(jmapId)) jmapId,
-      ];
-      if (missing.isEmpty) continue;
+      // both folders. This path is keyed by id, so the only thing that matters
+      // is whether the user has an edit in flight — an unflushed star counts
+      // just as much as an unflushed move.
+      //
       // Deliberately inside the loop: `_upsertJmapEmails` can enqueue changes
       // of its own via the #545 dissolve, so hoisting this lookup out would
       // read a stale set.
@@ -2646,8 +2724,8 @@ class EmailRepositoryImpl implements EmailRepository {
       for (final jmapId in missing) {
         if (inFlight.contains('$accountId:$jmapId')) {
           log(
-            'JMAP-sync: Email/get omitted $jmapId but an edit is still queued '
-            'for it — keeping the row until the server says it is destroyed',
+            'JMAP-sync: Email/get disclaimed $jmapId but an edit is still '
+            'queued for it — keeping the row for now',
           );
           continue;
         }
