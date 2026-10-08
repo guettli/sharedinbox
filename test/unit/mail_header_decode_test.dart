@@ -91,7 +91,7 @@ void main() {
     test('decodes an encoded-word glued to ASCII on both sides', () {
       expect(
         decodeMailHeader('B=?utf-8?Q?=C3=BC?=ro=?utf-8?Q?st=C3=BChl?='),
-        'Büröstühl',
+        'Bürostühl',
       );
     });
 
