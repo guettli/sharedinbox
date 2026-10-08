@@ -546,6 +546,31 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   labelText: 'From',
                   border: OutlineInputBorder(),
                 ),
+                // Without isExpanded the button sizes itself to the WIDEST
+                // ITEM, not to whatever is displayed — so this overflowed by
+                // 426px on a 411dp screen at text scale 2.0 while the short
+                // "Select an account" hint was the only thing on screen.
+                // isExpanded clamps the button to the field it sits in.
+                isExpanded: true,
+                // With the button clamped, an un-ellipsized item would wrap
+                // instead, making the collapsed field two or three lines tall.
+                // selectedItemBuilder truncates only the closed button, so the
+                // open menu keeps the full address readable — the menu can
+                // never be wider than the button, so ellipsizing the items
+                // themselves would leave the user choosing between addresses
+                // they cannot read.
+                selectedItemBuilder: (context) => _accounts
+                    .map(
+                      (a) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${a.displayName} <${a.email}>',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(),
                 hint: const Text('Select an account'),
                 items: _accounts
                     .map(
@@ -569,6 +594,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   labelText: 'From',
                   border: OutlineInputBorder(),
                 ),
+                // Deliberately NOT ellipsized. There is no menu to open in
+                // this branch, so truncating would hide the sending address
+                // with no way to recover it. It wraps instead, which costs a
+                // couple of lines inside a ListView that already scrolls.
                 child: Text(
                   '${_accounts.first.displayName} <${_accounts.first.email}>',
                 ),
