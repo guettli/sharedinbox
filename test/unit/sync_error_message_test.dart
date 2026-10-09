@@ -15,7 +15,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
-    show syncErrorMessage;
+    show syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
 
 void main() {
@@ -87,6 +87,61 @@ void main() {
       final error = Exception('invalid credentials');
       expect(syncErrorMessage(error), error.toString());
       expect(syncErrorMessage(StateError('bad state')), contains('bad state'));
+    });
+  });
+
+  group('syncErrorKey', () {
+    // The bug this key exists for: a partial cycle's message embeds the
+    // failing folder names and count, so dismissing the banner by raw text
+    // meant it re-appeared the moment a different folder failed. All partial
+    // messages must share one key regardless of which folders are named.
+    test('every partial-failure message classifies the same', () {
+      const a = '2 of 7 folders failed (Archive, Sent): '
+          'Could not reach the mail server — temporary network or DNS '
+          'problem. Will retry automatically.';
+      const b = '1 of 3 folders failed (Drafts): The mail server was reached '
+          'but did not answer in time — the request took too long. Will retry '
+          'automatically.';
+      expect(syncErrorKey(a), 'partial');
+      expect(syncErrorKey(b), 'partial');
+    });
+
+    test('maps the transient hints to stable keys', () {
+      expect(
+        syncErrorKey(syncErrorMessage(TimeoutException('x'))),
+        'timeout',
+      );
+      expect(
+        syncErrorKey(
+          syncErrorMessage(const SocketException('Connection refused')),
+        ),
+        'unreachable',
+      );
+    });
+
+    test('keeps a one-off error distinct by its full text', () {
+      final a = syncErrorMessage(Exception('mailbox locked'));
+      final b = syncErrorMessage(Exception('quota exceeded'));
+      expect(syncErrorKey(a), isNot(syncErrorKey(b)));
+      expect(syncErrorKey(a), a);
+    });
+
+    // Drift guard: if syncErrorMessage is reworded without updating
+    // syncErrorKey, the transient hints would fall through to their full text
+    // and the banner-dismiss grouping would silently break.
+    test('the transient hints do not fall through to full-text keys', () {
+      for (final e in <Object>[
+        TimeoutException('x'),
+        const SocketException('Failed host lookup'),
+        const HandshakeException('tls'),
+      ]) {
+        final message = syncErrorMessage(e);
+        expect(
+          syncErrorKey(message),
+          isNot(message),
+          reason: 'a transient error must map to a short class, not its text',
+        );
+      }
     });
   });
 }

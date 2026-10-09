@@ -1479,6 +1479,72 @@ void main() {
         },
       );
     });
+
+    testWidgets(
+      'dismissing the sync-error banner keeps it hidden across a changing '
+      'partial-failure message, then shows it again after recovery',
+      (tester) async {
+        final errors = StreamController<String?>.broadcast();
+        addTearDown(errors.close);
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+              syncLastErrorProvider('acc-1').overrideWith(
+                (ref) => errors.stream,
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // A partial-cycle failure appears.
+        errors.add('2 of 7 folders failed (Archive, Sent): Could not reach '
+            'the mail server — temporary network or DNS problem. Will retry '
+            'automatically.');
+        await tester.pumpAndSettle();
+        expect(find.text('Dismiss'), findsOneWidget);
+
+        await tester.tap(find.text('Dismiss'));
+        await tester.pumpAndSettle();
+        expect(find.text('Dismiss'), findsNothing);
+
+        // The next cycle fails on a different folder set — same KIND of
+        // problem. The banner must stay dismissed (the bug: it re-appeared).
+        errors.add('3 of 7 folders failed (Archive, Drafts, Spam): Could not '
+            'reach the mail server — temporary network or DNS problem. Will '
+            'retry automatically.');
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Dismiss'),
+          findsNothing,
+          reason: 'a dismissed partial-failure banner must not re-pop just '
+              'because the failing folders changed',
+        );
+
+        // Sync recovers, then fails again later. The dismissal is forgotten,
+        // so the banner shows once more rather than staying hidden forever.
+        errors.add(null);
+        await tester.pumpAndSettle();
+        errors.add('2 of 7 folders failed (Sent): Could not reach the mail '
+            'server — temporary network or DNS problem. Will retry '
+            'automatically.');
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Dismiss'),
+          findsOneWidget,
+          reason: 'a new occurrence after a recovery should surface again',
+        );
+      },
+    );
   });
 }
 

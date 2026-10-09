@@ -55,6 +55,27 @@ bool _isTransientNetworkError(Object e) =>
 /// Deliberately short and free of the words "network" and "DNS": it is
 /// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
 /// longer, and the half that would be cut is the actionable half.
+/// A stable key for the *kind* of a sync error, derived from the message
+/// [syncErrorMessage] / [_CycleFailure] produce.
+///
+/// The sync-error banner dismisses on this, not on the raw text: a partial
+/// cycle's message embeds the failing folder names and count, so comparing
+/// text meant a dismissed banner re-appeared the moment a different folder
+/// failed (or the same ones in a different order). Co-located with the
+/// message producers above so a reword updates both together; a test drives
+/// real messages through it to catch drift.
+///
+/// Unique one-off errors keep their full text as the key, so dismissing one
+/// does not hide a genuinely different problem.
+String syncErrorKey(String message) {
+  // Checked before the transient hints because a partial cycle's message
+  // contains the cause's text (e.g. "… folders failed (…): Could not reach …").
+  if (message.contains('folders failed')) return 'partial';
+  if (message.contains('did not answer in time')) return 'timeout';
+  if (message.contains('Could not reach the mail server')) return 'unreachable';
+  return message;
+}
+
 @visibleForTesting
 String syncErrorMessage(Object e) {
   if (_isTimeoutError(e)) {
