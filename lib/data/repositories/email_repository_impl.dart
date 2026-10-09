@@ -4033,7 +4033,7 @@ class EmailRepositoryImpl implements EmailRepository {
     if (row.mailboxPath == destMailboxPath) return;
     final emailId = row.id;
     final srcMailboxPath = row.mailboxPath;
-    final account = (await _accounts.getAccount(row.accountId))!;
+    final account = (await _bulkAccount(row.accountId))!;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
@@ -4094,8 +4094,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // Per-message log so the move (or trash/archive/spam, which are all moves)
     // shows up in this mail's "Show Logs" view (#562). The IMAP re-key on the
     // next sync carries this row along (see [_remapEmailAfterImapMove]).
-    unawaited(
-      _appLogger?.info(
+    _logAfterBulk(
+      () => _appLogger?.info(
         event,
         'Moved "${row.subject ?? '(no subject)'}" '
         'from $srcMailboxPath to $destMailboxPath',
@@ -4125,13 +4125,102 @@ class EmailRepositoryImpl implements EmailRepository {
     return dest;
   }
 
+  @override
+  Future<String?> deleteEmails(List<String> emailIds) async {
+    if (emailIds.isEmpty) return null;
+    final fetched =
+        await (_db.select(_db.emails)..where((t) => t.id.isIn(emailIds))).get();
+    final byId = {for (final r in fetched) r.id: r};
+    final rows = [
+      for (final id in emailIds)
+        if (byId[id] case final row?) row,
+    ];
+    if (rows.isEmpty) return null;
+
+    // Resolve the counterpart accounts once per source account instead of
+    // opening an `observeAccounts()` stream per message. This also has to
+    // happen outside the transaction below: a `.watch()` query started inside
+    // it would wait for the transaction to finish.
+    final counterparts = <String, List<account_model.Account>>{};
+    if (rows.any((r) => normaliseMessageId(r.messageId) != null)) {
+      final all = await _accounts.observeAccounts().first;
+      for (final source in all) {
+        if (!rows.any((r) => r.accountId == source.id)) continue;
+        counterparts[source.id] = AccountComparison.counterpartsOf(source, all);
+      }
+    }
+
+    // Deleting one message used to cost a dozen separate implicit write
+    // transactions, a sync-loop kick and a re-run of every live query; times
+    // 80 that kept a bulk delete busy for a long time with no feedback (#917).
+    // One transaction collapses all of it into a single commit, while the
+    // bulk scope defers the per-message App Log rows and the sync kick until
+    // after it.
+    final scope = _BulkScope();
+    String? dest;
+    await runZoned(
+      () => _db.transaction(() async {
+        // Ids already deleted in this batch — a selection can contain both
+        // twins of a counterpart pair, and the second must not be deleted
+        // again from its (now stale) source folder.
+        final handled = <String>{};
+        for (final row in rows) {
+          if (!handled.add(row.id)) continue;
+          dest = await _deleteRow(row);
+          final mid = normaliseMessageId(row.messageId);
+          if (mid == null) continue;
+          for (final counterpart in counterparts[row.accountId] ??
+              const <account_model.Account>[]) {
+            final twin = await _findEmailRowByNormalisedMessageId(
+              counterpart.id,
+              mid,
+            );
+            if (twin == null || !handled.add(twin.id)) continue;
+            await _deleteRow(twin);
+          }
+        }
+      }),
+      zoneValues: {_bulkScopeKey: scope},
+    );
+    for (final write in scope.logs) {
+      unawaited(write());
+    }
+    scope.kickedAccounts.forEach(_changeCtrl.add);
+    return dest;
+  }
+
+  /// The [_BulkScope] of the [deleteEmails] call currently running in this
+  /// zone, or null outside a bulk operation.
+  _BulkScope? get _bulkScope => Zone.current[_bulkScopeKey] as _BulkScope?;
+
+  /// [AccountRepository.getAccount], memoised for the duration of a bulk
+  /// operation so a batch looks each account up once, not once per message.
+  Future<account_model.Account?> _bulkAccount(String accountId) async {
+    final bulk = _bulkScope;
+    if (bulk == null) return _accounts.getAccount(accountId);
+    if (bulk.accounts.containsKey(accountId)) return bulk.accounts[accountId];
+    return bulk.accounts[accountId] = await _accounts.getAccount(accountId);
+  }
+
+  /// Writes an App Log row now, or — inside a bulk operation — once its
+  /// transaction has committed. The logger writes to the same database, so an
+  /// unawaited insert issued inside the transaction could outlive it.
+  void _logAfterBulk(Future<Object?>? Function() write) {
+    final bulk = _bulkScope;
+    if (bulk != null) {
+      bulk.logs.add(write);
+      return;
+    }
+    unawaited(write());
+  }
+
   /// Deletes a single [row] on its own account: moves it to that account's
   /// Trash when one exists (so the user can recover it), otherwise hard-deletes.
   /// Returns the Trash path when moved, or null when hard-deleted. Does not
   /// mirror to counterpart accounts (see [_mirrorDeleteToCounterparts]).
   Future<String?> _deleteRow(Email row) async {
     final emailId = row.id;
-    final account = (await _accounts.getAccount(row.accountId))!;
+    final account = (await _bulkAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
     final trashRow = await (_db.select(_db.mailboxes)
@@ -4149,8 +4238,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // Already in Trash or no Trash folder — hard delete. Record it so the
     // deletion still shows up in the global App Log even though the message
     // row (and any per-message view of it) is about to disappear (#562).
-    unawaited(
-      _appLogger?.info(
+    _logAfterBulk(
+      () => _appLogger?.info(
         'email.delete',
         'Permanently deleted "${row.subject ?? '(no subject)'}" '
             'from ${row.mailboxPath}',
@@ -4239,6 +4328,11 @@ class EmailRepositoryImpl implements EmailRepository {
             createdAt: DateTime.now(),
           ),
         );
+    final bulk = _bulkScope;
+    if (bulk != null) {
+      bulk.kickedAccounts.add(accountId);
+      return;
+    }
     _changeCtrl.add(accountId);
   }
 
@@ -7441,3 +7535,19 @@ Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
           .map(_jmapBodyStructureToJson)
           .toList(),
     };
+
+/// Zone key under which [EmailRepositoryImpl.deleteEmails] publishes its
+/// [_BulkScope].
+final _bulkScopeKey = Object();
+
+/// State shared by every mutation running inside one bulk operation.
+class _BulkScope {
+  /// App Log writes deferred until the bulk transaction has committed.
+  final logs = <Future<Object?>? Function()>[];
+
+  /// Accounts that queued pending changes; each is kicked once at the end.
+  final kickedAccounts = <String>{};
+
+  /// Accounts already looked up during this operation.
+  final accounts = <String, account_model.Account?>{};
+}

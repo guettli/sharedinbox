@@ -296,6 +296,16 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<String?>);
 
   @override
+  _i4.Future<String?> deleteEmails(List<String>? emailIds) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #deleteEmails,
+          [emailIds],
+        ),
+        returnValue: _i4.Future<String?>.value(),
+      ) as _i4.Future<String?>);
+
+  @override
   _i4.Future<void> sendEmail(
     String? accountId,
     _i2.EmailDraft? draft,

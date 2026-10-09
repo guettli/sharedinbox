@@ -190,13 +190,9 @@ Future<void> batchDelete(
       ref,
       accountThreads,
       type: UndoType.delete,
-      apply: (repo, emailIds) async {
-        String? lastDestPath;
-        for (final id in emailIds) {
-          lastDestPath = await repo.deleteEmail(id);
-        }
-        return lastDestPath;
-      },
+      // One bulk call: a per-id deleteEmail loop made large selections
+      // crawl (#917).
+      apply: (repo, emailIds) => repo.deleteEmails(emailIds),
     );
   }
 }

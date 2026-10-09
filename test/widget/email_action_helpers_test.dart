@@ -31,6 +31,7 @@ void main() {
     ).thenAnswer((_) async => []);
     when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
     when(mockEmailRepo.deleteEmail(any)).thenAnswer((_) async => 'Trash');
+    when(mockEmailRepo.deleteEmails(any)).thenAnswer((_) async => 'Trash');
     when(mockEmailRepo.snoozeEmail(any, any)).thenAnswer((_) async {});
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
   });
