@@ -62,11 +62,19 @@ class NoteRepositoryImpl implements NoteRepository {
   // ── Observe (local cache) ─────────────────────────────────────────────────
 
   @override
-  Stream<List<EmailNote>> observeNotes(String accountId, String messageId) {
+  Stream<List<EmailNote>> observeNotes(String accountId, String messageId) =>
+      observeNotesForMessages(accountId, [messageId]);
+
+  @override
+  Stream<List<EmailNote>> observeNotesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) {
+    final ids = messageIds.toSet();
+    if (ids.isEmpty) return Stream.value(const <EmailNote>[]);
     return (_db.select(_db.emailNotes)
           ..where(
-            (t) =>
-                t.accountId.equals(accountId) & t.messageId.equals(messageId),
+            (t) => t.accountId.equals(accountId) & t.messageId.isIn(ids),
           )
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .watch()

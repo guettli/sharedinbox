@@ -4,6 +4,14 @@ abstract class NoteRepository {
   /// Stream of notes for an email, keyed by [messageId] (stable across moves).
   Stream<List<EmailNote>> observeNotes(String accountId, String messageId);
 
+  /// Stream of notes attached to any of [messageIds], oldest first. Backs the
+  /// detail view so notes on related mails of the conversation (e.g. the Sent
+  /// copy of the mail being replied to) show up too (#870).
+  Stream<List<EmailNote>> observeNotesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  );
+
   /// Pulls every note in the account's Notes folder into the local cache.
   ///
   /// Runs from the per-account sync loop and the OS-level WorkManager job so

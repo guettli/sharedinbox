@@ -1078,7 +1078,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Widget _buildNotesSection(BuildContext ctx, Email header) {
     final messageId = header.messageId!;
-    final notes = ref.watch(notesProvider((header.accountId, messageId)));
+    final notes = ref.watch(
+      conversationNotesProvider(
+        (header.accountId, messageId, header.threadId),
+      ),
+    );
+    final threadId = header.threadId;
+    final threadEmails = threadId == null
+        ? const <Email>[]
+        : ref.watch(threadEmailsProvider((header.accountId, threadId))).value ??
+            const <Email>[];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1117,7 +1126,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             }
             return Column(
               children: [
-                for (final note in list) _buildNoteRow(ctx, note),
+                for (final note in list)
+                  _buildNoteRow(ctx, note, header, threadEmails),
               ],
             );
           },
@@ -1127,13 +1137,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  Widget _buildNoteRow(BuildContext ctx, EmailNote note) {
+  Widget _buildNoteRow(
+    BuildContext ctx,
+    EmailNote note,
+    Email header,
+    List<Email> threadEmails,
+  ) {
+    final created = DateFormat('MMM d, HH:mm').format(note.createdAt);
+    final subtitle = note.messageId == header.messageId
+        ? created
+        : '$created · ${_relatedMailLabel(note.messageId, threadEmails)}';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
       title: Text(note.noteText),
       subtitle: Text(
-        DateFormat('MMM d, HH:mm').format(note.createdAt),
+        subtitle,
         style: Theme.of(ctx).textTheme.bodySmall,
       ),
       trailing: IconButton(
@@ -1144,6 +1163,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         },
       ),
     );
+  }
+
+  /// Names the related mail of the conversation a note belongs to (#870),
+  /// e.g. "on mail from Alice, Mar 3, 10:15".
+  String _relatedMailLabel(String messageId, List<Email> threadEmails) {
+    final mail =
+        threadEmails.where((e) => e.messageId == messageId).firstOrNull;
+    if (mail == null) return 'on related mail';
+    final from = mail.from.firstOrNull;
+    final name = from?.name;
+    final sender = from == null
+        ? ''
+        : ' from ${name != null && name.isNotEmpty ? name : from.email}';
+    final sent = mail.sentAt == null
+        ? ''
+        : ', ${DateFormat('MMM d, HH:mm').format(mail.sentAt!)}';
+    return 'on mail$sender$sent';
   }
 
   Future<void> _addNoteDialog(BuildContext context, Email header) async {
