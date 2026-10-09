@@ -9,6 +9,15 @@ class Account {
   // Used when type == AccountType.imap
   final String imapHost;
   final int imapPort;
+
+  /// `true`: implicit TLS. `false`: STARTTLS required — except on localhost,
+  /// where it means plaintext (the dev Stalwart has no certificate).
+  ///
+  /// The boolean thus carries three effective states, resolved by host. A
+  /// `TlsMode` enum is the shape to adopt if a further case appears; plaintext
+  /// to a remote host is deliberately refused today, not merely unmodelled.
+  /// Capability-sniffing on localhost was rejected: it would silently flip
+  /// behaviour the day the dev server gets a certificate.
   final bool imapSsl;
   final String smtpHost;
   final int smtpPort;
@@ -165,6 +174,17 @@ class Account {
   }
 
   String get accountType => type.name;
+}
+
+/// The account as a sender: `Name <addr@example.com>`, or the bare address
+/// when no display name is set.
+///
+/// Shared so the From forms and the log filter cannot drift, and so the
+/// empty-displayName case is handled in one place — interpolating it inline
+/// renders a stray leading space before the angle bracket.
+String accountFromLabel(Account account) {
+  if (account.displayName.isEmpty) return account.email;
+  return '${account.displayName} <${account.email}>';
 }
 
 /// Human-friendly label for an account. Prefers [Account.displayName], falls

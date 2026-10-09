@@ -32,6 +32,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _passwordCtrl = TextEditingController();
   final _imapHostCtrl = TextEditingController();
   final _imapPortCtrl = TextEditingController();
+  var _imapSsl = true;
   final _smtpHostCtrl = TextEditingController();
   final _smtpPortCtrl = TextEditingController();
   var _smtpSsl = true;
@@ -81,6 +82,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
     _usernameCtrl.text = account.username;
     _imapHostCtrl.text = account.imapHost;
     _imapPortCtrl.text = account.imapPort.toString();
+    _imapSsl = account.imapSsl;
     _smtpHostCtrl.text = account.smtpHost;
     _smtpPortCtrl.text = account.smtpPort.toString();
     _smtpSsl = account.smtpSsl;
@@ -139,10 +141,10 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       type: account.type,
       imapHost: imapHost,
       imapPort: int.tryParse(_imapPortCtrl.text) ?? account.imapPort,
-      imapSsl: isLocalhost(imapHost) ? account.imapSsl : true,
+      imapSsl: _imapSsl,
       smtpHost: smtpHost,
       smtpPort: int.tryParse(_smtpPortCtrl.text) ?? account.smtpPort,
-      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
+      smtpSsl: _smtpSsl,
       manageSieveHost: sieveHost,
       manageSievePort: sievePort,
       manageSieveSsl: isLocalhost(effectiveSieveHost) ? _sieveSsl : true,
@@ -225,25 +227,11 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
           );
         }
         // Persist the discovered effective username when none was explicit.
+        // Only the username changes here -- listing the fields by hand is what
+        // dropped imapSsl on the add path (#936), and this copy dropped both
+        // imapSsl and signature the same way.
         if (updated.username.isEmpty) {
-          updated = Account(
-            id: updated.id,
-            displayName: updated.displayName,
-            email: updated.email,
-            username: result.username,
-            type: updated.type,
-            imapHost: updated.imapHost,
-            imapPort: updated.imapPort,
-            smtpHost: updated.smtpHost,
-            smtpPort: updated.smtpPort,
-            smtpSsl: updated.smtpSsl,
-            manageSieveHost: updated.manageSieveHost,
-            manageSievePort: updated.manageSievePort,
-            manageSieveSsl: updated.manageSieveSsl,
-            manageSieveAvailable: updated.manageSieveAvailable,
-            jmapUrl: updated.jmapUrl,
-            verbose: updated.verbose,
-          );
+          updated = updated.copyWith(username: result.username);
         }
       }
       await ref
@@ -341,22 +329,27 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ],
             if (account.type == AccountType.imap) ...[
               const Divider(height: 32),
-              Text(
-                'IMAP (SSL/TLS)',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
               _field(_imapHostCtrl, 'Host', validator: validateHostname),
               _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
+              SwitchListTile(
+                key: const Key('imapSslSwitch'),
+                title: const Text('SSL/TLS'),
+                subtitle: const Text('Off: upgrade with STARTTLS (IMAP 143)'),
+                value: _imapSsl,
+                onChanged: (v) => setState(() => _imapSsl = v),
+              ),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host', validator: validateHostname),
               _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-              if (isLocalhost(_smtpHostCtrl.text.trim()))
-                SwitchListTile(
-                  title: const Text('SSL/TLS'),
-                  value: _smtpSsl,
-                  onChanged: (v) => setState(() => _smtpSsl = v),
-                ),
+              SwitchListTile(
+                key: const Key('smtpSslSwitch'),
+                title: const Text('SSL/TLS'),
+                subtitle: const Text('Off: upgrade with STARTTLS (SMTP 587)'),
+                value: _smtpSsl,
+                onChanged: (v) => setState(() => _smtpSsl = v),
+              ),
               const Divider(height: 32),
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
@@ -382,6 +375,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                         : _imapHostCtrl.text.trim(),
                   ))
                     SwitchListTile(
+                      key: const Key('sieveSslSwitch'),
                       title: const Text('SSL/TLS'),
                       value: _sieveSsl,
                       onChanged: (v) => setState(() => _sieveSsl = v),

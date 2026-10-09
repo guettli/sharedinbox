@@ -55,6 +55,13 @@ abstract class EmailRepository {
   /// (e.g. Trash) if it was a soft-delete, or null if it was hard-deleted.
   Future<String?> deleteEmail(String emailId);
 
+  /// Deletes every email in [emailIds] like [deleteEmail], but as one bulk
+  /// operation: all local DB work runs in a single transaction and the sync
+  /// loop is kicked once, so deleting many messages stays fast (#917).
+  /// Returns the mailbox the last message was moved to (e.g. Trash), or null
+  /// if it was hard-deleted.
+  Future<String?> deleteEmails(List<String> emailIds);
+
   /// Sends [draft] synchronously. Throws on network/protocol failure.
   /// Prefer [enqueueSend] for user-initiated compose actions so the UI does
   /// not block on connectivity.

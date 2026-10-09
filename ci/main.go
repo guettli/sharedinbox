@@ -246,6 +246,8 @@ func New(
 				"deploy_cron.py",
 				"ci/",
 				"server/",
+				// Root module file for the Go server tests (TestGo).
+				"go.mod",
 				".jscpd.json",
 				"duplication-baseline.json",
 			},
@@ -702,6 +704,20 @@ func (m *Ci) CheckGoFormat(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// TestGo runs the Go server tests (server/...). The bugreport tests also read
+// the app's lib/core/services/report_limits.dart to keep the public-field caps
+// equal on both sides (issue #930), so that file is mounted too.
+func (m *Ci) TestGo(ctx context.Context) (string, error) {
+	return dag.Container().
+		From(goToolImage).
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{
+			Include: []string{"go.mod", "server/", "lib/core/services/report_limits.dart"},
+		})).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "./server/..."}).
+		Stdout(ctx)
+}
+
 // Format runs dart format check.
 func (m *Ci) Format(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
@@ -747,6 +763,10 @@ func (m *Ci) CheckFast(ctx context.Context) (string, error) {
 	})
 	eg.Go(func() error {
 		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.TestGo(ctx)
 		return err
 	})
 	eg.Go(func() error {
@@ -918,6 +938,12 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	fastEg.Go(func() error {
 		return timedCheck(&timingsMu, &timings, "structural", "goformat", func() error {
 			_, err := m.CheckGoFormat(ctx)
+			return err
+		})
+	})
+	fastEg.Go(func() error {
+		return timedCheck(&timingsMu, &timings, "structural", "gotest", func() error {
+			_, err := m.TestGo(ctx)
 			return err
 		})
 	})
@@ -1597,14 +1623,24 @@ func (m *Ci) GuiTestRelease(
 		WithEnvVariable("HOME", "/home/tester").
 		WithEnvVariable("GUI_SHOT_DIR", "/shots").
 		WithEnvVariable("RELEASE_VERSION", version).
-		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster).
-		WithExec([]string{"/bin/sh", "-c",
-			`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
-				`curl -fsSL https://mise.run | sh >/dev/null; ` +
-				`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
+		WithEnvVariable("GUI_CACHE_BUSTER", cacheBuster)
+
+	// The secret has to go on BEFORE the install exec, not after: a Dagger
+	// env/secret variable applies only to *subsequent* execs. Attached
+	// afterwards it reaches the test entrypoint — which has no use for it —
+	// while the mise install, release lookup, asset download and attestation
+	// checks all run anonymously against a 60 req/hour-per-IP limit shared by
+	// everything on the engine. The step then goes red for a reason that has
+	// nothing to do with the release. CheckMiseInstall gets this ordering
+	// right; this one did not.
 	if githubToken != nil {
 		ctr = ctr.WithSecretVariable("GITHUB_TOKEN", githubToken)
 	}
+
+	ctr = ctr.WithExec([]string{"/bin/sh", "-c",
+		`set -e; export PATH="$HOME/.local/bin:$PATH"; ` +
+			`curl -fsSL https://mise.run | sh >/dev/null; ` +
+			`MISE_YES=1 mise use -g "github:` + repository + `@` + version + `"`})
 
 	return m.WithStalwart(ctr).
 		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
@@ -1693,6 +1729,32 @@ func (m *Ci) BuildAndroidApk(
 	return m.setupKeystore(keystoreBase64, keystorePassword).
 		WithExec(args).
 		File("build/app/outputs/flutter-apk/app-release.apk")
+}
+
+// BuildAndroidDebugApk builds a debug APK for manual testing on a real device.
+//
+// Debug rather than release because that is what makes layout bugs visible: a
+// debug build paints the striped overflow banner and logs "A RenderFlex
+// overflowed by N pixels" to logcat, which a release build suppresses.
+//
+// Needs no keystore secrets — Gradle signs debug builds with a key it generates
+// per container. That key differs between runs, so reinstalling over a previous
+// debug build needs an uninstall first.
+func (m *Ci) BuildAndroidDebugApk(
+	// Becomes the APK's versionCode, so a rebuild is distinguishable on the
+	// device — the commit timestamp, as on the release path.
+	buildNumber string,
+	// Git commit hash injected as GIT_HASH dart-define so the About page can display it.
+	// +optional
+	commitHash string,
+) *dagger.File {
+	args := []string{"flutter", "build", "apk", "--debug", "--no-pub", "--build-number", buildNumber}
+	if commitHash != "" {
+		args = append(args, "--dart-define=GIT_HASH="+commitHash)
+	}
+	return m.androidBase().
+		WithExec(args).
+		File("build/app/outputs/flutter-apk/app-debug.apk")
 }
 
 // DeployApk builds and deploys the APK to the server.
@@ -2474,11 +2536,13 @@ flowchart TD
         pubWeb["publish-website\n(any build succeeded)"]
 
         relLinux["release-linux + check-mise-install\nGitHub Release for mise (auto CalVer)"]
+        relGui["gui-test-release\nAT-SPI drive vs Stalwart (non-blocking)"]
 
         detectChanges --> buildLinux
         detectChanges --> deployPS
         detectChanges --> deployApk
         buildLinux  --> relLinux
+        relLinux    --> relGui
         buildLinux  --> pubWeb
         deployPS    --> pubWeb
         deployApk   --> pubWeb

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
@@ -102,6 +104,38 @@ void main() {
         byAccount[t.accountId] = (byAccount[t.accountId] ?? 0) + 1;
       }
       expect(byAccount, {'acc-1': 1, 'acc-2': 1});
+    });
+
+    // A bulk action is visibly in progress until it finishes, and a second
+    // tap meanwhile is ignored (#917).
+    test('runBatch is busy while the action runs, then clears', () async {
+      final ctrl = EmailThreadListController()
+        ..updateThreads([_t('a'), _t('b')])
+        ..toggle(_t('a'))
+        ..toggle(_t('b'));
+      final gate = Completer<void>();
+      List<String>? acted;
+      var secondRan = false;
+
+      ctrl.runBatch(
+        () => gate.future,
+        busyLabel: 'Deleting 2 conversations…',
+        onDone: (ids) => acted = ids,
+      );
+      ctrl.runBatch(() async => secondRan = true, busyLabel: 'x');
+      await pumpEventQueue();
+
+      expect(ctrl.isBusy, isTrue);
+      expect(ctrl.busyLabel, 'Deleting 2 conversations…');
+      expect(ctrl.selectionCount, 2);
+      expect(secondRan, isFalse);
+
+      gate.complete();
+      await pumpEventQueue();
+
+      expect(ctrl.isBusy, isFalse);
+      expect(ctrl.isSelecting, isFalse);
+      expect(acted, ['a', 'b']);
     });
   });
 }

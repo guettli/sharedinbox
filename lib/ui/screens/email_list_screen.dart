@@ -9,6 +9,8 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/sync/account_sync_manager.dart'
+    show syncErrorKey;
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -43,8 +45,12 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // whenever the search is cleared so a later query starts folder-scoped again.
   bool _folderScoped = true;
 
-  // Error banner — tracks the last error message that the user dismissed.
-  String? _dismissedError;
+  // Error banner — the kind of error the user dismissed (see [syncErrorKey]).
+  // Keyed by kind, not raw text: a partial cycle's message names the failing
+  // folders, so comparing text re-popped the banner whenever that set shifted.
+  // Reset when sync next succeeds, so a later recurrence is shown again rather
+  // than suppressed forever.
+  String? _dismissedErrorKey;
 
   // Once the mailbox has been observed at least once, we treat a later
   // transition to "not found locally" as a server-side deletion and bounce
@@ -182,6 +188,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // When sync next succeeds, forget any dismissal so a later error surfaces
+    // again. Done via listen rather than in the banner builder so there is no
+    // setState scheduled from within build.
+    ref.listen(syncLastErrorProvider(widget.accountId), (_, next) {
+      if (next.value == null && _dismissedErrorKey != null) {
+        setState(() => _dismissedErrorKey = null);
+      }
+    });
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
     final prefs =
@@ -482,7 +496,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   Widget _buildSyncErrorBanner() {
     final errorAsync = ref.watch(syncLastErrorProvider(widget.accountId));
     final error = errorAsync.value;
-    if (error == null || error == _dismissedError) {
+    if (error == null || syncErrorKey(error) == _dismissedErrorKey) {
       return const SizedBox.shrink();
     }
     return MaterialBanner(
@@ -511,7 +525,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
           child: const Text('View log'),
         ),
         TextButton(
-          onPressed: () => setState(() => _dismissedError = error),
+          onPressed: () =>
+              setState(() => _dismissedErrorKey = syncErrorKey(error)),
           child: const Text('Dismiss'),
         ),
       ],

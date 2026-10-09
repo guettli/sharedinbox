@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -322,6 +323,48 @@ void main() {
     // The remaining structured fields still render, without the stack in them.
     expect(find.textContaining('"protocol": "imap"'), findsOneWidget);
     expect(find.textContaining('"stack"'), findsNothing);
+  });
+
+  testWidgets('URLs in the message and Data block are tappable links', (
+    tester,
+  ) async {
+    const url = 'https://github.com/guettli/sharedinbox/issues/944';
+    final repo = _MemRepo([
+      AppLogEntry(
+        id: 1,
+        createdAt: DateTime(2024, 1, 1, 10),
+        level: AppLogLevel.info,
+        event: 'bug_report.issue_created',
+        message: 'Created GitHub issue: $url',
+        dataJson: jsonEncode({'issueUrl': url}),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appLogRepositoryProvider.overrideWithValue(repo),
+          allAccountsProvider.overrideWith((ref) => Stream.value(<Account>[])),
+        ],
+        child: const MaterialApp(home: AppLogScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Collapsed: no links yet.
+    expect(linkRecognizersFor(tester, url), isEmpty);
+
+    await tester.tap(find.textContaining('bug_report.issue_created'));
+    await tester.pumpAndSettle();
+
+    // One link in the message, one in the JSON "Data" block. The closing
+    // quote of the JSON string is not part of the link.
+    expect(linkRecognizersFor(tester, url), hasLength(2));
+    expect(linkRecognizersFor(tester, '$url"'), isEmpty);
+
+    (linkRecognizersFor(tester, url).first as TapGestureRecognizer).onTap!();
+    await tester.pumpAndSettle();
+    expect(find.text('Open link?'), findsOneWidget);
   });
 
   group('email hyperlink', () {

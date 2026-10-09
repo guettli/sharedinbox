@@ -26,6 +26,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   var _step = _Step.email;
   String? _errorMessage;
 
+  /// What auto-detection found, kept so switching protocol and back can
+  /// restore the detected settings instead of discarding them — there is no
+  /// way to re-run discovery without abandoning the whole flow.
+  DiscoveryResult? _discovery;
+
   // -- controllers -----------------------------------------------------------
   final _emailCtrl = TextEditingController();
   final _displayNameCtrl = TextEditingController();
@@ -91,6 +96,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
           .read(accountDiscoveryServiceProvider)
           .discover(_emailCtrl.text.trim());
       if (!mounted) return;
+      _discovery = result;
       switch (result) {
         case JmapDiscovery(:final sessionUrl):
           _jmapApiUrlCtrl.text = sessionUrl;
@@ -98,16 +104,23 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         case ImapSmtpDiscovery(
             :final imapHost,
             :final imapPort,
+            :final imapSsl,
             :final smtpHost,
             :final smtpPort,
             :final smtpSsl,
           ):
           _imapHostCtrl.text = imapHost;
           _imapPortCtrl.text = imapPort.toString();
+          _imapSsl = imapSsl;
           _smtpHostCtrl.text = smtpHost;
           _smtpPortCtrl.text = smtpPort.toString();
           _smtpSsl = smtpSsl;
           setState(() => _step = _Step.imapForm);
+        case UnsupportedDiscovery(:final message):
+          setState(() {
+            _errorMessage = message;
+            _step = _Step.chooseType;
+          });
         case UnknownDiscovery():
           setState(() => _step = _Step.chooseType);
       }
@@ -136,10 +149,10 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       username: _usernameCtrl.text.trim(),
       imapHost: imapHost,
       imapPort: int.parse(_imapPortCtrl.text),
-      imapSsl: isLocalhost(imapHost) ? _imapSsl : true,
+      imapSsl: _imapSsl,
       smtpHost: smtpHost,
       smtpPort: int.parse(_smtpPortCtrl.text),
-      smtpSsl: isLocalhost(smtpHost) ? _smtpSsl : true,
+      smtpSsl: _smtpSsl,
     );
   }
 
@@ -205,15 +218,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               ),
         );
       }
-      final accountToSave = Account(
-        id: account.id,
-        displayName: account.displayName,
-        email: account.email,
-        username:
-            account.username.isNotEmpty ? account.username : result.username,
-        type: account.type,
-        jmapUrl: account.jmapUrl,
-      );
+      // Only the username may differ from the built account -- say exactly
+      // that, rather than re-listing every field (which is how imapSsl once
+      // went missing on the IMAP path, see #936).
+      final accountToSave = account.username.isEmpty
+          ? account.copyWith(username: result.username)
+          : account;
       await ref
           .read(accountRepositoryProvider)
           .addAccount(accountToSave, _passwordCtrl.text);
@@ -248,21 +258,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       final result = await ref
           .read(connectionTestServiceProvider)
           .testConnection(account, _passwordCtrl.text);
-      final accountToSave = Account(
-        id: account.id,
-        displayName: account.displayName,
-        email: account.email,
-        username:
-            account.username.isNotEmpty ? account.username : result.username,
-        imapHost: account.imapHost,
-        imapPort: account.imapPort,
-        smtpHost: account.smtpHost,
-        smtpPort: account.smtpPort,
-        smtpSsl: account.smtpSsl,
-        manageSieveHost: account.manageSieveHost,
-        manageSievePort: account.manageSievePort,
-        manageSieveSsl: account.manageSieveSsl,
-      );
+      // Only the username may differ from the built account. Listing the
+      // fields by hand dropped imapSsl silently (#936).
+      final accountToSave = account.username.isEmpty
+          ? account.copyWith(username: result.username)
+          : account;
       await ref
           .read(accountRepositoryProvider)
           .addAccount(accountToSave, _passwordCtrl.text);
@@ -376,29 +376,77 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             'Choose account type:',
           ),
           const SizedBox(height: AppSpacing.xl),
+          if (_errorMessage != null) _errorBanner(),
           FilledButton(
-            onPressed: () => setState(() {
-              _jmapApiUrlCtrl.clear();
-              _step = _Step.jmapForm;
-            }),
+            onPressed: _useJmap,
             child: const Text('JMAP'),
           ),
           const SizedBox(height: AppSpacing.md),
           OutlinedButton(
-            onPressed: () => setState(() {
-              _imapHostCtrl.clear();
-              _imapPortCtrl.text = '993';
-              _imapSsl = true;
-              _smtpHostCtrl.clear();
-              _smtpPortCtrl.text = '465';
-              _smtpSsl = true;
-              _step = _Step.imapForm;
-            }),
+            onPressed: _useImap,
             child: const Text('IMAP / SMTP'),
           ),
         ],
       ),
     );
+  }
+
+  /// Clears the Try-connection banner.
+  ///
+  /// It renders from the same three fields on both forms, directly above Save,
+  /// so without this a green "Connected as …" from a JMAP test stays on screen
+  /// above an empty IMAP form — a success message for a connection that was
+  /// never made with the settings shown.
+  void _resetTryState() {
+    _tryTesting = false;
+    _tryOk = null;
+    _tryErr = null;
+  }
+
+  /// Switches to the JMAP form, re-seeding the detected session URL when
+  /// discovery found one and clearing it otherwise.
+  ///
+  /// Shared by the account-type chooser and the "use JMAP instead" link so the
+  /// two entry points cannot drift apart.
+  void _useJmap() {
+    setState(() {
+      final discovery = _discovery;
+      _jmapApiUrlCtrl.text =
+          discovery is JmapDiscovery ? discovery.sessionUrl : '';
+      _resetTryState();
+      _errorMessage = null;
+      _step = _Step.jmapForm;
+    });
+  }
+
+  /// Switches to the IMAP/SMTP form, re-seeding the detected servers when
+  /// discovery found them and falling back to the implicit-TLS defaults.
+  void _useImap() {
+    setState(() {
+      _seedImapFields();
+      _resetTryState();
+      _errorMessage = null;
+      _step = _Step.imapForm;
+    });
+  }
+
+  void _seedImapFields() {
+    final discovery = _discovery;
+    if (discovery is! ImapSmtpDiscovery) {
+      _imapHostCtrl.clear();
+      _imapPortCtrl.text = '993';
+      _imapSsl = true;
+      _smtpHostCtrl.clear();
+      _smtpPortCtrl.text = '465';
+      _smtpSsl = true;
+      return;
+    }
+    _imapHostCtrl.text = discovery.imapHost;
+    _imapPortCtrl.text = discovery.imapPort.toString();
+    _imapSsl = discovery.imapSsl;
+    _smtpHostCtrl.text = discovery.smtpHost;
+    _smtpPortCtrl.text = discovery.smtpPort.toString();
+    _smtpSsl = discovery.smtpSsl;
   }
 
   Widget _buildJmapForm() {
@@ -409,7 +457,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _emailHeader('JMAP'),
+            _emailHeader(
+              'JMAP',
+              switchLabel: 'Use IMAP / SMTP instead',
+              onSwitch: _useImap,
+              switchKey: const Key('switchToImapButton'),
+            ),
             if (_errorMessage != null) _errorBanner(),
             _field(_displayNameCtrl, 'Display name'),
             _field(
@@ -446,7 +499,12 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _emailHeader('IMAP / SMTP'),
+            _emailHeader(
+              'IMAP / SMTP',
+              switchLabel: 'Use JMAP instead',
+              onSwitch: _useJmap,
+              switchKey: const Key('switchToJmapButton'),
+            ),
             if (_errorMessage != null) _errorBanner(),
             _field(_displayNameCtrl, 'Display name'),
             _field(
@@ -459,22 +517,24 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
             _field(_imapHostCtrl, 'Host', validator: validateHostname),
             _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
-            if (isLocalhost(_imapHostCtrl.text.trim()))
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _imapSsl,
-                onChanged: (v) => setState(() => _imapSsl = v),
-              ),
+            SwitchListTile(
+              key: const Key('imapSslSwitch'),
+              title: const Text('SSL/TLS'),
+              subtitle: const Text('Off: upgrade with STARTTLS (IMAP 143)'),
+              value: _imapSsl,
+              onChanged: (v) => setState(() => _imapSsl = v),
+            ),
             const Divider(height: 32),
             Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
             _field(_smtpHostCtrl, 'Host', validator: validateHostname),
             _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-            if (isLocalhost(_smtpHostCtrl.text.trim()))
-              SwitchListTile(
-                title: const Text('SSL/TLS'),
-                value: _smtpSsl,
-                onChanged: (v) => setState(() => _smtpSsl = v),
-              ),
+            SwitchListTile(
+              key: const Key('smtpSslSwitch'),
+              title: const Text('SSL/TLS'),
+              subtitle: const Text('Off: upgrade with STARTTLS (SMTP 587)'),
+              value: _smtpSsl,
+              onChanged: (v) => setState(() => _smtpSsl = v),
+            ),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),
               testing: _tryTesting,
@@ -492,7 +552,19 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
 
   // -- small helpers ---------------------------------------------------------
 
-  Widget _emailHeader(String accountTypeLabel) {
+  /// Header for both protocol forms, carrying the escape hatch from whichever
+  /// protocol auto-detection chose.
+  ///
+  /// The link lives here, beside the protocol name it contradicts, rather than
+  /// under Save: both forms scroll, and on a narrow screen at a large text
+  /// scale the bottom of the IMAP form sits far below the fold, which would
+  /// reintroduce the discoverability problem this exists to solve.
+  Widget _emailHeader(
+    String accountTypeLabel, {
+    String? switchLabel,
+    VoidCallback? onSwitch,
+    Key? switchKey,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.lg),
       child: Column(
@@ -502,7 +574,27 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _emailCtrl.text.trim(),
             style: Theme.of(context).textTheme.titleMedium,
           ),
-          Text(accountTypeLabel, style: Theme.of(context).textTheme.bodySmall),
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  accountTypeLabel,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              if (switchLabel != null)
+                Flexible(
+                  child: TextButton(
+                    key: switchKey,
+                    // Disabled mid-test: _tryConnection captures its form and
+                    // builder at call time, so a result landing after a switch
+                    // would report on settings that are no longer shown.
+                    onPressed: _tryTesting ? null : onSwitch,
+                    child: Text(switchLabel),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );

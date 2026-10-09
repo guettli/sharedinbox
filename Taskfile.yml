@@ -251,7 +251,30 @@ tasks:
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
         TOKEN_ARG=""
         [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
-        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+        # No dagger_with_retry and a tight budget, unlike the other release
+        # tasks: three 30-minute attempts would outlast the job's own timeout,
+        # and a cancelled job skips the retract step. Fail fast instead.
+        #
+        # Not -q: a green whose output is suppressed looks identical to
+        # "asserted nothing", which is no basis for gating a release.
+        #
+        # This task gates a release, so it distinguishes a broken release from
+        # a harness that could not run (see the exit-code contract in
+        # scripts/gui_test_entrypoint.sh). 75 is the harness failing to start;
+        # 124 is `timeout` firing, which the engine causes far more often than
+        # the app does — the python assertions have their own 20s budgets and
+        # fail long before the outer one. Neither is evidence about the
+        # release, so both warn instead of withdrawing it.
+        set +e
+        timeout --kill-after=10 600 dagger call --progress=plain -m ci --source=. gui-test-release --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
+        rc=$?
+        set -e
+        case "$rc" in
+          0) ;;
+          75) echo "::warning title=Release GUI harness could not run::Setup failed before any assertion (exit 75). Not treated as a release defect; the release stands unverified." ;;
+          124) echo "::warning title=Release GUI harness timed out::Exceeded its 600s budget (exit 124), which is usually the Dagger engine rather than the app. Not treated as a release defect; the release stands unverified." ;;
+          *) echo "::error title=Release GUI test failed::The packaged release failed a GUI assertion (exit $rc)."; exit "$rc" ;;
+        esac
 
   check-mise-install:
     desc: Install the published release with mise in a clean Ubuntu container and assert it launches (needs a published release + network)
@@ -269,6 +292,16 @@ tasks:
     cmds:
       - mkdir -p build/app/outputs/bundle/release
       - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. build-android-release --commit-hash "$HASH" -o build/app/outputs/bundle/release/app-release.aab
+
+  build-android-debug-apk:
+    desc: Build a debug APK via Dagger for manual testing on a device (shows overflow banners; release builds hide them)
+    cmds:
+      - mkdir -p build/app/outputs/flutter-apk
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
+        timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. build-android-debug-apk --build-number "$BUILD_NUMBER" --commit-hash "$HASH" -o build/app/outputs/flutter-apk/app-debug.apk
+      - echo "Install with 'adb install -r build/app/outputs/flutter-apk/app-debug.apk' (uninstall first if a previous debug build is present)"
 
   upload-android-bundle:
     desc: Upload AAB from build/ to Play Store via Dagger

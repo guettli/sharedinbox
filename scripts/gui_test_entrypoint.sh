@@ -14,6 +14,28 @@
 #     Stalwart has no usable certificate.
 set -euo pipefail
 
+# Exit-code contract, so the caller can tell "this release is broken" from
+# "we could not test it". Only the first should ever withdraw a release.
+#
+#   0   every assertion passed
+#   1   an assertion failed, or the app died on launch — a release defect
+#   75  the harness never got far enough to assert anything (EX_TEMPFAIL):
+#       apt, the mise download, Xvfb, dbus or the a11y bus failed. That is an
+#       environment problem; gating a release on it would withdraw good
+#       builds whenever the engine has a bad day.
+EX_TEMPFAIL=75
+PHASE=setup
+on_err() {
+    rc=$?
+    if [ "$PHASE" = setup ]; then
+        echo "ERROR: GUI harness setup failed (rc=$rc) before any assertion ran —"
+        echo "       reporting this as a harness problem, not a release defect."
+        exit "$EX_TEMPFAIL"
+    fi
+    exit "$rc"
+}
+trap on_err ERR
+
 export DISPLAY=:99
 export LIBGL_ALWAYS_SOFTWARE=1
 export GTK_MODULES=gail:atk-bridge
@@ -74,4 +96,7 @@ done
 echo "--- app log ---"
 tail -5 /tmp/app.log || true
 echo "--- running GUI tests ---"
+# Everything from here is a verdict about the release itself, so failures
+# propagate unchanged rather than being softened to EX_TEMPFAIL.
+PHASE=test
 python3 "$(dirname "$0")/gui_release_test.py"

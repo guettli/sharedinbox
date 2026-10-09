@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -47,6 +49,28 @@ http.Client _sessionClient({
       apiStatus,
     );
   });
+}
+
+/// Starts [JmapClient.connect] with the standard test credentials without
+/// awaiting it — for `fakeAsync` tests that drive the connect with
+/// `async.elapse`. Captures the connected client via [onConnected] or the
+/// failure via [onError].
+void _startConnect(
+  http.Client httpClient, {
+  void Function(JmapClient)? onConnected,
+  void Function(Object)? onError,
+}) {
+  unawaited(
+    JmapClient.connect(
+      httpClient: httpClient,
+      jmapUrl: Uri.parse(_sessionUrl),
+      username: 'alice',
+      password: 'secret',
+    ).then<void>(
+      (client) => onConnected?.call(client),
+      onError: onError,
+    ),
+  );
 }
 
 void main() {
@@ -127,6 +151,73 @@ void main() {
         ),
         throwsA(isA<JmapException>()),
       );
+    });
+
+    // Issue #1012: the session fetch is the first request of every sync
+    // cycle, so on mobile it hits the worst-case radio state. A single slow
+    // or dropped first attempt must not fail the whole cycle.
+    test('retries the session fetch after a transient transport error',
+        () async {
+      var calls = 0;
+      final httpClient = MockClient((req) async {
+        calls++;
+        if (calls == 1) {
+          throw http.ClientException('connection reset by peer');
+        }
+        return http.Response(jsonEncode(_sessionBody()), 200);
+      });
+      final client = await JmapClient.connect(
+        httpClient: httpClient,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      expect(client.accountId, _accountId);
+      expect(calls, 2, reason: 'the first attempt failed and was retried');
+    });
+
+    test('retries the session fetch after a timeout and succeeds', () {
+      fakeAsync((async) {
+        var calls = 0;
+        final httpClient = MockClient((req) async {
+          calls++;
+          if (calls == 1) {
+            // Slower than the metadata budget: the first attempt times out.
+            await Future<void>.delayed(
+              JmapClient.metadataTimeout + const Duration(seconds: 1),
+            );
+          }
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        });
+        JmapClient? client;
+        _startConnect(httpClient, onConnected: (c) => client = c);
+        async.elapse(JmapClient.metadataTimeout + const Duration(seconds: 2));
+        expect(client, isNotNull);
+        expect(client!.accountId, _accountId);
+        expect(calls, 2);
+      });
+    });
+
+    test('gives up and throws TimeoutException if every attempt times out', () {
+      fakeAsync((async) {
+        var calls = 0;
+        final httpClient = MockClient((req) async {
+          calls++;
+          await Future<void>.delayed(
+            JmapClient.metadataTimeout + const Duration(seconds: 1),
+          );
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        });
+        Object? error;
+        _startConnect(httpClient, onError: (e) => error = e);
+        async.elapse(const Duration(seconds: 60));
+        expect(error, isA<TimeoutException>());
+        expect(
+          calls,
+          3,
+          reason: '1 initial attempt + 2 retries, then gives up',
+        );
+      });
     });
   });
 
@@ -242,6 +333,214 @@ void main() {
         ],
       ]);
       expect(using(), isNot(contains('urn:ietf:params:jmap:submission')));
+    });
+  });
+
+  // Regression coverage for issue #967: every API call was capped at a flat
+  // 10 s, including `Email/get` requests that make the server read and
+  // serialize full message bodies before it can answer. A routine catch-up
+  // against a healthy server therefore timed out, and because the failure
+  // surfaced as a TimeoutException the user was told the mail server was
+  // unreachable.
+  group('JmapClient request budget', () {
+    Map<String, dynamic> emailGet({bool bodies = true}) => {
+          'accountId': _accountId,
+          'ids': ['e1'],
+          if (bodies) 'fetchTextBodyValues': true,
+          if (bodies) 'fetchHTMLBodyValues': true,
+        };
+
+    test('a metadata-only request gets the short budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/changes',
+            {'accountId': _accountId, 'sinceState': 's0', 'maxChanges': 200},
+            '0',
+          ],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('a request the server must do real work for gets the long budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get', emailGet(), '0'],
+        ]),
+        JmapClient.slowRequestTimeout,
+      );
+      expect(
+        JmapClient.slowRequestTimeout,
+        greaterThan(JmapClient.metadataTimeout),
+      );
+    });
+
+    test('one body fetch in a batch lifts the whole request', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/query',
+            {'accountId': _accountId, 'limit': 500},
+            '0',
+          ],
+          ['Email/get', emailGet(), '1'],
+        ]),
+        JmapClient.slowRequestTimeout,
+      );
+    });
+
+    test('fetchAllBodyValues also counts as a body fetch', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/get',
+            {
+              'accountId': _accountId,
+              'ids': ['e1'],
+              'fetchAllBodyValues': true,
+            },
+            '0',
+          ],
+        ]),
+        JmapClient.slowRequestTimeout,
+      );
+    });
+
+    test('an Email/get without body options stays on the short budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get', emailGet(bodies: false), '0'],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('a malformed method call does not throw', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          ['Email/get'],
+          ['Email/get', 'not-a-map', '0'],
+        ]),
+        JmapClient.metadataTimeout,
+      );
+    });
+
+    test('Email/query with calculateTotal gets the long budget', () {
+      expect(
+        JmapClient.defaultTimeoutFor([
+          [
+            'Email/query',
+            {
+              'accountId': _accountId,
+              'filter': {'inMailbox': 'a'},
+              'limit': 500,
+              'calculateTotal': true,
+            },
+            '0',
+          ],
+        ]),
+        JmapClient.slowRequestTimeout,
+        reason: 'a server-side count of the whole mailbox is not a cheap '
+            'metadata lookup',
+      );
+    });
+
+    // Pins the wiring, not just the derivation: reverting `call` to one flat
+    // budget would leave every assertion above green.
+    test('call applies the derived budget to the request', () {
+      fakeAsync((async) {
+        // A server that always takes 30s — longer than the metadata budget,
+        // shorter than the slow-request budget.
+        final httpClient = MockClient((req) async {
+          if (req.url.path.contains('well-known')) {
+            return http.Response(jsonEncode(_sessionBody()), 200);
+          }
+          await Future<void>.delayed(const Duration(seconds: 30));
+          return http.Response(
+            jsonEncode({'sessionState': 'st1', 'methodResponses': <dynamic>[]}),
+            200,
+          );
+        });
+
+        JmapClient? client;
+        _startConnect(httpClient, onConnected: (c) => client = c);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(client, isNotNull, reason: 'the session fetch is immediate');
+
+        Object? metadataError;
+        unawaited(
+          client!.call([
+            [
+              'Email/changes',
+              {'accountId': _accountId, 'sinceState': 's0'},
+              '0',
+            ],
+          ]).then<void>(
+            (_) {},
+            onError: (Object e) {
+              metadataError = e;
+            },
+          ),
+        );
+
+        Object? bodyError;
+        var bodyDone = false;
+        unawaited(
+          client!.call([
+            ['Email/get', emailGet(), '0'],
+          ]).then<void>(
+            (_) {
+              bodyDone = true;
+            },
+            onError: (Object e) {
+              bodyError = e;
+            },
+          ),
+        );
+
+        // Past the metadata budget: the metadata call has given up, the body
+        // fetch has not.
+        async.elapse(JmapClient.metadataTimeout + const Duration(seconds: 1));
+        expect(metadataError, isA<TimeoutException>());
+        expect(bodyError, isNull);
+        expect(bodyDone, isFalse);
+
+        // The server answers at 30s, inside the slow-request budget.
+        async.elapse(const Duration(seconds: 30));
+        expect(bodyError, isNull);
+        expect(
+          bodyDone,
+          isTrue,
+          reason: 'a body fetch must survive past the metadata budget',
+        );
+      });
+    });
+
+    test('an explicit timeout overrides the derived one', () async {
+      final httpClient = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        }
+        // Slower than the explicit budget, faster than the derived one.
+        await Future<void>.delayed(const Duration(seconds: 2));
+        return http.Response('{}', 200);
+      });
+      final client = await JmapClient.connect(
+        httpClient: httpClient,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      await expectLater(
+        client.call(
+          [
+            ['Email/get', emailGet(), '0'],
+          ],
+          timeout: const Duration(milliseconds: 50),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
     });
   });
 }

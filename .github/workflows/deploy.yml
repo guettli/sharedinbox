@@ -233,12 +233,32 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: task check-mise-install
 
+      # Blocking. A release that starts but renders an error where a screen's
+      # content belongs is exactly what shipped in #932, and check-mise-install
+      # (does the process survive 12s?) cannot see it.
+      #
+      # The asymmetry favours gating. A wrong retraction converts the release
+      # to a draft: the tag and assets survive, one click undoes it, the next
+      # hourly Linux deploy cuts another, and mise's 24h minimum_release_age
+      # means no user is served it for a day regardless — so there is a day to
+      # notice. A missed defect, by contrast, becomes @latest and installs.
+      #
+      # It does NOT gate on a harness that could not run: task gui-test-release
+      # maps exit 75 (setup failed) and 124 (engine timeout) to a ::warning::
+      # and success, so only a real assertion failure withdraws a release.
+      - name: Drive the release GUI
+        timeout-minutes: 12
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: task gui-test-release
+
       # mise cannot see draft releases, so a broken release cannot be caught
       # before it is public — hide it again instead.
       # Goes through Dagger because the runner image ships no gh; an inline
       # `gh release edit` here fails with "command not found" and, when
       # guarded, silently reports success while leaving the release public.
-      - name: Retract the release if it does not install
+      - name: Retract the release if it fails verification
         if: failure()
         env:
           DAGGER_NO_NAG: "1"

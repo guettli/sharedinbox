@@ -662,6 +662,9 @@ class _FakeEmails implements EmailRepository {
   Future<String?> deleteEmail(String id) async => null;
 
   @override
+  Future<String?> deleteEmails(List<String> ids) async => null;
+
+  @override
   Stream<String> get onChangesQueued => const Stream.empty();
 
   @override
@@ -862,6 +865,13 @@ class _FakeNotes implements NoteRepository {
 
   @override
   Stream<List<EmailNote>> observeNotes(String accountId, String messageId) =>
+      const Stream.empty();
+
+  @override
+  Stream<List<EmailNote>> observeNotesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) =>
       const Stream.empty();
 
   @override

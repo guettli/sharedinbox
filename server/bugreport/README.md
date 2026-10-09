@@ -35,6 +35,68 @@ public issue with no attachments (#847).
 All endpoints are globally rate limited to 10 requests/minute and cap bodies at
 20 MB.
 
+## Untrusted input
+
+`POST /api/v1/encrypted-reports` is public and unauthenticated, so `title`,
+`description` and `about_info` are attacker-controlled — yet they land in an
+issue authored by the bot account, which agentloop agents act on (#930). The
+server therefore:
+
+- **rejects** (`400`) any of the three that contains an agentloop managed-block
+  marker (`<!-- agentloop… -->`, `<!-- /agentloop… -->`), so a report cannot
+  forge e.g. an approved plan block. This check runs on the **normalized** text
+  (see the default-ignorable bullet): a marker hidden as `<!` + ZWSP or a C0
+  control + `-- agentloop` is invisible to the regex, so stripping has to happen
+  first or removing the rune afterwards reconstitutes the marker;
+- opens the issue with a fixed **untrusted-input notice** telling readers and
+  agents that the user parts are data, not instructions;
+- flattens the **title** to one plain line: line breaks and tabs become
+  spaces and whitespace runs collapse. Other control characters never get this
+  far — intake deletes them (below), so their neighbours join rather than being
+  separated. The bidi controls go the same way, as `Cf`;
+- renders the **description** and **system info** inside a fenced code block
+  whose fence is longer than any backtick run in them, so neither can break out
+  into markdown/HTML. System info was rendered as markdown until #1009, where a
+  bare `</details>` in it closed the System-info block and let the rest render
+  at top level — directly under the "how to decrypt" block, whose shape it
+  could then forge with another host's URL;
+- neutralizes HTML comments in both (`<!--` → `<! --`, `-->` → `-- >`), which
+  a fence alone would not do for a regex-based marker parser;
+- drops the **default-ignorable** runes, which carry no glyph and so reach an
+  agent while being absent for a human: category `Cf` (the U+E0000-U+E007F Tag
+  block is invisible ASCII; plus ZWSP, word joiner, BOM, soft hyphen), the
+  variation selectors U+FE00-FE0F and U+E0100-U+E01EF (256 codepoints, a full
+  byte each -- category `Mn`, which a `Cf`-only filter misses), the
+  `Other_Default_Ignorable` Hangul fillers and U+034F, and private-use runes.
+  `unicode.IsControl` covers none of this: it is Latin-1-only by construction,
+  so before #1009 a title reading `Bug report: Crash on login` could carry a
+  recoverable command. A code fence is no help here -- invisible text is
+  invisible inside a code block too. The strip runs **at intake, before** the
+  marker rejection, because doing it afterwards reconstitutes what that check
+  rejects: a zero-width space inside `<!--` hides the marker from the regex and
+  removing it later puts the marker back.
+
+  Two deliberate exceptions. **ZWJ and ZWNJ are kept** -- required orthography
+  in Persian and Indic scripts, and emoji joiners -- which leaves a low-bandwidth
+  residual channel, since two symbols encode arbitrary text in binary; it cannot
+  be closed without corrupting real languages. **Dropping `Cf` costs** U+0600-
+  U+0605 (Arabic number signs) and U+070F (Syriac abbreviation mark), accepted
+  because they format numerals rather than carry words. U+2800 BRAILLE PATTERN
+  BLANK and combining-mark runs are left alone: they render.
+- **truncates** the title to 120, the description to 8000 and system info to
+  4000 runes, ending a cut field with `…[truncated]`. The app truncates with
+  the identical numbers (`lib/core/services/report_limits.dart`), enforced by
+  `TestReportLimitsMatchApp`. `report.json` keeps the untruncated text — but
+  normalized, since the strip above runs at intake, so invisible and control
+  runes are gone from the stored copy of those three fields. `sync_log` is the
+  exception: it is stored raw and is not marker-checked, because it never
+  reaches the issue body (open item in #1009).
+
+No escaping removes natural-language instructions: the real containment is
+that agents never follow directives from the report, never reveal key material
+(`REPORT_PRIVATE_KEY`, tokens) and never fetch URLs taken from the report text
+(see `AGENTS.md`).
+
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |

@@ -95,27 +95,74 @@ http.Client _mockJmapEmails({
   });
 }
 
-Map<String, dynamic> _emailGetResponse({
+/// The request sequence a full sync makes, as separate API calls.
+///
+/// It used to be a single call per page: `Email/query` with `Email/get` chained
+/// onto its result, which asked the server for a whole page of full message
+/// bodies at once — the request shape that timed out in #967. The sweep now
+/// captures the state with one id-less `Email/get`, then per page issues an
+/// ids-only `Email/query` followed by batched `Email/get`s.
+///
+/// Each entry in [pages] is one `Email/query` page; with fewer than 50 emails
+/// per page each is fetched in a single batch.
+List<Map<String, dynamic>> _fullSyncResponses({
   required String state,
-  required List<Map<String, dynamic>> list,
+  required List<List<Map<String, dynamic>>> pages,
   int? total,
-}) =>
-    {
+}) {
+  // One Email/get response per page assumes the page fits in a single batch; a
+  // larger page makes production issue a second Email/get, which would consume
+  // the next page's Email/query response and fail somewhere unhelpful.
+  for (final page in pages) {
+    if (page.length > 50) {
+      throw ArgumentError.value(
+        page.length,
+        'pages',
+        'a page must fit one Email/get batch (50)',
+      );
+    }
+  }
+  final every = [for (final page in pages) ...page];
+  return [
+    for (var i = 0; i < pages.length; i++) ...[
+      {
+        'sessionState': 'sess1',
+        'methodResponses': [
+          [
+            'Email/query',
+            {
+              'accountId': 'acct1',
+              'ids': [for (final e in pages[i]) e['id']],
+              'total': total ?? every.length,
+            },
+            '0',
+          ],
+          // The id-less Email/get that captures the state rides along with
+          // the first page's query.
+          if (i == 0)
+            [
+              'Email/get',
+              {'accountId': 'acct1', 'state': state, 'list': <dynamic>[]},
+              '1',
+            ],
+        ],
+      },
+      _emailGetOnly(state: state, list: pages[i]),
+    ],
+  ];
+}
+
+/// An `Email/changes` refusal. RFC 8620 §5.2 uses one error type both for a
+/// `sinceState` the server can no longer resolve and for one it cannot step to
+/// an intermediate state from, so the client cannot tell them apart from the
+/// response alone — see the retry in `_jmapIncrementalEmailSync` (#967).
+Map<String, dynamic> _cannotCalculateChanges() => {
       'sessionState': 'sess1',
       'methodResponses': [
         [
-          'Email/query',
-          {
-            'accountId': 'acct1',
-            'ids': list.map((e) => e['id']).toList(),
-            'total': total ?? list.length,
-          },
+          'error',
+          {'type': 'cannotCalculateChanges'},
           '0',
-        ],
-        [
-          'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '1',
         ],
       ],
     };
@@ -146,16 +193,24 @@ Map<String, dynamic> _emailChangesResponse({
       ],
     };
 
+/// [notFound] must name every requested id missing from [list], as a real
+/// server does (RFC 8620 §5.1) — the client deletes on the strength of it.
 Map<String, dynamic> _emailGetOnly({
   required String state,
   required List<Map<String, dynamic>> list,
+  List<String> notFound = const [],
 }) =>
     {
       'sessionState': 'sess1',
       'methodResponses': [
         [
           'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
+          {
+            'accountId': 'acct1',
+            'state': state,
+            'list': list,
+            'notFound': notFound,
+          },
           '1',
         ],
       ],
@@ -2867,6 +2922,84 @@ void main() {
       expect(data['permanent'], true);
     });
 
+    // A bulk delete runs in one transaction and kicks the sync loop once,
+    // instead of once per message (#917) — while still trashing, queueing and
+    // logging every message exactly like deleteEmail.
+    test('deleteEmails trashes, queues and logs every message, kicks once',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      final ids = [for (var i = 1; i <= 50; i++) 'acc-1:$i'];
+      for (var i = 1; i <= 50; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                threadId: Value('t$i'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+      final kicks = <String>[];
+      final sub = r.emails.onChangesQueued.listen(kicks.add);
+      addTearDown(sub.cancel);
+
+      final dest = await r.emails.deleteEmails(ids);
+      await pumpEventQueue();
+
+      expect(dest, 'Trash');
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows, hasLength(50));
+      expect(rows.every((e) => e.mailboxPath == 'Trash'), isTrue);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(50));
+      expect(changes.every((c) => c.changeType == 'move'), isTrue);
+      final threads = await r.db.select(r.db.threads).get();
+      expect(threads.where((t) => t.mailboxPath == 'INBOX'), isEmpty);
+      expect(threads.where((t) => t.mailboxPath == 'Trash'), hasLength(50));
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.trash'), hasLength(50));
+      expect(kicks, ['acc-1']);
+    });
+
+    test('deleteEmails hard-deletes when there is no Trash folder', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      for (var i = 1; i <= 3; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      final dest = await r.emails.deleteEmails(['acc-1:1', 'acc-1:3', 'nope']);
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:2']);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => c.changeType), ['delete', 'delete']);
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.delete'), hasLength(2));
+    });
+
     test('snoozeEmail records an email.snooze entry', () async {
       final r = makeLoggedRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -4551,10 +4684,10 @@ void main() {
     test('full sync upserts emails and persists state', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
                 _jmapEmail(
                   id: 'e2',
@@ -4563,8 +4696,8 @@ void main() {
                   seen: true,
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4706,10 +4839,11 @@ void main() {
       ];
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(state: 'est1', list: page1, total: 4),
-            _emailGetResponse(state: 'est1', list: page2, total: 4),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [page1, page2],
+            total: 4,
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4869,14 +5003,12 @@ void main() {
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
-            apiResponses: [
-              _emailGetResponse(
-                state: 'est1',
-                list: [
-                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept'),
-                ],
-              ),
-            ],
+            apiResponses: _fullSyncResponses(
+              state: 'est1',
+              pages: [
+                [_jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept')],
+              ],
+            ),
           ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4907,22 +5039,23 @@ void main() {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
             apiResponses: [
-              // Call 1: Email/changes with error
-              {
-                'sessionState': 'sess1',
-                'methodResponses': [
-                  [
-                    'error',
-                    {'type': 'cannotCalculateChanges'},
-                    '0',
-                  ],
-                ],
-              },
-              // Call 2: full sync Email/query + Email/get
-              _emailGetResponse(
+              // Call 1: bounded Email/changes, refused.
+              _cannotCalculateChanges(),
+              // Call 2: the unbounded retry (#967) — a server whose stored
+              // state is genuinely unresolvable refuses this one too, which is
+              // what tells the client to give up and resync.
+              _cannotCalculateChanges(),
+              // Calls 3+: the full sync it falls back to.
+              ..._fullSyncResponses(
                 state: 'est-new',
-                list: [
-                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                pages: [
+                  [
+                    _jmapEmail(
+                      id: 'e-live',
+                      mailboxId: 'mbx1',
+                      subject: 'live',
+                    ),
+                  ],
                 ],
               ),
             ],
@@ -4967,8 +5100,73 @@ void main() {
       },
     );
 
+    // #967: sending `maxChanges` makes RFC 8620 §5.2's "cannot produce an
+    // intermediate state" refusal reachable where it was not before. A server
+    // that merely dislikes a bounded window must not cost a full resync of the
+    // folder on every single cycle.
     test(
-      'incremental sync drops row that Email/get omits (server treats as gone)',
+      'incremental sync retries unbounded before falling back to full sync',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              // Call 1: the bounded request is refused …
+              _cannotCalculateChanges(),
+              // Call 2: … but the same state resolves fine unbounded.
+              _emailChangesResponse(
+                oldState: 'est-ancient',
+                newState: 'est-new',
+                updated: ['e-live'],
+              ),
+              // Call 3: Email/get for the one changed id.
+              _emailGetOnly(
+                state: 'est-new',
+                list: [
+                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Email:mbx1',
+                state: 'est-ancient',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        // Fresh stamp so the 15-minutely reconcile pass stays out of the way.
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final subjects = (await r.emails.observeEmails('jmap-1', 'mbx1').first)
+            .map((e) => e.subject)
+            .toSet();
+        expect(
+          subjects,
+          {'live'},
+          reason: 'the unbounded retry must carry the sweep, not a full resync',
+        );
+
+        final state = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+            .getSingle();
+        expect(state.state, 'est-new');
+      },
+    );
+
+    test(
+      'incremental sync drops row that Email/get disclaims as notFound',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
@@ -4980,7 +5178,8 @@ void main() {
               ),
               _emailGetOnly(
                 state: 'est2',
-                // e-gone omitted — server no longer has it.
+                // e-gone omitted and disclaimed — server no longer has it.
+                notFound: ['e-gone'],
                 list: [
                   _jmapEmail(
                     id: 'e-live',
@@ -5947,10 +6146,10 @@ void main() {
     test('full sync caches bodies when bodyValues are present', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 jmapEmailWithBody(
                   id: 'e1',
                   mailboxId: 'mbx1',
@@ -5958,8 +6157,8 @@ void main() {
                   htmlContent: '<p>Hello</p>',
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -5974,12 +6173,12 @@ void main() {
     test('full sync does not write body row when bodyValues absent', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
-            ),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');

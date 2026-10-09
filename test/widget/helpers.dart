@@ -9,9 +9,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -72,6 +74,9 @@ class FakeAccountRepository implements AccountRepository {
 
   final List<Account> _accounts;
   bool hasPassword = true;
+
+  /// What the screen under test actually persisted, for save-path assertions.
+  List<Account> get accounts => List.unmodifiable(_accounts);
 
   @override
   Stream<List<Account>> observeAccounts() => Stream.value(List.of(_accounts));
@@ -505,6 +510,9 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<String?> deleteEmail(String emailId) async => null;
+
+  @override
+  Future<String?> deleteEmails(List<String> emailIds) async => null;
 
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
@@ -963,6 +971,7 @@ List<Override> baseOverrides({
   DiscoveryResult? discovery,
   Exception? connectionError,
   String? connectionIdentityWarning,
+  AccountRepository? accountRepository,
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
@@ -971,7 +980,8 @@ List<Override> baseOverrides({
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
+        accountRepository ??
+            (FakeAccountRepository(accounts)..hasPassword = hasStoredPassword),
       ),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
@@ -1157,4 +1167,29 @@ class FakeSearchHistoryRepository implements SearchHistoryRepository {
 
   @override
   Future<void> clearHistory() async => _history.clear();
+}
+
+/// Walks every rich-text span on screen and returns the tap recognizers
+/// attached to a span whose text is exactly [url] — mirrors how
+/// LinkifiedText renders hyperlinks, so tests can invoke the same callback a
+/// real tap would.
+List<GestureRecognizer> linkRecognizersFor(WidgetTester tester, String url) {
+  final recognizers = <GestureRecognizer>[];
+  for (final richText in tester.widgetList<Text>(
+    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+  )) {
+    void walk(InlineSpan span) {
+      if (span is TextSpan) {
+        if (span.text == url && span.recognizer != null) {
+          recognizers.add(span.recognizer!);
+        }
+        for (final child in span.children ?? const <InlineSpan>[]) {
+          walk(child);
+        }
+      }
+    }
+
+    walk(richText.textSpan!);
+  }
+  return recognizers;
 }

@@ -299,22 +299,38 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 		// against empty issues. Everything private — the mail, the metadata
 		// block and screenshots — is optional, so a general bug report with no
 		// mail is just a public issue with no encrypted attachments (#847).
-		aboutInfo := r.FormValue("about_info")
+		// Invisible and control runes are stripped up front so every check below -- the
+		// required-field checks, the marker rejection, and later
+		// neutralizeMarkers -- sees the same text the issue will carry. Stripping
+		// later instead would undo them: a zero-width space inside "<!--" passes
+		// the marker regex and becomes a real marker once stripped (#1009).
+		aboutInfo := normalizeUntrusted(r.FormValue("about_info"))
 		if aboutInfo == "" {
 			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
 			return
 		}
 		// The public title and description are both required: they carry what the
 		// user wants to report, in cleartext, and must not be auto-filled (#864).
-		title := strings.TrimSpace(r.FormValue("title"))
+		title := strings.TrimSpace(normalizeUntrusted(r.FormValue("title")))
 		if title == "" {
 			writeJSONError(w, http.StatusBadRequest, "title is a required field.")
 			return
 		}
-		description := r.FormValue("description")
+		description := normalizeUntrusted(r.FormValue("description"))
 		if strings.TrimSpace(description) == "" {
 			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
 			return
+		}
+		// The public fields reach an agent-watched issue, so a report must not
+		// smuggle in agentloop's managed-block markers (#930).
+		for _, f := range []struct{ name, value string }{
+			{"title", title}, {"description", description}, {"about_info", aboutInfo},
+		} {
+			if agentloopMarkerRe.MatchString(f.value) {
+				writeJSONError(w, http.StatusBadRequest,
+					fmt.Sprintf("%s must not contain agentloop markers (<!-- agentloop… -->).", f.name))
+				return
+			}
 		}
 		mailFiles := r.MultipartForm.File["encrypted_mail"]
 		metaFiles := r.MultipartForm.File["encrypted_metadata"]
@@ -426,12 +442,19 @@ func blobURL(baseURL, id, filename string) string {
 // (mail, metadata, screenshots) are never inlined — only links to their
 // encrypted downloads. Each of them is optional: a general no-mail report is
 // just the description plus system info (#847).
+//
+// Title, description and system info come from an unauthenticated endpoint,
+// so they are rendered defensively (#930): the title is flattened to one line,
+// the description is fenced as a code block, system info has HTML comments
+// neutralized, and all three are capped.
 func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []string) (title, body string) {
-	title = "Bug report: " + report.Title
+	title = "Bug report: " + sanitizeTitle(report.Title)
 	var b bytes.Buffer
+	b.WriteString(untrustedNotice)
 	if report.Description != "" {
-		b.WriteString(report.Description)
-		b.WriteString("\n\n---\n\n")
+		b.WriteString("### Reported by the user\n\n")
+		b.WriteString(fenceCode(neutralizeMarkers(truncateRunes(report.Description, maxDescriptionRunes))))
+		b.WriteString("\n---\n\n")
 	}
 	if mailURL != "" {
 		b.WriteString("📎 **Encrypted mail:** ")
@@ -456,8 +479,18 @@ func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []
 		b.WriteString(decryptHint(example))
 	}
 	if report.AboutInfo != "" {
+		// The blank line after the summary is load-bearing: it terminates the
+		// CommonMark HTML block, which is what lets the fence below be parsed as
+		// a fence. Without it the fence is raw text inside an open HTML block and
+		// the payload's own tags render as markup again.
 		b.WriteString("\n<details><summary>System info</summary>\n\n")
-		b.WriteString(report.AboutInfo)
+		// Fenced like the description: about_info is submitted through the same
+		// unauthenticated endpoint, so a bare "</details>" in it would close this
+		// block and let the rest render as top-level markdown -- directly below
+		// decryptHint(), whose shape it could then forge to point an agent's curl
+		// at another host (#1009). The app sends a key/value table; a code block
+		// renders that at least as readably.
+		b.WriteString(fenceCode(neutralizeMarkers(truncateRunes(report.AboutInfo, maxAboutInfoRunes))))
 		b.WriteString("\n</details>\n")
 	}
 	return title, b.String()

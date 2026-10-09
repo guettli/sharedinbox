@@ -247,7 +247,10 @@ class _SyncHealthVerifyingRow extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 2),
         ),
         SizedBox(width: AppSpacing.xs),
-        Text('Sync health: verifying...'),
+        // Expanded, not a bare Text: the spinner is a fixed width, so an
+        // unconstrained label overflows the row at large text scales exactly
+        // as the result row did.
+        Expanded(child: Text('Sync health: verifying...')),
       ],
     );
   }
@@ -296,30 +299,48 @@ class _SyncHealthResultRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final date = lastVerifiedAt.toLocal().toString().split('.')[0];
+    final iconSize = MediaQuery.textScalerOf(context).scale(AppIconSize.sm);
     final details =
         isHealthy ? const <String>[] : _discrepancyLines(discrepancySummary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Text('Sync health: '),
-            Icon(
-              isHealthy ? Icons.verified : Icons.warning_amber,
-              size: AppIconSize.sm,
-              color: isHealthy ? Colors.green : Colors.orange,
-            ),
-            const SizedBox(width: AppSpacing.xs),
-            Expanded(
-              child: Text(
-                isHealthy ? 'Healthy' : 'Discrepancies found',
+        // One RichText rather than a Row. A Row sized 'Sync health: ' and the
+        // date to their intrinsic widths, so once the text scale grew they
+        // squeezed the Expanded status down to nothing — rendering 'Healthy'
+        // one letter per line — and still overflowed (by 52px on a Galaxy A80
+        // at font_scale 1.8). Inline spans soft-wrap onto further lines
+        // instead; the only placeholder here is the fixed-size status icon, so
+        // nothing in this paragraph can exceed the line width.
+        Text.rich(
+          TextSpan(
+            children: [
+              const TextSpan(text: 'Sync health: '),
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: Icon(
+                  isHealthy ? Icons.verified : Icons.warning_amber,
+                  // Scaled with the text: WidgetSpan children are not
+                  // text-scaled, so a fixed 16px glyph next to 28px text at
+                  // scale 2.0 reads as a rendering fault.
+                  size: iconSize,
+                  color: isHealthy ? Colors.green : Colors.orange,
+                  // Colour alone distinguishes healthy from degraded, so the
+                  // state has to reach a screen reader some other way.
+                  semanticLabel: isHealthy ? 'healthy' : 'warning',
+                ),
               ),
-            ),
-            Text(
-              '($date)',
-              style: theme.textTheme.labelSmall,
-            ),
-          ],
+              // Non-breaking space: a plain space is a legal wrap point, which
+              // would strand the icon alone at the end of a line.
+              TextSpan(
+                text: '\u00A0${isHealthy ? 'Healthy' : 'Discrepancies found'}',
+              ),
+              TextSpan(
+                text: ' ($date)',
+                style: theme.textTheme.labelSmall,
+              ),
+            ],
+          ),
         ),
         for (final line in details)
           Padding(

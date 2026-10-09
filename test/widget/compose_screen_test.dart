@@ -85,6 +85,57 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    // Regression for the row-overflow class of #965, here via the dropdown.
+    // DropdownButton sizes itself from the WIDEST ITEM, not the selected one,
+    // so this overflowed by 426px on a real phone at font_scale 2.0 while the
+    // short "Select an account" hint was the thing on screen — the long item
+    // the user had not opened yet was setting the width.
+    //
+    // This pins isExpanded only. selectedItemBuilder is not pinned: with the
+    // mutation verified to have actually applied, the closed button measures
+    // 80px either way, so nothing here can tell them apart. It is kept because
+    // the menu can never be wider than the button, so truncating the items
+    // instead would leave the user choosing between unreadable addresses.
+    testWidgets('From dropdown does not overflow at large text scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 2400); // 360x800 logical
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      // A realistic display-name-plus-address, which is what the item renders.
+      const longAccount = Account(
+        id: 'acc-2',
+        displayName: 'Code8Test',
+        email: 'code8@thomas-guettler.de',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: _composeOverrides(
+            accounts: const [kTestAccount, longAccount],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Prove the scale reached the widget; without it the row fits and this
+      // would pass against the bug.
+      final scaler = MediaQuery.textScalerOf(
+        tester.element(find.byType(DropdownButtonFormField<String>)),
+      );
+      expect(scaler.scale(14), greaterThan(16));
+
+      // What pins the fix is the reported RenderFlex overflow surfacing
+      // here. A width assertion would be tautological: a vertical sliver
+      // hands its child a tight cross-axis width, so the field measures 328
+      // no matter what the button does.
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
       'does not auto-select an account with several configured, and '
       'blocks send until one is chosen (#463)',
