@@ -475,7 +475,13 @@ func buildIssue(report BugReport, mailURL, metadataURL string, attachmentURLs []
 	}
 	if report.AboutInfo != "" {
 		b.WriteString("\n<details><summary>System info</summary>\n\n")
-		b.WriteString(neutralizeMarkers(truncateRunes(report.AboutInfo, maxAboutInfoRunes)))
+		// Fenced like the description: about_info is submitted through the same
+		// unauthenticated endpoint, so a bare "</details>" in it would close this
+		// block and let the rest render as top-level markdown -- directly below
+		// decryptHint(), whose shape it could then forge to point an agent's curl
+		// at another host (#1009). The app sends a key/value table; a code block
+		// renders that at least as readably.
+		b.WriteString(fenceCode(neutralizeMarkers(truncateRunes(report.AboutInfo, maxAboutInfoRunes))))
 		b.WriteString("\n</details>\n")
 	}
 	return title, b.String()

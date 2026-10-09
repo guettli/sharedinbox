@@ -43,12 +43,32 @@ func isBidiControl(r rune) bool {
 	return (r >= '‪' && r <= '‮') || (r >= '⁦' && r <= '⁩')
 }
 
+// isInvisibleFormat reports format runes (Unicode category Cf) that carry no
+// visible glyph, plus surrogates and private-use runes. These are the channel
+// for text a human cannot see but an agent reads in full: U+E0000-U+E007F
+// (Unicode Tags) encodes arbitrary ASCII invisibly, and ZWSP/WJ/BOM let text be
+// padded or split. unicode.IsControl does NOT cover any of them — it is
+// Latin-1-only by construction ("All control characters are < MaxLatin1"), and
+// unicode.IsSpace is false for them too, so strings.Fields does not collapse
+// them either.
+//
+// ZWJ and ZWNJ are deliberately KEPT: they are required orthography in Persian
+// and Indic scripts and join emoji sequences, so dropping them would corrupt
+// legitimate titles. They cannot encode arbitrary text on their own the way the
+// Tag block can.
+func isInvisibleFormat(r rune) bool {
+	if r == '‌' || r == '‍' {
+		return false
+	}
+	return unicode.In(r, unicode.Cf, unicode.Cs, unicode.Co)
+}
+
 // sanitizeTitle turns the user's subject into a single, plain line: control
 // characters and line breaks become spaces, whitespace runs collapse, bidi
 // controls are dropped, and the result is capped at maxTitleRunes.
 func sanitizeTitle(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if isBidiControl(r) {
+		if isBidiControl(r) || isInvisibleFormat(r) {
 			return -1
 		}
 		if unicode.IsControl(r) {
@@ -73,8 +93,12 @@ func neutralizeMarkers(s string) string {
 
 // fenceCode renders s as a fenced code block whose backtick fence is longer
 // than any backtick run inside s, so the user text cannot close the fence and
-// escape into rendered markdown. Line endings are normalized and control
-// characters other than newline and tab are dropped.
+// escape into rendered markdown. Line endings are normalized; control, bidi and
+// invisible-format characters other than newline and tab are dropped.
+//
+// Every untrusted field that reaches the rendered issue body goes through this
+// -- title excepted, which GitHub renders as plain text and which sanitizeTitle
+// flattens to one line instead.
 func fenceCode(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
@@ -82,7 +106,7 @@ func fenceCode(s string) string {
 		if r == '\n' || r == '\t' {
 			return r
 		}
-		if unicode.IsControl(r) || isBidiControl(r) {
+		if unicode.IsControl(r) || isBidiControl(r) || isInvisibleFormat(r) {
 			return -1
 		}
 		return r

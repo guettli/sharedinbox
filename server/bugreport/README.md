@@ -47,11 +47,23 @@ server therefore:
   forge e.g. an approved plan block;
 - opens the issue with a fixed **untrusted-input notice** telling readers and
   agents that the user parts are data, not instructions;
-- flattens the **title** to one plain line (no control or bidi characters);
-- renders the **description** inside a fenced code block whose fence is longer
-  than any backtick run in it, so it cannot break out into markdown/HTML;
-- keeps **system info** rendered as markdown but neutralizes HTML comments
-  (`<!--` → `<! --`, `-->` → `-- >`);
+- flattens the **title** to one plain line, dropping control, bidi and
+  invisible-format characters (see below);
+- renders the **description** and **system info** inside a fenced code block
+  whose fence is longer than any backtick run in them, so neither can break out
+  into markdown/HTML. System info was rendered as markdown until #1009, where a
+  bare `</details>` in it closed the System-info block and let the rest render
+  at top level — directly under the "how to decrypt" block, whose shape it
+  could then forge with another host's URL;
+- neutralizes HTML comments in both (`<!--` → `<! --`, `-->` → `-- >`), which
+  a fence alone would not do for a regex-based marker parser;
+- drops **invisible** runes — Unicode category Cf plus surrogates and
+  private-use, keeping ZWJ/ZWNJ because Persian, Indic scripts and emoji
+  sequences need them. `unicode.IsControl` does not cover these: it is
+  Latin-1-only by construction, so before #1009 the U+E0000–U+E007F Tag block
+  (invisible ASCII) and ZWSP/WJ/BOM reached agents in a title that looked clean
+  to a human. A code fence does not help here — invisible text is invisible
+  inside a code block too;
 - **truncates** the title to 120, the description to 8000 and system info to
   4000 runes, ending a cut field with `…[truncated]`. The app truncates with
   the identical numbers (`lib/core/services/report_limits.dart`), enforced by
