@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/net/resettable_client.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -90,7 +91,10 @@ final dbEncryptionServiceProvider = Provider<DbEncryptionService>((ref) {
 });
 
 final httpClientProvider = Provider<http.Client>((ref) {
-  final client = http.Client();
+  // ResettableClient so a connectivity reconnect can drop pooled connections
+  // that went stale while offline / mid-handoff (see reconnectFlushProvider,
+  // issue #1012). Delegate is a plain http.Client() — IOClient on mobile.
+  final client = ResettableClient(http.Client.new);
   ref.onDispose(client.close);
   return client;
 });
@@ -401,7 +405,12 @@ final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
   final connectivity = ref.watch(connectivityServiceProvider);
   final outbox = ref.watch(outboxRepositoryProvider);
   final syncManager = ref.watch(syncManagerProvider);
+  final httpClient = ref.watch(httpClientProvider);
   final sub = connectivity.onOnline.listen((_) async {
+    // Drop any pooled connection that went stale while the device was offline
+    // or mid-handoff, so the sync kicked below opens fresh sockets instead of
+    // hanging on a dead keep-alive until it times out (issue #1012).
+    if (httpClient is ResettableClient) httpClient.reset();
     await outbox.resetPendingBackoff();
     syncManager.syncAll();
   });
