@@ -17,8 +17,9 @@ String? validateOptionalHostname(String? value) {
 /// HTTP Basic auth on every request, so it must be https — except to a
 /// localhost development server, where http is allowed (mirrors the IMAP/SMTP
 /// STARTTLS carve-out). Rejected at save time so the user sees it here rather
-/// than as a first-sync failure; `JmapClient.connect` enforces the same rule
-/// at the connection boundary for every other code path.
+/// than as a first-sync failure; the runtime paths (`JmapClient` and
+/// `ConnectionTestService`) enforce the same rule with `JmapClient.isSecureUrl`
+/// so a missing validator cannot re-open the leak.
 String? validateJmapUrl(String? value) {
   if (value == null || value.trim().isEmpty) return 'Required';
   final uri = Uri.tryParse(value.trim());

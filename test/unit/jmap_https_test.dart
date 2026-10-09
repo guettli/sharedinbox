@@ -11,26 +11,27 @@ Map<String, dynamic> _session({
   String? uploadUrl,
   String? downloadUrl,
   String? eventSourceUrl,
-}) =>
-    {
-      'apiUrl': apiUrl,
-      if (uploadUrl != null) 'uploadUrl': uploadUrl,
-      if (downloadUrl != null) 'downloadUrl': downloadUrl,
-      if (eventSourceUrl != null) 'eventSourceUrl': eventSourceUrl,
-      'accounts': {
-        'u1': {'name': 'alice@example.com', 'isPersonal': true},
-      },
-      'primaryAccounts': {
-        'urn:ietf:params:jmap:core': 'u1',
-        'urn:ietf:params:jmap:mail': 'u1',
-      },
-      'capabilities': {
-        'urn:ietf:params:jmap:core': <String, dynamic>{},
-        'urn:ietf:params:jmap:mail': <String, dynamic>{},
-      },
-      'username': 'alice@example.com',
-      'state': 'st1',
-    };
+}) {
+  return {
+    'apiUrl': apiUrl,
+    if (uploadUrl != null) 'uploadUrl': uploadUrl,
+    if (downloadUrl != null) 'downloadUrl': downloadUrl,
+    if (eventSourceUrl != null) 'eventSourceUrl': eventSourceUrl,
+    'accounts': {
+      'u1': {'name': 'alice@example.com', 'isPersonal': true},
+    },
+    'primaryAccounts': {
+      'urn:ietf:params:jmap:core': 'u1',
+      'urn:ietf:params:jmap:mail': 'u1',
+    },
+    'capabilities': {
+      'urn:ietf:params:jmap:core': <String, dynamic>{},
+      'urn:ietf:params:jmap:mail': <String, dynamic>{},
+    },
+    'username': 'alice@example.com',
+    'state': 'st1',
+  };
+}
 
 Future<JmapClient> _connect(
   String jmapUrl, {
@@ -50,13 +51,45 @@ Future<JmapClient> _connect(
 }
 
 void main() {
+  // The seam is a process-wide static; clear after every test so a host one
+  // test registers can never mask a rejection another test means to assert.
+  tearDown(JmapClient.debugAllowedHttpHosts.clear);
+
+  group('isSecureUrl: userinfo cannot smuggle a cleartext remote host', () {
+    test('a localhost-looking userinfo does not make a remote host safe', () {
+      // Uri.host is evil.com; scanning the authority string for the host would
+      // wrongly stop at the colon inside the userinfo and see 127.0.0.1.
+      expect(
+        JmapClient.isSecureUrl(Uri.parse('http://127.0.0.1:pw@evil.com/x')),
+        isFalse,
+      );
+      expect(
+        JmapClient.isSecureUrl(Uri.parse('http://localhost@evil.com/x')),
+        isFalse,
+      );
+    });
+
+    test('accepts https and http-localhost, rejects host-less', () {
+      expect(
+        JmapClient.isSecureUrl(Uri.parse('https://any.example/x')),
+        isTrue,
+      );
+      expect(
+        JmapClient.isSecureUrl(Uri.parse('http://localhost:8080/x')),
+        isTrue,
+      );
+      expect(JmapClient.isSecureUrl(Uri.parse('https://')), isFalse);
+    });
+  });
+
   group('JmapClient.connect scheme enforcement', () {
     test('rejects a remote http:// URL without making the request', () async {
       var requested = false;
       await expectLater(
-        _connect('http://mail.example.com/jmap', onRequest: () {
-          requested = true;
-        }),
+        _connect(
+          'http://mail.example.com/jmap',
+          onRequest: () => requested = true,
+        ),
         throwsA(
           isA<JmapException>().having(
             (e) => e.message,
@@ -114,6 +147,21 @@ void main() {
       expect(c.accountId, 'u1');
     });
 
+    test('rejects a userinfo-smuggled http uploadUrl at connect', () async {
+      // Session fetched over https, but a malicious server advertises an
+      // uploadUrl whose userinfo mimics localhost while the real host is
+      // remote. Must be rejected (the host is evil.com, not 127.0.0.1).
+      await expectLater(
+        _connect(
+          'https://jmap.example.com/.well-known/jmap',
+          session: _session(
+            uploadUrl: 'http://127.0.0.1:pw@evil.com/upload/{accountId}',
+          ),
+        ),
+        throwsA(isA<JmapException>()),
+      );
+    });
+
     test('rejects an http uploadUrl / downloadUrl / eventSourceUrl', () async {
       for (final s in [
         _session(uploadUrl: 'http://cdn.example.com/upload/{accountId}'),
@@ -131,7 +179,9 @@ void main() {
         () async {
       final dev = await _connect(
         'http://localhost:8080/jmap',
-        session: _session(uploadUrl: 'http://localhost:8080/upload/{accountId}'),
+        session: _session(
+          uploadUrl: 'http://localhost:8080/upload/{accountId}',
+        ),
       );
       expect(dev.accountId, 'u1');
 
@@ -168,8 +218,6 @@ void main() {
   });
 
   group('debugAllowedHttpHosts seam', () {
-    tearDown(JmapClient.debugAllowedHttpHosts.clear);
-
     test('off by default; a registered dev host is then allowed over http',
         () async {
       // Unregistered: a non-localhost http host is rejected like any other.
