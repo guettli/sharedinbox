@@ -167,32 +167,52 @@ class _FilterBar extends StatelessWidget {
                   },
                 ),
               if (accounts.length > 1)
-                DropdownButton<String?>(
-                  value: filter.accountId,
-                  hint: const Text('All accounts'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      child: Text('All accounts'),
-                    ),
-                    // accountDisplayLabel, not 'name <email>': this button
-                    // sizes itself to its widest item, and the full form
-                    // overflowed the compose field by 426px at text scale 2.0.
-                    // Inside a Wrap there is no field to clamp it to, so the
-                    // label is kept short instead — matching search_screen,
-                    // which already filters by account this way.
-                    for (final a in accounts)
-                      DropdownMenuItem<String?>(
-                        value: a.id,
-                        child: Text(accountDisplayLabel(a, a.id)),
+                // Bounded, then expanded. Inside a Wrap the button otherwise
+                // takes its widest item's intrinsic width and overflows the
+                // row — observed on a Galaxy A80 at font_scale 2.0 as "RIGHT
+                // OVERFLOWED BY 378 PIXELS", the same defect as the compose
+                // From field. Shortening the label alone only raised the
+                // threshold; a Wrap offers no field to fill the way a form
+                // does, so the ConstrainedBox gives it something to clamp to.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: DropdownButton<String?>(
+                    isExpanded: true,
+                    value: filter.accountId,
+                    hint: const Text('All accounts'),
+                    // Truncates only the closed button: the menu can never be
+                    // wider than the button, so ellipsizing the items would
+                    // leave the reader picking between unreadable addresses.
+                    selectedItemBuilder: (context) => [
+                      const Text('All accounts'),
+                      for (final a in accounts)
+                        Text(
+                          accountFromLabel(a),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        child: Text('All accounts'),
                       ),
-                  ],
-                  onChanged: (value) {
-                    onChanged(
-                      value == null
-                          ? filter.copyWith(clearAccountId: true)
-                          : filter.copyWith(accountId: value),
-                    );
-                  },
+                      // 'name <email>', not the display name alone: this
+                      // filter exists to tell accounts apart, and two accounts
+                      // can share a display name.
+                      for (final a in accounts)
+                        DropdownMenuItem<String?>(
+                          value: a.id,
+                          child: Text(accountFromLabel(a)),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      onChanged(
+                        value == null
+                            ? filter.copyWith(clearAccountId: true)
+                            : filter.copyWith(accountId: value),
+                      );
+                    },
+                  ),
                 ),
               if (filter.syncLogId != null)
                 InputChip(

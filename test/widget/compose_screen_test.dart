@@ -91,10 +91,11 @@ void main() {
     // short "Select an account" hint was the thing on screen — the long item
     // the user had not opened yet was setting the width.
     //
-    // This pins isExpanded only. selectedItemBuilder, which keeps the open
-    // menu readable, is not separately pinned: measured both ways, the closed
-    // button is 80px tall with or without it, so no assertion here can tell
-    // them apart.
+    // This pins isExpanded only. selectedItemBuilder is not pinned: with the
+    // mutation verified to have actually applied, the closed button measures
+    // 80px either way, so nothing here can tell them apart. It is kept because
+    // the menu can never be wider than the button, so truncating the items
+    // instead would leave the user choosing between unreadable addresses.
     testWidgets('From dropdown does not overflow at large text scale', (
       tester,
     ) async {
@@ -128,14 +129,10 @@ void main() {
       );
       expect(scaler.scale(14), greaterThan(16));
 
-      // The long item must really be in the list, or the fixture this test
-      // names as the cause is contributing nothing.
-      final field = find.byType(DropdownButtonFormField<String>);
-      expect(
-        tester.getSize(field).width,
-        lessThanOrEqualTo(360.0),
-        reason: 'the button must stay inside the 360dp surface',
-      );
+      // What pins the fix is the reported RenderFlex overflow surfacing
+      // here. A width assertion would be tautological: a vertical sliver
+      // hands its child a tight cross-axis width, so the field measures 328
+      // no matter what the button does.
       expect(tester.takeException(), isNull);
     });
 

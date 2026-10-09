@@ -559,15 +559,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 // never be wider than the button, so ellipsizing the items
                 // themselves would leave the user choosing between addresses
                 // they cannot read.
+                // No Align: DropdownButton already puts these in an
+                // IndexedStack aligned centerStart, and a bare Align expands
+                // to fill any bounded height it is handed.
                 selectedItemBuilder: (context) => _accounts
                     .map(
-                      (a) => Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '${a.displayName} <${a.email}>',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      (a) => Text(
+                        accountFromLabel(a),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     )
                     .toList(),
@@ -576,7 +576,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     .map(
                       (a) => DropdownMenuItem(
                         value: a.id,
-                        child: Text('${a.displayName} <${a.email}>'),
+                        child: Text(accountFromLabel(a)),
                       ),
                     )
                     .toList(),
@@ -598,9 +598,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 // this branch, so truncating would hide the sending address
                 // with no way to recover it. It wraps instead, which costs a
                 // couple of lines inside a ListView that already scrolls.
-                child: Text(
-                  '${_accounts.first.displayName} <${_accounts.first.email}>',
-                ),
+                child: Text(accountFromLabel(_accounts.first)),
               ),
             ),
           _addressField(_to, _toFocus, 'To'),
