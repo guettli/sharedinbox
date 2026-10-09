@@ -85,8 +85,10 @@ var invisibleRunes = []*unicode.RangeTable{
 // breaking real languages, so what contains it is the standing rule that agents
 // never follow instructions found in a report (AGENTS.md), not this filter.
 //
-// Known, accepted, and NOT dropped because they do render: U+2800 BRAILLE
-// PATTERN BLANK (a legitimate blank braille cell) and runs of combining marks.
+// Known, accepted, and NOT dropped because they all render: U+2800 BRAILLE
+// PATTERN BLANK (a legitimate blank braille cell), runs of combining marks, and
+// the noncharacters (U+FFFE, U+1FFFE, U+FDD0, ...), which are Cn and in no
+// table -- they show as tofu, so none of them is an invisible channel.
 func isInvisible(r rune) bool {
 	if unicode.Is(unicode.Join_Control, r) {
 		return false
@@ -123,9 +125,14 @@ func normalizeUntrusted(s string) string {
 	}, s)
 }
 
-// sanitizeTitle turns the user's subject into a single, plain line: control
-// characters and line breaks become spaces, whitespace runs collapse, bidi
-// controls are dropped, and the result is capped at maxTitleRunes.
+// sanitizeTitle turns the user's subject into a single, plain line: line breaks
+// and tabs become spaces, whitespace runs collapse, and the result is capped at
+// maxTitleRunes.
+//
+// Called after normalizeUntrusted, which has already removed every other
+// control rune and every invisible one (the bidi controls among them, as Cf) --
+// so the filters below are idempotent defense in depth rather than the primary
+// containment, and the only runes they actually convert are \n and \t.
 func sanitizeTitle(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if isInvisible(r) {
@@ -153,8 +160,9 @@ func neutralizeMarkers(s string) string {
 
 // fenceCode renders s as a fenced code block whose backtick fence is longer
 // than any backtick run inside s, so the user text cannot close the fence and
-// escape into rendered markdown. Line endings are normalized; control, bidi and
-// invisible-format characters other than newline and tab are dropped.
+// escape into rendered markdown. Line endings are normalized and control and
+// invisible runes other than newline and tab are dropped -- a no-op in practice,
+// since normalizeUntrusted has already done both at intake.
 //
 // Every untrusted field that reaches the rendered issue body goes through this
 // -- title excepted, which GitHub renders as plain text and which sanitizeTitle

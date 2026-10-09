@@ -50,9 +50,10 @@ server therefore:
   first or removing the rune afterwards reconstitutes the marker;
 - opens the issue with a fixed **untrusted-input notice** telling readers and
   agents that the user parts are data, not instructions;
-- flattens the **title** to one plain line (control characters become spaces,
-  whitespace runs collapse), having already dropped the invisible runes below —
-  the bidi controls among them, since they are all `Cf`;
+- flattens the **title** to one plain line: line breaks and tabs become
+  spaces and whitespace runs collapse. Other control characters never get this
+  far — intake deletes them (below), so their neighbours join rather than being
+  separated. The bidi controls go the same way, as `Cf`;
 - renders the **description** and **system info** inside a fenced code block
   whose fence is longer than any backtick run in them, so neither can break out
   into markdown/HTML. System info was rendered as markdown until #1009, where a
@@ -87,7 +88,9 @@ server therefore:
   the identical numbers (`lib/core/services/report_limits.dart`), enforced by
   `TestReportLimitsMatchApp`. `report.json` keeps the untruncated text — but
   normalized, since the strip above runs at intake, so invisible and control
-  runes are gone from the stored copy too.
+  runes are gone from the stored copy of those three fields. `sync_log` is the
+  exception: it is stored raw and is not marker-checked, because it never
+  reaches the issue body (open item in #1009).
 
 No escaping removes natural-language instructions: the real containment is
 that agents never follow directives from the report, never reveal key material
