@@ -95,15 +95,22 @@ Future<void> upgradeImapToStartTls(
   } catch (e, st) {
     rethrowAsTlsHint(e, st, host, port, hint: 'IMAP STARTTLS upgrade');
   }
+  // RFC 3501 §6.2.1 / RFC 2595 §3.1: capabilities announced before STARTTLS
+  // are MUST-discard, because they were sent over cleartext and an active MITM
+  // can author them. enough_mail does not re-fetch on upgrade (the secured
+  // socket reuses the connection without re-running the greeting handler) and
+  // login() overwrites them only when the server volunteers an `OK
+  // [CAPABILITY …]` code, so issue CAPABILITY explicitly on the secure channel.
+  await client.capability();
 }
 
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// When [account.imapSsl] is false, STARTTLS is required and the connection
 /// fails if the server does not support it — except on localhost, where
-/// plaintext is allowed for the dev server (see [imapNeedsStartTls]). The
-/// post-STARTTLS capability list is refreshed by `login()`, satisfying RFC
-/// 3501's rule to discard capabilities learned before the upgrade.
+/// plaintext is allowed for the dev server (see [imapNeedsStartTls]).
+/// [upgradeImapToStartTls] re-issues CAPABILITY on the secure channel so the
+/// pre-STARTTLS capability list is discarded per RFC 3501 §6.2.1.
 ///
 /// When the current [Zone] carries a capture sink under [verboseLogKey],
 /// IMAP trace logging is enabled so each command/response is captured there.
@@ -135,10 +142,65 @@ Future<ImapClient> connectImap(
   return client;
 }
 
+/// True when connecting [account] over SMTP must upgrade the plaintext
+/// connection with STARTTLS before authenticating.
+///
+/// Mirrors [imapNeedsStartTls]: `smtpSsl: false` means "STARTTLS required" —
+/// except on localhost, where plaintext stays legitimate for the dev server
+/// (`test/backend`, port 25, which has no certificate configured).
+@visibleForTesting
+bool smtpNeedsStartTls(Account account) =>
+    !account.smtpSsl && !isLocalhost(account.smtpHost);
+
+/// Issues `STARTTLS` on an already-EHLO'd plaintext [client] and requires the
+/// upgrade to succeed before any credential is sent. Two independent checks,
+/// because either gap leaks the password over cleartext:
+///
+///  1. the server must advertise `STARTTLS` — an active MITM strips it from the
+///     EHLO response to force a downgrade, so a missing capability is a refusal,
+///     not a reason to continue; and
+///  2. the command must answer with a success (2xx) status. `SmtpClient.
+///     startTls()` upgrades the socket only on `isOkStatus` and otherwise
+///     RETURNS the response rather than throwing — and a 1xx "accepted" status
+///     is neither OK nor a failure, so without this check a stripped-STARTTLS
+///     MITM that replies `150` leaves the socket in cleartext and the `AUTH`
+///     that follows sends the password in the clear.
+///
+/// No plaintext fallback: a server that cannot complete STARTTLS on this port
+/// is a misconfiguration, surfaced as an error, never a silent downgrade.
+@visibleForTesting
+Future<void> upgradeSmtpToStartTls(
+  SmtpClient client,
+  String host,
+  int port,
+) async {
+  if (!client.serverInfo.supportsStartTls) {
+    throw Exception(
+      'Server at $host:$port does not advertise STARTTLS — turn SSL/TLS on '
+      'and use the implicit-TLS port (usually 465), or point at a port that '
+      'offers STARTTLS.',
+    );
+  }
+  late final SmtpResponse response;
+  try {
+    response = await client.startTls();
+  } catch (e, st) {
+    rethrowAsTlsHint(e, st, host, port, hint: 'SMTP STARTTLS upgrade');
+  }
+  if (!response.isOkStatus) {
+    throw Exception(
+      'SMTP STARTTLS upgrade refused by $host:$port (${response.message}) — '
+      'refusing to send credentials over an un-upgraded connection.',
+    );
+  }
+}
+
 /// Opens an authenticated SMTP client for [account] using [username].
 ///
 /// When [account.smtpSsl] is false, STARTTLS is required and the connection
-/// fails if the server does not support it. Plaintext fallback is not allowed.
+/// fails if the server does not support or complete it — except on localhost,
+/// where plaintext is allowed for the dev server (see [smtpNeedsStartTls]).
+/// Plaintext fallback to a remote host is never allowed.
 ///
 /// Caller is responsible for calling [SmtpClient.quit] when done.
 Future<SmtpClient> connectSmtp(
@@ -165,13 +227,8 @@ Future<SmtpClient> connectSmtp(
     rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
   }
   await client.ehlo();
-  if (!account.smtpSsl) {
-    // STARTTLS required on submission port (587). No plaintext fallback.
-    try {
-      await client.startTls();
-    } catch (e, st) {
-      rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
-    }
+  if (smtpNeedsStartTls(account)) {
+    await upgradeSmtpToStartTls(client, account.smtpHost, account.smtpPort);
   }
   await client.authenticate(username, password);
   return client;

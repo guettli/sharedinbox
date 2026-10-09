@@ -63,7 +63,9 @@ void main() {
       await upgradeImapToStartTls(client, 'mail.example.com', 143);
 
       expect(client.startTlsCalls, 1);
-      expect(client.capabilityCalls, 0);
+      // The greeting already carried capabilities, so none is fetched before
+      // the upgrade; the one call is the mandatory refresh AFTER it.
+      expect(client.capabilityCalls, 1);
     });
 
     test('asks for CAPABILITY when the greeting carried none', () async {
@@ -73,8 +75,27 @@ void main() {
 
       await upgradeImapToStartTls(client, 'mail.example.com', 143);
 
-      expect(client.capabilityCalls, 1);
+      // One call before the upgrade (to learn STARTTLS is offered) and one
+      // after it (to discard the cleartext capabilities per RFC 3501 §6.2.1).
+      expect(client.capabilityCalls, 2);
       expect(client.startTlsCalls, 1);
+    });
+
+    test('discards pre-STARTTLS capabilities by re-fetching after the upgrade',
+        () async {
+      // Greeting (cleartext, MITM-authorable) carries a capability the secure
+      // CAPABILITY response does not. After the upgrade the client must reflect
+      // the post-TLS list, not the pre-TLS one.
+      final client = _StartTlsSpyClient(
+        greetingCapabilities: ['IMAP4rev1', 'STARTTLS', 'X-INJECTED-PRE-TLS'],
+        capabilityResponse: ['IMAP4rev1', 'STARTTLS'],
+      );
+
+      await upgradeImapToStartTls(client, 'mail.example.com', 143);
+
+      final caps = client.serverInfo.capabilities?.map((c) => c.name).toList();
+      expect(caps, isNot(contains('X-INJECTED-PRE-TLS')));
+      expect(caps, contains('IMAP4rev1'));
     });
 
     test('refuses a server that does not advertise STARTTLS', () async {
