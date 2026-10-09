@@ -425,10 +425,14 @@ class NoteRepositoryImpl implements NoteRepository {
     final destroyed =
         List<String>.from(emailArgs['destroyed'] as List? ?? const []);
 
-    // Fetch bodies for anything newly added or updated in the Notes mailbox.
-    final toFetch = <String>{
+    final addedIds = <String>{
       for (final entry in added)
         (entry as Map<String, dynamic>)['id'] as String,
+    };
+
+    // Fetch bodies for anything newly added or updated in the Notes mailbox.
+    final toFetch = <String>{
+      ...addedIds,
       ...created,
       ...updated,
     };
@@ -454,7 +458,16 @@ class NoteRepositoryImpl implements NoteRepository {
     // Deletions come from two sources: destroyed (globally deleted) and
     // removed-from-query (moved out of the Notes mailbox). Both mean "not a
     // note anymore", so drop from the local cache in either case.
-    final toRemove = {...destroyed, ...removed};
+    //
+    // An id may appear in both `removed` and `added`: RFC 8620 §5.6 lets a
+    // server list a still-matching item in `removed` as long as it re-lists
+    // it in `added`, and servers such as Stalwart do that for a freshly
+    // created note. Such an id is still in the Notes mailbox, so it must survive —
+    // otherwise the note the user just added vanishes on the next sync.
+    final toRemove = {
+      ...destroyed,
+      ...removed.where((id) => !addedIds.contains(id)),
+    };
     for (final jmapId in toRemove) {
       await _deleteNoteByServerId(accountId, jmapId);
     }
