@@ -55,6 +55,38 @@ bool _isTransientNetworkError(Object e) =>
 /// Deliberately short and free of the words "network" and "DNS": it is
 /// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
 /// longer, and the half that would be cut is the actionable half.
+/// A stable key for the *kind* of a sync error, derived from the message
+/// [syncErrorMessage] / [_CycleFailure] produce.
+///
+/// The sync-error banner dismisses on this, not on the raw text: a partial
+/// cycle's message embeds the failing folder names and count, so comparing
+/// text meant a dismissed banner re-appeared the moment a different folder
+/// failed (or the same ones in a different order). Co-located with the
+/// message producers above so a reword updates both together; a test drives
+/// real messages through it to catch drift.
+///
+/// A one-off error keeps its full text as the key, so dismissing one does not
+/// hide a genuinely different problem.
+///
+/// A partial-cycle key folds in the *cause* class, not just "partial": the
+/// folder names vary per cycle (so they must stay out of the key), but a
+/// transient partial self-heals while a persistent one does not — and
+/// dismissing the first must not suppress the second, which never recovers to
+/// a clean state and would otherwise stay hidden until an app restart.
+String syncErrorKey(String message) {
+  // The cause class is detectable even inside a partial message, which embeds
+  // the cause's text after the folder label.
+  final cause = message.contains('did not answer in time')
+      ? 'timeout'
+      : message.contains('Could not reach the mail server')
+          ? 'unreachable'
+          : 'other';
+  if (message.contains('folders failed')) return 'partial:$cause';
+  // A transient hint collapses to its class; anything else keeps its full
+  // text, so two distinct one-off problems stay distinct.
+  return cause == 'other' ? message : cause;
+}
+
 @visibleForTesting
 String syncErrorMessage(Object e) {
   if (_isTimeoutError(e)) {

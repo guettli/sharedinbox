@@ -15,7 +15,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
-    show syncErrorMessage;
+    show syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
 
 void main() {
@@ -87,6 +87,81 @@ void main() {
       final error = Exception('invalid credentials');
       expect(syncErrorMessage(error), error.toString());
       expect(syncErrorMessage(StateError('bad state')), contains('bad state'));
+    });
+  });
+
+  group('syncErrorKey', () {
+    // The bug this key exists for: a partial cycle's message embeds the
+    // failing folder names and count, so dismissing the banner by raw text
+    // meant it re-appeared the moment a different folder failed. All partial
+    // messages must share one key regardless of which folders are named.
+    test('partial-failure messages are folder-name invariant per cause', () {
+      // Same cause, different folder sets -> same key, so dismissing one does
+      // not re-pop when the failing folders shift. This is the bug the key
+      // exists to fix.
+      const a = '2 of 7 folders failed (Archive, Sent): '
+          'Could not reach the mail server — temporary network or DNS '
+          'problem. Will retry automatically.';
+      const b = '3 of 7 folders failed (Archive, Drafts, Spam): '
+          'Could not reach the mail server — temporary network or DNS '
+          'problem. Will retry automatically.';
+      expect(syncErrorKey(a), 'partial:unreachable');
+      expect(syncErrorKey(a), syncErrorKey(b));
+    });
+
+    test('a partial folds in its cause, so transient and persistent differ',
+        () {
+      const transient = '2 of 7 folders failed (Archive): Could not reach the '
+          'mail server — temporary network or DNS problem. Will retry '
+          'automatically.';
+      const persistent = '1 of 7 folders failed (Archive): '
+          'Authentication failed (HTTP 403)';
+      expect(syncErrorKey(transient), 'partial:unreachable');
+      expect(syncErrorKey(persistent), 'partial:other');
+      expect(
+        syncErrorKey(transient),
+        isNot(syncErrorKey(persistent)),
+        reason: 'dismissing a transient partial must not suppress a serious '
+            'one, which never recovers to clear the dismissal',
+      );
+    });
+
+    test('maps the transient hints to stable keys', () {
+      expect(
+        syncErrorKey(syncErrorMessage(TimeoutException('x'))),
+        'timeout',
+      );
+      expect(
+        syncErrorKey(
+          syncErrorMessage(const SocketException('Connection refused')),
+        ),
+        'unreachable',
+      );
+    });
+
+    test('keeps a one-off error distinct by its full text', () {
+      final a = syncErrorMessage(Exception('mailbox locked'));
+      final b = syncErrorMessage(Exception('quota exceeded'));
+      expect(syncErrorKey(a), isNot(syncErrorKey(b)));
+      expect(syncErrorKey(a), a);
+    });
+
+    // Drift guard: if syncErrorMessage is reworded without updating
+    // syncErrorKey, the transient hints would fall through to their full text
+    // and the banner-dismiss grouping would silently break.
+    test('the transient hints do not fall through to full-text keys', () {
+      for (final e in <Object>[
+        TimeoutException('x'),
+        const SocketException('Failed host lookup'),
+        const HandshakeException('tls'),
+      ]) {
+        final message = syncErrorMessage(e);
+        expect(
+          syncErrorKey(message),
+          isNot(message),
+          reason: 'a transient error must map to a short class, not its text',
+        );
+      }
     });
   });
 }
