@@ -51,6 +51,28 @@ http.Client _sessionClient({
   });
 }
 
+/// Starts [JmapClient.connect] with the standard test credentials without
+/// awaiting it — for `fakeAsync` tests that drive the connect with
+/// `async.elapse`. Captures the connected client via [onConnected] or the
+/// failure via [onError].
+void _startConnect(
+  http.Client httpClient, {
+  void Function(JmapClient)? onConnected,
+  void Function(Object)? onError,
+}) {
+  unawaited(
+    JmapClient.connect(
+      httpClient: httpClient,
+      jmapUrl: Uri.parse(_sessionUrl),
+      username: 'alice',
+      password: 'secret',
+    ).then<void>(
+      (client) => onConnected?.call(client),
+      onError: onError,
+    ),
+  );
+}
+
 void main() {
   group('JmapClient.connect', () {
     test('parses apiUrl and accountId from session', () async {
@@ -129,6 +151,70 @@ void main() {
         ),
         throwsA(isA<JmapException>()),
       );
+    });
+
+    // Issue #1012: the session fetch is the first request of every sync
+    // cycle, so on mobile it hits the worst-case radio state. A single slow
+    // or dropped first attempt must not fail the whole cycle.
+    test('retries the session fetch after a transient transport error',
+        () async {
+      var calls = 0;
+      final httpClient = MockClient((req) async {
+        calls++;
+        if (calls == 1) {
+          throw http.ClientException('connection reset by peer');
+        }
+        return http.Response(jsonEncode(_sessionBody()), 200);
+      });
+      final client = await JmapClient.connect(
+        httpClient: httpClient,
+        jmapUrl: Uri.parse(_sessionUrl),
+        username: 'alice',
+        password: 'secret',
+      );
+      expect(client.accountId, _accountId);
+      expect(calls, 2, reason: 'the first attempt failed and was retried');
+    });
+
+    test('retries the session fetch after a timeout and succeeds', () {
+      fakeAsync((async) {
+        var calls = 0;
+        final httpClient = MockClient((req) async {
+          calls++;
+          if (calls == 1) {
+            // Slower than the metadata budget: the first attempt times out.
+            await Future<void>.delayed(
+              JmapClient.metadataTimeout + const Duration(seconds: 1),
+            );
+          }
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        });
+        JmapClient? client;
+        _startConnect(httpClient, onConnected: (c) => client = c);
+        async.elapse(JmapClient.metadataTimeout + const Duration(seconds: 2));
+        expect(client, isNotNull);
+        expect(client!.accountId, _accountId);
+        expect(calls, 2);
+      });
+    });
+
+    test('gives up and throws TimeoutException if every attempt times out', () {
+      fakeAsync((async) {
+        var calls = 0;
+        final httpClient = MockClient((req) async {
+          calls++;
+          await Future<void>.delayed(
+            JmapClient.metadataTimeout + const Duration(seconds: 1),
+          );
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        });
+        Object? error;
+        _startConnect(httpClient, onError: (e) => error = e);
+        async.elapse(const Duration(seconds: 60));
+        expect(error, isA<TimeoutException>());
+        expect(calls, 3,
+            reason: '1 initial attempt + 2 retries, then gives up');
+      });
     });
   });
 
@@ -375,14 +461,7 @@ void main() {
         });
 
         JmapClient? client;
-        unawaited(
-          JmapClient.connect(
-            httpClient: httpClient,
-            jmapUrl: Uri.parse(_sessionUrl),
-            username: 'alice',
-            password: 'secret',
-          ).then((c) => client = c),
-        );
+        _startConnect(httpClient, onConnected: (c) => client = c);
         async.elapse(const Duration(milliseconds: 1));
         expect(client, isNotNull, reason: 'the session fetch is immediate');
 

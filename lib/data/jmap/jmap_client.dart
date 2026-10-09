@@ -84,6 +84,22 @@ class JmapClient {
   /// think-time.
   static const blobTimeout = Duration(seconds: 30);
 
+  /// Total attempts for the session fetch in [connect] before giving up on a
+  /// timeout or transient transport error (1 initial + retries).
+  ///
+  /// The session `GET` is the *first* request of every sync cycle, so on
+  /// mobile it runs against the worst-case radio state: a cold/dozed data
+  /// connection that needs to be brought up, or a keep-alive socket the
+  /// carrier already killed while the client slept. A single slow or dead
+  /// first attempt would otherwise fail the whole cycle with `0 fetched`
+  /// (issue #1012), even though the very next attempt usually succeeds.
+  ///
+  /// Kept deliberately small: [Future.timeout] does not cancel the underlying
+  /// request, so each timed-out attempt leaves one request in flight, and
+  /// [connect] runs several times per cycle — a generous count would multiply
+  /// [metadataTimeout] waits under a genuinely bad connection.
+  static const _connectMaxAttempts = 3;
+
   /// Fetches the JMAP Session object from [jmapUrl] and returns a connected
   /// client. Throws [JmapException] on HTTP errors or missing capabilities.
   static Future<JmapClient> connect({
@@ -94,19 +110,37 @@ class JmapClient {
   }) async {
     final credentials = base64.encode(utf8.encode('$username:$password'));
     http.Response resp;
-    var attempt = 0;
+    var rateLimitAttempt = 0;
+    var transientAttempt = 0;
     while (true) {
-      resp = await httpClient.get(
-        jmapUrl,
-        headers: {
-          'Authorization': 'Basic $credentials',
-        },
-      ).timeout(metadataTimeout);
-      if (resp.statusCode != 429 || attempt >= 4) {
+      try {
+        resp = await httpClient.get(
+          jmapUrl,
+          headers: {
+            'Authorization': 'Basic $credentials',
+          },
+        ).timeout(metadataTimeout);
+      } on Exception catch (e) {
+        // A slow first request (cold/dozed radio) throws TimeoutException; a
+        // dropped or stale pooled socket surfaces from IOClient as a
+        // ClientException. Both are worth a bounded retry; anything else
+        // (e.g. a programming error) propagates.
+        final transient = e is TimeoutException || e is http.ClientException;
+        if (!transient || transientAttempt >= _connectMaxAttempts - 1) rethrow;
+        // Cumulative across the whole connect() — not reset by an intervening
+        // 429 retry — so the total number of attempts stays bounded.
+        transientAttempt++;
+        await Future<void>.delayed(
+          Duration(milliseconds: 300 * transientAttempt),
+        );
+        continue;
+      }
+      if (resp.statusCode != 429 || rateLimitAttempt >= 4) {
         break;
       }
-      attempt++;
-      await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+      rateLimitAttempt++;
+      await Future<void>.delayed(
+          Duration(milliseconds: 200 * rateLimitAttempt));
     }
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
