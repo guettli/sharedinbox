@@ -2343,6 +2343,28 @@ class EmailRepositoryImpl implements EmailRepository {
 
   static const _jmapPageSize = 500;
 
+  /// Backstop on an `Email/query` walk, so a server that keeps returning full
+  /// pages cannot spin one forever. Hitting it means the enumeration is
+  /// incomplete, which [_jmapEnumerationComplete] then refuses to prune on.
+  static const _jmapMaxQueryPages = 200;
+
+  /// Whether a walk that collected [seen] ids, with [reportedTotal] being the
+  /// last `total` the server gave, can be trusted to have enumerated the whole
+  /// mailbox.
+  ///
+  /// This gates every prune, because pruning against an untrustworthy
+  /// enumeration deletes every message the walk did not see — and for a
+  /// spurious empty first page that is the entire mailbox. A server that
+  /// answers one bad `Email/query` should cost a deferred reconcile, not a
+  /// folder.
+  ///
+  /// An empty mailbox reports `total: 0` and collects nothing, which is
+  /// complete and correctly prunes away local leftovers. A server that does
+  /// not report `total` at all is never trusted; the periodic reconcile
+  /// retries instead.
+  static bool _jmapEnumerationComplete(Set<String> seen, int? reportedTotal) =>
+      reportedTotal != null && seen.length >= reportedTotal;
+
   /// Pending changes exceeding this attempt count are evicted rather than
   /// retried, preventing unbounded queue growth from permanent server errors.
   static const _maxChangeAttempts = 5;
@@ -2461,6 +2483,8 @@ class EmailRepositoryImpl implements EmailRepository {
     late final String state;
 
     int position = 0;
+    var pages = 0;
+    int? reportedTotal;
     var fetched = 0;
     var bytes = 0;
     final seenIds = <String>{};
@@ -2508,7 +2532,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
       final queryResult = _responseArgs(responses, 0, 'Email/query');
       final ids = List<String>.from(queryResult['ids'] as List);
-      final total = queryResult['total'] as int?;
+      reportedTotal = (queryResult['total'] as int?) ?? reportedTotal;
       seenIds.addAll(ids);
       if (firstPage) {
         state = _responseArgs(responses, 1, 'Email/get')['state'] as String;
@@ -2525,27 +2549,58 @@ class EmailRepositoryImpl implements EmailRepository {
       bytes += batched.bytes;
 
       position += ids.length;
-      if (ids.isEmpty || total == null || position >= total) break;
+      pages++;
+      if (ids.isEmpty) break;
+      // Prefer the server's own count; fall back to "a short page is the end"
+      // only when it does not give one. Deliberately not breaking outright on
+      // an absent `total`, which is what used to stop the walk after one page
+      // — so a server ignoring `calculateTotal` had its mailbox truncated to
+      // the first 500 messages, and then pruned down to them.
+      if (reportedTotal != null) {
+        if (position >= reportedTotal) break;
+      } else if (ids.length < _jmapPageSize) {
+        break;
+      }
+      if (pages >= _jmapMaxQueryPages) {
+        log(
+          'JMAP-sync: full mailbox=$mailboxJmapId stopped after $pages pages '
+          '(position=$position) — not pruning against a partial walk',
+        );
+        break;
+      }
     }
 
-    final pruned = await _pruneJmapMailboxToServerIds(
-      accountId,
-      mailboxJmapId,
-      seenIds,
-    );
+    final complete = _jmapEnumerationComplete(seenIds, reportedTotal);
+    var pruned = 0;
+    if (complete) {
+      pruned = await _pruneJmapMailboxToServerIds(
+        accountId,
+        mailboxJmapId,
+        seenIds,
+      );
+    }
     log(
       'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
-      'newState=$state',
+      'newState=$state complete=$complete total=$reportedTotal',
     );
 
     await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', state);
-    // Record that we've just done an exhaustive reconciliation so the periodic
-    // pass in _maybeReconcileJmapMailbox doesn't repeat it immediately.
-    await _saveSyncState(
-      accountId,
-      'JMAP:Reconcile:$mailboxJmapId',
-      DateTime.now().toIso8601String(),
-    );
+    final reconcileKey = 'JMAP:Reconcile:$mailboxJmapId';
+    if (complete) {
+      // Record that we've just done an exhaustive reconciliation so the
+      // periodic pass in _maybeReconcileJmapMailbox doesn't repeat it
+      // immediately.
+      await _saveSyncState(
+        accountId,
+        reconcileKey,
+        DateTime.now().toIso8601String(),
+      );
+    } else {
+      // Nothing was pruned, so make the periodic pass due now rather than
+      // leaving a possibly-fresh marker to defer it: `_syncEmailsJmap` runs
+      // the reconcile right after this returns.
+      await _clearSyncState(accountId, reconcileKey);
+    }
     await _sweepOrphanThreads(accountId, mailboxJmapId);
     return model.SyncEmailsResult(
       fetched: fetched,
@@ -3019,6 +3074,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final serverIds = <String>{};
     int position = 0;
+    var pages = 0;
+    int? reportedTotal;
     while (true) {
       final responses = await jmap.call([
         [
@@ -3035,10 +3092,29 @@ class EmailRepositoryImpl implements EmailRepository {
       ]);
       final queryResult = _responseArgs(responses, 0, 'Email/query');
       final ids = List<String>.from(queryResult['ids'] as List);
-      final total = queryResult['total'] as int?;
+      reportedTotal = (queryResult['total'] as int?) ?? reportedTotal;
       serverIds.addAll(ids);
       position += ids.length;
-      if (ids.isEmpty || total == null || position >= total) break;
+      pages++;
+      if (ids.isEmpty) break;
+      if (reportedTotal != null) {
+        if (position >= reportedTotal) break;
+      } else if (ids.length < _jmapPageSize) {
+        break;
+      }
+      if (pages >= _jmapMaxQueryPages) break;
+    }
+
+    // This pass exists only to prune, and it is the one that runs on every
+    // mailbox every 15 minutes — so an enumeration it cannot vouch for is the
+    // most dangerous input in the file. Leave the cache alone and let the
+    // next cycle try again rather than deleting what the walk failed to see.
+    if (!_jmapEnumerationComplete(serverIds, reportedTotal)) {
+      log(
+        'JMAP-sync: reconcile mailbox=$mailboxJmapId walked ${serverIds.length}'
+        ' of ${reportedTotal ?? -1} after $pages page(s) — skipping the prune',
+      );
+      return;
     }
 
     final removed = await _pruneJmapMailboxToServerIds(
@@ -3490,6 +3566,18 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .getSingleOrNull();
     return row?.state;
+  }
+
+  /// Removes one sync-state row, so a checkpoint can be made due again rather
+  /// than merely left stale.
+  Future<void> _clearSyncState(String accountId, String resourceType) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
+        .go();
   }
 
   Future<void> _saveSyncState(
