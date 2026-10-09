@@ -325,6 +325,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
                 _jmapUrlCtrl,
                 'JMAP API URL',
                 keyboardType: TextInputType.url,
+                validator: validateJmapUrl,
               ),
             ],
             if (account.type == AccountType.imap) ...[

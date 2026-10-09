@@ -22,6 +22,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 /// Default size of the user pool defined in stalwart-dev/config.toml.
 /// Keep in sync with the number of aliceN/bobN principals seeded there.
@@ -103,7 +104,7 @@ class StalwartEnv {
   static StalwartEnv fromPlatform() {
     String read(String key, String fallback) =>
         Platform.environment[key] ?? fallback;
-    return StalwartEnv(
+    final env = StalwartEnv(
       stalwartUrl: read('STALWART_URL', 'http://127.0.0.1:8080'),
       imapHost: read('STALWART_IMAP_HOST', '127.0.0.1'),
       imapPort: int.parse(read('STALWART_IMAP_PORT', '1430')),
@@ -114,6 +115,14 @@ class StalwartEnv {
         read('STALWART_POOL_SIZE', '$_defaultPoolSize'),
       ),
     );
+    // The dev Stalwart serves JMAP over plaintext http and, in CI, is addressed
+    // by its docker service name ('stalwart') rather than localhost. Register
+    // that host so JmapClient.connect allows http to it during the test run.
+    // JmapClient ignores this set in release builds, so it never affects a
+    // shipped app; this mirrors how the IMAP/SMTP backend tests reach the same
+    // dev server over plaintext via their own test-local connector.
+    JmapClient.debugAllowedHttpHosts.add(Uri.parse(env.stalwartUrl).host);
+    return env;
   }
 }
 

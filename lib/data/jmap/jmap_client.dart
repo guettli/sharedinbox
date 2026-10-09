@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
 
@@ -108,6 +110,16 @@ class JmapClient {
     required String username,
     required String password,
   }) async {
+    // The session GET carries `Authorization: Basic`, so refuse to make it over
+    // cleartext: https anywhere, http only to a localhost dev server. A
+    // relative or scheme-less URL is rejected too — there is nothing for it to
+    // inherit from at the entry point (#1018).
+    if (!_isSecureUrl(jmapUrl)) {
+      throw JmapException(
+        'JMAP URL must use https ($jmapUrl) — refusing to send credentials '
+        'over cleartext. http is allowed only for a localhost dev server.',
+      );
+    }
     final credentials = base64.encode(utf8.encode('$username:$password'));
     http.Response resp;
     var rateLimitAttempt = 0;
@@ -166,6 +178,13 @@ class JmapClient {
     final uploadUrl = session['uploadUrl'] as String?;
     final downloadUrl = session['downloadUrl'] as String?;
     final eventSourceUrl = session['eventSourceUrl'] as String?;
+    // These session-advertised URLs also carry the credentials (blob transfer,
+    // SSE push), so a server must not be able to downgrade them to http for a
+    // remote host. A relative or templated value has no scheme of its own and
+    // inherits the (already validated) session scheme, so it is left alone.
+    _rejectInsecureHttpUrl(uploadUrl, 'uploadUrl');
+    _rejectInsecureHttpUrl(downloadUrl, 'downloadUrl');
+    _rejectInsecureHttpUrl(eventSourceUrl, 'eventSourceUrl');
 
     return JmapClient._(
       httpClient: httpClient,
@@ -329,8 +348,65 @@ class JmapClient {
     if (raw == null || raw.isEmpty) {
       throw JmapException('Session missing apiUrl');
     }
-    // apiUrl may be relative (RFC 8620 §2 allows it)
-    return sessionUri.resolve(raw);
+    // apiUrl may be relative (RFC 8620 §2 allows it); a relative one inherits
+    // the session's already-validated scheme.
+    final resolved = sessionUri.resolve(raw);
+    // Every call() request goes here with the credentials, so a server that
+    // returns an absolute http:// apiUrl must not be able to downgrade the
+    // whole session after an https session fetch.
+    if (!_isSecureUrl(resolved)) {
+      throw JmapException(
+        'Session apiUrl is not https ($resolved) — refusing to send '
+        'credentials over cleartext.',
+      );
+    }
+    return resolved;
+  }
+
+  /// Hosts allowed over plaintext `http` in addition to localhost. Populated
+  /// ONLY by the backend test harness ([StalwartEnv.fromPlatform]), which
+  /// reaches a dev Stalwart addressed by its private host (a docker service
+  /// name in CI) that serves JMAP over http. It is consulted solely outside a
+  /// release build (see [_hostAllowedOverHttp]), so it is physically inert in a
+  /// shipped app even if left populated — the IMAP/SMTP backend tests reach the
+  /// same dev server over plaintext the same way (a test-local connector), and
+  /// this is the JMAP equivalent, kept off the production path.
+  @visibleForTesting
+  static final Set<String> debugAllowedHttpHosts = <String>{};
+
+  /// Whether [host] may carry credentials over plaintext http: a localhost dev
+  /// server always, or a test-registered dev host — but the latter never in a
+  /// release build.
+  static bool _hostAllowedOverHttp(String host) =>
+      isLocalhost(host) ||
+      (!kReleaseMode && debugAllowedHttpHosts.contains(host));
+
+  /// Whether [url] may carry credentials: https to any host, or http only to a
+  /// localhost (or test-registered dev) host. A scheme-less (relative) URL is
+  /// not secure on its own — callers that allow relative values resolve first.
+  static bool _isSecureUrl(Uri url) =>
+      url.scheme == 'https' ||
+      (url.scheme == 'http' && _hostAllowedOverHttp(url.host));
+
+  /// Rejects a session-provided URL [raw] that would send credentials over
+  /// cleartext — an explicit `http://` to a non-localhost host. https, and
+  /// relative/templated values (no scheme of their own, so they inherit the
+  /// validated session scheme), are left alone. Works on the raw string rather
+  /// than Uri.parse because these values are URI templates (`{accountId}` …)
+  /// that are not valid URIs until expanded.
+  static void _rejectInsecureHttpUrl(String? raw, String label) {
+    if (raw == null) return;
+    final trimmed = raw.trimLeft();
+    if (!trimmed.toLowerCase().startsWith('http://')) return;
+    final authority = trimmed.substring('http://'.length);
+    final host = authority.split(RegExp(r'[/:?#]')).first;
+    // An IPv6 localhost literal (`http://[::1]/…`) is deliberately rejected
+    // here (safe direction) rather than special-cased; use https for it.
+    if (_hostAllowedOverHttp(host)) return;
+    throw JmapException(
+      '$label is an insecure http:// URL ($raw) — refusing to send '
+      'credentials over cleartext. Use https (or localhost for development).',
+    );
   }
 
   static Set<String> _extractCapabilities(Map<String, dynamic> session) {
