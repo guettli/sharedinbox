@@ -174,14 +174,16 @@ class _FilterBar extends StatelessWidget {
                     const DropdownMenuItem<String?>(
                       child: Text('All accounts'),
                     ),
+                    // accountDisplayLabel, not 'name <email>': this button
+                    // sizes itself to its widest item, and the full form
+                    // overflowed the compose field by 426px at text scale 2.0.
+                    // Inside a Wrap there is no field to clamp it to, so the
+                    // label is kept short instead — matching search_screen,
+                    // which already filters by account this way.
                     for (final a in accounts)
                       DropdownMenuItem<String?>(
                         value: a.id,
-                        child: Text(
-                          a.displayName.isNotEmpty
-                              ? '${a.displayName} <${a.email}>'
-                              : a.email,
-                        ),
+                        child: Text(accountDisplayLabel(a, a.id)),
                       ),
                   ],
                   onChanged: (value) {

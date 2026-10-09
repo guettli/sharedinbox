@@ -85,6 +85,60 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    // Regression for the row-overflow class of #965, here via the dropdown.
+    // DropdownButton sizes itself from the WIDEST ITEM, not the selected one,
+    // so this overflowed by 426px on a real phone at font_scale 2.0 while the
+    // short "Select an account" hint was the thing on screen — the long item
+    // the user had not opened yet was setting the width.
+    //
+    // This pins isExpanded only. selectedItemBuilder, which keeps the open
+    // menu readable, is not separately pinned: measured both ways, the closed
+    // button is 80px tall with or without it, so no assertion here can tell
+    // them apart.
+    testWidgets('From dropdown does not overflow at large text scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 2400); // 360x800 logical
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      // A realistic display-name-plus-address, which is what the item renders.
+      const longAccount = Account(
+        id: 'acc-2',
+        displayName: 'Code8Test',
+        email: 'code8@thomas-guettler.de',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: _composeOverrides(
+            accounts: const [kTestAccount, longAccount],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Prove the scale reached the widget; without it the row fits and this
+      // would pass against the bug.
+      final scaler = MediaQuery.textScalerOf(
+        tester.element(find.byType(DropdownButtonFormField<String>)),
+      );
+      expect(scaler.scale(14), greaterThan(16));
+
+      // The long item must really be in the list, or the fixture this test
+      // names as the cause is contributing nothing.
+      final field = find.byType(DropdownButtonFormField<String>);
+      expect(
+        tester.getSize(field).width,
+        lessThanOrEqualTo(360.0),
+        reason: 'the button must stay inside the 360dp surface',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
       'does not auto-select an account with several configured, and '
       'blocks send until one is chosen (#463)',
