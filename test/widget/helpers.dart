@@ -9,9 +9,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -1165,4 +1167,29 @@ class FakeSearchHistoryRepository implements SearchHistoryRepository {
 
   @override
   Future<void> clearHistory() async => _history.clear();
+}
+
+/// Walks every rich-text span on screen and returns the tap recognizers
+/// attached to a span whose text is exactly [url] — mirrors how
+/// LinkifiedText renders hyperlinks, so tests can invoke the same callback a
+/// real tap would.
+List<GestureRecognizer> linkRecognizersFor(WidgetTester tester, String url) {
+  final recognizers = <GestureRecognizer>[];
+  for (final richText in tester.widgetList<Text>(
+    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+  )) {
+    void walk(InlineSpan span) {
+      if (span is TextSpan) {
+        if (span.text == url && span.recognizer != null) {
+          recognizers.add(span.recognizer!);
+        }
+        for (final child in span.children ?? const <InlineSpan>[]) {
+          walk(child);
+        }
+      }
+    }
+
+    walk(richText.textSpan!);
+  }
+  return recognizers;
 }

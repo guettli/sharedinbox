@@ -5,32 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
+import 'helpers.dart';
+
 // LinkifiedText is a ConsumerWidget, so a ProviderScope must be in the tree.
 Widget _wrap(Widget child) =>
     ProviderScope(child: MaterialApp(home: Scaffold(body: child)));
-
-// Walks the rich-text spans and returns the tap recognizers attached to a span
-// whose text matches [url] — mirrors how LinkifiedText renders hyperlinks.
-List<GestureRecognizer> _linkRecognizersFor(WidgetTester tester, String url) {
-  final recognizers = <GestureRecognizer>[];
-  for (final richText in tester.widgetList<Text>(
-    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
-  )) {
-    void walk(InlineSpan span) {
-      if (span is TextSpan) {
-        if (span.text == url && span.recognizer != null) {
-          recognizers.add(span.recognizer!);
-        }
-        for (final child in span.children ?? const <InlineSpan>[]) {
-          walk(child);
-        }
-      }
-    }
-
-    walk(richText.textSpan!);
-  }
-  return recognizers;
-}
 
 void main() {
   group('TryConnectionButton', () {
@@ -95,7 +74,7 @@ void main() {
       );
 
       final recognizers =
-          _linkRecognizersFor(tester, 'https://support.google.com/mail');
+          linkRecognizersFor(tester, 'https://support.google.com/mail');
       expect(recognizers, hasLength(1));
 
       (recognizers.single as TapGestureRecognizer).onTap!();

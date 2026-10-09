@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 
 final _timeFmt = DateFormat('MMM d, HH:mm:ss');
 
@@ -429,7 +430,7 @@ class _AppLogTile extends ConsumerWidget {
               ),
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-              child: Text(entry.message, style: small),
+              child: LinkifiedText(entry.message, style: small),
             ),
             if (parsed.data != null) ...[
               Padding(
@@ -513,12 +514,18 @@ class _MonoBlock extends StatelessWidget {
         color: Colors.black87,
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(
+      child: LinkifiedText(
         text,
         style: const TextStyle(
           fontSize: 11,
           fontFamily: 'monospace',
           color: Colors.greenAccent,
+        ),
+        // The block is always dark, so the theme's primary colour may be
+        // unreadable here.
+        linkStyle: const TextStyle(
+          color: Colors.lightBlueAccent,
+          decoration: TextDecoration.underline,
         ),
       ),
     );
