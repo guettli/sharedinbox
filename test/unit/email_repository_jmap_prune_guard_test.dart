@@ -40,12 +40,32 @@ http.Client _server({
   required List<String> queryIds,
   int? reportTotal,
   bool omitTotal = false,
+  bool ignorePosition = false,
 }) {
   return jmapFakeServer(
     accountId: _jmapAccountId,
     handle: (call) {
+      if (call.method == 'Email/changes') {
+        // Nothing changed; the point of these tests is the prune that the
+        // reconcile does afterwards, not the sweep.
+        return [
+          'Email/changes',
+          {
+            'accountId': _jmapAccountId,
+            'oldState': 's0',
+            'newState': 's0',
+            'hasMoreChanges': false,
+            'created': <String>[],
+            'updated': <String>[],
+            'destroyed': <String>[],
+          },
+          call.callId,
+        ];
+      }
       if (call.method == 'Email/query') {
-        final position = (call.args['position'] as int?) ?? 0;
+        // A server that ignores `position` hands back the same page forever.
+        final position =
+            ignorePosition ? 0 : ((call.args['position'] as int?) ?? 0);
         final limit = (call.args['limit'] as int?) ?? queryIds.length;
         final end = (position + limit).clamp(0, queryIds.length);
         final page = position >= queryIds.length
@@ -86,13 +106,16 @@ http.Client _server({
 void main() {
   final cacheDir = useJmapTestEnv('jmap_prune_');
 
-  Future<JmapTestRepos> withCachedRows(http.Client client) async {
+  Future<JmapTestRepos> withCachedRows(
+    http.Client client, {
+    List<String> extra = const [],
+  }) async {
     final r = await openJmapTestRepos(
       httpClient: client,
       account: _jmapAccount,
       cacheDir: cacheDir(),
     );
-    for (final id in ['a', 'b', 'c']) {
+    for (final id in ['a', 'b', 'c', ...extra]) {
       await insertJmapEmailRow(
         r.db,
         _jmapAccount.id,
@@ -126,16 +149,102 @@ void main() {
   });
 
   test('a server that never reports a total keeps the rows', () async {
+    // `d` is cached but not listed by the server, so it is the only row a
+    // prune could remove — without it this test passes whether or not the
+    // gate exists.
     final r = await withCachedRows(
       _server(queryIds: const ['a', 'b', 'c'], omitTotal: true),
+      extra: const ['d'],
     );
 
     await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 
     expect(
       await jmapLocalEmailIds(r.db),
-      containsAll(expectedIds(['a', 'b', 'c'])),
+      contains('${_jmapAccount.id}:d'),
       reason: 'an unverifiable walk must not be pruned against',
+    );
+
+    await r.db.close();
+  });
+
+  // The count has to match exactly. A `total` smaller than what the walk
+  // collected used to wave it through: the walk ends after the first page and
+  // `500 >= 0` authorised pruning the rest of the folder away.
+  test('a total smaller than the page the server returned keeps the rows',
+      () async {
+    final r = await withCachedRows(
+      _server(queryIds: const ['a', 'b', 'c'], reportTotal: 0),
+      extra: const ['d'],
+    );
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    expect(
+      await jmapLocalEmailIds(r.db),
+      contains('${_jmapAccount.id}:d'),
+      reason: 'total: 0 alongside a non-empty page is not a count we can act '
+          'on',
+    );
+
+    await r.db.close();
+  });
+
+  // The periodic reconcile is the dangerous one — it runs on every mailbox,
+  // so one bad Email/query was enough to empty a folder. The full sync only
+  // runs on a first sync or a force resync.
+  test('the periodic reconcile also refuses to prune on a bad walk', () async {
+    final r = await openJmapTestReposOnIncrementalPath(
+      httpClient: _server(queryIds: const [], reportTotal: 3),
+      account: _jmapAccount,
+      cacheDir: cacheDir(),
+      mailboxJmapId: _mailbox,
+      syncState: 's0',
+      // Past the 15-minute interval, so the reconcile is due this cycle.
+      reconcileStamp: DateTime.now().subtract(const Duration(hours: 1)),
+    );
+    for (final id in ['a', 'b', 'c']) {
+      await insertJmapEmailRow(
+        r.db,
+        _jmapAccount.id,
+        id,
+        mailboxPath: _mailbox,
+      );
+    }
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    expect(
+      await jmapLocalEmailIds(r.db),
+      expectedIds(['a', 'b', 'c']),
+      reason: 'the reconcile prunes on every mailbox every 15 minutes; one '
+          'empty response must not cost a folder',
+    );
+
+    await r.db.close();
+  });
+
+  // A walk the server truncates must not checkpoint the Email state. Doing so
+  // switches the mailbox to the incremental path, and `Email/changes` only
+  // reports what happened after that state — so everything the walk never
+  // reached becomes unreachable by any path.
+  test('a stalled walk does not checkpoint the mailbox as synced', () async {
+    final r = await openJmapTestRepos(
+      httpClient: _server(
+        queryIds: [for (var i = 0; i < 600; i++) 'm$i'],
+        ignorePosition: true,
+      ),
+      account: _jmapAccount,
+      cacheDir: cacheDir(),
+    );
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    expect(
+      await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+      isNull,
+      reason: 'checkpointing a truncated walk strands the rest of the mailbox '
+          'on a path that can never fetch it',
     );
 
     await r.db.close();
