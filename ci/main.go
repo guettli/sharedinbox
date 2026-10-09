@@ -246,6 +246,8 @@ func New(
 				"deploy_cron.py",
 				"ci/",
 				"server/",
+				// Root module file for the Go server tests (TestGo).
+				"go.mod",
 				".jscpd.json",
 				"duplication-baseline.json",
 			},
@@ -702,6 +704,20 @@ func (m *Ci) CheckGoFormat(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
+// TestGo runs the Go server tests (server/...). The bugreport tests also read
+// the app's lib/core/services/report_limits.dart to keep the public-field caps
+// equal on both sides (issue #930), so that file is mounted too.
+func (m *Ci) TestGo(ctx context.Context) (string, error) {
+	return dag.Container().
+		From(goToolImage).
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{
+			Include: []string{"go.mod", "server/", "lib/core/services/report_limits.dart"},
+		})).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "./server/..."}).
+		Stdout(ctx)
+}
+
 // Format runs dart format check.
 func (m *Ci) Format(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
@@ -747,6 +763,10 @@ func (m *Ci) CheckFast(ctx context.Context) (string, error) {
 	})
 	eg.Go(func() error {
 		_, err := m.CheckLayers(ctx)
+		return err
+	})
+	eg.Go(func() error {
+		_, err := m.TestGo(ctx)
 		return err
 	})
 	eg.Go(func() error {
@@ -918,6 +938,12 @@ func (m *Ci) Check(ctx context.Context) (string, error) {
 	fastEg.Go(func() error {
 		return timedCheck(&timingsMu, &timings, "structural", "goformat", func() error {
 			_, err := m.CheckGoFormat(ctx)
+			return err
+		})
+	})
+	fastEg.Go(func() error {
+		return timedCheck(&timingsMu, &timings, "structural", "gotest", func() error {
+			_, err := m.TestGo(ctx)
 			return err
 		})
 	})
