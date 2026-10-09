@@ -31,7 +31,17 @@ class _StartTlsSpyClient extends smtp.SmtpClient {
     startTlsCalls++;
     final err = startTlsError;
     if (err != null) throw err;
-    return startTlsResponse ?? smtp.SmtpResponse(['220 ready to start TLS']);
+    final resp =
+        startTlsResponse ?? smtp.SmtpResponse(['220 ready to start TLS']);
+    // Mirror enough_mail exactly: sendCommand completes a failed status
+    // (4xx/5xx) with an SmtpException, so startTls() THROWS for those; only a
+    // success (2xx) or an "accepted" (1xx) status is returned, and the socket
+    // is upgraded only on success. Modelling this is what makes the 1xx and
+    // 5xx tests exercise the real production paths.
+    if (resp.isFailedStatus) {
+      throw smtp.SmtpException(this, resp);
+    }
+    return resp;
   }
 }
 
@@ -97,7 +107,11 @@ void main() {
       expect(client.startTlsCalls, 1);
     });
 
-    test('refuses a 4xx/5xx STARTTLS rejection', () async {
+    test('a 4xx/5xx STARTTLS rejection is surfaced, not accepted', () async {
+      // enough_mail throws SmtpException on a failed status (unlike the 1xx
+      // case, which it returns). rethrowAsTlsHint has no TLS pattern to match
+      // here, so its default branch rethrows the SmtpException unchanged — the
+      // point being only that the upgrade fails loudly and AUTH is never sent.
       final client = _StartTlsSpyClient(
         capabilities: ['STARTTLS'],
         startTlsResponse: smtp.SmtpResponse(['454 TLS not available']),
@@ -105,12 +119,9 @@ void main() {
 
       await expectLater(
         upgradeSmtpToStartTls(client, 'smtp.example.com', 587),
-        throwsA(
-          predicate(
-            (e) => e.toString().contains('refusing to send credentials'),
-          ),
-        ),
+        throwsA(isA<smtp.SmtpException>()),
       );
+      expect(client.startTlsCalls, 1);
     });
 
     test('a failed TLS handshake surfaces as the TLS hint', () async {
