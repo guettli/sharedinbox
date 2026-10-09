@@ -63,25 +63,30 @@ http.Client _server({
         ];
       }
       if (call.method == 'Email/query') {
-        // A server that ignores `position` hands back the same page forever.
-        final position =
-            ignorePosition ? 0 : ((call.args['position'] as int?) ?? 0);
-        final limit = (call.args['limit'] as int?) ?? queryIds.length;
-        final end = (position + limit).clamp(0, queryIds.length);
-        final page = position >= queryIds.length
-            ? const <String>[]
-            : queryIds.sublist(position, end);
-        return [
-          'Email/query',
-          {
-            'accountId': _jmapAccountId,
-            'queryState': 'q1',
-            'position': position,
-            if (!omitTotal) 'total': reportTotal ?? queryIds.length,
-            'ids': page,
-          },
-          call.callId,
-        ];
+        if (ignorePosition) {
+          // A server that honours neither `position` nor `anchor` hands back
+          // the same first page forever.
+          final limit = (call.args['limit'] as int?) ?? queryIds.length;
+          return [
+            'Email/query',
+            {
+              'accountId': _jmapAccountId,
+              'queryState': 'q1',
+              'position': 0,
+              if (!omitTotal) 'total': reportTotal ?? queryIds.length,
+              'ids': queryIds.sublist(0, limit.clamp(0, queryIds.length)),
+            },
+            call.callId,
+          ];
+        }
+        return jmapQueryPage(
+          accountId: _jmapAccountId,
+          sortedIds: queryIds,
+          args: call.args,
+          callId: call.callId,
+          total: reportTotal,
+          omitTotal: omitTotal,
+        );
       }
       if (call.method != 'Email/get') return null;
       if (call.ids.isEmpty) {
