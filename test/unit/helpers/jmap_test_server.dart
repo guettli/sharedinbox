@@ -115,16 +115,22 @@ Future<JmapTestRepos> openJmapTestRepos({
   required Account account,
   required Directory cacheDir,
   String password = 'pw',
+  JmapTestRepos? reuse,
 }) async {
-  final db = openTestDatabase();
-  final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+  // [reuse] continues against the same database and account repository with a
+  // different HTTP client — modelling a second sync cycle (or a relaunched
+  // app) picking up where a previous one left off. The account and its stored
+  // password come along with the reused account repository.
+  final db = reuse?.db ?? openTestDatabase();
+  final accounts =
+      reuse?.accounts ?? AccountRepositoryImpl(db, MapSecureStorage());
   final emails = EmailRepositoryImpl(
     db,
     accounts,
     getCacheDir: () async => cacheDir,
     httpClient: httpClient,
   );
-  await accounts.addAccount(account, password);
+  if (reuse == null) await accounts.addAccount(account, password);
   return JmapTestRepos(db: db, accounts: accounts, emails: emails);
 }
 
@@ -416,3 +422,53 @@ Future<JmapTestRepos> openJmapTestReposOnIncrementalPath({
 /// Every cached email row id, for asserting on what a sync kept or removed.
 Future<Set<String>> jmapLocalEmailIds(AppDatabase db) async =>
     (await db.select(db.emails).get()).map((e) => e.id).toSet();
+
+/// Resolves one `Email/query` page from [sortedIds] against [args], honouring
+/// either `position` or `anchor`+`anchorOffset` the way a real server does.
+///
+/// Returns the method response, or an `anchorNotFound` error when the anchor
+/// is no longer in the list — which is exactly how the full-sync resume path
+/// learns its stored anchor was deleted.
+List<dynamic> jmapQueryPage({
+  required String accountId,
+  required List<String> sortedIds,
+  required Map<String, dynamic> args,
+  Object? callId = '0',
+  int? total,
+  bool omitTotal = false,
+}) {
+  final limit = (args['limit'] as int?) ?? sortedIds.length;
+
+  int start;
+  final anchor = args['anchor'] as String?;
+  if (anchor != null) {
+    final idx = sortedIds.indexOf(anchor);
+    if (idx < 0) {
+      return [
+        'error',
+        {
+          'type': 'anchorNotFound',
+          'description': 'The anchor was not found in the query results.',
+        },
+        callId,
+      ];
+    }
+    start = idx + ((args['anchorOffset'] as int?) ?? 0);
+  } else {
+    start = (args['position'] as int?) ?? 0;
+  }
+  start = start.clamp(0, sortedIds.length);
+  final end = (start + limit).clamp(0, sortedIds.length);
+
+  return [
+    'Email/query',
+    {
+      'accountId': accountId,
+      'queryState': 'q1',
+      'position': start,
+      if (!omitTotal) 'total': total ?? sortedIds.length,
+      'ids': sortedIds.sublist(start, end),
+    },
+    callId,
+  ];
+}

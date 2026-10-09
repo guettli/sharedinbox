@@ -2437,7 +2437,17 @@ class EmailRepositoryImpl implements EmailRepository {
     var storedMailboxState =
         await _loadSyncState(account.id, mailboxResourceType);
 
-    if (storedMailboxState == null) {
+    // A full sync that paused part-way leaves no `JMAP:Email:` state but does
+    // leave a resume point. It MUST stay on the full-sync path: taking the
+    // incremental path here would ask `Email/changes` for deltas and never
+    // fetch the mailbox's remaining pages. Checked before the global-state
+    // fallback, which would otherwise adopt another mailbox's state and send
+    // this one incremental (the defect that sank the first resume attempt).
+    final resuming =
+        await _loadSyncState(account.id, _jmapFullSyncKey(mailboxJmapId)) !=
+            null;
+
+    if (storedMailboxState == null && !resuming) {
       // Fallback to global 'Email' state
       final globalState = await _loadSyncState(account.id, 'Email');
       if (globalState != null) {
@@ -2447,8 +2457,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     try {
-      if (storedMailboxState == null) {
-        log('JMAP-sync: full sync mailbox=$mailboxJmapId (no stored state)');
+      if (resuming || storedMailboxState == null) {
+        log(
+          'JMAP-sync: full sync mailbox=$mailboxJmapId '
+          '(${resuming ? 'resuming' : 'no stored state'})',
+        );
         return await _jmapFullEmailSync(account.id, jmap, mailboxJmapId);
       }
       log(
@@ -2487,73 +2500,134 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// How many `Email/query` pages one full-sync invocation walks before it
+  /// pauses and hands back, so the next cycle continues from the resume point.
+  ///
+  /// #973 split the chained body fetch into bounded batches, taking a
+  /// 10 000-mail mailbox from ~20 requests to ~220. Running all of that in one
+  /// invocation and losing it to a backgrounded app or a dropped connection
+  /// would be the "never catches up" shape of #967 again, moved from a
+  /// per-request timeout to total run length.
+  static const _jmapFullSyncPagesPerRun = 4;
+
+  /// Where an unfinished full sync stores its resume point.
+  ///
+  /// Deliberately NOT `JMAP:Email:<mailbox>`: that key means "incrementally
+  /// synced", and writing it mid-sync would send the next cycle to
+  /// `Email/changes`, which never fetches the mailbox's remaining pages.
+  static String _jmapFullSyncKey(String mailboxJmapId) =>
+      'JMAP:FullSync:$mailboxJmapId';
+
   Future<model.SyncEmailsResult> _jmapFullEmailSync(
     String accountId,
     JmapClient jmap,
     String mailboxJmapId,
   ) async {
-    // Captured on the first page below, before any body is fetched, so a
-    // change landing during a long full sync is picked up by the next
-    // incremental sweep instead of being missed.
-    late final String state;
+    final resumeKey = _jmapFullSyncKey(mailboxJmapId);
 
-    int position = 0;
-    var pages = 0;
-    var truncated = false;
-    int? reportedTotal;
+    // Resume point: the id of the last message fetched (the paging anchor) and
+    // the Email state token captured on the very first page. Resuming by a
+    // stable id rather than a numeric `position` is the whole reason this is a
+    // second attempt: `Email/query` offsets shift when mail is added or
+    // removed between runs, so a position-based resume silently skipped
+    // messages. An anchor is immune to changes above it, and when the anchor
+    // message itself is deleted the server answers `anchorNotFound` and the
+    // walk restarts from the top — mbsync's UIDVALIDITY reset, in JMAP terms.
+    String? anchor;
+    String? state;
+    final stored = await _loadSyncState(accountId, resumeKey);
+    if (stored != null) {
+      try {
+        final decoded = jsonDecode(stored) as Map<String, dynamic>;
+        final a = decoded['anchor'] as String?;
+        final t = decoded['state'] as String?;
+        if (a != null && t != null) {
+          anchor = a;
+          state = t;
+        }
+      } catch (e) {
+        log(
+          'JMAP-sync: unreadable full-sync resume point for '
+          'mailbox=$mailboxJmapId ($e) — starting over',
+        );
+      }
+    }
+    var resumed = anchor != null;
+    if (resumed) {
+      log('JMAP-sync: resuming full sync mailbox=$mailboxJmapId anchor=$anchor');
+    }
+
     var fetched = 0;
     var bytes = 0;
+    var pages = 0;
+    int? reportedTotal;
+    var truncated = false;
+    var drained = false;
+    var restartedOnce = false;
     final seenIds = <String>{};
 
-    while (true) {
-      final firstPage = position == 0;
-      // Ids only. This query used to chain `Email/get` straight onto its
-      // result, which asked the server for up to `_jmapPageSize` (500) full
-      // message bodies in a single request — ten times the batch the
-      // incremental sweep settled on, and the same request shape that timed
-      // out in #967. A bare query is cheap; the bodies follow in bounded
-      // batches below.
-      final responses = await jmap.call([
-        [
-          'Email/query',
-          {
-            'accountId': jmap.accountId,
-            'filter': {'inMailbox': mailboxJmapId},
-            'sort': [
-              {'property': 'receivedAt', 'isAscending': false},
-            ],
-            'limit': _jmapPageSize,
-            'position': position,
-            'calculateTotal': true,
-          },
-          '0',
+    while (pages < _jmapFullSyncPagesPerRun) {
+      // Anchor-based once we have an anchor (resumed, or after page one of a
+      // fresh run); `position: 0` only for the very first page of a fresh run.
+      final query = <String, dynamic>{
+        'accountId': jmap.accountId,
+        'filter': {'inMailbox': mailboxJmapId},
+        'sort': [
+          {'property': 'receivedAt', 'isAscending': false},
         ],
+        'limit': _jmapPageSize,
+        'calculateTotal': true,
+        if (anchor != null) ...{'anchor': anchor, 'anchorOffset': 1} else
+          'position': 0,
+      };
+      final methodCalls = <List<dynamic>>[
+        ['Email/query', query, '0'],
         // `Email/get` with an empty `ids` list returns the Email state and
-        // nothing else (RFC 8620 §5.1 — `ids: null` would mean *every* email,
-        // so the empty list is load-bearing). Riding along with the first
-        // query costs no extra round trip and inherits that request's larger
-        // timeout budget; a standalone probe would be classified as metadata
-        // and given 10s to gate the whole full sync.
-        //
-        // The state used to be read off the `Email/get` chained onto this
-        // query. With that gone there is nothing to read it from on an empty
-        // mailbox, which fetches no bodies at all.
-        if (firstPage)
+        // nothing else (RFC 8620 §5.1 — `ids: null` would mean *every* email).
+        // Captured once, before any body is fetched, so a change landing
+        // during a long full sync is picked up by the next incremental sweep.
+        // Reused across runs via the resume point rather than re-probed.
+        if (state == null)
           [
             'Email/get',
             {'accountId': jmap.accountId, 'ids': <String>[]},
             '1',
           ],
-      ]);
+      ];
+      final responses = await jmap.call(methodCalls);
 
-      final queryResult = _responseArgs(responses, 0, 'Email/query');
+      // A resumed run's anchor may have been destroyed since it was stored.
+      // The server then cannot place the anchor in the result set and returns
+      // `anchorNotFound`; restart the whole mailbox from the top, once.
+      final triple = responses[0] as List<dynamic>;
+      if (triple[0] == 'error') {
+        final type = (triple[1] as Map<String, dynamic>)['type'];
+        if (type == 'anchorNotFound' && !restartedOnce) {
+          log(
+            'JMAP-sync: full-sync anchor gone for mailbox=$mailboxJmapId — '
+            'restarting from the top',
+          );
+          await _clearSyncState(accountId, resumeKey);
+          anchor = null;
+          state = null;
+          resumed = false;
+          restartedOnce = true;
+          seenIds.clear();
+          fetched = 0;
+          bytes = 0;
+          pages = 0;
+          reportedTotal = null;
+          continue;
+        }
+        throw JmapException('Email/query error: $type');
+      }
+
+      final queryResult = triple[1] as Map<String, dynamic>;
       final ids = List<String>.from(queryResult['ids'] as List);
       reportedTotal = (queryResult['total'] as int?) ?? reportedTotal;
+      state ??= _responseArgs(responses, 1, 'Email/get')['state'] as String;
       final seenBefore = seenIds.length;
       seenIds.addAll(ids);
-      if (firstPage) {
-        state = _responseArgs(responses, 1, 'Email/get')['state'] as String;
-      }
 
       final batched = await _fetchJmapEmailBatches(
         accountId,
@@ -2564,63 +2638,44 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       fetched += batched.fetched;
       bytes += batched.bytes;
-
-      position += ids.length;
       pages++;
-      if (ids.isEmpty) break;
-      // A page that adds nothing new means the server is not honouring
-      // `position` (or something between us and it is replaying a response).
-      // Stop rather than re-fetching the same bodies until the page cap.
+
+      if (ids.isEmpty) {
+        drained = true;
+        break;
+      }
+      anchor = ids.last;
+      // A page that adds nothing new means the server is not honouring the
+      // anchor (or a proxy is replaying a response). Stop rather than
+      // re-fetching the same bodies up to the page cap.
       if (seenIds.length == seenBefore) {
         truncated = true;
         log(
-          'JMAP-sync: full mailbox=$mailboxJmapId stalled at position=$position'
-          ' — Email/query stopped returning new ids',
+          'JMAP-sync: full mailbox=$mailboxJmapId stalled — Email/query '
+          'stopped returning new ids',
         );
         break;
       }
       // Prefer the server's own count; fall back to "a short page is the end"
-      // only when it does not give one. Deliberately not breaking outright on
-      // an absent `total`, which is what used to stop the walk after one page
-      // — so a server ignoring `calculateTotal` had its mailbox truncated to
-      // the first 500 messages, and then pruned down to them.
+      // only when it does not report one. Not breaking outright on an absent
+      // total: that used to truncate a mailbox to its first page.
       if (reportedTotal != null) {
-        if (position >= reportedTotal) break;
+        if (seenIds.length >= reportedTotal) {
+          drained = true;
+          break;
+        }
       } else if (ids.length < _jmapPageSize) {
-        break;
-      }
-      if (pages >= _jmapMaxQueryPages) {
-        truncated = true;
-        log(
-          'JMAP-sync: full mailbox=$mailboxJmapId stopped after $pages pages '
-          '(position=$position) — walk truncated',
-        );
+        drained = true;
         break;
       }
     }
-
-    final complete = _jmapEnumerationComplete(seenIds, reportedTotal);
-    var pruned = 0;
-    if (complete) {
-      pruned = await _pruneJmapMailboxToServerIds(
-        accountId,
-        mailboxJmapId,
-        seenIds,
-      );
-    }
-    log(
-      'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
-      'newState=$state complete=$complete total=$reportedTotal',
-    );
 
     if (truncated) {
-      // Checkpointing here would be the worst outcome available: `state` was
-      // captured on the first page, so storing it switches the mailbox to the
-      // incremental path, and `Email/changes` only reports what happened
-      // *after* it. Everything the truncated walk never reached would be
-      // unreachable by any path — the full sync never runs again, and the
-      // reconcile only prunes. Leave the mailbox on the full-sync path so the
-      // next cycle tries again.
+      // Checkpointing here would be the worst outcome available: storing the
+      // state switches the mailbox to the incremental path, and
+      // `Email/changes` only reports what happened after it, so everything the
+      // truncated walk never reached would be unreachable by any path. Leave
+      // the mailbox on the full-sync path (resume key untouched) to retry.
       unawaited(
         _appLogger?.warn(
           'jmap_sync.full_sync_truncated',
@@ -2629,7 +2684,6 @@ class EmailRepositoryImpl implements EmailRepository {
           data: {
             'mailbox': mailboxJmapId,
             'pages': pages,
-            'position': position,
             'seen': seenIds.length,
             'total': reportedTotal,
           },
@@ -2642,17 +2696,71 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
 
-    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', state);
-    // Record that the reconciliation window starts now whether or not the
-    // prune actually ran. Leaving the marker unstamped on an incomplete walk
-    // would make the periodic pass re-walk the mailbox on every cycle — every
-    // 30 s on the poll fallback — and the decline is not rare: a message
-    // arriving mid-walk is enough to put the count off by one.
-    await _saveSyncState(
-      accountId,
-      'JMAP:Reconcile:$mailboxJmapId',
-      DateTime.now().toIso8601String(),
+    final reconcileKey = 'JMAP:Reconcile:$mailboxJmapId';
+
+    if (!drained) {
+      // Paused at the per-run page cap. Persist the anchor so the next cycle
+      // continues, and leave `JMAP:Email:` unset so path selection keeps this
+      // mailbox on the full-sync path. Stamp the reconcile marker to keep the
+      // periodic pass from walking a half-synced mailbox every cycle.
+      await _saveSyncState(
+        accountId,
+        resumeKey,
+        jsonEncode({'anchor': anchor, 'state': state}),
+      );
+      await _saveSyncState(
+        accountId,
+        reconcileKey,
+        DateTime.now().toIso8601String(),
+      );
+      log(
+        'JMAP-sync: full mailbox=$mailboxJmapId paused after $pages page(s), '
+        'fetched=$fetched anchor=$anchor',
+      );
+      return model.SyncEmailsResult(
+        fetched: fetched,
+        skipped: 0,
+        bytesTransferred: bytes,
+      );
+    }
+
+    // Drained. `seenIds` covers the whole mailbox only for a fresh sync that
+    // finished in one invocation; a sync spread over several runs holds just
+    // the final run's pages, so it cannot prune — the other runs' ids would
+    // all look absent and be deleted. Hand pruning to the periodic reconcile,
+    // which re-lists the mailbox from scratch (and, post-#1016, declines
+    // safely if that listing is itself incomplete).
+    final complete =
+        !resumed && _jmapEnumerationComplete(seenIds, reportedTotal);
+    var pruned = 0;
+    if (complete) {
+      pruned = await _pruneJmapMailboxToServerIds(
+        accountId,
+        mailboxJmapId,
+        seenIds,
+      );
+    }
+    log(
+      'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
+      'complete=$complete resumed=$resumed total=$reportedTotal',
     );
+
+    await _saveSyncState(accountId, 'JMAP:Email:$mailboxJmapId', state!);
+    await _clearSyncState(accountId, resumeKey);
+    if (complete) {
+      // Pruned exhaustively just now, so hold the periodic pass off for its
+      // normal interval.
+      await _saveSyncState(
+        accountId,
+        reconcileKey,
+        DateTime.now().toIso8601String(),
+      );
+    } else {
+      // Nothing was pruned (a resumed drain can't), so make the reconcile due
+      // now rather than leaving a stamp to defer it: `_syncEmailsJmap` runs it
+      // immediately after this returns.
+      await _clearSyncState(accountId, reconcileKey);
+    }
     await _sweepOrphanThreads(accountId, mailboxJmapId);
     return model.SyncEmailsResult(
       fetched: fetched,
@@ -3030,9 +3138,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 (mailboxJmapId == null
                     ? (t.resourceType.equals('Email') |
-                        t.resourceType.like('JMAP:Email:%'))
+                        t.resourceType.like('JMAP:Email:%') |
+                        t.resourceType.like('JMAP:FullSync:%'))
                     : (t.resourceType.equals('Email') |
-                        t.resourceType.equals('JMAP:Email:$mailboxJmapId'))),
+                        t.resourceType.equals('JMAP:Email:$mailboxJmapId') |
+                        t.resourceType.equals('JMAP:FullSync:$mailboxJmapId'))),
           ))
         .go();
   }
@@ -3630,6 +3740,18 @@ class EmailRepositoryImpl implements EmailRepository {
           ))
         .getSingleOrNull();
     return row?.state;
+  }
+
+  /// Removes one sync-state row, so a checkpoint can be made due again (or a
+  /// resume point retired) rather than merely left stale.
+  Future<void> _clearSyncState(String accountId, String resourceType) async {
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(resourceType),
+          ))
+        .go();
   }
 
   Future<void> _saveSyncState(
@@ -7633,7 +7755,8 @@ class EmailRepositoryImpl implements EmailRepository {
                 (t) =>
                     t.accountId.equals(accountId) &
                     (t.resourceType.equals('IMAP:$mailboxPath') |
-                        t.resourceType.equals('JMAP:Email:$mailboxPath')),
+                        t.resourceType.equals('JMAP:Email:$mailboxPath') |
+                        t.resourceType.equals('JMAP:FullSync:$mailboxPath')),
               ))
             .go();
       });

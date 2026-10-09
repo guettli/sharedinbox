@@ -20,6 +20,8 @@
 // accepted as an `Email/changes` sinceState, and is identical to the state a
 // body-fetching `Email/get` reports.
 
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -50,6 +52,13 @@ class _Observed {
   final getBatchSizes = <int>[];
   final queryLimits = <int?>[];
 
+  /// `position` argument per `Email/query` (-1 when anchor-based, i.e. no
+  /// `position` sent), so a test can assert on resume vs restart.
+  final queryPositions = <int>[];
+
+  /// `anchor` argument per `Email/query`, null when position-based.
+  final queryAnchors = <String?>[];
+
   /// True when a request chained `Email/get` onto an `Email/query` result
   /// instead of asking for ids it had already received — the shape that made
   /// one request answer for a whole page of bodies.
@@ -66,28 +75,23 @@ http.Client _fullSyncServer(
   _Observed observed, {
   int total = _total,
   String? omitFromGet,
+  String idPrefix = 'e',
 }) {
-  final ids = [for (var i = 0; i < total; i++) 'e$i'];
+  final ids = [for (var i = 0; i < total; i++) '$idPrefix$i'];
 
   return jmapFakeServer(
     accountId: _jmapAccountId,
     handle: (call) {
       if (call.method == 'Email/query') {
         observed.queryLimits.add(call.args['limit'] as int?);
-        final position = (call.args['position'] as int?) ?? 0;
-        final limit = (call.args['limit'] as int?) ?? total;
-        final end = (position + limit).clamp(0, total);
-        return [
-          'Email/query',
-          {
-            'accountId': _jmapAccountId,
-            'queryState': 'q1',
-            'position': position,
-            'total': total,
-            'ids': ids.sublist(position, end),
-          },
-          call.callId,
-        ];
+        observed.queryPositions.add((call.args['position'] as int?) ?? -1);
+        observed.queryAnchors.add(call.args['anchor'] as String?);
+        return jmapQueryPage(
+          accountId: _jmapAccountId,
+          sortedIds: ids,
+          args: call.args,
+          callId: call.callId,
+        );
       }
 
       if (call.method != 'Email/get') return null;
@@ -226,5 +230,134 @@ void main() {
     );
 
     await r.db.close();
+  });
+
+  // #973 made a full sync of a large mailbox ~11x longer in requests. It still
+  // loses no mail if interrupted (bodies are upserted per batch), but it used
+  // to re-download the whole prefix on restart. A run now walks a bounded
+  // number of pages, stores an anchor, and the next cycle continues from it.
+  //
+  // Resuming by a stable id rather than a numeric offset is the point: the
+  // first attempt (closed #1004) paged by `position`, which skips messages
+  // when mail is deleted between runs.
+  group('a full sync too large for one run', () {
+    // Five 500-id pages against a four-page-per-run cap.
+    const big = 2300;
+
+    Future<String?> resumePoint(JmapTestRepos r) =>
+        jmapStoredSyncState(r.db, 'JMAP:FullSync:$_mailbox');
+
+    // A second run against the same database and account, with [client] as
+    // its server — the next sync cycle picking up the resume point.
+    Future<JmapTestRepos> continueFrom(JmapTestRepos r, http.Client client) =>
+        openJmapTestRepos(
+          httpClient: client,
+          account: _jmapAccount,
+          cacheDir: cacheDir(),
+          reuse: r,
+        );
+
+    // A first run that fills four pages and pauses at anchor e1999.
+    Future<JmapTestRepos> pausedAfterFirstRun() async {
+      final r = await openJmapTestRepos(
+        httpClient: _fullSyncServer(_Observed(), total: big),
+        account: _jmapAccount,
+        cacheDir: cacheDir(),
+      );
+      await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+      return r;
+    }
+
+    test('pauses at the page cap and stores an anchor, not an offset',
+        () async {
+      final observed = _Observed();
+      final r = await openJmapTestRepos(
+        httpClient: _fullSyncServer(observed, total: big),
+        account: _jmapAccount,
+        cacheDir: cacheDir(),
+      );
+
+      final result = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(result.fetched, 2000, reason: 'four 500-id pages, then pause');
+      expect(await r.db.select(r.db.emails).get(), hasLength(2000));
+      expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+        isNull,
+        reason: 'a half-synced mailbox must not look incrementally synced',
+      );
+      final point = await resumePoint(r);
+      expect(point, isNotNull);
+      final decoded = jsonDecode(point!) as Map<String, dynamic>;
+      expect(
+        decoded['anchor'],
+        'e1999',
+        reason: 'the resume point is the last id fetched, a stable handle',
+      );
+      expect(decoded['state'], 'est-full');
+      // Only the first query is position-based; the rest ride the anchor.
+      expect(observed.queryPositions.first, 0);
+      expect(
+        observed.queryAnchors.sublist(1),
+        everyElement(isNotNull),
+        reason: 'pages after the first must page by anchor',
+      );
+
+      await r.db.close();
+    });
+
+    test('the next run continues from the anchor and finishes', () async {
+      final r = await pausedAfterFirstRun();
+
+      final second = _Observed();
+      final r2 = await continueFrom(r, _fullSyncServer(second, total: big));
+
+      final result = await r2.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(
+        second.queryAnchors.first,
+        'e1999',
+        reason: 'resume from where run 1 stopped, by id',
+      );
+      expect(result.fetched, big - 2000);
+      expect(await r.db.select(r.db.emails).get(), hasLength(big));
+      expect(
+        await jmapStoredSyncState(r.db, 'JMAP:Email:$_mailbox'),
+        'est-full',
+        reason: 'drained now, so the incremental path takes over',
+      );
+      expect(await resumePoint(r2), isNull);
+
+      await r.db.close();
+    });
+
+    test('a deleted anchor restarts the walk from the top', () async {
+      final r = await pausedAfterFirstRun();
+
+      // The anchor message is gone when the next run asks for it: the server
+      // now holds a different set that does not contain e1999.
+      final second = _Observed();
+      final r2 = await continueFrom(
+        r,
+        _fullSyncServer(second, total: 300, idPrefix: 'x'),
+      );
+
+      final result = await r2.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(
+        second.queryAnchors.first,
+        'e1999',
+        reason: 'it tries the stored anchor first',
+      );
+      expect(
+        second.queryPositions.any((p) => p == 0),
+        isTrue,
+        reason: 'anchorNotFound must fall back to a position-0 restart',
+      );
+      expect(result.fetched, 300);
+      expect(await resumePoint(r2), isNull);
+
+      await r.db.close();
+    });
   });
 }
