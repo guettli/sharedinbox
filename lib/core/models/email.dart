@@ -10,6 +10,9 @@ class Email {
   final List<EmailAddress> from;
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
+  // RFC 5322 Reply-To addresses; empty when the header is absent. Replies go
+  // here instead of [from] when set (#919).
+  final List<EmailAddress> replyTo;
   final String? preview;
   final bool isSeen;
   final bool isFlagged;
@@ -39,6 +42,7 @@ class Email {
     required this.from,
     required this.to,
     required this.cc,
+    this.replyTo = const [],
     this.preview,
     required this.isSeen,
     required this.isFlagged,
@@ -73,6 +77,9 @@ class Email {
       cc: (json['cc'] as List<dynamic>)
           .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
           .toList(),
+      replyTo: (json['replyTo'] as List<dynamic>? ?? const [])
+          .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
+          .toList(),
       preview: json['preview'] as String?,
       isSeen: json['isSeen'] as bool,
       isFlagged: json['isFlagged'] as bool,
@@ -102,6 +109,7 @@ class Email {
       'from': from.map((e) => e.toJson()).toList(),
       'to': to.map((e) => e.toJson()).toList(),
       'cc': cc.map((e) => e.toJson()).toList(),
+      'replyTo': replyTo.map((e) => e.toJson()).toList(),
       'preview': preview,
       'isSeen': isSeen,
       'isFlagged': isFlagged,
@@ -128,6 +136,7 @@ class Email {
     List<EmailAddress>? from,
     List<EmailAddress>? to,
     List<EmailAddress>? cc,
+    List<EmailAddress>? replyTo,
     String? preview,
     bool? isSeen,
     bool? isFlagged,
@@ -152,6 +161,7 @@ class Email {
       from: from ?? this.from,
       to: to ?? this.to,
       cc: cc ?? this.cc,
+      replyTo: replyTo ?? this.replyTo,
       preview: preview ?? this.preview,
       isSeen: isSeen ?? this.isSeen,
       isFlagged: isFlagged ?? this.isFlagged,
