@@ -1489,6 +1489,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // (realEmailId, messageId) of each row we just wrote — checked afterwards
     // for a local self-sent "virtual" counterpart to dissolve (#545).
     final dissolveCandidates = <(String, String?)>[];
+    // (emailId, subject, size) of each row stored for the first time — logged
+    // after the transaction so "Show Logs" starts with the fetch (#920).
+    final newlyStored = <(String, String?, int?)>[];
     await _db.transaction(() async {
       for (final msg in fetch.messages) {
         final envelope = msg.envelope;
@@ -1553,6 +1556,11 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
+        final isNew = await (_db.selectOnly(_db.emails)
+                  ..addColumns([_db.emails.id])
+                  ..where(_db.emails.id.equals(emailId)))
+                .getSingleOrNull() ==
+            null;
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
@@ -1585,8 +1593,20 @@ class EmailRepositoryImpl implements EmailRepository {
               ),
             );
         if (msgId != null) dissolveCandidates.add((emailId, msgId));
+        if (isNew) newlyStored.add((emailId, subject, msg.size));
       }
     });
+    // Outside the transaction: the app log writes through the same database.
+    for (final (emailId, subject, size) in newlyStored) {
+      _logEmailFetched(
+        emailId: emailId,
+        accountId: account.id,
+        mailboxPath: mailboxPath,
+        protocol: 'imap',
+        subject: subject,
+        bytes: size,
+      );
+    }
     for (final tid in affectedThreads) {
       await _updateThread(account.id, mailboxPath, tid);
     }
@@ -3426,6 +3446,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
     // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
     final dissolveCandidates = <(String, String, String?)>[];
+    // (emailId, mailboxPath, subject, size) of each row stored for the first
+    // time — logged so "Show Logs" starts with the fetch (#920).
+    final newlyStored = <(String, String, String?, int?)>[];
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
@@ -3565,6 +3588,19 @@ class EmailRepositoryImpl implements EmailRepository {
             );
       }
       dissolveCandidates.add((mailboxPath, dbId, jmapMessageId));
+      if (existingRow == null) {
+        newlyStored.add((dbId, mailboxPath, subject, m['size'] as int?));
+      }
+    }
+    for (final (emailId, mailboxPath, subject, size) in newlyStored) {
+      _logEmailFetched(
+        emailId: emailId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        protocol: 'jmap',
+        subject: subject,
+        bytes: size,
+      );
     }
 
     for (final mailboxPath in affectedByMailbox.keys) {
@@ -7561,6 +7597,32 @@ class EmailRepositoryImpl implements EmailRepository {
   /// htmlBody length. Reported by the Sync state screen; not the wire size.
   int _bodySize(String? textBody, String? htmlBody) =>
       (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
+
+  /// Records the first time a server message is stored locally, so the
+  /// per-message "Show Logs" view starts with the mail's own fetch (#920).
+  void _logEmailFetched({
+    required String emailId,
+    required String accountId,
+    required String mailboxPath,
+    required String protocol,
+    String? subject,
+    int? bytes,
+  }) {
+    unawaited(
+      _appLogger?.info(
+        'email.fetched',
+        'Fetched "${subject ?? '(no subject)'}" from the server '
+            '(${protocol.toUpperCase()})',
+        data: {
+          'protocol': protocol,
+          if (bytes != null) 'bytes': bytes,
+        },
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+      ),
+    );
+  }
 
   /// Records how a message body was loaded so the per-message "Show Logs" view
   /// answers "did opening this mail need the Internet?" (#642). [source] is one

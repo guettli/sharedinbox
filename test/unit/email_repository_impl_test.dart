@@ -2780,6 +2780,7 @@ void main() {
       AppLogRepositoryImpl logs,
     }) makeLoggedRepos({
       Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
+      http.Client? httpClient,
     }) {
       final db = openTestDatabase();
       final storage = MapSecureStorage();
@@ -2790,6 +2791,9 @@ void main() {
         accounts,
         imapConnect: imapConnect ?? _noImapConnect,
         smtpConnect: _noSmtpConnect,
+        fetchObjectIds: _noObjectIds,
+        fetchPreviewSnippets: _noPreviewSnippets,
+        httpClient: httpClient,
         appLogger: AppLogger(logs),
       );
       return (db: db, accounts: accounts, emails: emails, logs: logs);
@@ -3139,6 +3143,101 @@ void main() {
       expect(await logsFor(r.logs, oldId), isEmpty);
       final moved = await logsFor(r.logs, newId);
       expect(moved.single.event, 'email.move');
+    });
+
+    group('email.fetched (#920)', () {
+      test('an IMAP sync logs the fetch once, as the first entry of the mail',
+          () async {
+        final messages = {
+          42: _PreviewTestMessage(
+            subject: 'Hello',
+            from: 'sender@example.com',
+            text: 'Body',
+            messageId: '<m42@example.com>',
+          ),
+        };
+        final r = makeLoggedRepos(
+          imapConnect: (_, __, ___) async =>
+              _PreviewSyncImapClient(messages: messages),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        const emailId = 'acc-1:INBOX:42';
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        final fetched = await logsFor(r.logs, emailId);
+        expect(fetched.single.event, 'email.fetched');
+        expect(fetched.single.level, AppLogLevel.info);
+        expect(fetched.single.accountId, 'acc-1');
+        expect(fetched.single.mailboxPath, 'INBOX');
+        expect(fetched.single.message, contains('Hello'));
+        final data =
+            jsonDecode(fetched.single.dataJson!) as Map<String, dynamic>;
+        expect(data['protocol'], 'imap');
+
+        // Re-fetching the already-stored mail must not log it again.
+        await r.emails.syncEmails('acc-1', 'INBOX');
+        await r.emails.setFlag(emailId, flagged: true);
+
+        final entries = await logsFor(r.logs, emailId);
+        expect(entries.map((e) => e.event), ['email.flag', 'email.fetched']);
+      });
+
+      test('a JMAP sync logs only mails that are new locally', () async {
+        final r = makeLoggedRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                created: ['e3'],
+                updated: ['e1'],
+              ),
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
+                  _jmapEmail(id: 'e3', mailboxId: 'mbx1', subject: 'Third'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('First'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        for (final resourceType in ['Email', 'JMAP:Reconcile:mbx1']) {
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: resourceType,
+                  state: resourceType == 'Email'
+                      ? 'est1'
+                      : DateTime.now().toIso8601String(),
+                  syncedAt: DateTime.now(),
+                ),
+              );
+        }
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(await logsFor(r.logs, 'jmap-1:e1'), isEmpty);
+        final created = await logsFor(r.logs, 'jmap-1:e3');
+        expect(created.single.event, 'email.fetched');
+        expect(created.single.accountId, 'jmap-1');
+        expect(created.single.mailboxPath, 'mbx1');
+        final data =
+            jsonDecode(created.single.dataJson!) as Map<String, dynamic>;
+        expect(data['protocol'], 'jmap');
+      });
     });
   });
 
