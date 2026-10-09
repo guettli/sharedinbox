@@ -19,8 +19,7 @@ ImapSmtpDiscovery _imapDiscovery() => ImapSmtpDiscovery(
       smtpSsl: false,
     );
 
-/// Discovery pointing at a local server — the only shape whose SSL flags
-/// survive `_buildImapAccount()`, and so the only one that can be asserted.
+/// Discovery pointing at a local server, where `*Ssl: false` means plaintext.
 ImapSmtpDiscovery _localhostDiscovery() => ImapSmtpDiscovery(
       imapHost: 'localhost',
       imapPort: 1430,
@@ -263,8 +262,8 @@ void main() {
         overrides: baseOverrides(discovery: _localhostDiscovery()),
       );
 
-      // Both switches are shown (localhost hosts) and carry what discovery
-      // reported, rather than the field defaults.
+      // Both switches carry what discovery reported, rather than the field
+      // defaults.
       final switches = tester.widgetList<SwitchListTile>(
         find.byType(SwitchListTile),
       );
@@ -369,7 +368,6 @@ void main() {
       await tester.pumpAndSettle();
 
       await _fillCredentials(tester);
-      // localhost is what reveals the SSL switches at all.
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Host').first,
         'localhost',
@@ -410,37 +408,63 @@ void main() {
       expect(saved.username, 'user@example.com');
     });
 
-    testWidgets(
-      'IMAP form hides SSL toggle for non-localhost, shows for localhost',
-      (tester) async {
-        await _submitEmail(
-          tester,
-          overrides: baseOverrides(discovery: UnknownDiscovery()),
-        );
+    testWidgets('IMAP form shows both SSL switches for remote hosts', (
+      tester,
+    ) async {
+      _useTallViewport(tester);
 
-        await tester.tap(find.text('IMAP / SMTP'));
-        await tester.pumpAndSettle();
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(discovery: _imapDiscovery()),
+      );
 
-        expect(find.text('IMAP'), findsOneWidget);
-        // No SSL toggles shown when hosts are empty (non-localhost).
-        expect(find.byType(SwitchListTile), findsNothing);
+      // Remote `*Ssl: false` means STARTTLS now (#954), so the switches are no
+      // longer localhost-only.
+      expect(find.byKey(const Key('imapSslSwitch')), findsOneWidget);
+      expect(find.byKey(const Key('smtpSslSwitch')), findsOneWidget);
+    });
 
-        // Entering localhost as IMAP host reveals the IMAP SSL toggle.
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'Host').first,
-          'localhost',
-        );
-        await tester.pumpAndSettle();
-        expect(find.byType(SwitchListTile), findsOneWidget);
+    testWidgets('IMAP save persists STARTTLS for remote hosts', (tester) async {
+      _useTallViewport(tester);
 
-        // Entering localhost as SMTP host reveals both SSL toggles.
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'Host').last,
-          'localhost',
-        );
-        await tester.pumpAndSettle();
-        expect(find.byType(SwitchListTile), findsNWidgets(2));
-      },
-    );
+      final repo = FakeAccountRepository();
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(
+          discovery: _imapDiscovery(),
+          accountRepository: repo,
+        ),
+      );
+
+      await _fillCredentials(tester);
+      // Discovery seeded IMAP on (implicit TLS); turn it off for STARTTLS.
+      await tester.tap(find.byKey(const Key('imapSslSwitch')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final saved = repo.accounts.single;
+      expect(saved.imapHost, 'imap.example.com');
+      expect(saved.imapSsl, isFalse);
+      expect(saved.smtpHost, 'smtp.example.com');
+      expect(saved.smtpSsl, isFalse);
+    });
+
+    testWidgets('unsupported autoconfig shows the reason on choose-type', (
+      tester,
+    ) async {
+      await _submitEmail(
+        tester,
+        overrides: baseOverrides(
+          discovery: UnsupportedDiscovery('advertises an unencrypted IMAP'),
+        ),
+      );
+
+      expect(
+        find.textContaining('unencrypted IMAP', findRichText: true),
+        findsOneWidget,
+      );
+      expect(find.text('IMAP / SMTP'), findsOneWidget);
+    });
   });
 }
