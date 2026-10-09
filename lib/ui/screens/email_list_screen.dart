@@ -188,6 +188,14 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // When sync next succeeds, forget any dismissal so a later error surfaces
+    // again. Done via listen rather than in the banner builder so there is no
+    // setState scheduled from within build.
+    ref.listen(syncLastErrorProvider(widget.accountId), (_, next) {
+      if (next.value == null && _dismissedErrorKey != null) {
+        setState(() => _dismissedErrorKey = null);
+      }
+    });
     final repo = ref.watch(emailRepositoryProvider);
     final accountAsync = ref.watch(accountByIdProvider(widget.accountId));
     final prefs =
@@ -488,18 +496,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   Widget _buildSyncErrorBanner() {
     final errorAsync = ref.watch(syncLastErrorProvider(widget.accountId));
     final error = errorAsync.value;
-    if (error == null) {
-      // Sync recovered; forget the dismissal so a later error shows again.
-      if (_dismissedErrorKey != null) {
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) {
-            if (mounted) setState(() => _dismissedErrorKey = null);
-          },
-        );
-      }
-      return const SizedBox.shrink();
-    }
-    if (syncErrorKey(error) == _dismissedErrorKey) {
+    if (error == null || syncErrorKey(error) == _dismissedErrorKey) {
       return const SizedBox.shrink();
     }
     return MaterialBanner(

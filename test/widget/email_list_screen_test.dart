@@ -1545,6 +1545,55 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'a dismissed error does not suppress a different KIND of failure',
+      (tester) async {
+        final errors = StreamController<String?>.broadcast();
+        addTearDown(errors.close);
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+            overrides: [
+              accountRepositoryProvider.overrideWithValue(
+                FakeAccountRepository([kTestAccount]),
+              ),
+              mailboxRepositoryProvider.overrideWithValue(
+                FakeMailboxRepository(),
+              ),
+              emailRepositoryProvider.overrideWithValue(FakeEmailRepository()),
+              syncLastErrorProvider('acc-1').overrideWith(
+                (ref) => errors.stream,
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Dismiss a transient partial failure.
+        errors.add('2 of 7 folders failed (Archive, Sent): Could not reach '
+            'the mail server — temporary network or DNS problem. Will retry '
+            'automatically.');
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Dismiss'));
+        await tester.pumpAndSettle();
+        expect(find.text('Dismiss'), findsNothing);
+
+        // A partial failure with a persistent cause arrives, without any
+        // recovery in between. It never self-heals, so if it were suppressed
+        // the user would not see it until an app restart — it must show.
+        errors.add('1 of 7 folders failed (Archive): '
+            'Authentication failed (HTTP 403)');
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Dismiss'),
+          findsOneWidget,
+          reason: 'a serious partial failure must surface even though a '
+              'transient partial was dismissed',
+        );
+      },
+    );
   });
 }
 

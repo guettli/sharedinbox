@@ -65,15 +65,26 @@ bool _isTransientNetworkError(Object e) =>
 /// message producers above so a reword updates both together; a test drives
 /// real messages through it to catch drift.
 ///
-/// Unique one-off errors keep their full text as the key, so dismissing one
-/// does not hide a genuinely different problem.
+/// A one-off error keeps its full text as the key, so dismissing one does not
+/// hide a genuinely different problem.
+///
+/// A partial-cycle key folds in the *cause* class, not just "partial": the
+/// folder names vary per cycle (so they must stay out of the key), but a
+/// transient partial self-heals while a persistent one does not — and
+/// dismissing the first must not suppress the second, which never recovers to
+/// a clean state and would otherwise stay hidden until an app restart.
 String syncErrorKey(String message) {
-  // Checked before the transient hints because a partial cycle's message
-  // contains the cause's text (e.g. "… folders failed (…): Could not reach …").
-  if (message.contains('folders failed')) return 'partial';
-  if (message.contains('did not answer in time')) return 'timeout';
-  if (message.contains('Could not reach the mail server')) return 'unreachable';
-  return message;
+  // The cause class is detectable even inside a partial message, which embeds
+  // the cause's text after the folder label.
+  final cause = message.contains('did not answer in time')
+      ? 'timeout'
+      : message.contains('Could not reach the mail server')
+          ? 'unreachable'
+          : 'other';
+  if (message.contains('folders failed')) return 'partial:$cause';
+  // A transient hint collapses to its class; anything else keeps its full
+  // text, so two distinct one-off problems stay distinct.
+  return cause == 'other' ? message : cause;
 }
 
 @visibleForTesting

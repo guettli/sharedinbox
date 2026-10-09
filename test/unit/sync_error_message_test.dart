@@ -95,15 +95,35 @@ void main() {
     // failing folder names and count, so dismissing the banner by raw text
     // meant it re-appeared the moment a different folder failed. All partial
     // messages must share one key regardless of which folders are named.
-    test('every partial-failure message classifies the same', () {
+    test('partial-failure messages are folder-name invariant per cause', () {
+      // Same cause, different folder sets -> same key, so dismissing one does
+      // not re-pop when the failing folders shift. This is the bug the key
+      // exists to fix.
       const a = '2 of 7 folders failed (Archive, Sent): '
           'Could not reach the mail server — temporary network or DNS '
           'problem. Will retry automatically.';
-      const b = '1 of 3 folders failed (Drafts): The mail server was reached '
-          'but did not answer in time — the request took too long. Will retry '
+      const b = '3 of 7 folders failed (Archive, Drafts, Spam): '
+          'Could not reach the mail server — temporary network or DNS '
+          'problem. Will retry automatically.';
+      expect(syncErrorKey(a), 'partial:unreachable');
+      expect(syncErrorKey(a), syncErrorKey(b));
+    });
+
+    test('a partial folds in its cause, so transient and persistent differ',
+        () {
+      const transient = '2 of 7 folders failed (Archive): Could not reach the '
+          'mail server — temporary network or DNS problem. Will retry '
           'automatically.';
-      expect(syncErrorKey(a), 'partial');
-      expect(syncErrorKey(b), 'partial');
+      const persistent = '1 of 7 folders failed (Archive): '
+          'Authentication failed (HTTP 403)';
+      expect(syncErrorKey(transient), 'partial:unreachable');
+      expect(syncErrorKey(persistent), 'partial:other');
+      expect(
+        syncErrorKey(transient),
+        isNot(syncErrorKey(persistent)),
+        reason: 'dismissing a transient partial must not suppress a serious '
+            'one, which never recovers to clear the dismissal',
+      );
     });
 
     test('maps the transient hints to stable keys', () {
