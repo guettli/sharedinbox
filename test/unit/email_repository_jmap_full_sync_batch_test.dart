@@ -26,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Account;
 
 import 'helpers/jmap_test_server.dart';
 
@@ -358,6 +359,100 @@ void main() {
       expect(await resumePoint(r2), isNull);
 
       await r.db.close();
+    });
+
+    // The keystone of the resumed-drain design: the final run holds only its
+    // own pages, so it cannot prune — it clears the reconcile marker and the
+    // periodic reconcile, running in the same cycle, prunes against a fresh
+    // full walk. A ghost the resumed run never saw must still be removed, and
+    // the earlier runs' messages must survive.
+    test('a resumed drain defers pruning to the reconcile, which runs',
+        () async {
+      final r = await pausedAfterFirstRun();
+
+      // A local row the server does not list — only a complete reconcile walk
+      // can know it is gone.
+      await insertJmapEmailRow(
+        r.db,
+        _jmapAccount.id,
+        'ghost',
+        mailboxPath: _mailbox,
+      );
+
+      final r2 =
+          await continueFrom(r, _fullSyncServer(_Observed(), total: big));
+      await r2.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      final ids = await jmapLocalEmailIds(r.db);
+      expect(
+        ids,
+        isNot(contains('${_jmapAccount.id}:ghost')),
+        reason: 'the deferred reconcile must actually prune the ghost',
+      );
+      expect(
+        ids,
+        contains('${_jmapAccount.id}:e0'),
+        reason: "run one's messages must not be pruned by the resumed drain",
+      );
+      expect(ids, hasLength(big));
+
+      await r.db.close();
+    });
+
+    test('an unreadable resume point starts the walk over', () async {
+      final observed = _Observed();
+      final r = await openJmapTestRepos(
+        httpClient: _fullSyncServer(observed, total: 3),
+        account: _jmapAccount,
+        cacheDir: cacheDir(),
+      );
+      await r.db.into(r.db.syncStates).insert(
+            SyncStatesCompanion.insert(
+              accountId: _jmapAccount.id,
+              resourceType: 'JMAP:FullSync:$_mailbox',
+              state: 'not valid json {',
+              syncedAt: DateTime.now(),
+            ),
+          );
+
+      final result = await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect(observed.queryPositions.first, 0, reason: 'fresh walk');
+      expect(result.fetched, 3);
+      expect(await resumePoint(r), isNull);
+
+      await r.db.close();
+    });
+
+    test('a mailbox spanning three runs drains over three cycles', () async {
+      const huge = 4500; // nine 500-id pages, four per run
+      Future<JmapTestRepos> cycle(JmapTestRepos? prev) async {
+        final client = _fullSyncServer(_Observed(), total: huge);
+        return prev == null
+            ? openJmapTestRepos(
+                httpClient: client,
+                account: _jmapAccount,
+                cacheDir: cacheDir(),
+              )
+            : continueFrom(prev, client);
+      }
+
+      final r1 = await cycle(null);
+      final a = await r1.emails.syncEmails(_jmapAccount.id, _mailbox);
+      final r2 = await cycle(r1);
+      final b = await r2.emails.syncEmails(_jmapAccount.id, _mailbox);
+      final r3 = await cycle(r2);
+      final c = await r3.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+      expect([a.fetched, b.fetched, c.fetched], [2000, 2000, 500]);
+      expect(await r1.db.select(r1.db.emails).get(), hasLength(huge));
+      expect(await resumePoint(r3), isNull);
+      expect(
+        await jmapStoredSyncState(r1.db, 'JMAP:Email:$_mailbox'),
+        'est-full',
+      );
+
+      await r1.db.close();
     });
   });
 }

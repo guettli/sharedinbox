@@ -2554,7 +2554,9 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     var resumed = anchor != null;
     if (resumed) {
-      log('JMAP-sync: resuming full sync mailbox=$mailboxJmapId anchor=$anchor');
+      log(
+        'JMAP-sync: resuming full sync mailbox=$mailboxJmapId anchor=$anchor',
+      );
     }
 
     var fetched = 0;
