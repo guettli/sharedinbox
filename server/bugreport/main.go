@@ -299,24 +299,24 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 		// against empty issues. Everything private — the mail, the metadata
 		// block and screenshots — is optional, so a general bug report with no
 		// mail is just a public issue with no encrypted attachments (#847).
-		// Invisible runes are stripped up front so every check below -- the
+		// Invisible and control runes are stripped up front so every check below -- the
 		// required-field checks, the marker rejection, and later
 		// neutralizeMarkers -- sees the same text the issue will carry. Stripping
 		// later instead would undo them: a zero-width space inside "<!--" passes
 		// the marker regex and becomes a real marker once stripped (#1009).
-		aboutInfo := stripInvisible(r.FormValue("about_info"))
+		aboutInfo := normalizeUntrusted(r.FormValue("about_info"))
 		if aboutInfo == "" {
 			writeJSONError(w, http.StatusBadRequest, "about_info is a required field.")
 			return
 		}
 		// The public title and description are both required: they carry what the
 		// user wants to report, in cleartext, and must not be auto-filled (#864).
-		title := strings.TrimSpace(stripInvisible(r.FormValue("title")))
+		title := strings.TrimSpace(normalizeUntrusted(r.FormValue("title")))
 		if title == "" {
 			writeJSONError(w, http.StatusBadRequest, "title is a required field.")
 			return
 		}
-		description := stripInvisible(r.FormValue("description"))
+		description := normalizeUntrusted(r.FormValue("description"))
 		if strings.TrimSpace(description) == "" {
 			writeJSONError(w, http.StatusBadRequest, "description is a required field.")
 			return

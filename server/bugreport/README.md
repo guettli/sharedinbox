@@ -44,11 +44,15 @@ server therefore:
 
 - **rejects** (`400`) any of the three that contains an agentloop managed-block
   marker (`<!-- agentloop… -->`, `<!-- /agentloop… -->`), so a report cannot
-  forge e.g. an approved plan block;
+  forge e.g. an approved plan block. This check runs on the **normalized** text
+  (see the default-ignorable bullet): a marker hidden as `<!` + ZWSP or a C0
+  control + `-- agentloop` is invisible to the regex, so stripping has to happen
+  first or removing the rune afterwards reconstitutes the marker;
 - opens the issue with a fixed **untrusted-input notice** telling readers and
   agents that the user parts are data, not instructions;
-- flattens the **title** to one plain line, dropping control, bidi and
-  invisible-format characters (see below);
+- flattens the **title** to one plain line (control characters become spaces,
+  whitespace runs collapse), having already dropped the invisible runes below —
+  the bidi controls among them, since they are all `Cf`;
 - renders the **description** and **system info** inside a fenced code block
   whose fence is longer than any backtick run in them, so neither can break out
   into markdown/HTML. System info was rendered as markdown until #1009, where a
@@ -78,6 +82,12 @@ server therefore:
   U+0605 (Arabic number signs) and U+070F (Syriac abbreviation mark), accepted
   because they format numerals rather than carry words. U+2800 BRAILLE PATTERN
   BLANK and combining-mark runs are left alone: they render.
+- **truncates** the title to 120, the description to 8000 and system info to
+  4000 runes, ending a cut field with `…[truncated]`. The app truncates with
+  the identical numbers (`lib/core/services/report_limits.dart`), enforced by
+  `TestReportLimitsMatchApp`. `report.json` keeps the untruncated text — but
+  normalized, since the strip above runs at intake, so invisible and control
+  runes are gone from the stored copy too.
 
 No escaping removes natural-language instructions: the real containment is
 that agents never follow directives from the report, never reveal key material

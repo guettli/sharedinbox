@@ -10,7 +10,9 @@ import (
 // the GitHub issue. The app truncates with the identical numbers and marker
 // (lib/core/services/report_limits.dart) before submitting, so a report sent by
 // the app is never cut again here; TestReportLimitsMatchApp keeps the two in
-// lockstep. The full text is still stored in report.json.
+// lockstep. report.json keeps the untruncated text -- normalized, though:
+// normalizeUntrusted runs at intake, so invisible and control runes are
+// already gone from what is stored.
 const (
 	maxTitleRunes       = 120
 	maxDescriptionRunes = 8000
@@ -37,12 +39,6 @@ func truncateRunes(s string, limit int) string {
 	return string(r[:keep]) + truncationMarker
 }
 
-// isBidiControl reports the Unicode bidi embedding/override/isolate runes,
-// which can make a title read differently from what it contains.
-func isBidiControl(r rune) bool {
-	return (r >= '‪' && r <= '‮') || (r >= '⁦' && r <= '⁩')
-}
-
 // invisibleRunes are the runes carrying no glyph of their own, so text built
 // from them is read in full by an agent and is simply absent for a human. Each
 // is a channel for hidden instructions:
@@ -54,6 +50,9 @@ func isBidiControl(r rune) bool {
 //     version of this filter missed entirely.
 //   - Other_Default_Ignorable_Code_Point: the Hangul fillers (U+115F, U+1160,
 //     U+3164, U+FFA0) and U+034F combining grapheme joiner.
+//   - the bidi embedding/override/isolate controls, which can make a title
+//     read differently from what it contains -- all Cf, so the table above
+//     covers them; there is no separate isBidiControl check any more.
 //   - Co: private use. Not strictly invisible -- it renders as a vendor glyph or
 //     tofu depending on the platform -- but it has no agreed meaning, so a
 //     report has no business carrying it into an agent-watched issue.
@@ -95,14 +94,29 @@ func isInvisible(r rune) bool {
 	return unicode.In(r, invisibleRunes...)
 }
 
-// stripInvisible drops every isInvisible rune. It runs at intake, BEFORE the
-// agentloop-marker rejection and before neutralizeMarkers, because stripping
-// afterwards reconstitutes exactly what those two reject or break: a
-// "<!" + ZWSP + "-- agentloop" contains no "<!--" for the regex to see, and
-// removing the ZWSP later turns it back into a real marker.
-func stripInvisible(s string) string {
+// normalizeUntrusted is the single place the public report fields are
+// normalized, and it runs at intake -- before the required-field checks, before
+// the agentloop-marker rejection, and before neutralizeMarkers. Everything the
+// downstream sanitizers would remove has to go here, or the strip undoes the
+// checks: "<!" + ZWSP + "-- agentloop" carries no "<!--" for agentloopMarkerRe
+// to see, and removing the ZWSP afterwards turns it back into a real marker.
+// The same is true of a C0 control, which is why controls are dropped here and
+// not only in fenceCode (#1009).
+//
+// Newlines and tabs survive -- they are legitimate in a description, and
+// sanitizeTitle flattens them for the title. CR is folded into LF rather than
+// dropped, so a CRLF document does not have its line structure deleted.
+//
+// The downstream filters in sanitizeTitle and fenceCode are kept as idempotent
+// defense in depth: they see nothing left to remove when called after this.
+func normalizeUntrusted(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
 	return strings.Map(func(r rune) rune {
-		if isInvisible(r) {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if isInvisible(r) || unicode.IsControl(r) {
 			return -1
 		}
 		return r
@@ -114,7 +128,7 @@ func stripInvisible(s string) string {
 // controls are dropped, and the result is capped at maxTitleRunes.
 func sanitizeTitle(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if isBidiControl(r) || isInvisible(r) {
+		if isInvisible(r) {
 			return -1
 		}
 		if unicode.IsControl(r) {
@@ -152,7 +166,7 @@ func fenceCode(s string) string {
 		if r == '\n' || r == '\t' {
 			return r
 		}
-		if unicode.IsControl(r) || isBidiControl(r) || isInvisible(r) {
+		if unicode.IsControl(r) || isInvisible(r) {
 			return -1
 		}
 		return r
