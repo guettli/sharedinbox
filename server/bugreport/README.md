@@ -57,17 +57,27 @@ server therefore:
   could then forge with another host's URL;
 - neutralizes HTML comments in both (`<!--` → `<! --`, `-->` → `-- >`), which
   a fence alone would not do for a regex-based marker parser;
-- drops **invisible** runes — Unicode category Cf plus surrogates and
-  private-use, keeping ZWJ/ZWNJ because Persian, Indic scripts and emoji
-  sequences need them. `unicode.IsControl` does not cover these: it is
-  Latin-1-only by construction, so before #1009 the U+E0000–U+E007F Tag block
-  (invisible ASCII) and ZWSP/WJ/BOM reached agents in a title that looked clean
-  to a human. A code fence does not help here — invisible text is invisible
-  inside a code block too;
-- **truncates** the title to 120, the description to 8000 and system info to
-  4000 runes, ending a cut field with `…[truncated]`. The app truncates with
-  the identical numbers (`lib/core/services/report_limits.dart`), enforced by
-  `TestReportLimitsMatchApp`. The full text is still kept in `report.json`.
+- drops the **default-ignorable** runes, which carry no glyph and so reach an
+  agent while being absent for a human: category `Cf` (the U+E0000-U+E007F Tag
+  block is invisible ASCII; plus ZWSP, word joiner, BOM, soft hyphen), the
+  variation selectors U+FE00-FE0F and U+E0100-U+E01EF (256 codepoints, a full
+  byte each -- category `Mn`, which a `Cf`-only filter misses), the
+  `Other_Default_Ignorable` Hangul fillers and U+034F, and private-use runes.
+  `unicode.IsControl` covers none of this: it is Latin-1-only by construction,
+  so before #1009 a title reading `Bug report: Crash on login` could carry a
+  recoverable command. A code fence is no help here -- invisible text is
+  invisible inside a code block too. The strip runs **at intake, before** the
+  marker rejection, because doing it afterwards reconstitutes what that check
+  rejects: a zero-width space inside `<!--` hides the marker from the regex and
+  removing it later puts the marker back.
+
+  Two deliberate exceptions. **ZWJ and ZWNJ are kept** -- required orthography
+  in Persian and Indic scripts, and emoji joiners -- which leaves a low-bandwidth
+  residual channel, since two symbols encode arbitrary text in binary; it cannot
+  be closed without corrupting real languages. **Dropping `Cf` costs** U+0600-
+  U+0605 (Arabic number signs) and U+070F (Syriac abbreviation mark), accepted
+  because they format numerals rather than carry words. U+2800 BRAILLE PATTERN
+  BLANK and combining-mark runs are left alone: they render.
 
 No escaping removes natural-language instructions: the real containment is
 that agents never follow directives from the report, never reveal key material
