@@ -212,8 +212,11 @@ void main() {
         _startConnect(httpClient, onError: (e) => error = e);
         async.elapse(const Duration(seconds: 60));
         expect(error, isA<TimeoutException>());
-        expect(calls, 3,
-            reason: '1 initial attempt + 2 retries, then gives up');
+        expect(
+          calls,
+          3,
+          reason: '1 initial attempt + 2 retries, then gives up',
+        );
       });
     });
   });

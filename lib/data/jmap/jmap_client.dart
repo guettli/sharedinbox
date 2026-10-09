@@ -140,7 +140,8 @@ class JmapClient {
       }
       rateLimitAttempt++;
       await Future<void>.delayed(
-          Duration(milliseconds: 200 * rateLimitAttempt));
+        Duration(milliseconds: 200 * rateLimitAttempt),
+      );
     }
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
