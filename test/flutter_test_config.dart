@@ -9,10 +9,27 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
+  _allowDevJmapHostOverHttp();
   setUpAll(_loadMaterialFonts);
   await testMain();
+}
+
+/// Backend/integration tests reach a dev Stalwart over plaintext http,
+/// addressed by its docker service name via `STALWART_URL`. Register that host
+/// so `JmapClient.connect` allows http to it across the whole suite — not just
+/// the tests that happen to call `StalwartEnv.fromPlatform` first. A no-op when
+/// the var is unset (unit-test isolates, so their remote-http rejection tests
+/// are unaffected), and `JmapClient` ignores the set in release builds.
+void _allowDevJmapHostOverHttp() {
+  final url = Platform.environment['STALWART_URL'];
+  if (url == null || url.isEmpty) return;
+  final host = Uri.tryParse(url)?.host;
+  if (host != null && host.isNotEmpty) {
+    JmapClient.debugAllowedHttpHosts.add(host);
+  }
 }
 
 Future<void> _loadMaterialFonts() async {
