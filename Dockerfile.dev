@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ClickHouse package ships one multi-call binary that dispatches on argv[0], so
 # `clickhouse-client` is a symlink to it.
 ARG GRPCURL_VERSION=1.9.4
-ARG CLICKHOUSE_VERSION=26.9.12.8
+ARG CLICKHOUSE_VERSION=26.9.14.10
 RUN set -eux; \
     deb_arch="$(dpkg --print-architecture)"; \
     case "$deb_arch" in \
