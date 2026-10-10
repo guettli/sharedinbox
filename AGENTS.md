@@ -96,15 +96,22 @@ re-run). The Dagger `task`s below fail to connect until it is up. If it errors
 > "permission denied", hooks fail): your shell predates the `dagger`-group grant
 > or is not a login shell, so it never picked up the group membership or
 > `/etc/profile.d/dagger-runner-host.sh`. This is a stale session, not a broken
-> seat — do not fall back to `ssh root@tc` or `--no-verify`. Confirm and
-> activate in place:
+> seat — do not fall back to `ssh root@tc` or `--no-verify`. Confirm you are
+> provisioned, then run each Dagger/`task` command with the group and engine
+> socket activated in one shot via `sg dagger -c '…'`:
 >
 > ```
-> getent group dagger | grep "$USER"   # you should be listed
-> newgrp dagger                        # pick up the group in this shell
-> export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock
-> dagger core --help                   # now reaches the engine as you
+> getent group dagger | grep "$(id -un)"   # you should be listed
+> sg dagger -c 'export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock; dagger core --help'
+> # then prefix real checks the same way, e.g.
+> sg dagger -c 'export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock; task check-fast'
 > ```
+>
+> Use `sg dagger -c`, not a bare `newgrp dagger`: `newgrp` replaces the shell
+> and, in a non-interactive agent shell, swallows the commands typed after it
+> (they run in no shell, or the call hangs). A fresh *login* shell also works —
+> it picks up the group and sources `/etc/profile.d/dagger-runner-host.sh`
+> automatically — if you can start one.
 
 Then drive everything through `task`, which calls `dagger call -m ci …` under
 the hood. The commands you need:
