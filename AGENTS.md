@@ -91,6 +91,20 @@ re-run). The Dagger `task`s below fail to connect until it is up. If it errors
 > gitops#738), so the `task …` / `dagger call …` commands below work as-is — and
 > the pre-commit hooks run, so there is no need for `git commit --no-verify`. The
 > tunnel step is worker-only.
+>
+> **If they _don't_ work** (`dagger`/`task` cannot reach the engine, docker is
+> "permission denied", hooks fail): your shell predates the `dagger`-group grant
+> or is not a login shell, so it never picked up the group membership or
+> `/etc/profile.d/dagger-runner-host.sh`. This is a stale session, not a broken
+> seat — do not fall back to `ssh root@tc` or `--no-verify`. Confirm and
+> activate in place:
+>
+> ```
+> getent group dagger | grep "$USER"   # you should be listed
+> newgrp dagger                        # pick up the group in this shell
+> export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock
+> dagger core --help                   # now reaches the engine as you
+> ```
 
 Then drive everything through `task`, which calls `dagger call -m ci …` under
 the hood. The commands you need:
