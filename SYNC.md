@@ -348,3 +348,7 @@ SYNC_RELIABILITY_ARGS=$'--fuzz\n--fuzz-seed=42\n--fuzz-prob=0.15\n--cycles=5' \
 
 The fault-injection layer itself lives in `scripts/sync_reliability_fuzz.dart`
 and has unit coverage in `test/unit/sync_reliability_fuzz_test.dart`.
+
+To check how a real server behaves before relying on a semantic (rather than
+fuzzing the engine), probe a throwaway Stalwart directly — see
+`stalwart-dev/README.md` and `stalwart-dev/jmap_probe.py`.
