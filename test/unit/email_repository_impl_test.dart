@@ -347,6 +347,11 @@ class _ThrowingMimeMessage extends imap.MimeMessage {
       throw RangeError.range(44858, 0, 44856, 'end');
 }
 
+Future<List<String>> _changeTypes(AppDatabase db) async =>
+    (await db.select(db.pendingChanges).get())
+        .map((c) => c.changeType)
+        .toList();
+
 imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
       encodedName: path,
       encodedPath: path,
@@ -7468,6 +7473,229 @@ void main() {
     );
   });
 
+  group('Sent copy lands in the Sent folder (#918)', () {
+    const draft = EmailDraft(
+      from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+      to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      cc: [],
+      subject: 'Test',
+      body: 'Body',
+      messageId: '<sent-1@example.com>',
+    );
+
+    Future<void> seedMailbox(
+      AppDatabase db,
+      String path, {
+      required String role,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:$path',
+                accountId: 'acc-1',
+                path: path,
+                name: path,
+                role: Value(role),
+              ),
+            );
+
+    test(
+      'APPENDs to the mailbox the server flags as Sent, without creating one',
+      () async {
+        // Hardcoding 'Sent' used to CREATE a second top-level folder here and
+        // file the copy into it, leaving the Sent folder the app displays
+        // (role = 'sent') empty.
+        final spy = _AppendCapturingImapClient(appendUid: 11);
+        final r = _makeRepos(
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) async => spy,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+
+        await r.emails.sendEmail('acc-1', draft);
+
+        expect(spy.appendedToPath, 'INBOX.Sent');
+        expect(spy.createdMailboxes, isEmpty);
+      },
+    );
+
+    test(
+      'falls back to creating "Sent" when the account has no sent-role folder',
+      () async {
+        final spy = _AppendCapturingImapClient(appendUid: 11);
+        final r = _makeRepos(
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) async => spy,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+
+        await r.emails.sendEmail('acc-1', draft);
+
+        expect(spy.appendedToPath, 'Sent');
+        expect(spy.createdMailboxes, ['Sent']);
+      },
+    );
+
+    test('the message shows up in Sent immediately, with no sync', () async {
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(appendUid: 11),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+
+      await r.emails.sendEmail('acc-1', draft);
+
+      final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      expect(sent, hasLength(1));
+      expect(sent.single.subject, 'Test');
+      expect(sent.single.to.single.email, 'bob@example.com');
+      expect(sent.single.isSeen, isTrue, reason: 'you wrote it');
+      // APPENDUID told us the UID, so the row carries the id a later sync of
+      // this folder writes — that sync updates it instead of duplicating it.
+      expect(sent.single.id, 'acc-1:INBOX.Sent:11');
+      expect(sent.single.uid, 11);
+      expect(sent.single.isLocal, isFalse);
+
+      // The body we composed is cached against that row, so the thread view
+      // has something to show before the first fetch of this folder.
+      final body = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(sent.single.id)))
+          .getSingle();
+      expect(body.textBody, 'Body');
+    });
+
+    test('without UIDPLUS it still shows up, as a virtual row', () async {
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+
+      await r.emails.sendEmail('acc-1', draft);
+
+      final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      expect(sent, hasLength(1));
+      expect(sent.single.subject, 'Test');
+      expect(
+        sent.single.isLocal,
+        isTrue,
+        reason: 'dissolved into the real message by the next sync',
+      );
+
+      // A virtual row has no server copy to fetch, so its body is always
+      // served from the cache we just wrote.
+      final body = await r.emails.getEmailBody(sent.single.id);
+      expect(body.textBody, 'Body');
+    });
+
+    test(
+      'the virtual Sent copy dissolves against the Sent arrival, and the '
+      'inbox note against the inbox arrival',
+      () async {
+        // A mail to yourself leaves both virtual rows behind. Pairing them up
+        // the wrong way round would move the inbox arrival into Sent.
+        final r = _makeRepos(
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) async =>
+              _AppendCapturingImapClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await seedMailbox(r.db, 'INBOX', role: 'inbox');
+        await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+
+        const selfDraft = EmailDraft(
+          from: EmailAddress(email: 'alice@example.com'),
+          to: [EmailAddress(email: 'alice@example.com')],
+          cc: [],
+          subject: 'note',
+          body: 'remember milk',
+          messageId: '<self-1@example.com>',
+        );
+        await r.emails.enqueueSend('acc-1', selfDraft);
+        await r.emails.sendNow('acc-1');
+
+        expect(
+          (await r.emails.observeEmails('acc-1', 'INBOX').first).single.isLocal,
+          isTrue,
+        );
+        expect(
+          (await r.emails.observeEmails('acc-1', 'INBOX.Sent').first)
+              .single
+              .isLocal,
+          isTrue,
+        );
+
+        // The real message is delivered to the inbox.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:42',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 42,
+                receivedAt: DateTime(2024, 6),
+                subject: const Value('note'),
+                messageId: const Value('self-1@example.com'),
+                threadId: const Value('self-1@example.com'),
+              ),
+            );
+        await r.emails.maybeDissolveLocalMessageForTest(
+          'acc-1',
+          'INBOX',
+          'acc-1:INBOX:42',
+          'self-1@example.com',
+        );
+
+        // The inbox note is gone, replaced by the real message — and it stayed
+        // in the inbox rather than being dragged into Sent. Matching the Sent
+        // copy here would have queued a move to INBOX.Sent.
+        final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
+        expect(inbox, hasLength(1));
+        expect(inbox.single.id, 'acc-1:INBOX:42');
+        expect(await _changeTypes(r.db), isNot(contains('move')));
+
+        // The Sent copy is untouched; it waits for the Sent arrival.
+        final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+        expect(sent, hasLength(1));
+        expect(sent.single.isLocal, isTrue);
+
+        // Which now dissolves it.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX.Sent:7',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX.Sent',
+                uid: 7,
+                receivedAt: DateTime(2024, 6),
+                subject: const Value('note'),
+                messageId: const Value('self-1@example.com'),
+                threadId: const Value('self-1@example.com'),
+              ),
+            );
+        await r.emails.maybeDissolveLocalMessageForTest(
+          'acc-1',
+          'INBOX.Sent',
+          'acc-1:INBOX.Sent:7',
+          'self-1@example.com',
+        );
+
+        final sentAfter =
+            await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+        expect(sentAfter, hasLength(1));
+        expect(sentAfter.single.id, 'acc-1:INBOX.Sent:7');
+        expect(await _changeTypes(r.db), isNot(contains('move')));
+      },
+    );
+  });
+
   group('IMAP folder deleted on server', () {
     test(
       'syncEmails prunes local mailbox when SELECT raises NONEXISTENT',
@@ -8610,15 +8838,22 @@ class _NoOpSmtpClient extends imap.SmtpClient {
 }
 
 class _AppendCapturingImapClient extends FakeImapClient {
+  _AppendCapturingImapClient({this.appendUid});
+
+  /// UID this fake reports back in an `APPENDUID` response code (RFC 4315
+  /// UIDPLUS). Null mimics a server that doesn't advertise UIDPLUS, so the
+  /// caller never learns where the copy landed.
+  final int? appendUid;
+
   Duration? lastAppendTimeout;
+  String? appendedToPath;
+  final List<String> createdMailboxes = [];
 
   @override
-  Future<imap.Mailbox> createMailbox(String path) async => imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        flags: [],
-        pathSeparator: '/',
-      );
+  Future<imap.Mailbox> createMailbox(String path) async {
+    createdMailboxes.add(path);
+    return _fakeMailbox(path);
+  }
 
   @override
   Future<imap.GenericImapResult> appendMessage(
@@ -8629,7 +8864,10 @@ class _AppendCapturingImapClient extends FakeImapClient {
     Duration? responseTimeout,
   }) async {
     lastAppendTimeout = responseTimeout;
-    return imap.GenericImapResult();
+    appendedToPath = targetMailboxPath;
+    final result = imap.GenericImapResult();
+    if (appendUid != null) result.responseCode = 'APPENDUID 1 $appendUid';
+    return result;
   }
 }
 

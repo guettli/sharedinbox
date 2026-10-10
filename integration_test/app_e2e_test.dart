@@ -333,9 +333,13 @@ void main() {
       await tapSync(tester);
 
       // ── Check Sent folder ──────────────────────────────────────────────────
-      // The Sent folder is created server-side by the IMAP send, then picked
-      // up by the next syncMailboxes pass. Poll the drawer for it (Stalwart
+      // The copy is APPENDed to the server's own \Sent folder — Stalwart calls
+      // it "Sent Items" — or, when no sent-role folder is known yet, to a
+      // freshly created "Sent" (#918). Poll the drawer for either (Stalwart
       // delivery + sync timing is bounded by syncNow).
+      final sentFolder = find.byWidgetPredicate(
+        (w) => w is Text && (w.data == 'Sent' || w.data == 'Sent Items'),
+      );
       Future<void> openDrawer() async {
         await tester.tap(find.byTooltip('Open folders'));
         await tester.pumpAndSettle();
@@ -351,7 +355,7 @@ void main() {
       final sentDeadline = DateTime.now().add(const Duration(seconds: 90));
       while (true) {
         await openDrawer();
-        if (tester.any(find.text('Sent'))) break;
+        if (tester.any(sentFolder)) break;
         if (DateTime.now().isAfter(sentDeadline)) {
           throw Exception('Sent folder never appeared in drawer');
         }
@@ -362,7 +366,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 200));
         }
       }
-      await tester.tap(find.text('Sent'));
+      await tester.tap(sentFolder.first);
       await tester.pumpAndSettle();
 
       // Sync Sent folder to fetch the appended message.

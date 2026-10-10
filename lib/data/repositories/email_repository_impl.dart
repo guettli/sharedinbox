@@ -4899,20 +4899,15 @@ class EmailRepositoryImpl implements EmailRepository {
     final mid = normaliseMessageId(messageId);
     if (mid == null) return;
 
-    // Never dissolve against the Sent copy we append after sending — the
-    // virtual message lives in the inbox and should merge with the inbox
-    // arrival, which carries the user's intended folder.
-    if (await _mailboxRole(accountId, arrivalMailboxPath) == 'sent') return;
-
-    final local = await (_db.select(_db.emails)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.isLocal.equals(true) &
-                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
-          )
-          ..limit(1))
-        .getSingleOrNull();
+    // A send can leave two virtual rows behind: the self-send note in the
+    // inbox (#545) and, when the server gave us no APPENDUID, the Sent copy
+    // (#918). Pair each with the arrival it actually is, keyed off the row id's
+    // marker rather than its current folder — the user may well have filed the
+    // note into Trash, and that move is exactly what dissolving carries over.
+    // Matching the wrong one would move an inbox arrival into Sent.
+    final arrivalIsSent =
+        await _mailboxRole(accountId, arrivalMailboxPath) == 'sent';
+    final local = await _localRowFor(accountId, mid, sentCopy: arrivalIsSent);
     if (local == null || local.id == realEmailId) return;
 
     final targetMailbox = local.mailboxPath;
@@ -4946,6 +4941,28 @@ class EmailRepositoryImpl implements EmailRepository {
     if (targetMailbox != real.mailboxPath) {
       await moveEmail(realEmailId, targetMailbox);
     }
+  }
+
+  /// The virtual row for Message-ID [mid] on [accountId] that is — or is not,
+  /// per [sentCopy] — the Sent-folder copy of a message we sent (#918), as
+  /// opposed to a self-send inbox note (#545). Null when there is none.
+  Future<Email?> _localRowFor(
+    String accountId,
+    String mid, {
+    required bool sentCopy,
+  }) async {
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.isLocal.equals(true) &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          ))
+        .get();
+    for (final row in rows) {
+      if (_isLocalSentCopyId(row.id) == sentCopy) return row;
+    }
+    return null;
   }
 
   /// The RFC 8621 / RFC 6154 role of the mailbox at [path] on [accountId], or
@@ -5987,6 +6004,87 @@ class EmailRepositoryImpl implements EmailRepository {
   /// or `accountId:jmapId` for JMAP).
   static const _localIdMarker = '__local__';
 
+  /// Marker for the virtual Sent-folder copy of a message we just sent (#918).
+  /// Kept distinct from [_localIdMarker] because a mail sent to yourself
+  /// produces both rows — the inbox note and the Sent copy — and they must not
+  /// share an id, nor dissolve against each other's arrival.
+  static const _localSentIdMarker = '__local_sent__';
+
+  /// Whether [id] belongs to a virtual Sent-folder copy ([_localSentIdMarker])
+  /// rather than a self-send inbox note ([_localIdMarker]).
+  static bool _isLocalSentCopyId(String id) =>
+      id.contains(':$_localSentIdMarker:');
+
+  /// Mirrors a message we just sent into the local `emails` table so it shows
+  /// up in Sent immediately, instead of only once the background sync next
+  /// visits that folder (#918).
+  ///
+  /// With a [uid] (IMAP UIDPLUS `APPENDUID`) or a [jmapId] the row carries the
+  /// very id a sync of [mailboxPath] would give it, so that sync updates this
+  /// row in place rather than inserting a duplicate. With neither, the row is
+  /// inserted as a virtual `isLocal` one that [_maybeDissolveLocalMessage]
+  /// folds into the real message later — the same machinery self-send notes
+  /// use (#545) — which needs a [messageId] to match on, so a message without
+  /// one is skipped rather than left as a permanent duplicate.
+  Future<void> _storeSentCopyLocally({
+    required String accountId,
+    required String mailboxPath,
+    required model.EmailDraft draft,
+    required String? messageId,
+    int? uid,
+    String? jmapId,
+  }) async {
+    final mid = normaliseMessageId(messageId);
+    // Prefer the server's own id for the copy, so the next sync of this folder
+    // updates this row instead of adding a second one.
+    final serverId = uid != null
+        ? '$accountId:$mailboxPath:$uid'
+        : (jmapId != null ? '$accountId:$jmapId' : null);
+    if (serverId == null && mid == null) return;
+    final emailId = serverId ?? '$accountId:$_localSentIdMarker:$mid';
+    final isLocal = serverId == null;
+
+    final now = DateTime.now();
+    final threadId =
+        _computeThreadId(messageId: mid, inReplyTo: null, references: null) ??
+            emailId;
+    final body = draft.body;
+    final preview = body.length > 200 ? body.substring(0, 200) : body;
+
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          EmailsCompanion.insert(
+            id: emailId,
+            accountId: accountId,
+            mailboxPath: mailboxPath,
+            uid: uid ?? 0,
+            subject: Value(draft.subject),
+            sentAt: Value(now),
+            receivedAt: now,
+            fromJson: Value(_encodeModelAddresses([draft.from])),
+            toAddresses: Value(_encodeModelAddresses(draft.to)),
+            ccJson: Value(_encodeModelAddresses(draft.cc)),
+            preview: Value(preview),
+            // You wrote it — mirrors the \Seen flag the APPEND sets, and never
+            // nags with an unread badge on your own mail.
+            isSeen: const Value(true),
+            isFlagged: const Value(false),
+            hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+            threadId: Value(threadId),
+            messageId: Value(mid),
+            isLocal: Value(isLocal),
+          ),
+        );
+    await _db.into(_db.emailBodies).insertOnConflictUpdate(
+          EmailBodiesCompanion.insert(
+            emailId: emailId,
+            textBody: Value(body),
+            cachedAt: Value(now),
+            bodySize: Value(_bodySize(body, null)),
+          ),
+        );
+    await _updateThread(accountId, mailboxPath, threadId);
+  }
+
   /// For every configured account whose address is among [draft]'s recipients,
   /// insert a local "virtual" copy of the message into that account's inbox so
   /// it shows up immediately for note-taking (#545). Dissolved into the real
@@ -6408,12 +6506,35 @@ class EmailRepositoryImpl implements EmailRepository {
     // delivering the message twice and leaving the row lingering in the Sent
     // Queue until a later attempt finally completed the append.
     try {
-      await _appendSentCopy(
+      final appended = await _appendSentCopy(
         account,
         password,
         mimeMessage,
         imapEndpoint,
         timing,
+      );
+      // UIDPLUS (RFC 4315) tells us the UID the copy got, which is all we need
+      // to write the very row a later sync of that folder would write. Without
+      // it we insert a virtual row instead, so Sent is never empty right after
+      // sending (#918).
+      final uidList =
+          appended.result.responseCodeAppendUid?.targetSequence.toList();
+      final appendUid =
+          (uidList != null && uidList.isNotEmpty) ? uidList.first : null;
+      // The draft's own id first: it is what `enqueueSend` stamped and what the
+      // self-send inbox note (#545) was keyed on, so both rows agree. The
+      // header is only a fallback for a direct send that never went through the
+      // outbox, and MessageBuilder can hand it back double-bracketed (#859),
+      // which `normaliseMessageId` only half-strips.
+      final sentMessageId = normaliseMessageId(
+        draft.messageId ?? mimeMessage.getHeaderValue('message-id'),
+      );
+      await _storeSentCopyLocally(
+        accountId: account.id,
+        mailboxPath: appended.path,
+        draft: draft,
+        messageId: sentMessageId,
+        uid: appendUid,
       );
     } catch (e, stack) {
       final logger = _appLogger;
@@ -6431,18 +6552,45 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// Folder to APPEND the Sent copy to when the account has no `role = 'sent'`
+  /// mailbox at all — a fresh account whose folder list has never synced, or a
+  /// server that advertises no SPECIAL-USE flags. Only in that case do we fall
+  /// back to the RFC 6154 conventional name and create it.
+  static const _fallbackSentFolder = 'Sent';
+
+  /// The mailbox the server itself designates as its Sent folder, as recorded
+  /// by the mailbox sync from the SPECIAL-USE / XLIST flags. Null when the
+  /// account has no sent-role mailbox.
+  Future<MailboxRow?> _sentMailboxRow(String accountId) =>
+      (_db.select(_db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.role.equals('sent'),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+
   /// Connects over IMAP and APPENDs [mimeMessage] to the Sent folder, creating
   /// the folder first when the server does not pre-create it. Extracted from
   /// [_sendEmailImap] so the caller can treat the whole Sent-copy step as one
   /// best-effort unit that never undoes an already-completed SMTP send (#755).
-  Future<void> _appendSentCopy(
+  ///
+  /// Returns the folder the copy went into plus the server's APPEND result, so
+  /// the caller can mirror it into the local DB.
+  Future<({String path, imap.GenericImapResult result})> _appendSentCopy(
     account_model.Account account,
     String password,
     imap.MimeMessage mimeMessage,
     String imapEndpoint,
     SendTiming timing,
   ) async {
-    // Create the folder first — many servers don't pre-create it.
+    // Append to the folder this server actually calls Sent. The path used to be
+    // the literal 'Sent', which on every server that names it something else
+    // (INBOX.Sent, Sent Items, Sent Messages, [Gmail]/Sent Mail, or anything
+    // under a namespace prefix) CREATEd a second, top-level folder and filed
+    // the copy there — so the Sent folder the app displays, resolved by
+    // `role = 'sent'`, stayed empty (#918).
+    final sentRow = await _sentMailboxRow(account.id);
+    final sentPath = sentRow?.path ?? _fallbackSentFolder;
     final imapClient = await _withPhase(
       'IMAP connect/login (to append Sent copy)',
       imapEndpoint,
@@ -6454,31 +6602,39 @@ class EmailRepositoryImpl implements EmailRepository {
       timing: timing,
     );
     try {
-      final createStopwatch = Stopwatch()..start();
-      try {
-        await imapClient.createMailbox('Sent').timeout(_sendOperationTimeout);
-      } on TimeoutException catch (e) {
-        throw _wrapPhaseError(
-          'IMAP create Sent folder',
-          imapEndpoint,
-          e,
-        );
-      } catch (_) {
-        // Already exists — that's fine.
-      } finally {
-        timing.record('IMAP create Sent folder', createStopwatch.elapsed);
+      // Only create when we are guessing the name: a folder the server already
+      // listed needs no CREATE, and issuing one just to swallow the inevitable
+      // "already exists" would keep hiding real errors on every single send.
+      if (sentRow == null) {
+        final createStopwatch = Stopwatch()..start();
+        try {
+          await imapClient
+              .createMailbox(sentPath)
+              .timeout(_sendOperationTimeout);
+        } on TimeoutException catch (e) {
+          throw _wrapPhaseError(
+            'IMAP create Sent folder',
+            imapEndpoint,
+            e,
+          );
+        } catch (_) {
+          // Already exists — that's fine.
+        } finally {
+          timing.record('IMAP create Sent folder', createStopwatch.elapsed);
+        }
       }
-      await _withPhase(
+      final result = await _withPhase(
         'IMAP append to Sent folder',
         imapEndpoint,
         () => imapClient.appendMessage(
           mimeMessage,
-          targetMailboxPath: 'Sent',
+          targetMailboxPath: sentPath,
           flags: [r'\Seen'],
           responseTimeout: _sendOperationTimeout,
         ),
         timing: timing,
       );
+      return (path: sentPath, result: result);
     } finally {
       // Logout is best-effort — bound it so a wedged server can't strand the
       // caller after the message is already appended to Sent.
@@ -6559,14 +6715,23 @@ class EmailRepositoryImpl implements EmailRepository {
       });
     }
 
-    // Look up the Sent mailbox JMAP ID from the local DB.
-    final sentMailbox = await (_db.select(_db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('sent'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
+    // Look up the Sent mailbox JMAP ID from the local DB. For JMAP accounts a
+    // mailbox row's `path` *is* its JMAP id.
+    final sentMailbox = await _sentMailboxRow(account.id);
     final sentJmapId = sentMailbox?.path;
+    if (sentJmapId == null) {
+      // Without it the create below omits `mailboxIds`, which strict servers
+      // reject and lenient ones file into no folder at all — either way the
+      // message never shows up in Sent (#918). Nothing we can do but say so.
+      unawaited(
+        _appLogger?.warn(
+          'outbox.send.sent_mailbox_unknown',
+          'No sent-role mailbox known for this account; the sent copy may not '
+              'be filed into Sent. Sync the folder list and try again.',
+          accountId: account.id,
+        ),
+      );
+    }
 
     // Build the email body.
     const bodyPartId = '1';
@@ -6722,6 +6887,31 @@ class EmailRepositoryImpl implements EmailRepository {
     } catch (_) {
       await _destroyJmapEmail(jmap, emailId);
       rethrow;
+    }
+
+    // The message is away and the server already filed it into Sent above —
+    // mirror it locally so Sent shows it now rather than after the next sync
+    // of that folder (#918). Best-effort in its own right: a DB hiccup here
+    // must not look like a failed send and get the message delivered twice.
+    if (sentMailbox == null) return;
+    try {
+      await _storeSentCopyLocally(
+        accountId: account.id,
+        mailboxPath: sentMailbox.path,
+        draft: draft,
+        messageId: draft.messageId,
+        jmapId: emailId,
+      );
+    } catch (e, stack) {
+      unawaited(
+        _appLogger?.warn(
+          'outbox.send.sent_copy_failed',
+          'Message sent, but recording the Sent copy locally failed: $e',
+          accountId: account.id,
+          error: e,
+          stack: stack,
+        ),
+      );
     }
   }
 
