@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kReleaseMode;
+import 'package:flutter/foundation.dart' show kReleaseMode, visibleForTesting;
 
 bool isLocalhost(String host) {
   final h = host.trim().toLowerCase();
@@ -11,7 +11,10 @@ bool isLocalhost(String host) {
 /// non-localhost name — the Stalwart docker service in CI. Consulted solely
 /// outside a release build (see [isPlaintextAllowedHost]), so it is physically
 /// inert in a shipped app even if left populated. Shared by `JmapClient` (http)
-/// and `ManageSieveClient` (STARTTLS) so the dev carve-out has one definition.
+/// and `ManageSieveClient` (STARTTLS) so the dev carve-out has one definition —
+/// a host registered here is allowed plaintext for both, which only matters in
+/// dev/test. `@visibleForTesting` so production code cannot `.add()` to it.
+@visibleForTesting
 final Set<String> debugAllowedPlaintextHosts = <String>{};
 
 /// Whether [host] may carry credentials over a plaintext (non-TLS) connection:
