@@ -13,6 +13,24 @@ String? validateOptionalHostname(String? value) {
   return _checkHostChars(value.trim());
 }
 
+/// Validates a JMAP API URL field. The URL carries the account password as
+/// HTTP Basic auth on every request, so it must be https — except to a
+/// localhost development server, where http is allowed (mirrors the IMAP/SMTP
+/// STARTTLS carve-out). Rejected at save time so the user sees it here rather
+/// than as a first-sync failure; the runtime paths (`JmapClient` and
+/// `ConnectionTestService`) enforce the same rule with `JmapClient.isSecureUrl`
+/// so a missing validator cannot re-open the leak.
+String? validateJmapUrl(String? value) {
+  if (value == null || value.trim().isEmpty) return 'Required';
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+    return 'Enter a full URL, e.g. https://mail.example.com/jmap';
+  }
+  if (uri.scheme == 'https') return null;
+  if (uri.scheme == 'http' && isLocalhost(uri.host)) return null;
+  return 'Must use https (http is allowed only for localhost)';
+}
+
 String? _checkHostChars(String h) {
   if (h.contains(RegExp(r'[@/\\]')) ||
       h.codeUnits.any((c) => c < 32 || c == 127)) {

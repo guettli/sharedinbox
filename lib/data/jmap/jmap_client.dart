@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
 
@@ -108,6 +110,16 @@ class JmapClient {
     required String username,
     required String password,
   }) async {
+    // The session GET carries `Authorization: Basic`, so refuse to make it over
+    // cleartext: https anywhere, http only to a localhost dev server. A
+    // relative or scheme-less URL is rejected too — there is nothing for it to
+    // inherit from at the entry point (#1018).
+    if (!isSecureUrl(jmapUrl)) {
+      throw JmapException(
+        'JMAP URL must use https ($jmapUrl) — refusing to send credentials '
+        'over cleartext. http is allowed only for a localhost dev server.',
+      );
+    }
     final credentials = base64.encode(utf8.encode('$username:$password'));
     http.Response resp;
     var rateLimitAttempt = 0;
@@ -166,6 +178,14 @@ class JmapClient {
     final uploadUrl = session['uploadUrl'] as String?;
     final downloadUrl = session['downloadUrl'] as String?;
     final eventSourceUrl = session['eventSourceUrl'] as String?;
+    // These session-advertised URLs also carry the credentials (blob transfer,
+    // SSE push), so a server must not be able to downgrade them to http for a
+    // remote host. Validated by their real parsed host; the blob send sites
+    // re-check the expanded URL, and eventSourceUrl (consumed by the push lane
+    // outside this class) is guarded here.
+    _requireSecureSessionUrl(uploadUrl, 'uploadUrl');
+    _requireSecureSessionUrl(downloadUrl, 'downloadUrl');
+    _requireSecureSessionUrl(eventSourceUrl, 'eventSourceUrl');
 
     return JmapClient._(
       httpClient: httpClient,
@@ -275,6 +295,10 @@ class JmapClient {
     final url = Uri.parse(
       _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)),
     );
+    // Validate the fully-parsed URL that will actually carry the credential:
+    // Uri.host correctly separates userinfo from host, which string scanning
+    // of the template cannot (http://127.0.0.1:x@evil.com/ has host evil.com).
+    _requireSecureRequestUrl(url, 'uploadUrl');
     final resp = await _httpClient
         .post(
           url,
@@ -312,6 +336,7 @@ class JmapClient {
           .replaceAll('{name}', Uri.encodeComponent(name))
           .replaceAll('{type}', Uri.encodeComponent(type)),
     );
+    _requireSecureRequestUrl(url, 'downloadUrl');
     final resp = await _httpClient.get(
       url,
       headers: {
@@ -329,8 +354,78 @@ class JmapClient {
     if (raw == null || raw.isEmpty) {
       throw JmapException('Session missing apiUrl');
     }
-    // apiUrl may be relative (RFC 8620 §2 allows it)
-    return sessionUri.resolve(raw);
+    // apiUrl may be relative (RFC 8620 §2 allows it); a relative one inherits
+    // the session's already-validated scheme.
+    final resolved = sessionUri.resolve(raw);
+    // Every call() request goes here with the credentials, so a server that
+    // returns an absolute http:// apiUrl must not be able to downgrade the
+    // whole session after an https session fetch.
+    if (!isSecureUrl(resolved)) {
+      throw JmapException(
+        'Session apiUrl is not https ($resolved) — refusing to send '
+        'credentials over cleartext.',
+      );
+    }
+    return resolved;
+  }
+
+  /// Hosts allowed over plaintext `http` in addition to localhost. Populated
+  /// ONLY by the backend test harness ([StalwartEnv.fromPlatform]), which
+  /// reaches a dev Stalwart addressed by its private host (a docker service
+  /// name in CI) that serves JMAP over http. It is consulted solely outside a
+  /// release build (see [_hostAllowedOverHttp]), so it is physically inert in a
+  /// shipped app even if left populated — the IMAP/SMTP backend tests reach the
+  /// same dev server over plaintext the same way (a test-local connector), and
+  /// this is the JMAP equivalent, kept off the production path.
+  @visibleForTesting
+  static final Set<String> debugAllowedHttpHosts = <String>{};
+
+  /// Whether [host] may carry credentials over plaintext http: a localhost dev
+  /// server always, or a test-registered dev host — but the latter never in a
+  /// release build.
+  static bool _hostAllowedOverHttp(String host) {
+    if (isLocalhost(host)) return true;
+    return !kReleaseMode && debugAllowedHttpHosts.contains(host);
+  }
+
+  /// Whether [url] may carry credentials: it must have a host, and be https to
+  /// any host or http only to a localhost (or test-registered dev) host. The
+  /// host check uses [Uri.host], which correctly separates userinfo from host
+  /// — never string-scan an authority for this (`http://127.0.0.1:x@evil.com/`
+  /// has host `evil.com`, not `127.0.0.1`). A scheme-less/host-less URL is not
+  /// secure on its own.
+  ///
+  /// Public so the other credential-bearing JMAP path (ConnectionTestService,
+  /// which does not go through [connect]) enforces the identical rule.
+  static bool isSecureUrl(Uri url) {
+    if (url.host.isEmpty) return false;
+    if (url.scheme == 'https') return true;
+    return url.scheme == 'http' && _hostAllowedOverHttp(url.host);
+  }
+
+  /// Throws unless [url] — the fully-parsed URL a request is about to send the
+  /// credential to — is secure. Used at every credential-bearing send site.
+  static void _requireSecureRequestUrl(Uri url, String label) {
+    if (isSecureUrl(url)) return;
+    throw JmapException(
+      '$label ($url) is not https — refusing to send credentials over '
+      'cleartext. Use https (or localhost for development).',
+    );
+  }
+
+  /// Connect-time guard for a session-advertised URL [raw] (RFC 8620/8887 URI
+  /// templates like `uploadUrl`/`eventSourceUrl`). Substitutes the `{…}`
+  /// placeholders with a dummy so the value parses, then validates the REAL
+  /// parsed host via [isSecureUrl] — fails early and clearly rather than at
+  /// first blob/push use. (The send sites re-check the expanded URL too.)
+  static void _requireSecureSessionUrl(String? raw, String label) {
+    if (raw == null || raw.isEmpty) return;
+    final uri = Uri.tryParse(raw.replaceAll(RegExp(r'\{[^}]*\}'), 'x'));
+    if (uri != null && isSecureUrl(uri)) return;
+    throw JmapException(
+      '$label ($raw) is not an https URL — refusing to send credentials over '
+      'cleartext. Use https (or localhost for development).',
+    );
   }
 
   static Set<String> _extractCapabilities(Map<String, dynamic> session) {
