@@ -57,11 +57,11 @@ def main(argv):
         api = base.rstrip("/") + api
     else:
         api = base.rstrip("/") + urlparse(api).path
-    account = (session.get("primaryAccounts", {}).get(
-        "urn:ietf:params:jmap:mail")
-        or session.get("primaryAccounts", {}).get("urn:ietf:params:jmap:core")
-        or next(iter(session.get("accounts", {})), None))
-    core_caps = session.get("capabilities", {}).get(
+    primary = session.get("primaryAccounts") or {}
+    account = (primary.get("urn:ietf:params:jmap:mail")
+               or primary.get("urn:ietf:params:jmap:core")
+               or next(iter(session.get("accounts") or {}), None))
+    core_caps = (session.get("capabilities") or {}).get(
         "urn:ietf:params:jmap:core", {})
     print(f"apiUrl       : {api}")
     print(f"accountId    : {account}")

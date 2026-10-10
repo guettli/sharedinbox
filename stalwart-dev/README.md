@@ -23,15 +23,21 @@ both with password `secret`.
 On a **codeN seat**, docker is root-only, so start it on `tc` as root and map a
 local port (nothing else needs the container — delete it when done):
 
+Double quotes so `$HOME` expands **locally** to your seat's home (the repo
+lives at `$HOME/sharedinbox` on tc); everything else is literal:
+
 ```
-ssh root@tc 'docker run -d --name sbprobe --entrypoint stalwart \
+ssh root@tc "docker run -d --name sbprobe --entrypoint stalwart \
   -p 127.0.0.1:18080:8080 \
-  -v /home/$USER/sharedinbox/stalwart-dev/config.toml:/etc/stalwart/config.toml:ro \
+  -v $HOME/sharedinbox/stalwart-dev/config.toml:/etc/stalwart/config.toml:ro \
   -v /tmp/sbprobe:/tmp/stalwart:rw \
-  docker.io/stalwartlabs/stalwart:v0.14.1 --config /etc/stalwart/config.toml'
+  docker.io/stalwartlabs/stalwart:v0.14.1 --config /etc/stalwart/config.toml"
 # … probe (below) …
-ssh root@tc 'docker rm -f sbprobe; rm -rf /tmp/sbprobe'
+ssh root@tc "docker rm -f sbprobe; rm -rf /tmp/sbprobe"
 ```
+
+(Using single quotes here would expand `$HOME` on the *remote* side as root —
+`/home/root/sharedinbox` — and the mount would fail.)
 
 Inside `nix develop` (with a container runtime and Flutter SDK), the existing
 `./start` script does the same with random ports — see its header.
@@ -57,4 +63,8 @@ python3 stalwart-dev/jmap_probe.py http://127.0.0.1:18080 alice@example.com secr
 
 To reproduce the examples at the top, create a few messages first (an
 `Email/set` `--call` with a `create` object) and then query/change against them.
-```
+
+Two limitations, fine for a dev probe: the `using` set is core+mail, so a
+`--call` to a submission/sieve/vacation method is rejected; and an `apiUrl` the
+server reports on a *different host* is followed only by path (re-joined to the
+base URL you passed).
