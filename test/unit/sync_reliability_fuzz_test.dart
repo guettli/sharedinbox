@@ -2,8 +2,9 @@
 // runner (issue #584).
 //
 // These exercise the policy and HTTP wrapper directly — no Stalwart, no
-// sockets. The end-to-end run is in scripts/sync_reliability.dart driven by
-// scripts/sync_reliability.sh --fuzz.
+// sockets. The end-to-end run is in scripts/sync_reliability.dart, driven by
+// test/backend/sync_reliability_runner_test.dart (which reads fuzz arguments
+// from SYNC_RELIABILITY_ARGS).
 
 import 'dart:convert';
 import 'dart:io';

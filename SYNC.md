@@ -316,11 +316,14 @@ and that Message-ID.
 
 ## 9. Fuzz testing the sync engine
 
-`scripts/sync_reliability.sh` runs the IMAP/JMAP sync engine against an isolated
-Stalwart instance with multiple parallel DBs, performs random create / update /
-delete operations, and asserts that all snapshots converge.
+`test/backend/sync_reliability_runner_test.dart` runs the IMAP/JMAP sync engine
+against an isolated Stalwart instance with multiple parallel DBs, performs
+random create / update / delete operations, and asserts that all snapshots
+converge. It runs with the rest of the backend suite (`task test-backend`); the
+long-running nightly fuzz is `task test-fuzz`.
 
-Pass `--fuzz` to additionally inject randomised faults around the IMAP, SMTP and
+Pass `--fuzz` via the `SYNC_RELIABILITY_ARGS` environment variable (newline-
+separated) to additionally inject randomised faults around the IMAP, SMTP and
 JMAP clients:
 
 | Fault | Effect |
@@ -336,10 +339,11 @@ JMAP clients:
 The sync engine is expected to recover from every fault — the existing
 convergence assertion in `_waitForConvergence` still applies. Each run prints
 its seed; re-running with `--fuzz-seed=N` reproduces the exact same fault
-sequence.
+sequence. Locally (with a Stalwart and Flutter SDK on PATH):
 
 ```
-scripts/sync_reliability.sh --fuzz --fuzz-seed=42 --fuzz-prob=0.15 --cycles=5
+SYNC_RELIABILITY_ARGS=$'--fuzz\n--fuzz-seed=42\n--fuzz-prob=0.15\n--cycles=5' \
+  flutter test test/backend/sync_reliability_runner_test.dart
 ```
 
 The fault-injection layer itself lives in `scripts/sync_reliability_fuzz.dart`

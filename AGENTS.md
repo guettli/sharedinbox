@@ -85,6 +85,13 @@ This opens an SSH tunnel to the remote Dagger engine (idempotent — safe to
 re-run). The Dagger `task`s below fail to connect until it is up. If it errors
 (e.g. the engine is unreachable), stop and report it rather than working blind.
 
+> **On a `tc` `codeN` seat (not an agentloop worker):** skip the tunnel. The seat
+> reaches the engine directly over its local socket (`dagger` group +
+> `_EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock`, provisioned by
+> gitops#738), so the `task …` / `dagger call …` commands below work as-is — and
+> the pre-commit hooks run, so there is no need for `git commit --no-verify`. The
+> tunnel step is worker-only.
+
 Then drive everything through `task`, which calls `dagger call -m ci …` under
 the hood. The commands you need:
 
