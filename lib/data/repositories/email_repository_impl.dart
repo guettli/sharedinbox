@@ -715,6 +715,18 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
+        // Same opportunistic backfill for Reply-To (#919), so mail cached
+        // before we stored it replies to the right address once opened.
+        if (emailRow.replyToJson == '[]' || emailRow.replyToJson.isEmpty) {
+          final replyTo = msg.decodeHeaderMailAddressValue('Reply-To');
+          if (replyTo != null && replyTo.isNotEmpty) {
+            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+                .write(
+              EmailsCompanion(replyToJson: Value(_encodeAddresses(replyTo))),
+            );
+          }
+        }
+
         _logBodyLoaded(
           emailId: emailId,
           accountId: emailRow.accountId,
@@ -1565,6 +1577,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
+                replyToJson: Value(_encodeAddresses(envelope.replyTo)),
                 preview: Value(
                   previewFromSnippet(msg, previewSnippetByUid[uid]),
                 ),
@@ -2398,6 +2411,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'from',
     'to',
     'cc',
+    'replyTo',
     'keywords',
     'hasAttachment',
     'preview',
@@ -3496,6 +3510,7 @@ class EmailRepositoryImpl implements EmailRepository {
       final from = _encodeJmapAddresses(m['from'] as List<dynamic>?);
       final to = _encodeJmapAddresses(m['to'] as List<dynamic>?);
       final cc = _encodeJmapAddresses(m['cc'] as List<dynamic>?);
+      final replyTo = _encodeJmapAddresses(m['replyTo'] as List<dynamic>?);
       final sentAt = _parseDate(m['sentAt'] as String?);
       final receivedAt =
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
@@ -3537,6 +3552,7 @@ class EmailRepositoryImpl implements EmailRepository {
               fromJson: Value(from),
               toAddresses: Value(to),
               ccJson: Value(cc),
+              replyToJson: Value(replyTo),
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
@@ -5124,6 +5140,7 @@ class EmailRepositoryImpl implements EmailRepository {
               fromJson: Value(jsonEncode(e.from)),
               toAddresses: Value(jsonEncode(e.to)),
               ccJson: Value(jsonEncode(e.cc)),
+              replyToJson: Value(jsonEncode(e.replyTo)),
               preview: Value(e.preview),
               isSeen: Value(e.isSeen),
               isFlagged: Value(e.isFlagged),
@@ -7500,6 +7517,7 @@ class EmailRepositoryImpl implements EmailRepository {
       from: parseAddresses(row.fromJson),
       to: parseAddresses(row.toAddresses),
       cc: parseAddresses(row.ccJson),
+      replyTo: parseAddresses(row.replyToJson),
       preview: row.preview,
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,

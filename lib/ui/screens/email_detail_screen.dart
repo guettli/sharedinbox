@@ -1353,8 +1353,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       candidates.add(_Candidate(addr, defaultPlacement));
     }
 
-    for (final addr in header.from) {
+    // Reply-To replaces From as the reply target when the sender set it
+    // (#919). Fall back to From when Reply-To is absent or only names our
+    // own address, so the reply never ends up without a recipient.
+    for (final addr in header.replyTo) {
       addIfNew(addr, _Placement.to);
+    }
+    if (candidates.isEmpty) {
+      for (final addr in header.from) {
+        addIfNew(addr, _Placement.to);
+      }
     }
     for (final addr in header.to) {
       addIfNew(addr, _Placement.to);

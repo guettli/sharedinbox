@@ -222,6 +222,7 @@ Map<String, dynamic> _jmapEmail({
   String subject = 'Hello',
   bool seen = false,
   String? threadId,
+  List<Map<String, dynamic>>? replyTo,
 }) =>
     {
       'id': id,
@@ -236,6 +237,7 @@ Map<String, dynamic> _jmapEmail({
         {'name': 'Alice', 'email': 'alice@example.com'},
       ],
       'cc': [],
+      'replyTo': replyTo,
       'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
       'hasAttachment': false,
       'preview': 'Hello world',
@@ -4709,6 +4711,38 @@ void main() {
       expect(emailState.state, 'est1');
     });
 
+    test('full sync stores replyTo addresses (#919)', () async {
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
+                _jmapEmail(
+                  id: 'e1',
+                  mailboxId: 'mbx1',
+                  subject: 'With Reply-To',
+                  replyTo: [
+                    {'name': 'Support', 'email': 'support@example.com'},
+                  ],
+                ),
+                _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Without'),
+              ],
+            ],
+          ),
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.emails.syncEmails('jmap-1', 'mbx1');
+
+      final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
+      final withReplyTo =
+          emails.firstWhere((e) => e.subject == 'With Reply-To');
+      expect(withReplyTo.replyTo.single.email, 'support@example.com');
+      expect(withReplyTo.replyTo.single.name, 'Support');
+      expect(emails.firstWhere((e) => e.subject == 'Without').replyTo, isEmpty);
+    });
+
     test('incremental sync applies created, updated, destroyed', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
@@ -7928,6 +7962,40 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('syncEmails stores the Reply-To envelope addresses (#919)', () async {
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'With Reply-To',
+          from: 'sender@example.com',
+          text: 'Hi',
+          messageId: '<m42@example.com>',
+          replyTo: 'support@example.com',
+        ),
+        43: _PreviewTestMessage(
+          subject: 'Without Reply-To',
+          from: 'sender@example.com',
+          text: 'Hi',
+          messageId: '<m43@example.com>',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final withReplyTo = await r.emails.getEmail('acc-1:INBOX:42');
+      expect(
+        withReplyTo!.replyTo.map((a) => a.email),
+        ['support@example.com'],
+      );
+      final withoutReplyTo = await r.emails.getEmail('acc-1:INBOX:43');
+      expect(withoutReplyTo!.replyTo, isEmpty);
+    });
+
     test('syncEmails derives preview from HTML when there is no text part',
         () async {
       final messages = {
@@ -8080,6 +8148,56 @@ void main() {
             ..where((t) => t.id.equals('acc-1:INBOX:1')))
           .getSingle();
       expect(emailRow.listUnsubscribeHeader, '<mailto:existing@example.com>');
+    });
+
+    test('getEmailBody backfills an empty Reply-To (#919)', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _ReplyToBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final email = await r.emails.getEmail('acc-1:INBOX:1');
+      expect(email!.replyTo.map((a) => a.email), ['support@example.com']);
+      expect(email.replyTo.single.name, 'Support');
+    });
+
+    test('getEmailBody leaves an existing Reply-To untouched', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _ReplyToBodyImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              replyToJson: const Value(
+                '[{"name":null,"email":"existing@example.com"}]',
+              ),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:INBOX:1');
+
+      final email = await r.emails.getEmail('acc-1:INBOX:1');
+      expect(email!.replyTo.map((a) => a.email), ['existing@example.com']);
     });
   });
 
@@ -8711,11 +8829,13 @@ class _PreviewTestMessage {
     required this.messageId,
     this.text,
     this.html,
+    this.replyTo,
   });
 
   final String subject;
   final String from;
   final String messageId;
+  final String? replyTo;
   final String? text;
   final String? html;
 
@@ -8754,6 +8874,7 @@ class _PreviewTestMessage {
         subject: subject,
         from: [imap.MailAddress(null, from)],
         to: const [imap.MailAddress(null, 'alice@example.com')],
+        replyTo: replyTo == null ? null : [imap.MailAddress(null, replyTo!)],
         messageId: messageId,
       );
     return msg;
@@ -8863,6 +8984,27 @@ class _PreviewBodyImapClient extends FakeImapClient {
         flags: [],
         pathSeparator: '/',
       );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage.parseFromText(_kRawMime)..uid = messageUid;
+    return imap.FetchImapResult([msg], null);
+  }
+}
+
+/// Serves a body carrying a Reply-To header so we can exercise the
+/// opportunistic Reply-To backfill on body fetch (#919).
+class _ReplyToBodyImapClient extends _UnsubscribeBodyImapClient {
+  static const String _kRawMime = 'MIME-Version: 1.0\r\n'
+      'Content-Type: text/plain; charset=UTF-8\r\n'
+      'From: Bob <bob@example.com>\r\n'
+      'Reply-To: Support <support@example.com>\r\n'
+      '\r\n'
+      'Body with a Reply-To header.\r\n';
 
   @override
   Future<imap.FetchImapResult> uidFetchMessage(

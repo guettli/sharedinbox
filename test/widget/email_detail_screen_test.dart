@@ -61,6 +61,12 @@ List<Override> _overrides({required EmailBody body, Email? email}) => [
       ),
     ];
 
+// The compose To field is a RawAutocomplete, so match its EditableText by the
+// controller's full value rather than a TextFormField ancestor.
+Finder _editableWithText(String text) => find.byWidgetPredicate(
+      (w) => w is EditableText && w.controller.text == text,
+    );
+
 void main() {
   group('EmailDetailScreen', () {
     testWidgets('shows loading spinner before data arrives', (tester) async {
@@ -559,6 +565,134 @@ void main() {
       // Both non-own addresses should be listed in the dialog.
       expect(find.textContaining('bob@example.com'), findsAtLeastNWidgets(1));
       expect(find.textContaining('carol@example.com'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('Reply goes to the Reply-To address instead of From (#919)', (
+      tester,
+    ) async {
+      final email = testEmail().copyWith(
+        replyTo: const [EmailAddress(email: 'support@example.com')],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            ..._overrides(
+              // A text part keeps _quotedBody off the compute() isolate,
+              // which never completes under the widget-test clock.
+              body: const EmailBody(
+                emailId: 'acc-1:42',
+                textBody: 'Hi',
+                attachments: [],
+              ),
+              email: email,
+            ),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+      );
+      await tester.pumpAndSettle();
+
+      // Reply-To is the only candidate → straight to compose, To prefilled.
+      expect(find.text('Reply All'), findsNothing);
+      expect(
+        _editableWithText('support@example.com'),
+        findsOneWidget,
+      );
+      expect(
+        _editableWithText('bob@example.com'),
+        findsNothing,
+      );
+    });
+
+    testWidgets('Reply All dialog offers Reply-To, not From (#919)', (
+      tester,
+    ) async {
+      final email = testEmail().copyWith(
+        replyTo: const [EmailAddress(email: 'support@example.com')],
+        cc: const [EmailAddress(name: 'Carol', email: 'carol@example.com')],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            // A text part keeps _quotedBody off the compute() isolate,
+            // which never completes under the widget-test clock.
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+            email: email,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+      );
+      await tester.pumpAndSettle();
+
+      final dialog = find.byType(AlertDialog);
+      expect(find.text('Reply All'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: dialog,
+          matching: find.textContaining('support@example.com'),
+        ),
+        findsAtLeastNWidgets(1),
+      );
+      expect(
+        find.descendant(
+          of: dialog,
+          matching: find.textContaining('bob@example.com'),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('Reply falls back to From when Reply-To is own address', (
+      tester,
+    ) async {
+      // alice@example.com is kTestAccount's own address.
+      final email = testEmail().copyWith(
+        replyTo: const [EmailAddress(email: 'alice@example.com')],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            ..._overrides(
+              // A text part keeps _quotedBody off the compute() isolate,
+              // which never completes under the widget-test clock.
+              body: const EmailBody(
+                emailId: 'acc-1:42',
+                textBody: 'Hi',
+                attachments: [],
+              ),
+              email: email,
+            ),
+            draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        _editableWithText('bob@example.com'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('Mark as spam is a standalone button, not in popup menu', (
