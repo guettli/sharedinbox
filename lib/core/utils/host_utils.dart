@@ -1,6 +1,25 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
+
 bool isLocalhost(String host) {
   final h = host.trim().toLowerCase();
   return h == 'localhost' || h == '127.0.0.1' || h == '::1';
+}
+
+/// Hosts allowed to carry credentials over a plaintext connection in addition
+/// to localhost. Populated ONLY by the test bootstrap
+/// (`test/flutter_test_config.dart`) for a dev server addressed by a
+/// non-localhost name — the Stalwart docker service in CI. Consulted solely
+/// outside a release build (see [isPlaintextAllowedHost]), so it is physically
+/// inert in a shipped app even if left populated. Shared by `JmapClient` (http)
+/// and `ManageSieveClient` (STARTTLS) so the dev carve-out has one definition.
+final Set<String> debugAllowedPlaintextHosts = <String>{};
+
+/// Whether [host] may carry credentials over a plaintext (non-TLS) connection:
+/// a localhost dev server always, or a test-registered dev host — the latter
+/// never in a release build.
+bool isPlaintextAllowedHost(String host) {
+  if (isLocalhost(host)) return true;
+  return !kReleaseMode && debugAllowedPlaintextHosts.contains(host);
 }
 
 String? validateHostname(String? value) {

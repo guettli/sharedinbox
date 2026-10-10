@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
 import 'package:sharedinbox/data/imap/tls_error.dart';
@@ -32,6 +33,19 @@ class ManageSieveClient {
     required bool useTls,
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    // AUTHENTICATE PLAIN sends the password base64-but-cleartext, so a plaintext
+    // (useTls:false) connection to a remote host would leak it. Refuse it here
+    // at the boundary rather than trusting every caller to have clamped
+    // manageSieveSsl — the account-import path, for one, copies it verbatim
+    // (#1019). localhost (and a test-registered dev host) stay allowed for the
+    // dev server, which has no cert; inert in release builds.
+    if (!useTls && !isPlaintextAllowedHost(host)) {
+      throw ManageSieveException(
+        'Refusing a plaintext ManageSieve connection to $host — enable SSL for '
+        'ManageSieve in account settings (plaintext is allowed only for a '
+        'localhost dev server).',
+      );
+    }
     // ignore: close_sinks  // Stored in client and closed in logout().
     Socket socket = await Socket.connect(host, port, timeout: timeout);
     var source = _ByteSource();

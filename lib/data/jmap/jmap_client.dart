@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
@@ -369,38 +368,20 @@ class JmapClient {
     return resolved;
   }
 
-  /// Hosts allowed over plaintext `http` in addition to localhost. Populated
-  /// ONLY by the backend test harness ([StalwartEnv.fromPlatform]), which
-  /// reaches a dev Stalwart addressed by its private host (a docker service
-  /// name in CI) that serves JMAP over http. It is consulted solely outside a
-  /// release build (see [_hostAllowedOverHttp]), so it is physically inert in a
-  /// shipped app even if left populated — the IMAP/SMTP backend tests reach the
-  /// same dev server over plaintext the same way (a test-local connector), and
-  /// this is the JMAP equivalent, kept off the production path.
-  @visibleForTesting
-  static final Set<String> debugAllowedHttpHosts = <String>{};
-
-  /// Whether [host] may carry credentials over plaintext http: a localhost dev
-  /// server always, or a test-registered dev host — but the latter never in a
-  /// release build.
-  static bool _hostAllowedOverHttp(String host) {
-    if (isLocalhost(host)) return true;
-    return !kReleaseMode && debugAllowedHttpHosts.contains(host);
-  }
-
   /// Whether [url] may carry credentials: it must have a host, and be https to
   /// any host or http only to a localhost (or test-registered dev) host. The
   /// host check uses [Uri.host], which correctly separates userinfo from host
   /// — never string-scan an authority for this (`http://127.0.0.1:x@evil.com/`
   /// has host `evil.com`, not `127.0.0.1`). A scheme-less/host-less URL is not
-  /// secure on its own.
+  /// secure on its own. The plaintext carve-out ([isPlaintextAllowedHost]) is
+  /// shared with ManageSieveClient and inert in release builds.
   ///
   /// Public so the other credential-bearing JMAP path (ConnectionTestService,
   /// which does not go through [connect]) enforces the identical rule.
   static bool isSecureUrl(Uri url) {
     if (url.host.isEmpty) return false;
     if (url.scheme == 'https') return true;
-    return url.scheme == 'http' && _hostAllowedOverHttp(url.host);
+    return url.scheme == 'http' && isPlaintextAllowedHost(url.host);
   }
 
   /// Throws unless [url] — the fully-parsed URL a request is about to send the
