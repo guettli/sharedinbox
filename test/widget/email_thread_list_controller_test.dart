@@ -137,5 +137,57 @@ void main() {
       expect(ctrl.isSelecting, isFalse);
       expect(acted, ['a', 'b']);
     });
+
+    test('a run with no busyLabel is still busy and blocks another (#1011)',
+        () async {
+      // A swipe routes through runBatch with no label. Busy is tracked by a
+      // run token, not the label, so it must still block a concurrent action —
+      // the old label-keyed guard let an unlabelled run through.
+      final ctrl = EmailThreadListController()
+        ..updateThreads([_t('a')])
+        ..toggle(_t('a'));
+      final gate = Completer<void>();
+      var secondRan = false;
+
+      ctrl.runBatch(() => gate.future);
+      await pumpEventQueue();
+      expect(ctrl.isBusy, isTrue);
+      expect(ctrl.busyLabel, isNull);
+
+      ctrl.runBatch(() async => secondRan = true);
+      await pumpEventQueue();
+      expect(secondRan, isFalse);
+
+      gate.complete();
+      await pumpEventQueue();
+      expect(ctrl.isBusy, isFalse);
+    });
+
+    test('a failed run keeps the selection and reports via onError (#1011)',
+        () async {
+      final ctrl = EmailThreadListController()
+        ..updateThreads([_t('a'), _t('b')])
+        ..toggle(_t('a'))
+        ..toggle(_t('b'));
+      Object? reported;
+      var doneCalled = false;
+
+      ctrl.runBatch(
+        () async {
+          throw StateError('boom');
+        },
+        busyLabel: 'Deleting…',
+        onDone: (_) => doneCalled = true,
+        onError: (e, _) => reported = e,
+      );
+      await pumpEventQueue();
+
+      // Surfaced, not swallowed; selection kept for retry; onDone not called.
+      expect(reported, isA<StateError>());
+      expect(doneCalled, isFalse);
+      expect(ctrl.isSelecting, isTrue);
+      expect(ctrl.selectionCount, 2);
+      expect(ctrl.isBusy, isFalse);
+    });
   });
 }

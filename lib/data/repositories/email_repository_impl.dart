@@ -4420,6 +4420,13 @@ class EmailRepositoryImpl implements EmailRepository {
     // One transaction collapses all of it into a single commit, while the
     // bulk scope defers the per-message App Log rows and the sync kick until
     // after it.
+    // Per-email-id mailbox each message was selected from, when the caller
+    // provides it. A row that has since moved out of that mailbox is a stale
+    // (duplicate) delete — e.g. an accidental second delete of a selection the
+    // first call already moved to Trash — so skip it rather than hard-delete
+    // it from Trash (#1010).
+    final expectedMailbox =
+        Zone.current[deleteExpectedMailboxZoneKey] as Map<String, String>?;
     final scope = _BulkScope();
     String? dest;
     await runZoned(
@@ -4430,6 +4437,8 @@ class EmailRepositoryImpl implements EmailRepository {
         final handled = <String>{};
         for (final row in rows) {
           if (!handled.add(row.id)) continue;
+          final expected = expectedMailbox?[row.id];
+          if (expected != null && expected != row.mailboxPath) continue;
           dest = await _deleteRow(row);
           final mid = normaliseMessageId(row.messageId);
           if (mid == null) continue;

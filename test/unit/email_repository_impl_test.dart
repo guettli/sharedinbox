@@ -16,7 +16,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
-    show SendNowOutcome;
+    show SendNowOutcome, deleteExpectedMailboxZoneKey;
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/imap/object_id.dart';
@@ -2993,6 +2993,88 @@ void main() {
       expect(changes.map((c) => c.changeType), ['delete', 'delete']);
       final logs = await r.db.select(r.db.appLogs).get();
       expect(logs.where((e) => e.event == 'email.delete'), hasLength(2));
+    });
+
+    test('deleteEmails skips a row that moved out of its selected mailbox',
+        () async {
+      // The row is already in Trash, as if a first delete moved it there. A
+      // stale second delete whose selection snapshot said INBOX must NOT
+      // hard-delete it from Trash (#1010).
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Trash',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await runZoned(
+        () => r.emails.deleteEmails(['acc-1:1']),
+        zoneValues: {
+          deleteExpectedMailboxZoneKey: {'acc-1:1': 'INBOX'},
+        },
+      );
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:1']);
+      expect(rows.single.mailboxPath, 'Trash');
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.delete'), isEmpty);
+    });
+
+    test('deleteEmails hard-deletes from Trash when Trash IS the selected box',
+        () async {
+      // The complement: a deliberate delete-from-Trash (expected == current ==
+      // Trash) still hard-deletes (#1010).
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Trash',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await runZoned(
+        () => r.emails.deleteEmails(['acc-1:1']),
+        zoneValues: {
+          deleteExpectedMailboxZoneKey: {'acc-1:1': 'Trash'},
+        },
+      );
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      expect(await r.db.select(r.db.emails).get(), isEmpty);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => c.changeType), ['delete']);
     });
 
     test('snoozeEmail records an email.snooze entry', () async {
