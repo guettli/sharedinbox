@@ -53,7 +53,7 @@ Future<JmapClient> _connect(
 void main() {
   // The seam is a process-wide static; clear after every test so a host one
   // test registers can never mask a rejection another test means to assert.
-  tearDown(JmapClient.debugAllowedHttpHosts.clear);
+  tearDown(debugAllowedPlaintextHosts.clear);
 
   group('isSecureUrl: userinfo cannot smuggle a cleartext remote host', () {
     test('a localhost-looking userinfo does not make a remote host safe', () {
@@ -217,7 +217,7 @@ void main() {
     });
   });
 
-  group('debugAllowedHttpHosts seam', () {
+  group('debugAllowedPlaintextHosts seam', () {
     test('off by default; a registered dev host is then allowed over http',
         () async {
       // Unregistered: a non-localhost http host is rejected like any other.
@@ -228,7 +228,7 @@ void main() {
       // Registered (as the backend harness does for the dev Stalwart host):
       // http to exactly that host is allowed. The guard is additionally gated
       // on !kReleaseMode in production, so this set is inert in a shipped app.
-      JmapClient.debugAllowedHttpHosts.add('devbox.test');
+      debugAllowedPlaintextHosts.add('devbox.test');
       final c = await _connect('http://devbox.test:8080/jmap');
       expect(c.accountId, 'u1');
       // Still scoped to the one host — a different http host stays rejected.
@@ -240,7 +240,7 @@ void main() {
 
     test('also admits an http session URL (upload/apiUrl) for that host',
         () async {
-      JmapClient.debugAllowedHttpHosts.add('devbox.test');
+      debugAllowedPlaintextHosts.add('devbox.test');
       final c = await _connect(
         'http://devbox.test:8080/jmap',
         session: _session(
