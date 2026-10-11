@@ -29,7 +29,8 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart' show FakeImapClient, SnoozeSpyImapClient;
+import 'fake_imap.dart'
+    show FakeImapClient, FakeSmtpClient, SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -424,6 +425,50 @@ class _MoveFailsImapClient extends FakeImapClient {
       throw Exception('server said no');
 }
 
+/// Fake IMAP client that records the Sent-copy APPEND so the send path can be
+/// asserted without a network. Both [createMailbox] and [appendMessage] are
+/// recorded rather than hitting the wire.
+class _SentCaptureImapClient extends FakeImapClient {
+  String? appendTargetPath;
+  String? createdMailbox;
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    createdMailbox = path;
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appendTargetPath = targetMailboxPath;
+    return imap.GenericImapResult();
+  }
+}
+
+/// Fake SMTP client whose `sendMessage` always succeeds, so the send path
+/// proceeds to the Sent-copy APPEND. `quit` is inherited from [FakeSmtpClient].
+class _OkSmtpClient extends FakeSmtpClient {
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async =>
+      imap.SmtpResponse(const ['250 OK']);
+}
+
 /// Fake IMAP client that returns a *different* message than the row expects for
 /// a given UID — the shape produced by an optimistic snooze/unsnooze/move whose
 /// destination UID happens to collide with an unrelated message (#616). The
@@ -510,6 +555,83 @@ void main() {
           hasLength(1),
           reason: 'a transient failure must leave the row queued',
         );
+      },
+    );
+
+    test(
+      'IMAP Sent copy is appended to the resolved Sent folder, not a '
+      'hard-coded "Sent"',
+      () async {
+        final sentImap = _SentCaptureImapClient();
+        final r = _makeRepos(
+          imapConnect: (a, u, p) async => sentImap,
+          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        // This account's real Sent folder is "Sent Items" (role sent), as on
+        // Exchange/Stalwart — not literally "Sent".
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Sent Items',
+                accountId: 'acc-1',
+                path: 'Sent Items',
+                name: 'Sent Items',
+                role: const Value('sent'),
+              ),
+            );
+
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hello',
+            body: 'body',
+          ),
+        );
+        final result = await r.emails.sendNow(_account.id, outboxRowId: rowId);
+
+        expect(result.outcome, SendNowOutcome.sent);
+        expect(
+          sentImap.appendTargetPath,
+          'Sent Items',
+          reason: 'the copy must land in the resolved Sent folder',
+        );
+        expect(
+          sentImap.createdMailbox,
+          isNull,
+          reason: 'must not create a stray "Sent" when a Sent folder exists',
+        );
+      },
+    );
+
+    test(
+      'IMAP Sent copy falls back to creating "Sent" when no Sent folder is '
+      'known',
+      () async {
+        final sentImap = _SentCaptureImapClient();
+        final r = _makeRepos(
+          imapConnect: (a, u, p) async => sentImap,
+          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        // No mailboxes synced → no role=sent folder is known.
+
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hello',
+            body: 'body',
+          ),
+        );
+        await r.emails.sendNow(_account.id, outboxRowId: rowId);
+
+        expect(sentImap.createdMailbox, 'Sent');
+        expect(sentImap.appendTargetPath, 'Sent');
       },
     );
 
