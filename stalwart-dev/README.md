@@ -119,10 +119,11 @@ PY
 IMAP/SMTP uses the same screen under *IMAP / SMTP*: a *Display name* (required),
 host `localhost`, IMAP port `1430`, SMTP port `1025`, and **turn SSL/TLS off on
 both** — the defaults are 993/465 with SSL on (implicit TLS), which this
-plaintext dev server does not speak. Heads-up: against this server the SMTP leg
-of *Try connection* currently fails with a *TLS certificate error on
-`localhost:1025`* (the port advertises STARTTLS with a self-signed cert). IMAP
-connects fine, so if you hit that, use JMAP — it has no such step.
+plaintext dev server does not speak. Heads-up: app builds from **before #988**
+upgrade to STARTTLS even on `localhost` and fail the SMTP leg of *Try connection*
+with a *TLS certificate error on `localhost:1025`* (the port advertises STARTTLS
+with a self-signed cert). A current build connects cleanly; if you hit that
+error, the installed APK predates the fix — rebuild and reinstall, or use JMAP.
 
 **Click through it from the shell.** The Flutter app exposes its full semantics
 tree, so `uiautomator` gives real tap targets — no pixel-hunting. Dump the tree
