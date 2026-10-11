@@ -185,6 +185,13 @@ Future<void> batchDelete(
   required List<EmailThread> threads,
 }) async {
   if (threads.isEmpty) return;
+  // The mailbox each selected message is in right now. deleteEmails uses it to
+  // refuse hard-deleting a message that has since moved — an accidental second
+  // delete of a selection the first call already moved to Trash (#1010).
+  final expectedMailbox = <String, String>{
+    for (final t in threads)
+      for (final id in t.emailIds) id: t.mailboxPath,
+  };
   for (final accountThreads in _groupByAccount(threads).values) {
     await _pushGroupedUndo(
       ref,
@@ -192,7 +199,10 @@ Future<void> batchDelete(
       type: UndoType.delete,
       // One bulk call: a per-id deleteEmail loop made large selections
       // crawl (#917).
-      apply: (repo, emailIds) => repo.deleteEmails(emailIds),
+      apply: (repo, emailIds) => runZoned(
+        () => repo.deleteEmails(emailIds),
+        zoneValues: {deleteExpectedMailboxZoneKey: expectedMailbox},
+      ),
     );
   }
 }

@@ -23,6 +23,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
+import 'package:sharedinbox/core/utils/reply_recipients.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -1341,35 +1342,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   ) async {
     final account =
         await ref.read(accountRepositoryProvider).getAccount(header.accountId);
-    final ownEmail = account?.email.toLowerCase() ?? '';
-
-    final seen = <String>{};
-    final candidates = <_Candidate>[];
-
-    void addIfNew(EmailAddress addr, _Placement defaultPlacement) {
-      final key = addr.email.toLowerCase();
-      if (key == ownEmail || seen.contains(key)) return;
-      seen.add(key);
-      candidates.add(_Candidate(addr, defaultPlacement));
-    }
-
-    // Reply-To replaces From as the reply target when the sender set it
-    // (#919). Fall back to From when Reply-To is absent or only names our
-    // own address, so the reply never ends up without a recipient.
-    for (final addr in header.replyTo) {
-      addIfNew(addr, _Placement.to);
-    }
-    if (candidates.isEmpty) {
-      for (final addr in header.from) {
-        addIfNew(addr, _Placement.to);
-      }
-    }
-    for (final addr in header.to) {
-      addIfNew(addr, _Placement.to);
-    }
-    for (final addr in header.cc) {
-      addIfNew(addr, _Placement.cc);
-    }
+    final candidates = [
+      for (final r in replyRecipients(
+        ownEmail: account?.email ?? '',
+        from: header.from,
+        to: header.to,
+        cc: header.cc,
+        replyTo: header.replyTo,
+      ))
+        _Candidate(r.address, r.isCc ? _Placement.cc : _Placement.to),
+    ];
 
     if (!context.mounted) return;
 

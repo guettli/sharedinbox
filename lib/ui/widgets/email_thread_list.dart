@@ -7,10 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/swipe_tree/swipe_action_menu.dart';
 import 'package:sharedinbox/ui/widgets/swipe_tree/swipe_tree_node.dart';
 import 'package:sharedinbox/ui/widgets/thread_tile.dart';
@@ -36,41 +38,61 @@ class EmailThreadListController extends ChangeNotifier {
   bool get isSelecting => _selected.isNotEmpty;
   int get selectionCount => _selected.length;
 
+  /// Identity of the batch action currently running, or null when idle. A
+  /// token rather than a flag so a run only clears its OWN busy state in the
+  /// finally below — an action started with no [busyLabel] used to clear a
+  /// different run's state because the guard keyed off the label (#1011).
+  Object? _activeRun;
+
   String? _busyLabel;
 
-  /// Whether a batch action on the selection is still running. The selection
-  /// bottom bar shows [busyLabel] with a spinner in place of its buttons
-  /// meanwhile, so a slow bulk action is visibly in progress (#917).
-  bool get isBusy => _busyLabel != null;
+  /// Whether a batch action on the selection is running. Blocks another from
+  /// starting, so the bottom bar and a swipe acting on the same selection
+  /// cannot double-fire (#917, #1010). Independent of [busyLabel].
+  bool get isBusy => _activeRun != null;
 
-  /// What the running batch action is doing, e.g. "Deleting 80 conversations…".
+  /// What the running batch action is doing, e.g. "Deleting 80 conversations…",
+  /// shown by the bottom bar with a spinner in place of its buttons. Null for
+  /// an action that shows no label (a swipe, or one opening a dialog).
   String? get busyLabel => _busyLabel;
 
-  /// Runs [body] as the selection's batch action, then clears the selection
-  /// and calls [onDone] with the thread ids that were targeted. With a
-  /// [busyLabel] the controller is busy while [body] runs; pass one only for
-  /// actions that open no dialog, which the busy bar would sit behind.
-  /// Ignored while another busy action is running.
+  /// Runs [body] as the selection's batch action. On success clears the
+  /// selection and calls [onDone] with the thread ids that were targeted; on
+  /// failure the selection is kept and [onError] is called so the failure is
+  /// surfaced rather than swallowed (#1011). With a [busyLabel] the bottom bar
+  /// shows it while [body] runs; pass one only for actions that open no dialog,
+  /// which the busy bar would sit behind. Ignored while another run is active.
   void runBatch(
     Future<void> Function() body, {
     String? busyLabel,
     void Function(List<String> actedThreadIds)? onDone,
+    void Function(Object error, StackTrace stack)? onError,
   }) {
     if (isBusy) return;
+    final run = Object();
+    _activeRun = run;
     final actedIds = selectedThreads.map((t) => t.threadId).toList();
     _busyLabel = busyLabel;
-    if (busyLabel != null) notifyListeners();
+    notifyListeners();
     unawaited(() async {
+      var succeeded = false;
       try {
         await body();
+        succeeded = true;
+      } catch (error, stack) {
+        onError?.call(error, stack);
       } finally {
-        // The host screen may have been closed while the action ran.
-        if (_busyLabel != null && !_disposed) {
+        // Only this run clears the busy state, and only if the host screen is
+        // still open.
+        if (_activeRun == run && !_disposed) {
+          _activeRun = null;
           _busyLabel = null;
           notifyListeners();
         }
       }
-      if (_disposed) return;
+      // Keep the selection on failure so the user can retry; clear and notify
+      // the host only on success.
+      if (_disposed || !succeeded) return;
       clear();
       onDone?.call(actedIds);
     }());
@@ -358,10 +380,29 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
   /// Runs a batch [body] and clears the selection afterwards when the swipe
   /// acted on a multi-selection, mirroring [buildSelectionBottomBar].
   void _invoke(Future<void> Function() body) {
-    final wasSelecting = widget.controller.isSelecting;
+    final messenger = context.appMessenger();
+    void onError(Object e, StackTrace st) => messenger.show(
+          'Action failed: $e',
+          level: AppLogLevel.error,
+          error: e,
+          stack: st,
+        );
+    // A swipe acting on the whole selection must share the bottom bar's busy
+    // guard so it cannot double-fire with a bottom-bar action on the same
+    // selection (#1010); runBatch also clears the selection on success and
+    // surfaces failures. A single-row swipe (not selecting) is independent of
+    // any selection — run it directly so rapid swipes on different rows don't
+    // serialise, but still surface its failures (#1011).
+    if (widget.controller.isSelecting) {
+      widget.controller.runBatch(body, onError: onError);
+      return;
+    }
     unawaited(() async {
-      await body();
-      if (wasSelecting) widget.controller.clear();
+      try {
+        await body();
+      } catch (e, st) {
+        onError(e, st);
+      }
     }());
   }
 
@@ -598,8 +639,21 @@ Widget buildSelectionBottomBar(
   String? currentFolderRole,
   void Function(List<String> actedThreadIds)? onAfterAction,
 }) {
+  // Capture the messenger now so a failing action can still surface (and log)
+  // feedback after its await, when this context may be gone (#1011).
+  final messenger = context.appMessenger();
   void run(Future<void> Function() body, {String? busyLabel}) =>
-      controller.runBatch(body, busyLabel: busyLabel, onDone: onAfterAction);
+      controller.runBatch(
+        body,
+        busyLabel: busyLabel,
+        onDone: onAfterAction,
+        onError: (e, st) => messenger.show(
+          'Action failed: $e',
+          level: AppLogLevel.error,
+          error: e,
+          stack: st,
+        ),
+      );
 
   // While a batch action runs, the bar shows what it is doing instead of the
   // buttons — so a large delete visibly makes progress and cannot be fired

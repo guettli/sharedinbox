@@ -5,6 +5,16 @@ import 'package:sharedinbox/core/models/pending_change.dart';
 export 'package:sharedinbox/core/sieve/sieve_parser.dart'
     show SieveParseException;
 
+/// Zone key a caller of [EmailRepository.deleteEmails] may set to a
+/// `Map<String, String>` of email-id → the mailbox path that email was
+/// selected from. `deleteEmails` then refuses to hard-delete any row that has
+/// since moved out of that mailbox — the signature of an accidental second
+/// delete of a selection the first call already moved to Trash (#1010). A
+/// deliberate delete-from-Trash sets Trash here, which matches the row, so it
+/// still hard-deletes. Passed by zone (not a parameter) so the interface — and
+/// its generated mocks — stay unchanged; absent/unset means no check.
+final deleteExpectedMailboxZoneKey = Object();
+
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
     String accountId,

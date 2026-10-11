@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/managesieve_client.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 typedef ImapConnectForTestFn = Future<imap.ImapClient> Function(
   Account,
@@ -175,6 +176,16 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
       throw Exception('No JMAP URL configured for this account');
     }
     final sessionUri = Uri.parse(jmapUrl);
+    // This path sends Basic-auth credentials without going through
+    // JmapClient.connect, so it enforces the same rule itself: no cleartext to
+    // a remote host (#1018). The UI also blocks it at save via validateJmapUrl;
+    // this is the defense that does not depend on a validator being wired.
+    if (!JmapClient.isSecureUrl(sessionUri)) {
+      throw Exception(
+        'JMAP URL must use https — refusing to send credentials over '
+        'cleartext. http is allowed only for a localhost dev server.',
+      );
+    }
     final candidates = _usernamesFor(account);
     Object? lastError;
     for (final username in candidates) {
@@ -252,6 +263,9 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
       final apiUrl = session['apiUrl'] as String?;
       if (apiUrl == null || apiUrl.isEmpty) return null;
       final apiUri = sessionUri.resolve(apiUrl);
+      // A server must not downgrade this credential-bearing probe to http.
+      // Best-effort, so skip rather than leak if it tries.
+      if (!JmapClient.isSecureUrl(apiUri)) return null;
       final accountId = _jmapAccountId(session);
       if (accountId == null) return null;
 

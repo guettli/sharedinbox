@@ -469,6 +469,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               _jmapApiUrlCtrl,
               'JMAP API URL',
               keyboardType: TextInputType.url,
+              validator: validateJmapUrl,
             ),
             _field(
               _usernameCtrl,

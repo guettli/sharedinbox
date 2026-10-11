@@ -4436,6 +4436,13 @@ class EmailRepositoryImpl implements EmailRepository {
     // One transaction collapses all of it into a single commit, while the
     // bulk scope defers the per-message App Log rows and the sync kick until
     // after it.
+    // Per-email-id mailbox each message was selected from, when the caller
+    // provides it. A row that has since moved out of that mailbox is a stale
+    // (duplicate) delete — e.g. an accidental second delete of a selection the
+    // first call already moved to Trash — so skip it rather than hard-delete
+    // it from Trash (#1010).
+    final expectedMailbox =
+        Zone.current[deleteExpectedMailboxZoneKey] as Map<String, String>?;
     final scope = _BulkScope();
     String? dest;
     await runZoned(
@@ -4446,6 +4453,8 @@ class EmailRepositoryImpl implements EmailRepository {
         final handled = <String>{};
         for (final row in rows) {
           if (!handled.add(row.id)) continue;
+          final expected = expectedMailbox?[row.id];
+          if (expected != null && expected != row.mailboxPath) continue;
           dest = await _deleteRow(row);
           final mid = normaliseMessageId(row.messageId);
           if (mid == null) continue;
@@ -6450,7 +6459,20 @@ class EmailRepositoryImpl implements EmailRepository {
     String imapEndpoint,
     SendTiming timing,
   ) async {
-    // Create the folder first — many servers don't pre-create it.
+    // Resolve the account's real Sent folder by role rather than assuming it is
+    // literally named "Sent": Exchange/Stalwart use "Sent Items", Gmail uses
+    // "[Gmail]/Sent Mail", and localised servers use translated names. Hard-
+    // coding "Sent" created a stray duplicate folder and left the server's real
+    // Sent folder empty. Only fall back to creating "Sent" when the account
+    // exposes no Sent folder at all (e.g. mailboxes not synced yet).
+    final sentRow = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(account.id) & t.role.equals('sent'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    final sentPath = sentRow?.path ?? 'Sent';
+
     final imapClient = await _withPhase(
       'IMAP connect/login (to append Sent copy)',
       imapEndpoint,
@@ -6464,7 +6486,13 @@ class EmailRepositoryImpl implements EmailRepository {
     try {
       final createStopwatch = Stopwatch()..start();
       try {
-        await imapClient.createMailbox('Sent').timeout(_sendOperationTimeout);
+        // Only create when the account exposes no Sent folder; otherwise the
+        // resolved one already exists and appending into it is enough.
+        if (sentRow == null) {
+          await imapClient
+              .createMailbox(sentPath)
+              .timeout(_sendOperationTimeout);
+        }
       } on TimeoutException catch (e) {
         throw _wrapPhaseError(
           'IMAP create Sent folder',
@@ -6481,7 +6509,7 @@ class EmailRepositoryImpl implements EmailRepository {
         imapEndpoint,
         () => imapClient.appendMessage(
           mimeMessage,
-          targetMailboxPath: 'Sent',
+          targetMailboxPath: sentPath,
           flags: [r'\Seen'],
           responseTimeout: _sendOperationTimeout,
         ),
