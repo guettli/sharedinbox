@@ -77,7 +77,7 @@ when the module genuinely needs a newer engine, after the engine has moved.
 Every workflow pins `runs-on: sharedinbox-arc`. Each job's first Dagger step is
 [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh), which opens
 the SSH tunnel to the remote engine and exports
-`_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080` for the steps that
+`_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080` for the steps that
 follow (see `.github/workflows/ci.yml`).
 
 ```
