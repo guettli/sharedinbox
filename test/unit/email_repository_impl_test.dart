@@ -3712,6 +3712,166 @@ void main() {
       },
     );
 
+    group('Undo of a delete (#1048)', () {
+      const oldId = 'acc-1:INBOX:5';
+      const messageId = '<msg-1@example.com>';
+
+      Future<void> seedInboxEmail(AppDatabase db) => db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: oldId,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value(messageId),
+            ),
+          );
+
+      Future<void> queueMove(
+        AppDatabase db, {
+        required int uid,
+        required String src,
+        required String dest,
+        String resourceId = oldId,
+      }) =>
+          db.into(db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'Email',
+                  resourceId: resourceId,
+                  changeType: 'move',
+                  payload: jsonEncode({
+                    'uid': uid,
+                    'mailboxPath': src,
+                    'dest': dest,
+                    'messageId': messageId,
+                  }),
+                  createdAt: DateTime.now(),
+                ),
+              );
+
+      test('a change cancelled after the flush snapshot is not applied',
+          () async {
+        final spy = SnoozeSpyImapClient();
+        late final ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+        }) r;
+        var cancelled = false;
+        r = _makeRepos(
+          imapConnect: (_, __, ___) async {
+            // Undo tapped while the flush is still connecting.
+            cancelled = await r.emails.cancelPendingChange(oldId, 'move');
+            return spy;
+          },
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Trash');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(cancelled, isTrue);
+        expect(spy.moves, isEmpty);
+      });
+
+      test('a change being applied can no longer be cancelled', () async {
+        bool? cancelled;
+        late final ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+        }) r;
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42},
+          // Undo tapped while the MOVE is on the wire.
+          onUidMove: () async =>
+              cancelled ??= await r.emails.cancelPendingChange(oldId, 'move'),
+        );
+        r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Trash');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        // The cancel must fail so Undo enqueues a real reverse move.
+        expect(cancelled, isFalse);
+        expect(spy.moves, ['INBOX:5->Trash']);
+        expect(await r.emails.getEmail('acc-1:Trash:42'), isNotNull);
+      });
+
+      test(
+          'reverse move queued behind the original targets the re-keyed UID '
+          'in the same flush', () async {
+        // Delete while offline: the move to Trash failed once, so Undo could
+        // not cancel it and queued the reverse move (still carrying the INBOX
+        // UID) behind it.
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42, 42: 7},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await r.emails.moveEmail(oldId, 'Trash');
+        await (r.db.update(r.db.pendingChanges)
+              ..where((t) => t.resourceId.equals(oldId)))
+            .write(const PendingChangesCompanion(attempts: Value(1)));
+        await r.emails.moveEmail(oldId, 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['INBOX:5->Trash', 'Trash:42->INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        final restored = await r.emails.getEmail('acc-1:INBOX:7');
+        expect(restored, isNotNull);
+        expect(restored!.mailboxPath, 'INBOX');
+      });
+
+      test('move with a stale UID re-resolves it by Message-ID', () async {
+        // The reverse move was queued with the pre-delete INBOX UID; on the
+        // server the message sits in Trash under UID 205. The first MOVE is
+        // an OK no-op without COPYUID.
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {205: 7},
+          searchResultsByMailbox: const {
+            'Trash': [205],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['Trash:5->INBOX', 'Trash:205->INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail('acc-1:INBOX:7'), isNotNull);
+      });
+
+      test('move that cannot be located is kept for a retry, not dropped',
+          () async {
+        final spy = SnoozeSpyImapClient(
+          searchResultsByMailbox: const {},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        final change = (await r.db.select(r.db.pendingChanges).get()).single;
+        expect(change.attempts, 1);
+        expect(change.lastError, contains(messageId));
+      });
+    });
+
     test(
       'move flush rewrites pending undo_actions referencing the old id',
       () async {

@@ -654,8 +654,9 @@ class _FakeEmails implements EmailRepository {
   @override
   Future<Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async =>
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
       null;
 
   @override

@@ -906,8 +906,9 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   @override
   _i6.Future<_i3.Email?> findEmailByMessageId(
     String? accountId,
-    String? messageId,
-  ) =>
+    String? messageId, {
+    String? preferMailboxPath,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #findEmailByMessageId,
@@ -915,6 +916,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
             accountId,
             messageId,
           ],
+          {#preferMailboxPath: preferMailboxPath},
         ),
         returnValue: _i6.Future<_i3.Email?>.value(),
       ) as _i6.Future<_i3.Email?>);

@@ -179,7 +179,13 @@ abstract class EmailRepository {
   /// Finds an email in [accountId]'s mailboxes by its RFC 2822 Message-ID header.
   /// Returns null if not found. Used during undo to locate an email after its
   /// IMAP UID changed (e.g. after a server-applied move assigned a new UID).
-  Future<Email?> findEmailByMessageId(String accountId, String messageId);
+  /// When several rows share the Message-ID (e.g. the Sent copy of a self-sent
+  /// mail), the one in [preferMailboxPath] wins.
+  Future<Email?> findEmailByMessageId(
+    String accountId,
+    String messageId, {
+    String? preferMailboxPath,
+  });
 
   /// Applies locally stored active Sieve rules to INBOX emails that have not
   /// been processed yet. Records each processed email in LocalSieveApplied so

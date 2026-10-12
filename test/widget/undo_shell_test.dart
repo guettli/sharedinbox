@@ -25,7 +25,11 @@ void main() {
     // Some tests tap UNDO, which triggers repo access; give minimal stubs.
     when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
     when(
-      mockEmailRepo.findEmailByMessageId(any, any),
+      mockEmailRepo.findEmailByMessageId(
+        any,
+        any,
+        preferMailboxPath: anyNamed('preferMailboxPath'),
+      ),
     ).thenAnswer((_) async => null);
     when(
       mockEmailRepo.cancelPendingChange(any, any),
