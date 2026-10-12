@@ -38,6 +38,16 @@ class UndoService extends Notifier<List<UndoAction>> {
         .pushAndTrim(action, maxHistory: _maxHistory);
   }
 
+  /// Returns the persisted copy of [action]. When the original move reached
+  /// the server, the IMAP re-key rewrote the email ids in the stored action
+  /// (see `_rekeyEmailRow`) but not in [state], so the in-memory copy may
+  /// still reference the pre-move id (#1048).
+  Future<UndoAction> _reload(UndoAction action) async {
+    final history =
+        await ref.read(undoRepositoryProvider).getHistory(limit: _maxHistory);
+    return history.where((a) => a.id == action.id).firstOrNull ?? action;
+  }
+
   Future<void> clear() async {
     await _ready;
     state = [];
@@ -50,16 +60,17 @@ class UndoService extends Notifier<List<UndoAction>> {
     await _ready;
     if (state.isEmpty) return;
 
-    final UndoAction action;
+    final UndoAction inMemory;
     if (actionId == null) {
-      action = state.last;
+      inMemory = state.last;
     } else {
       try {
-        action = state.firstWhere((a) => a.id == actionId);
+        inMemory = state.firstWhere((a) => a.id == actionId);
       } catch (e) {
         return; // Action not found
       }
     }
+    final action = await _reload(inMemory);
 
     // Keep the original entry in state and DB so the user can see what
     // happened and retry if the undo failed (e.g. after an IMAP sync reverted
@@ -84,15 +95,22 @@ class UndoService extends Notifier<List<UndoAction>> {
         // Message-ID so we use the correct UID in the pending change.
         var currentEmail = await repo.getEmail(id);
         if (currentEmail == null && original?.messageId != null) {
+          // Prefer the copy where the email should be now, so a Sent copy
+          // of a self-sent mail with the same Message-ID is never picked.
           currentEmail = await repo.findEmailByMessageId(
             action.accountId,
             original!.messageId!,
+            preferMailboxPath: cancelled
+                ? action.sourceMailboxPath
+                : (action.destinationMailboxPath ?? action.sourceMailboxPath),
           );
         }
         final currentId = currentEmail?.id ?? id;
 
         // 3. If the row is absent (hard delete or UID changed after sync),
-        // restore it from the saved snapshot so moveEmail can find it.
+        // restore it from the saved snapshot so moveEmail can find it. When
+        // not cancelled, the snapshot's UID is the pre-move one; the reverse
+        // move carries the Message-ID so the flush re-resolves the real UID.
         if (currentEmail == null && original != null) {
           final currentPath = cancelled
               ? action.sourceMailboxPath

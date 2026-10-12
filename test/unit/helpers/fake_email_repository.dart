@@ -101,7 +101,12 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<void> restoreEmails(List<Email> emails) async {}
   @override
-  Future<Email?> findEmailByMessageId(String a, String messageId) async => null;
+  Future<Email?> findEmailByMessageId(
+    String a,
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
+      null;
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
   @override
