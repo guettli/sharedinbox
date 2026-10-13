@@ -18,6 +18,7 @@ import 'package:sharedinbox/ui/utils/global_email_search.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
+import 'package:sharedinbox/ui/widgets/new_compose.dart';
 
 class EmailListScreen extends ConsumerStatefulWidget {
   const EmailListScreen({
@@ -280,10 +281,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
         IconButton(
           icon: const Icon(Icons.edit),
           tooltip: 'Compose',
-          onPressed: () => context.push(
-            '/compose',
-            extra: {'accountId': widget.accountId},
-          ),
+          onPressed: () =>
+              openNewCompose(context, ref, accountId: widget.accountId),
         ),
         PopupMenuButton<String>(
           onSelected: (value) async {

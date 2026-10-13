@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -240,19 +242,36 @@ void main() {
       expect(_bodyText(tester), 'Cheers,\nAlice\n\n> quoted original');
     });
 
-    testWidgets('restores saved draft when no prefill is provided', (
+    testWidgets('starts blank even when a saved draft exists (#1047)', (
       tester,
     ) async {
       final fakeDrafts = FakeDraftRepository();
-      await fakeDrafts.saveDraft(
-        toText: 'carol@example.com',
-        ccText: '',
-        subjectText: 'Restored subject',
-        bodyText: 'Draft body',
-      );
+      await _seedRestoredDraft(fakeDrafts);
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(),
+          overrides: _composeOverrides(drafts: fakeDrafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextFormField, 'carol@example.com'),
+        findsNothing,
+      );
+      expect(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        findsNothing,
+      );
+      expect(_bodyText(tester), isEmpty);
+    });
+
+    testWidgets('restores the draft passed by draftId', (tester) async {
+      final fakeDrafts = FakeDraftRepository();
+      final saved = await _seedRestoredDraft(fakeDrafts);
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
           overrides: _composeOverrides(drafts: fakeDrafts),
         ),
       );
@@ -265,6 +284,39 @@ void main() {
       expect(
         find.widgetWithText(TextFormField, 'Restored subject'),
         findsOneWidget,
+      );
+      expect(_bodyText(tester), 'Draft body');
+    });
+
+    testWidgets('typing before a slow restore is not overwritten (#1047)', (
+      tester,
+    ) async {
+      final fakeDrafts = _SlowDraftRepository();
+      final saved = await _seedRestoredDraft(fakeDrafts);
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: fakeDrafts),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Subject'),
+        'Typed subject',
+      );
+      await tester.pump();
+
+      fakeDrafts.release.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextFormField, 'Typed subject'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(TextFormField, 'carol@example.com'),
+        findsNothing,
       );
     });
 
@@ -320,9 +372,7 @@ void main() {
 
     testWidgets('discard deletes the restored draft and pops', (tester) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // The saved draft has been restored into the fields.
       expect(
@@ -358,9 +408,7 @@ void main() {
       tester,
     ) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // Dirty the draft so the dispose flush would otherwise fire.
       await tester.enterText(
@@ -374,7 +422,7 @@ void main() {
 
       // The row stays deleted — dispose did not resurrect it.
       expect(await fakeDrafts.getDraft(saved.id), isNull);
-      expect(await fakeDrafts.findDraft(), isNull);
+      expect(await fakeDrafts.listNewMessageDrafts(), isEmpty);
     });
   });
 }
@@ -388,6 +436,18 @@ class _RecordingDraftRepository extends FakeDraftRepository {
   Future<void> deleteDraft(int id) async {
     deleted.add(id);
     return super.deleteDraft(id);
+  }
+}
+
+/// A [FakeDraftRepository] whose [getDraft] blocks until [release] completes,
+/// so a test can type while a draft restore is still in flight.
+class _SlowDraftRepository extends FakeDraftRepository {
+  final Completer<void> release = Completer<void>();
+
+  @override
+  Future<SavedDraft?> getDraft(int id) async {
+    await release.future;
+    return super.getDraft(id);
   }
 }
 
@@ -435,6 +495,22 @@ Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
       bodyText: 'Draft body',
     );
 
+/// Seeds the canonical restored draft and opens it in compose (by draftId)
+/// from a home route — the shared setup for the discard-a-restored-draft tests.
+Future<SavedDraft> _pumpRestoredDraftFromHome(
+  WidgetTester tester,
+  FakeDraftRepository drafts,
+) async {
+  final saved = await _seedRestoredDraft(drafts);
+  await _pumpComposeFromHome(
+    tester,
+    router: _homeAndCompose(),
+    drafts: drafts,
+    draftId: saved.id,
+  );
+  return saved;
+}
+
 /// Pumps compose from a home route, fills in a recipient and taps Send —
 /// the shared setup for the direct-send (#755) tests, which differ only in
 /// the [email] fake's configured outcome.
@@ -465,18 +541,22 @@ Future<void> _pumpComposeFromHome(
   WidgetTester tester, {
   required GoRouter router,
   required FakeDraftRepository drafts,
+  int? draftId,
 }) async {
   await tester.pumpWidget(_buildRouter(router: router, drafts: drafts));
   await tester.pumpAndSettle();
-  unawaited(router.push('/compose'));
+  unawaited(router.push('/compose', extra: {'draftId': draftId}));
   await tester.pumpAndSettle();
 }
 
 /// A router with a home screen under a compose route so [context.pop()] has
 /// somewhere to land. The scaffolding is shared with the other tests that need
 /// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
-GoRouter _homeAndCompose() =>
-    homeAndComposeRouter(compose: (_) => const ComposeScreen());
+GoRouter _homeAndCompose() => homeAndComposeRouter(
+      compose: (state) => ComposeScreen(
+        draftId: (state.extra as Map<String, dynamic>?)?['draftId'] as int?,
+      ),
+    );
 
 Widget _buildRouter({
   required GoRouter router,

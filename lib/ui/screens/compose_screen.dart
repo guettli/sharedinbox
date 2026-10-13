@@ -32,6 +32,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillCc,
     this.prefillSubject,
     this.prefillBody,
+    this.draftId,
   });
 
   final String? accountId;
@@ -40,6 +41,10 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? prefillCc;
   final String? prefillSubject;
   final String? prefillBody;
+
+  /// The saved draft to resume. Compose only ever restores a draft the user
+  /// explicitly picked — without this it always starts blank (#1047).
+  final int? draftId;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -89,12 +94,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;
     unawaited(_loadAccounts());
-    // Only restore if no prefill fields were provided (avoids overwriting a
-    // fresh reply with an old draft from a previous reply to the same email).
-    final hasPrefill = widget.prefillTo != null ||
-        widget.prefillSubject != null ||
-        widget.prefillBody != null;
-    if (!hasPrefill) unawaited(_restoreDraft());
+    if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
     for (final c in [_to, _cc, _subject, _body]) {
       c.addListener(_onTextChanged);
@@ -156,12 +156,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _suppressAutoSave = false;
   }
 
-  Future<void> _restoreDraft() async {
-    final draft = await ref.read(draftRepositoryProvider).findDraft(
-          replyToEmailId: widget.replyToEmailId,
-          accountId: widget.accountId,
-        );
+  Future<void> _restoreDraft(int id) async {
+    final draft = await _draftRepo.getDraft(id);
     if (draft == null || !mounted) return;
+    // The user already started typing — never splice the draft into it.
+    if (_draftDirty) return;
+    // Programmatic fill — don't count it as the user dirtying the draft.
+    _suppressAutoSave = true;
     setState(() {
       _draftRestored = true;
       _draftId = draft.id;
@@ -173,6 +174,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _sigAccountId = _accountId;
       _sigBlock = '';
     });
+    _suppressAutoSave = false;
   }
 
   void _onTextChanged() {
