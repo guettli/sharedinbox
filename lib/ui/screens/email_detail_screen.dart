@@ -1111,12 +1111,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ],
         ),
         notes.when(
-          // Keep the current notes on screen while the stream resubscribes
-          // (thread membership can shift during a sync); without this the
-          // section collapses to zero height and back, shifting the HTML body
-          // below it up and down — the single-mail view visibly blinks (#1053).
+          // conversationNotesProvider is fed by threadEmailsProvider, a drift
+          // .watch() that re-emits on every write to the emails table — so it
+          // resubscribes (passing through AsyncLoading) constantly while a sync
+          // runs. skipLoadingOnReload keeps the current notes on screen through
+          // those reloads; without it the section collapsed to zero height and
+          // back, shifting the HTML body below it up and down, which read as
+          // the single-mail view blinking (#1053). (skipLoadingOnRefresh
+          // already defaults to true in Riverpod, so it is not set here.)
           skipLoadingOnReload: true,
-          skipLoadingOnRefresh: true,
           loading: () => const SizedBox.shrink(),
           error: (e, _) => Text('Error loading notes: $e'),
           data: (list) {
