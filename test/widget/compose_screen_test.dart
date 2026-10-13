@@ -372,14 +372,7 @@ void main() {
 
     testWidgets('discard deletes the restored draft and pops', (tester) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(
-        tester,
-        router: router,
-        drafts: fakeDrafts,
-        draftId: saved.id,
-      );
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // The saved draft has been restored into the fields.
       expect(
@@ -415,14 +408,7 @@ void main() {
       tester,
     ) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(
-        tester,
-        router: router,
-        drafts: fakeDrafts,
-        draftId: saved.id,
-      );
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // Dirty the draft so the dispose flush would otherwise fire.
       await tester.enterText(
@@ -508,6 +494,22 @@ Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
       subjectText: 'Restored subject',
       bodyText: 'Draft body',
     );
+
+/// Seeds the canonical restored draft and opens it in compose (by draftId)
+/// from a home route — the shared setup for the discard-a-restored-draft tests.
+Future<SavedDraft> _pumpRestoredDraftFromHome(
+  WidgetTester tester,
+  FakeDraftRepository drafts,
+) async {
+  final saved = await _seedRestoredDraft(drafts);
+  await _pumpComposeFromHome(
+    tester,
+    router: _homeAndCompose(),
+    drafts: drafts,
+    draftId: saved.id,
+  );
+  return saved;
+}
 
 /// Pumps compose from a home route, fills in a recipient and taps Send —
 /// the shared setup for the direct-send (#755) tests, which differ only in
