@@ -1111,6 +1111,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ],
         ),
         notes.when(
+          // Keep the current notes on screen while the stream resubscribes
+          // (thread membership can shift during a sync); without this the
+          // section collapses to zero height and back, shifting the HTML body
+          // below it up and down — the single-mail view visibly blinks (#1053).
+          skipLoadingOnReload: true,
+          skipLoadingOnRefresh: true,
           loading: () => const SizedBox.shrink(),
           error: (e, _) => Text('Error loading notes: $e'),
           data: (list) {

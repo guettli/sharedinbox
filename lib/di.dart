@@ -668,12 +668,24 @@ final conversationNotesProvider = StreamProvider.autoDispose
   final (accountId, messageId, threadId) = key;
   final repo = ref.watch(noteRepositoryProvider);
   if (threadId == null) return repo.observeNotes(accountId, messageId);
-  final emails = ref.watch(threadEmailsProvider((accountId, threadId))).value ??
-      const <Email>[];
-  final ids = {
-    messageId,
-    for (final e in emails)
-      if (e.messageId != null) e.messageId!,
-  };
-  return repo.observeNotesForMessages(accountId, ids);
+  // Only the *set* of message IDs matters here. threadEmailsProvider is a
+  // drift .watch() that re-emits a fresh list on every write to the emails
+  // table (e.g. throughout a sync cycle); watching its value directly would
+  // resubscribe the notes stream — flashing it through AsyncLoading — on every
+  // such write, blinking the detail view (#1053). Select a canonical,
+  // value-comparable key so this only recomputes when thread membership
+  // actually changes. A space is a safe separator: message IDs never contain
+  // whitespace.
+  final idsKey = ref.watch(
+    threadEmailsProvider((accountId, threadId)).select((async) {
+      final ids = <String>{
+        messageId,
+        for (final e in (async.value ?? const <Email>[]))
+          if (e.messageId != null) e.messageId!,
+      }.toList()
+        ..sort();
+      return ids.join(' ');
+    }),
+  );
+  return repo.observeNotesForMessages(accountId, idsKey.split(' '));
 });
