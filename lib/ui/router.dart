@@ -298,6 +298,7 @@ final router = GoRouter(
               prefillCc: extra?['prefillCc'] as String?,
               prefillSubject: extra?['prefillSubject'] as String?,
               prefillBody: extra?['prefillBody'] as String?,
+              draftId: extra?['draftId'] as int?,
             );
           },
         ),

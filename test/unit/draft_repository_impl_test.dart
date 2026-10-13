@@ -70,39 +70,22 @@ void main() {
       expect(await repo.getDraft(99999), isNull);
     });
 
-    test('findDraft returns null when no draft exists', () async {
+    test('listNewMessageDrafts is empty when no draft exists', () async {
       final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
-      expect(await repo.findDraft(), isNull);
+      expect(await repo.listNewMessageDrafts(), isEmpty);
     });
 
     test(
-      'findDraft returns most recent draft for matching replyToEmailId',
+      'listNewMessageDrafts returns new-message drafts newest first and '
+      'skips reply drafts',
       () async {
         final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
-        await repo.saveDraft(
-          replyToEmailId: 'email-1',
+        final older = await repo.saveDraft(
           toText: 'a@example.com',
           ccText: '',
           subjectText: 'Older',
           bodyText: '',
         );
-        final newer = await repo.saveDraft(
-          replyToEmailId: 'email-1',
-          toText: 'a@example.com',
-          ccText: '',
-          subjectText: 'Newer',
-          bodyText: 'body',
-        );
-        final found = await repo.findDraft(replyToEmailId: 'email-1');
-        expect(found?.id, newer.id);
-        expect(found?.subjectText, 'Newer');
-      },
-    );
-
-    test(
-      'findDraft with null replyToEmailId finds new-message drafts',
-      () async {
-        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
         // This draft is a reply and should NOT be returned.
         await repo.saveDraft(
           replyToEmailId: 'email-1',
@@ -111,19 +94,19 @@ void main() {
           subjectText: 'Reply draft',
           bodyText: '',
         );
-        final newMsg = await repo.saveDraft(
-          toText: 'y@example.com',
+        final newer = await repo.saveDraft(
+          toText: 'b@example.com',
           ccText: '',
-          subjectText: 'New draft',
+          subjectText: 'Newer',
           bodyText: '',
         );
-        final found = await repo.findDraft();
-        expect(found?.id, newMsg.id);
+        final found = await repo.listNewMessageDrafts();
+        expect(found.map((d) => d.id), [newer.id, older.id]);
       },
     );
 
     test(
-      'findDraft scopes new-message lookup to the given accountId',
+      'listNewMessageDrafts scopes the list to the given accountId',
       () async {
         final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
         final imapDraft = await repo.saveDraft(
@@ -133,8 +116,6 @@ void main() {
           subjectText: 'IMAP draft',
           bodyText: '',
         );
-        // A newer draft under the other account must NOT be returned when the
-        // lookup is scoped to the IMAP account.
         final jmapDraft = await repo.saveDraft(
           accountId: 'jmap-1',
           toText: 'b@example.com',
@@ -143,31 +124,17 @@ void main() {
           bodyText: '',
         );
 
-        final imapFound = await repo.findDraft(accountId: 'imap-1');
-        expect(imapFound?.id, imapDraft.id);
-        expect(imapFound?.subjectText, 'IMAP draft');
+        final imapFound = await repo.listNewMessageDrafts(accountId: 'imap-1');
+        expect(imapFound.map((d) => d.id), [imapDraft.id]);
 
-        final jmapFound = await repo.findDraft(accountId: 'jmap-1');
-        expect(jmapFound?.id, jmapDraft.id);
+        final jmapFound = await repo.listNewMessageDrafts(accountId: 'jmap-1');
+        expect(jmapFound.map((d) => d.id), [jmapDraft.id]);
 
-        // Without an accountId, the most recent draft overall is returned.
-        final anyFound = await repo.findDraft();
-        expect(anyFound?.id, jmapDraft.id);
-      },
-    );
+        // Without an accountId, every account's drafts are returned.
+        final all = await repo.listNewMessageDrafts();
+        expect(all.map((d) => d.id), [jmapDraft.id, imapDraft.id]);
 
-    test(
-      'findDraft returns null when no draft matches the given accountId',
-      () async {
-        final repo = DraftRepositoryImpl(openTestDatabase(), _StubAccounts());
-        await repo.saveDraft(
-          accountId: 'jmap-1',
-          toText: 'b@example.com',
-          ccText: '',
-          subjectText: 'JMAP draft',
-          bodyText: '',
-        );
-        expect(await repo.findDraft(accountId: 'imap-1'), isNull);
+        expect(await repo.listNewMessageDrafts(accountId: 'other'), isEmpty);
       },
     );
 
