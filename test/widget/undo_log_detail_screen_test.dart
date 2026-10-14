@@ -23,8 +23,9 @@ class _LookupEmailRepository extends FakeEmailRepository {
   @override
   Future<Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async =>
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
       _lookup;
 }
 

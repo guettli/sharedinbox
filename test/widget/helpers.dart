@@ -157,18 +157,16 @@ class FakeDraftRepository implements DraftRepository {
   }
 
   @override
-  Future<SavedDraft?> findDraft({
-    String? replyToEmailId,
-    String? accountId,
-  }) async {
-    final matches = _drafts.values.where((d) {
-      if (accountId != null && d.accountId != accountId) return false;
-      if (replyToEmailId == null) return d.replyToEmailId == null;
-      return d.replyToEmailId == replyToEmailId;
-    }).toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return matches.isEmpty ? null : matches.first;
-  }
+  Future<List<SavedDraft>> listNewMessageDrafts({String? accountId}) async =>
+      _drafts.values
+          .where((d) => d.replyToEmailId == null)
+          .where((d) => accountId == null || d.accountId == accountId)
+          .toList()
+        ..sort((a, b) {
+          final byTime = b.updatedAt.compareTo(a.updatedAt);
+          if (byTime != 0) return byTime;
+          return b.id.compareTo(a.id);
+        });
 
   @override
   Future<SavedDraft?> getDraft(int id) async => _drafts[id];
@@ -504,8 +502,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async =>
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
       null;
 
   @override
@@ -894,6 +893,7 @@ Widget buildApp({
             prefillCc: extra?['prefillCc'] as String?,
             prefillSubject: extra?['prefillSubject'] as String?,
             prefillBody: extra?['prefillBody'] as String?,
+            draftId: extra?['draftId'] as int?,
           );
         },
       ),

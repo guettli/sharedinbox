@@ -656,6 +656,104 @@ void main() {
     }
   });
 
+  group('undo of a delete survives a sync (#1048)', () {
+    Future<
+        ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+        })> setUpDeletable(String subject) async {
+      await appendToInbox(subject);
+      final setup = await connectImap(env: env, user: user);
+      try {
+        await _ensureMailbox(setup, 'Trash');
+      } finally {
+        await setup.logout();
+      }
+      final r = makeRepo();
+      await r.accounts.addAccount(account, user.password);
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'test:Trash',
+              accountId: 'test',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.emails.syncEmails('test', 'INBOX');
+      return r;
+    }
+
+    Future<void> expectBackInInbox(
+      ({
+        AppDatabase db,
+        AccountRepositoryImpl accounts,
+        EmailRepositoryImpl emails,
+      }) r,
+      String subject,
+    ) async {
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      await r.emails.syncEmails('test', 'INBOX');
+      await r.emails.syncEmails('test', 'Trash');
+
+      final inbox = await r.emails.observeEmails('test', 'INBOX').first;
+      expect(inbox.map((e) => e.subject), [subject]);
+      expect(await r.emails.observeEmails('test', 'Trash').first, isEmpty);
+
+      final client = await connectImap(env: env, user: user);
+      try {
+        expect((await client.selectMailboxByPath('INBOX')).messagesExists, 1);
+        expect((await client.selectMailboxByPath('Trash')).messagesExists, 0);
+      } finally {
+        await client.logout();
+      }
+    }
+
+    test('reverse move after the delete reached the server', () async {
+      const subject = 'undo-after-flush';
+      final r = await setUpDeletable(subject);
+      final original =
+          (await r.emails.observeEmails('test', 'INBOX').first).single;
+
+      await r.emails.deleteEmail(original.id);
+      await r.emails.flushPendingChanges('test', user.password);
+
+      // What UndoService does once the row was re-keyed into Trash.
+      final current = await r.emails.findEmailByMessageId(
+        'test',
+        original.messageId!,
+        preferMailboxPath: 'Trash',
+      );
+      expect(current!.mailboxPath, 'Trash');
+      await r.emails.moveEmail(current.id, 'INBOX');
+      await r.emails.flushPendingChanges('test', user.password);
+
+      await expectBackInInbox(r, subject);
+    });
+
+    test('reverse move queued behind a delete that could not be cancelled',
+        () async {
+      const subject = 'undo-before-flush';
+      final r = await setUpDeletable(subject);
+      final original =
+          (await r.emails.observeEmails('test', 'INBOX').first).single;
+
+      await r.emails.deleteEmail(original.id);
+      // The first flush attempt failed (e.g. offline), so Undo cannot cancel
+      // the move and queues the reverse move with the stale INBOX UID.
+      await (r.db.update(r.db.pendingChanges)
+            ..where((t) => t.resourceId.equals(original.id)))
+          .write(const PendingChangesCompanion(attempts: Value(1)));
+      expect(await r.emails.cancelPendingChange(original.id, 'move'), isFalse);
+      await r.emails.moveEmail(original.id, 'INBOX');
+
+      await r.emails.flushPendingChanges('test', user.password);
+
+      await expectBackInInbox(r, subject);
+    });
+  });
+
   // Regression: the in-app "sync" button calls syncEmails directly and does
   // not invoke flushPendingChanges itself. After a local delete, the message
   // is removed from the local DB optimistically but still lives on the server

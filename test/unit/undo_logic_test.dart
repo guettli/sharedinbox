@@ -325,6 +325,107 @@ void main() {
     },
   );
 
+  test(
+    'Undo uses the re-keyed id when the move reached the server (#1048)',
+    () async {
+      const oldEmailId = 'acc1:101';
+      const newEmailId = 'acc1:Trash:205';
+      final original = await repo.getEmail(oldEmailId);
+
+      final destPath = await repo.deleteEmail(oldEmailId);
+      final action = UndoAction(
+        id: 'undo-rekeyed',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: [oldEmailId],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: destPath,
+        originalEmails: [original!],
+      );
+      final undo = container.read(undoServiceProvider.notifier);
+      await undo.pushAction(action);
+
+      // Simulate the flush applying the move and re-keying the row: the
+      // persisted undo action follows the new id, the in-memory one doesn't.
+      await (db.delete(db.pendingChanges)).go();
+      await (db.update(db.emails)..where((t) => t.id.equals(oldEmailId))).write(
+        const EmailsCompanion(id: Value(newEmailId), uid: Value(205)),
+      );
+      await db.customStatement(
+        'UPDATE undo_actions SET data_json = REPLACE(data_json, ?1, ?2)',
+        ['"$oldEmailId"', '"$newEmailId"'],
+      );
+
+      await undo.undo();
+
+      final restored = await repo.getEmail(newEmailId);
+      expect(restored!.mailboxPath, 'INBOX');
+      final reverseMove = (await db.select(db.pendingChanges).get()).single;
+      expect(reverseMove.resourceId, newEmailId);
+      final payload = jsonDecode(reverseMove.payload) as Map<String, dynamic>;
+      expect(payload['uid'], 205);
+      expect(payload['mailboxPath'], 'Trash');
+      expect(payload['dest'], 'INBOX');
+    },
+  );
+
+  test(
+    'Undo looks up the Trash copy, not the Sent copy, by Message-ID (#1048)',
+    () async {
+      const oldEmailId = 'acc1:101';
+      const messageId = 'msg-101@test';
+      await (db.update(db.emails)..where((t) => t.id.equals(oldEmailId)))
+          .write(const EmailsCompanion(messageId: Value(messageId)));
+      // A self-sent mail: its Sent copy shares the Message-ID.
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc1:Sent:7',
+              accountId: 'acc1',
+              mailboxPath: 'Sent',
+              uid: 7,
+              subject: const Value('Test Email'),
+              receivedAt: DateTime.now(),
+              messageId: const Value(messageId),
+            ),
+          );
+      final original = await repo.getEmail(oldEmailId);
+
+      final destPath = await repo.deleteEmail(oldEmailId);
+      // Sync re-fetched the moved message under a new id without updating
+      // the undo log.
+      await (db.delete(db.pendingChanges)).go();
+      await (db.delete(db.emails)..where((t) => t.id.equals(oldEmailId))).go();
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc1:Trash:205',
+              accountId: 'acc1',
+              mailboxPath: 'Trash',
+              uid: 205,
+              subject: const Value('Test Email'),
+              receivedAt: DateTime.now(),
+              messageId: const Value(messageId),
+            ),
+          );
+
+      final action = UndoAction(
+        id: 'undo-sent-copy',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: [oldEmailId],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: destPath,
+        originalEmails: [original!],
+      );
+      await container.read(undoServiceProvider.notifier).pushAction(action);
+      await container.read(undoServiceProvider.notifier).undo();
+
+      expect((await repo.getEmail('acc1:Sent:7'))!.mailboxPath, 'Sent');
+      expect((await repo.getEmail('acc1:Trash:205'))!.mailboxPath, 'INBOX');
+      final reverseMove = (await db.select(db.pendingChanges).get()).single;
+      expect(reverseMove.resourceId, 'acc1:Trash:205');
+    },
+  );
+
   test('Undo snooze clears snooze metadata and moves back', () async {
     const emailId = 'acc1:101';
     final original = await repo.getEmail(emailId);

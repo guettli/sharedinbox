@@ -939,6 +939,11 @@ class EmailRepositoryImpl implements EmailRepository {
       await (_db.update(_db.pendingChanges)
             ..where((t) => t.resourceId.equals(oldId)))
           .write(PendingChangesCompanion(resourceId: Value(newId)));
+      await _rewritePendingChangeUids(
+        resourceId: newId,
+        mailboxPath: newMailboxPath,
+        newUid: newUid,
+      );
 
       // app_logs.emailId references emails.id with onDelete:setNull but no
       // onUpdate action, so re-point the per-message logs by hand — otherwise
@@ -972,6 +977,35 @@ class EmailRepositoryImpl implements EmailRepository {
         ['"$oldId"', '"$newId"', '%"$oldId"%'],
       );
     });
+  }
+
+  /// Points the IMAP payloads of [resourceId]'s queued changes that address
+  /// the message in [mailboxPath] at its new [newUid]. Changes queued after an
+  /// optimistic move (e.g. Undo's reverse move Trash→INBOX) still carry the
+  /// pre-move UID, which does not exist in the destination mailbox: the server
+  /// would accept the `UID MOVE` as a no-op and the change would be lost
+  /// (#1048).
+  Future<void> _rewritePendingChangeUids({
+    required String resourceId,
+    required String mailboxPath,
+    required int newUid,
+  }) async {
+    final rows = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.resourceId.equals(resourceId)))
+        .get();
+    for (final row in rows) {
+      final Map<String, dynamic> payload;
+      try {
+        payload = jsonDecode(row.payload) as Map<String, dynamic>;
+      } catch (_) {
+        continue;
+      }
+      if (payload['uid'] is! int || payload['uid'] == newUid) continue;
+      if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) continue;
+      payload['uid'] = newUid;
+      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+    }
   }
 
   Future<model.EmailBody> _getEmailBodyJmap(
@@ -1489,6 +1523,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // (realEmailId, messageId) of each row we just wrote — checked afterwards
     // for a local self-sent "virtual" counterpart to dissolve (#545).
     final dissolveCandidates = <(String, String?)>[];
+    // (emailId, subject, size) of each row stored for the first time — logged
+    // after the transaction so "Show Logs" starts with the fetch (#920).
+    final newlyStored = <(String, String?, int?)>[];
     await _db.transaction(() async {
       for (final msg in fetch.messages) {
         final envelope = msg.envelope;
@@ -1553,6 +1590,11 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
+        final isNew = await (_db.selectOnly(_db.emails)
+                  ..addColumns([_db.emails.id])
+                  ..where(_db.emails.id.equals(emailId)))
+                .getSingleOrNull() ==
+            null;
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
@@ -1585,8 +1627,20 @@ class EmailRepositoryImpl implements EmailRepository {
               ),
             );
         if (msgId != null) dissolveCandidates.add((emailId, msgId));
+        if (isNew) newlyStored.add((emailId, subject, msg.size));
       }
     });
+    // Outside the transaction: the app log writes through the same database.
+    for (final (emailId, subject, size) in newlyStored) {
+      _logEmailFetched(
+        emailId: emailId,
+        accountId: account.id,
+        mailboxPath: mailboxPath,
+        protocol: 'imap',
+        subject: subject,
+        bytes: size,
+      );
+    }
     for (final tid in affectedThreads) {
       await _updateThread(account.id, mailboxPath, tid);
     }
@@ -3426,6 +3480,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
     // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
     final dissolveCandidates = <(String, String, String?)>[];
+    // (emailId, mailboxPath, subject, size) of each row stored for the first
+    // time — logged so "Show Logs" starts with the fetch (#920).
+    final newlyStored = <(String, String, String?, int?)>[];
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
@@ -3565,6 +3622,19 @@ class EmailRepositoryImpl implements EmailRepository {
             );
       }
       dissolveCandidates.add((mailboxPath, dbId, jmapMessageId));
+      if (existingRow == null) {
+        newlyStored.add((dbId, mailboxPath, subject, m['size'] as int?));
+      }
+    }
+    for (final (emailId, mailboxPath, subject, size) in newlyStored) {
+      _logEmailFetched(
+        emailId: emailId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        protocol: 'jmap',
+        subject: subject,
+        bytes: size,
+      );
     }
 
     for (final mailboxPath in affectedByMailbox.keys) {
@@ -4331,6 +4401,9 @@ class EmailRepositoryImpl implements EmailRepository {
           'uid': row.uid,
           'mailboxPath': srcMailboxPath,
           'dest': destMailboxPath,
+          // Lets the flush re-resolve a stale UID (see
+          // [_retryImapMoveByMessageId]) instead of silently no-op'ing (#1048).
+          if (row.messageId != null) 'messageId': row.messageId,
         }),
       );
       // Optimistic: move the cached row locally instead of hard-deleting.
@@ -4619,10 +4692,40 @@ class EmailRepositoryImpl implements EmailRepository {
     return row?.read(_db.emails.isLocal) ?? false;
   }
 
+  /// Atomically marks [snapshot] as picked up by a flush by bumping its
+  /// attempt counter, so [cancelPendingChange] (which only removes rows still
+  /// at `attempts == 0`) can no longer delete a change that is being applied.
+  /// Otherwise an Undo racing the flush would "cancel" a MOVE that still lands
+  /// on the server and skip its reverse move (#1048).
+  ///
+  /// Returns null when the row was cancelled (or claimed by another isolate)
+  /// since the flush took its snapshot — the caller must then skip it.
+  /// Otherwise returns the row as currently stored: an earlier change in the
+  /// same flush may have re-keyed it ([_rekeyEmailRow] rewrites `resourceId`
+  /// and the payload UID). The attempt count is the pre-claim one, so a failed
+  /// apply is not double-counted by [_recordChangeError].
+  Future<PendingChangeRow?> _claimPendingChange(
+    PendingChangeRow snapshot,
+  ) async {
+    final count = await (_db.update(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.id.equals(snapshot.id) & t.attempts.equals(snapshot.attempts),
+          ))
+        .write(
+      PendingChangesCompanion(attempts: Value(snapshot.attempts + 1)),
+    );
+    if (count == 0) return null;
+    final current = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.id.equals(snapshot.id)))
+        .getSingleOrNull();
+    return current?.copyWith(attempts: snapshot.attempts);
+  }
+
   @override
   Future<bool> cancelPendingChange(String emailId, String changeType) async {
-    // Find the latest pending change for this email/type that hasn't been
-    // attempted yet.
+    // Find the latest pending change for this email/type that no flush has
+    // picked up yet (see [_claimPendingChange]).
     final query = _db.select(_db.pendingChanges)
       ..where(
         (t) =>
@@ -5120,16 +5223,20 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
-  @override
   Future<model.Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async {
+    String messageId, {
+    String? preferMailboxPath,
+  }) async {
     final row = await (_db.select(_db.emails)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) & t.messageId.equals(messageId),
           )
+          ..orderBy([
+            if (preferMailboxPath != null)
+              (t) => OrderingTerm.desc(t.mailboxPath.equals(preferMailboxPath)),
+          ])
           ..limit(1))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
@@ -5482,7 +5589,9 @@ class EmailRepositoryImpl implements EmailRepository {
 
     var applied = 0;
 
-    for (final row in rows) {
+    for (final snapshot in rows) {
+      final row = await _claimPendingChange(snapshot);
+      if (row == null) continue;
       try {
         // Pending-change `Email/set`s deliberately omit `ifInState`: each patch
         // targets a single email's own `mailboxIds`/`keywords`, so it is safe
@@ -5544,7 +5653,9 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     var applied = 0;
     try {
-      for (final row in rows) {
+      for (final snapshot in rows) {
+        final row = await _claimPendingChange(snapshot);
+        if (row == null) continue;
         try {
           await _applyPendingChangeImap(client, row);
           await (_db.delete(
@@ -5606,12 +5717,21 @@ class EmailRepositoryImpl implements EmailRepository {
       case 'move':
         final dest = payload['dest'] as String;
         final result = await client.uidMove(seq, targetMailboxPath: dest);
-        await _remapEmailAfterImapMove(
+        final located = await _remapEmailAfterImapMove(
           client,
           oldId: row.resourceId,
           sourceUid: uid,
           destMailboxPath: dest,
           moveResult: result,
+        );
+        if (located) return;
+        await _retryImapMoveByMessageId(
+          client,
+          row: row,
+          staleUid: uid,
+          mailboxPath: mailboxPath,
+          destMailboxPath: dest,
+          messageId: payload['messageId'] as String?,
         );
       case 'delete':
         await client.uidMarkDeleted(seq);
@@ -5665,6 +5785,59 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// Handles a `UID MOVE` that reported OK but whose message could not be
+  /// found in [destMailboxPath] afterwards. Servers accept a MOVE of a UID that
+  /// does not exist as a no-op, so a stale [staleUid] (e.g. Undo's reverse move
+  /// queued before the original move re-keyed the row) would otherwise be
+  /// dropped as "applied" while the message stays put (#1048).
+  ///
+  /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one.
+  /// Throws [StateError] when the message cannot be found, so the change is
+  /// retried and the failure lands in the App Log instead of vanishing.
+  /// Without any Message-ID to verify against, keeps the old behaviour and
+  /// treats the MOVE as applied.
+  Future<void> _retryImapMoveByMessageId(
+    imap.ImapClient client, {
+    required PendingChangeRow row,
+    required int staleUid,
+    required String mailboxPath,
+    required String destMailboxPath,
+    required String? messageId,
+  }) async {
+    final local = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    final mid = messageId ?? local?.messageId;
+    if (mid == null || mid.isEmpty) return;
+
+    final resolvedUid = await _searchUidByMessageId(client, mailboxPath, mid);
+    if (resolvedUid == null || resolvedUid == staleUid) {
+      // Wording must not match [isImapMailboxNotFound], which would treat
+      // the change as applied.
+      throw StateError(
+        'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
+        'effect: message $mid is in neither mailbox',
+      );
+    }
+    await client.selectUnicodeMailboxByPath(mailboxPath);
+    final result = await client.uidMove(
+      imap.MessageSequence.fromId(resolvedUid, isUid: true),
+      targetMailboxPath: destMailboxPath,
+    );
+    final located = await _remapEmailAfterImapMove(
+      client,
+      oldId: row.resourceId,
+      sourceUid: resolvedUid,
+      destMailboxPath: destMailboxPath,
+      moveResult: result,
+    );
+    if (located) return;
+    throw StateError(
+      'MOVE of UID $resolvedUid from $mailboxPath to $destMailboxPath had no '
+      'effect: message $mid is missing from $destMailboxPath',
+    );
+  }
+
   /// Rewrites the local row identity after an IMAP MOVE so the cache keeps
   /// tracking the same physical message under its new (mailbox, UID).
   ///
@@ -5674,7 +5847,10 @@ class EmailRepositoryImpl implements EmailRepository {
   /// When neither yields a UID we leave the row in place; the next sync
   /// cycle will re-fetch it as a new message and reconciliation will drop
   /// the stale source-side row.
-  Future<void> _remapEmailAfterImapMove(
+  ///
+  /// Returns false only when the moved message could not be located in
+  /// [destMailboxPath]; true when it was (or there is no local row to remap).
+  Future<bool> _remapEmailAfterImapMove(
     imap.ImapClient client, {
     required String oldId,
     required int sourceUid,
@@ -5683,7 +5859,7 @@ class EmailRepositoryImpl implements EmailRepository {
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
         .getSingleOrNull();
-    if (row == null) return;
+    if (row == null) return true;
 
     final newUid = _resolveCopyUid(moveResult, sourceUid) ??
         await _searchUidByMessageId(
@@ -5697,11 +5873,11 @@ class EmailRepositoryImpl implements EmailRepository {
         'after move to $destMailboxPath (no COPYUID, '
         'messageId=${row.messageId}); row will be re-fetched on next sync',
       );
-      return;
+      return false;
     }
 
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
-    if (newId == oldId) return;
+    if (newId == oldId) return true;
 
     await _rekeyEmailRow(
       oldId: oldId,
@@ -5714,6 +5890,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final threadId = row.threadId ?? newId;
     await _updateThread(row.accountId, row.mailboxPath, threadId);
     await _updateThread(row.accountId, destMailboxPath, threadId);
+    return true;
   }
 
   /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
@@ -7760,6 +7937,32 @@ class EmailRepositoryImpl implements EmailRepository {
   /// htmlBody length. Reported by the Sync state screen; not the wire size.
   int _bodySize(String? textBody, String? htmlBody) =>
       (textBody?.length ?? 0) + (htmlBody?.length ?? 0);
+
+  /// Records the first time a server message is stored locally, so the
+  /// per-message "Show Logs" view starts with the mail's own fetch (#920).
+  void _logEmailFetched({
+    required String emailId,
+    required String accountId,
+    required String mailboxPath,
+    required String protocol,
+    String? subject,
+    int? bytes,
+  }) {
+    unawaited(
+      _appLogger?.info(
+        'email.fetched',
+        'Fetched "${subject ?? '(no subject)'}" from the server '
+            '(${protocol.toUpperCase()})',
+        data: {
+          'protocol': protocol,
+          if (bytes != null) 'bytes': bytes,
+        },
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        emailId: emailId,
+      ),
+    );
+  }
 
   /// Records how a message body was loaded so the per-message "Show Logs" view
   /// answers "did opening this mail need the Internet?" (#642). [source] is one

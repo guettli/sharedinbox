@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
+import 'package:sharedinbox/ui/widgets/new_compose.dart';
 
 class CombinedInboxScreen extends ConsumerStatefulWidget {
   const CombinedInboxScreen({super.key});
@@ -80,7 +81,7 @@ class _CombinedInboxScreenState extends ConsumerState<CombinedInboxScreen> {
           floatingActionButton: selecting
               ? null
               : FloatingActionButton(
-                  onPressed: () => context.push('/compose'),
+                  onPressed: () => openNewCompose(context, ref),
                   child: const Icon(Icons.edit),
                 ),
         );

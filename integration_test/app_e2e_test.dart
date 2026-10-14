@@ -293,6 +293,13 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.edit));
       await tester.pumpAndSettle();
+      // A draft left behind by an earlier run brings up the draft chooser
+      // (#1047) — start a fresh message instead.
+      final createNew = find.text('Create new message');
+      if (createNew.evaluate().isNotEmpty) {
+        await tester.tap(createNew);
+        await tester.pumpAndSettle();
+      }
 
       final subject = 'E2E-${DateTime.now().millisecondsSinceEpoch}';
 
