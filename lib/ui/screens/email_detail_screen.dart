@@ -23,6 +23,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
+import 'package:sharedinbox/core/utils/reply_recipients.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -1078,7 +1079,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Widget _buildNotesSection(BuildContext ctx, Email header) {
     final messageId = header.messageId!;
-    final notes = ref.watch(notesProvider((header.accountId, messageId)));
+    final notes = ref.watch(
+      conversationNotesProvider(
+        (header.accountId, messageId, header.threadId),
+      ),
+    );
+    final threadId = header.threadId;
+    final threadEmails = threadId == null
+        ? const <Email>[]
+        : ref.watch(threadEmailsProvider((header.accountId, threadId))).value ??
+            const <Email>[];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1101,6 +1111,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           ],
         ),
         notes.when(
+          // conversationNotesProvider is fed by threadEmailsProvider, a drift
+          // .watch() that re-emits on every write to the emails table — so it
+          // resubscribes (passing through AsyncLoading) constantly while a sync
+          // runs. skipLoadingOnReload keeps the current notes on screen through
+          // those reloads; without it the section collapsed to zero height and
+          // back, shifting the HTML body below it up and down, which read as
+          // the single-mail view blinking (#1053). (skipLoadingOnRefresh
+          // already defaults to true in Riverpod, so it is not set here.)
+          skipLoadingOnReload: true,
           loading: () => const SizedBox.shrink(),
           error: (e, _) => Text('Error loading notes: $e'),
           data: (list) {
@@ -1117,7 +1136,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             }
             return Column(
               children: [
-                for (final note in list) _buildNoteRow(ctx, note),
+                for (final note in list)
+                  _buildNoteRow(ctx, note, header, threadEmails),
               ],
             );
           },
@@ -1127,13 +1147,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  Widget _buildNoteRow(BuildContext ctx, EmailNote note) {
+  Widget _buildNoteRow(
+    BuildContext ctx,
+    EmailNote note,
+    Email header,
+    List<Email> threadEmails,
+  ) {
+    final created = DateFormat('MMM d, HH:mm').format(note.createdAt);
+    final subtitle = note.messageId == header.messageId
+        ? created
+        : '$created · ${_relatedMailLabel(note.messageId, threadEmails)}';
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
       title: Text(note.noteText),
       subtitle: Text(
-        DateFormat('MMM d, HH:mm').format(note.createdAt),
+        subtitle,
         style: Theme.of(ctx).textTheme.bodySmall,
       ),
       trailing: IconButton(
@@ -1144,6 +1173,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         },
       ),
     );
+  }
+
+  /// Names the related mail of the conversation a note belongs to (#870),
+  /// e.g. "on mail from Alice, Mar 3, 10:15".
+  String _relatedMailLabel(String messageId, List<Email> threadEmails) {
+    final mail =
+        threadEmails.where((e) => e.messageId == messageId).firstOrNull;
+    if (mail == null) return 'on related mail';
+    final from = mail.from.firstOrNull;
+    final name = from?.name;
+    final sender = from == null
+        ? ''
+        : ' from ${name != null && name.isNotEmpty ? name : from.email}';
+    final sent = mail.sentAt == null
+        ? ''
+        : ', ${DateFormat('MMM d, HH:mm').format(mail.sentAt!)}';
+    return 'on mail$sender$sent';
   }
 
   Future<void> _addNoteDialog(BuildContext context, Email header) async {
@@ -1247,9 +1293,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         if (email.sentAt != null)
           Row(
             children: [
-              Text(
-                _dateFmt.format(email.sentAt!),
-                style: Theme.of(ctx).textTheme.bodySmall,
+              // Flexible: the date led this row unconstrained, taking its
+              // intrinsic width. Measured at text scale 2.0 on a 320dp screen
+              // it renders 270.6px wide inside a 288px row, leaving ~9px for
+              // the folder label after the gap — the label is already starved,
+              // and a slightly narrower screen or larger scale overflows.
+              Flexible(
+                child: Text(
+                  _dateFmt.format(email.sentAt!),
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
               ),
               if (folderLabel.isNotEmpty) ...[
                 const SizedBox(width: AppSpacing.sm),
@@ -1298,27 +1351,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   ) async {
     final account =
         await ref.read(accountRepositoryProvider).getAccount(header.accountId);
-    final ownEmail = account?.email.toLowerCase() ?? '';
-
-    final seen = <String>{};
-    final candidates = <_Candidate>[];
-
-    void addIfNew(EmailAddress addr, _Placement defaultPlacement) {
-      final key = addr.email.toLowerCase();
-      if (key == ownEmail || seen.contains(key)) return;
-      seen.add(key);
-      candidates.add(_Candidate(addr, defaultPlacement));
-    }
-
-    for (final addr in header.from) {
-      addIfNew(addr, _Placement.to);
-    }
-    for (final addr in header.to) {
-      addIfNew(addr, _Placement.to);
-    }
-    for (final addr in header.cc) {
-      addIfNew(addr, _Placement.cc);
-    }
+    final candidates = [
+      for (final r in replyRecipients(
+        ownEmail: account?.email ?? '',
+        from: header.from,
+        to: header.to,
+        cc: header.cc,
+      ))
+        _Candidate(r.address, r.isCc ? _Placement.cc : _Placement.to),
+    ];
 
     if (!context.mounted) return;
 

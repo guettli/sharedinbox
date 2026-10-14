@@ -23,6 +23,8 @@ class SnoozeSpyImapClient extends FakeImapClient {
     this.copyUidValidity,
     this.copyUidSourceToTarget = const {},
     this.searchResults = const {},
+    this.searchResultsByMailbox,
+    this.onUidMove,
   });
 
   String? selectedMailbox;
@@ -45,6 +47,17 @@ class SnoozeSpyImapClient extends FakeImapClient {
   /// Maps a `UID SEARCH HEADER Message-ID …` search criteria (the literal
   /// IMAP atom incl. quotes) to the UIDs the fake should return.
   final Map<String, List<int>> searchResults;
+
+  /// When non-null, replaces [searchResults]: the UIDs any search returns in
+  /// the currently selected mailbox (keyed by path).
+  final Map<String, List<int>>? searchResultsByMailbox;
+
+  /// Called at the start of every `uidMove`, e.g. to race an Undo against an
+  /// in-flight flush.
+  final Future<void> Function()? onUidMove;
+
+  /// Every `uidMove` as `'<selected mailbox>:<uids>-><target>'`.
+  final List<String> moves = [];
 
   imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
         encodedName: path,
@@ -108,7 +121,11 @@ class SnoozeSpyImapClient extends FakeImapClient {
     imap.Mailbox? targetMailbox,
     String? targetMailboxPath,
   }) async {
+    await onUidMove?.call();
     movedToMailbox = targetMailboxPath;
+    moves.add(
+      '$selectedMailbox:${sequence.toList().join(',')}->$targetMailboxPath',
+    );
     final result = imap.GenericImapResult();
     if (copyUidValidity != null && copyUidSourceToTarget.isNotEmpty) {
       final sources = sequence.toList();
@@ -132,7 +149,9 @@ class SnoozeSpyImapClient extends FakeImapClient {
     Duration? responseTimeout,
   }) async {
     lastSearchCriteria = searchCriteria;
-    final hits = searchResults[searchCriteria] ?? const <int>[];
+    final hits = searchResultsByMailbox != null
+        ? searchResultsByMailbox![selectedMailbox] ?? const <int>[]
+        : searchResults[searchCriteria] ?? const <int>[];
     final result = imap.SearchImapResult()
       ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
     return result;

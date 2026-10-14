@@ -48,12 +48,18 @@ class FakeEmailRepositoryBase implements EmailRepository {
   Future<void> moveEmail(String id, String dest) async {}
   @override
   Future<String?> deleteEmail(String id) async => null;
+
+  @override
+  Future<String?> deleteEmails(List<String> ids) async => null;
   @override
   Future<void> sendEmail(String a, EmailDraft d) async {}
   @override
   Future<int> enqueueSend(String a, EmailDraft d) async => 0;
   @override
   Future<int> flushOutbox(String a, String p) async => 0;
+  @override
+  Future<SendNowResult> sendNow(String a, {int? outboxRowId}) async =>
+      const SendNowResult(SendNowOutcome.sent);
   @override
   Future<String> downloadAttachment(String id, EmailAttachment att) async => '';
   @override
@@ -95,7 +101,12 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<void> restoreEmails(List<Email> emails) async {}
   @override
-  Future<Email?> findEmailByMessageId(String a, String messageId) async => null;
+  Future<Email?> findEmailByMessageId(
+    String a,
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
+      null;
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
   @override

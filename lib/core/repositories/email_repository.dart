@@ -5,6 +5,16 @@ import 'package:sharedinbox/core/models/pending_change.dart';
 export 'package:sharedinbox/core/sieve/sieve_parser.dart'
     show SieveParseException;
 
+/// Zone key a caller of [EmailRepository.deleteEmails] may set to a
+/// `Map<String, String>` of email-id → the mailbox path that email was
+/// selected from. `deleteEmails` then refuses to hard-delete any row that has
+/// since moved out of that mailbox — the signature of an accidental second
+/// delete of a selection the first call already moved to Trash (#1010). A
+/// deliberate delete-from-Trash sets Trash here, which matches the row, so it
+/// still hard-deletes. Passed by zone (not a parameter) so the interface — and
+/// its generated mocks — stay unchanged; absent/unset means no check.
+final deleteExpectedMailboxZoneKey = Object();
+
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
     String accountId,
@@ -55,6 +65,13 @@ abstract class EmailRepository {
   /// (e.g. Trash) if it was a soft-delete, or null if it was hard-deleted.
   Future<String?> deleteEmail(String emailId);
 
+  /// Deletes every email in [emailIds] like [deleteEmail], but as one bulk
+  /// operation: all local DB work runs in a single transaction and the sync
+  /// loop is kicked once, so deleting many messages stays fast (#917).
+  /// Returns the mailbox the last message was moved to (e.g. Trash), or null
+  /// if it was hard-deleted.
+  Future<String?> deleteEmails(List<String> emailIds);
+
   /// Sends [draft] synchronously. Throws on network/protocol failure.
   /// Prefer [enqueueSend] for user-initiated compose actions so the UI does
   /// not block on connectivity.
@@ -69,6 +86,18 @@ abstract class EmailRepository {
   /// protocol. Called from [AccountSyncManager] on every sync cycle.
   /// Returns the number of messages successfully transmitted.
   Future<int> flushOutbox(String accountId, String password);
+
+  /// Immediately attempts to send the queued outbox messages for [accountId]
+  /// and reports the concrete outcome, so a user action (composing a message,
+  /// or hitting Retry) gets real feedback instead of a fire-and-forget kick of
+  /// the background loop (#755).
+  ///
+  /// Reads the account password itself and runs the same flush the background
+  /// sync loop uses, guarded by a per-account lock so a UI-initiated send can
+  /// never race the loop into delivering the same message twice. When
+  /// [outboxRowId] is supplied the returned [SendNowResult] describes that
+  /// row's fate; otherwise it reports whether anything was sent.
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId});
 
   /// Downloads [attachment] bytes from the server (or local cache) and returns
   /// the local file-system path.  Subsequent calls for the same attachment
@@ -150,7 +179,13 @@ abstract class EmailRepository {
   /// Finds an email in [accountId]'s mailboxes by its RFC 2822 Message-ID header.
   /// Returns null if not found. Used during undo to locate an email after its
   /// IMAP UID changed (e.g. after a server-applied move assigned a new UID).
-  Future<Email?> findEmailByMessageId(String accountId, String messageId);
+  /// When several rows share the Message-ID (e.g. the Sent copy of a self-sent
+  /// mail), the one in [preferMailboxPath] wins.
+  Future<Email?> findEmailByMessageId(
+    String accountId,
+    String messageId, {
+    String? preferMailboxPath,
+  });
 
   /// Applies locally stored active Sieve rules to INBOX emails that have not
   /// been processed yet. Records each processed email in LocalSieveApplied so
@@ -220,4 +255,31 @@ abstract class EmailRepository {
   /// in full. EmailBodies are preserved so already-downloaded content is not
   /// re-downloaded. Other mailboxes are untouched.
   Future<void> clearMailboxForResync(String accountId, String mailboxPath);
+}
+
+/// Outcome of an [EmailRepository.sendNow] call for the targeted outbox row.
+enum SendNowOutcome {
+  /// The message was transmitted and removed from the queue.
+  sent,
+
+  /// The send failed with a retriable error; the row stays queued and backs
+  /// off for a later automatic retry.
+  transientFailed,
+
+  /// The send failed permanently (e.g. a 5xx SMTP rejection); the row is
+  /// marked failed and will not be retried automatically.
+  permanentlyFailed,
+
+  /// No send was attempted for the row (e.g. it was not yet eligible, or a
+  /// concurrent flush handled it) and it remains queued.
+  queued,
+}
+
+/// The result of an [EmailRepository.sendNow] call: the [outcome] plus, on
+/// failure, a human-readable [message] explaining why, suitable for a SnackBar.
+class SendNowResult {
+  const SendNowResult(this.outcome, {this.message});
+
+  final SendNowOutcome outcome;
+  final String? message;
 }

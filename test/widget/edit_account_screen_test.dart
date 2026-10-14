@@ -1,20 +1,65 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
+
 import 'helpers.dart';
+
+/// A localhost IMAP account, where `imapSsl: false` means plaintext rather
+/// than STARTTLS (#954). `imapSsl` defaults to true, which is the state accounts saved before #936
+/// was fixed are stuck in.
+const _kLocalhostAccount = Account(
+  id: 'acc-1',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'localhost',
+  imapPort: 1430,
+  smtpHost: 'smtp.example.com',
+  signature: 'Cheers,\nAlice',
+);
+
+/// The edit form does not fit the default test viewport.
+void _useTallViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 1400);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+/// Pumps the edit screen for [account] and waits for `_load()` to settle.
+Future<void> _pumpEditAccount(
+  WidgetTester tester, {
+  Account account = kTestAccount,
+  FakeAccountRepository? accountRepository,
+  bool hasStoredPassword = true,
+  Exception? connectionError,
+}) async {
+  _useTallViewport(tester);
+
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/edit',
+      overrides: baseOverrides(
+        accounts: [account],
+        accountRepository: accountRepository,
+        hasStoredPassword: hasStoredPassword,
+        connectionError: connectionError,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// The IMAP / SMTP SSL switches. They share a title, so tests find them by key.
+Finder _imapSslSwitch() => find.byKey(const Key('imapSslSwitch'));
+Finder _smtpSslSwitch() => find.byKey(const Key('smtpSslSwitch'));
 
 void main() {
   group('EditAccountScreen', () {
     testWidgets('shows account email and type label after loading', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       expect(find.text('alice@example.com'), findsOneWidget);
       // "IMAP" appears as both the type badge and the IMAP section header.
@@ -22,30 +67,15 @@ void main() {
     });
 
     testWidgets('pre-fills display name field', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       expect(find.widgetWithText(TextFormField, 'Alice'), findsOneWidget);
     });
 
     testWidgets('pre-fills the signature field', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kSignedAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester, account: kSignedAccount);
 
-      expect(
-        find.byKey(const Key('editSignatureField')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('editSignatureField')), findsOneWidget);
       final field = tester.widget<TextFormField>(
         find.byKey(const Key('editSignatureField')),
       );
@@ -53,42 +83,19 @@ void main() {
     });
 
     testWidgets('shows Save button', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       expect(find.text('Save'), findsOneWidget);
     });
 
     testWidgets('does not show Force full sync button', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       expect(find.text('Force full sync'), findsNothing);
     });
 
     testWidgets('saving without password change pops back', (tester) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -100,18 +107,7 @@ void main() {
     testWidgets('saving with new password runs connection test', (
       tester,
     ) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(accounts: [kTestAccount]),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester);
 
       await tester.enterText(
         find.byKey(const Key('editPasswordField')),
@@ -127,21 +123,7 @@ void main() {
     testWidgets(
       'try connection button is disabled when no password stored or entered',
       (tester) async {
-        tester.view.physicalSize = const Size(800, 1400);
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/edit',
-            overrides: baseOverrides(
-              accounts: [kTestAccount],
-              hasStoredPassword: false,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
+        await _pumpEditAccount(tester, hasStoredPassword: false);
 
         final button = tester.widget<OutlinedButton>(
           find.byKey(const Key('editTryConnectionButton')),
@@ -153,21 +135,7 @@ void main() {
     testWidgets(
       'try connection button is enabled after typing password with no stored password',
       (tester) async {
-        tester.view.physicalSize = const Size(800, 1400);
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/edit',
-            overrides: baseOverrides(
-              accounts: [kTestAccount],
-              hasStoredPassword: false,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
+        await _pumpEditAccount(tester, hasStoredPassword: false);
 
         await tester.enterText(
           find.byKey(const Key('editPasswordField')),
@@ -185,21 +153,7 @@ void main() {
     testWidgets('save button is disabled when no password stored or entered', (
       tester,
     ) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            hasStoredPassword: false,
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpEditAccount(tester, hasStoredPassword: false);
 
       final button = tester.widget<FilledButton>(
         find.widgetWithText(FilledButton, 'Save'),
@@ -208,21 +162,10 @@ void main() {
     });
 
     testWidgets('connection error shows error message', (tester) async {
-      tester.view.physicalSize = const Size(800, 1400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/edit',
-          overrides: baseOverrides(
-            accounts: [kTestAccount],
-            connectionError: Exception('auth failed'),
-          ),
-        ),
+      await _pumpEditAccount(
+        tester,
+        connectionError: Exception('auth failed'),
       );
-      await tester.pumpAndSettle();
 
       await tester.enterText(
         find.byKey(const Key('editPasswordField')),
@@ -233,5 +176,92 @@ void main() {
 
       expect(find.textContaining('Save failed'), findsOneWidget);
     });
+
+    testWidgets('IMAP and SMTP SSL switches show for remote hosts', (
+      tester,
+    ) async {
+      // Remote `*Ssl: false` means STARTTLS now (#954), so the switches are no
+      // longer localhost-only.
+      await _pumpEditAccount(tester);
+
+      expect(_imapSslSwitch(), findsOneWidget);
+      expect(_smtpSslSwitch(), findsOneWidget);
+    });
+
+    testWidgets(
+      'turning the SSL switches off for a remote host is persisted',
+      (tester) async {
+        final repo = FakeAccountRepository([kTestAccount]);
+        await _pumpEditAccount(tester, accountRepository: repo);
+
+        await tester.tap(_imapSslSwitch());
+        await tester.tap(_smtpSslSwitch());
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+
+        final saved = repo.accounts.single;
+        expect(saved.imapHost, isNot('localhost'));
+        expect(saved.imapSsl, isFalse);
+        expect(saved.smtpSsl, isFalse);
+      },
+    );
+
+    testWidgets(
+        'IMAP SSL switch shows for localhost and reflects the stored '
+        'value', (tester) async {
+      await _pumpEditAccount(tester, account: _kLocalhostAccount);
+
+      expect(_imapSslSwitch(), findsOneWidget);
+      expect(tester.widget<SwitchListTile>(_imapSslSwitch()).value, isTrue);
+    });
+
+    testWidgets('turning the IMAP SSL switch off is persisted', (tester) async {
+      final repo = FakeAccountRepository([_kLocalhostAccount]);
+      await _pumpEditAccount(
+        tester,
+        account: _kLocalhostAccount,
+        accountRepository: repo,
+      );
+
+      await tester.tap(_imapSslSwitch());
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(_imapSslSwitch()).value, isFalse);
+
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(repo.accounts.single.imapSsl, isFalse);
+    });
+
+    testWidgets(
+      'turning the IMAP SSL switch off survives the username-filling save',
+      (tester) async {
+        // Entering a password runs the connection test, which used to rebuild
+        // the account field by field to fill in the username — dropping both
+        // imapSsl and signature on the way (#936).
+        final repo = FakeAccountRepository([_kLocalhostAccount]);
+        await _pumpEditAccount(
+          tester,
+          account: _kLocalhostAccount,
+          accountRepository: repo,
+        );
+
+        await tester.tap(_imapSslSwitch());
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('editPasswordField')),
+          'newsecret',
+        );
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+
+        final saved = repo.accounts.single;
+        expect(saved.imapSsl, isFalse);
+        expect(saved.signature, 'Cheers,\nAlice');
+        // The one thing the rebuild was there for.
+        expect(saved.username, 'alice@example.com');
+      },
+    );
   });
 }

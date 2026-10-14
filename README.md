@@ -53,6 +53,84 @@ automatically. **Gmail** users see this: enter your `@gmail.com` (or `@googlemai
 authenticate with a Google [App Password](GMAIL.md). See [GMAIL.md](GMAIL.md) for details and the
 plan for one-tap Google sign-in.
 
+### Install on Linux with mise
+
+[mise](https://mise.jdx.dev/) installs SharedInbox from this repository's GitHub Releases — no
+package manager entry and no plugin repo required:
+
+```bash
+mise use -g github:guettli/sharedinbox@latest
+sharedinbox
+```
+
+> **`@latest` lags about a day.** mise refuses to install a release younger than
+> `minimum_release_age` (24 hours by default) — a supply-chain guard, not a bug here. If the command
+> above reports *"no versions found … matching minimum_release_age"*, every release so far is still
+> too new; install the newest one by name instead, which the error message names for you:
+>
+> ```bash
+> mise use -g github:guettli/sharedinbox@2026.9.29.0916   # pin an exact version
+> ```
+>
+> Releases are cut automatically from every Linux deploy, so `@latest` tracks roughly yesterday's
+> build. Pin a version when you want today's.
+
+If the short form above does not put `sharedinbox` on your `PATH`, spell the options out in
+`~/.config/mise/config.toml` (CI installs this block on every release, with `version` pinned to the
+release under test):
+
+```toml
+[tools."github:guettli/sharedinbox"]
+version = "latest"
+asset_pattern = "sharedinbox-*-linux-x86_64.tar.gz"
+strip_components = 1
+bin_path = "."
+filter_bins = ["sharedinbox"]
+```
+
+`strip_components = 1` unwraps the tarball's top-level directory so the executable keeps its
+`data/` and `lib/` siblings — the Flutter runner resolves both relative to the binary. `bin_path`
+plus `filter_bins` then expose only `sharedinbox` on `PATH`, keeping the rest of the payload
+(`share/`, and any future helper binary) out of it.
+
+Upgrade with `mise up github:guettli/sharedinbox`. The app detects a mise install and shows that
+command instead of a download link. (The bin name alone, `mise up sharedinbox`, matches no tool and
+exits successfully without doing anything — mise wants the tool name.)
+
+**Runtime prerequisites.** mise ships the app, not system libraries. On Ubuntu 24.04+:
+
+```bash
+sudo apt install libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils
+```
+
+* **libsecret + a running keyring** (gnome-keyring, KWallet, …) is required, not optional: account
+  passwords go through `flutter_secure_storage`, so without a keyring service **login fails**.
+* `zenity` (or an XDG desktop portal) backs the attachment file picker; `xdg-utils` opens
+  downloaded attachments in your other apps.
+* **glibc floor: 2.39**, because the tarball is built on Ubuntu 24.04.
+* **Debian 13 (trixie) does not work yet.** The build links `libjsoncpp.so.25` (via
+  `flutter_secure_storage`), and trixie ships only `libjsoncpp26` — a different soname, so
+  installing it does not help. Ubuntu 24.04 / 24.10 / 25.04 are the tested targets; see
+  [#896](https://github.com/guettli/sharedinbox/issues/896) for widening the reach.
+
+**Menu entry (optional).** A mise install puts nothing in your application menu. The tarball ships
+the files for it; link them into your user directories:
+
+```bash
+# readlink -f is needed: `mise which` prints a symlink in .mise-bins/, while
+# the icon and the .desktop file sit next to the real binary.
+DIR=$(dirname "$(readlink -f "$(mise which sharedinbox)")")
+mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/512x512/apps
+cp "$DIR/sharedinbox.png" ~/.local/share/icons/hicolor/512x512/apps/
+sed 's|^Exec=sharedinbox$|Exec=mise x -- sharedinbox|' \
+   "$DIR/share/applications/sharedinbox.desktop" \
+   > ~/.local/share/applications/sharedinbox.desktop
+update-desktop-database ~/.local/share/applications
+```
+
+`mise x -- sharedinbox` resolves the current version at launch time, so the entry keeps working
+after `mise up` — a hard-coded install path would not.
+
 ### Troubleshooting
 
 **"TLS handshake aborted" when opening Remote email filters (ManageSieve, port 4190)**
@@ -180,6 +258,46 @@ adb install build/app/outputs/flutter-apk/app-release.apk
 2. Open a file manager on the device, tap the `.apk` file, and confirm the install prompt.
 
 > **Tip — split APKs for smaller size:** `flutter build apk --split-per-abi` produces three smaller APKs (one per CPU architecture). Install the one matching the device: `app-arm64-v8a-release.apk` covers almost all modern Android phones.
+
+### Linux releases (the mise channel)
+
+**There is nothing to do.** Releases are cut automatically: every green hourly Linux deploy
+publishes a GitHub Release, and `mise use github:guettli/sharedinbox@latest` picks it up. No tag
+push, no `pubspec.yaml` bump.
+
+The version is derived from the commit timestamp as CalVer — `scripts/release_version.sh` prints
+`2026.9.29.2013` — which keeps it consistent with every other version in this project: the Play
+Store `versionCode` is `int(time.Now().Unix())` and the APK build number is the commit timestamp.
+Nothing here is hand-maintained, so a release never costs a PR. Re-running for the same commit
+republishes the same version instead of inventing a new one.
+
+`deploy.yml`'s `build-linux` job runs, in order:
+
+1. `task deploy-linux` — the snapshot tarball on `sharedinbox.de/builds` + `latest.json`.
+2. `task release-linux` — the same bundle, wrapped for mise and attached to a GitHub Release with
+   `SHA256SUMS`. It also prunes old releases, keeping the newest `KEEP_RELEASES` (default 20); only
+   CalVer tags it created are eligible, so hand-made tags are never touched.
+3. `task check-mise-install` — installs that release with real mise in a clean Ubuntu container and
+   fails unless the app survives 12 seconds under Xvfb.
+
+Both steps 1 and 2 share one Flutter compile: they pass the same commit, release version and build
+number, so Dagger serves the second from cache.
+
+If step 3 fails the release is converted back to a draft, which removes it from mise's view — mise
+never sees drafts, so a bad release cannot be caught before it is public, only withdrawn after.
+`.github/workflows/release.yml` (manual `workflow_dispatch`) re-publishes the current main if you
+need to restore one.
+
+To inspect a tarball without publishing anything:
+
+```bash
+task package-linux-release   # → build/sharedinbox-<version>-linux-x86_64.tar.gz
+task check-mise-install      # only meaningful once that version is published
+```
+
+Release builds carry a `RELEASE_VERSION` dart-define. That is what makes the in-app update check
+compare against GitHub Releases instead of `latest.json`, whose `version` is a git hash and would
+otherwise read as "newer" forever.
 
 ### Widget tests
 

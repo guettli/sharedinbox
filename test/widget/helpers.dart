@@ -9,9 +9,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -72,6 +74,9 @@ class FakeAccountRepository implements AccountRepository {
 
   final List<Account> _accounts;
   bool hasPassword = true;
+
+  /// What the screen under test actually persisted, for save-path assertions.
+  List<Account> get accounts => List.unmodifiable(_accounts);
 
   @override
   Stream<List<Account>> observeAccounts() => Stream.value(List.of(_accounts));
@@ -152,18 +157,16 @@ class FakeDraftRepository implements DraftRepository {
   }
 
   @override
-  Future<SavedDraft?> findDraft({
-    String? replyToEmailId,
-    String? accountId,
-  }) async {
-    final matches = _drafts.values.where((d) {
-      if (accountId != null && d.accountId != accountId) return false;
-      if (replyToEmailId == null) return d.replyToEmailId == null;
-      return d.replyToEmailId == replyToEmailId;
-    }).toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return matches.isEmpty ? null : matches.first;
-  }
+  Future<List<SavedDraft>> listNewMessageDrafts({String? accountId}) async =>
+      _drafts.values
+          .where((d) => d.replyToEmailId == null)
+          .where((d) => accountId == null || d.accountId == accountId)
+          .toList()
+        ..sort((a, b) {
+          final byTime = b.updatedAt.compareTo(a.updatedAt);
+          if (byTime != 0) return byTime;
+          return b.id.compareTo(a.id);
+        });
 
   @override
   Future<SavedDraft?> getDraft(int id) async => _drafts[id];
@@ -499,12 +502,16 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async =>
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
       null;
 
   @override
   Future<String?> deleteEmail(String emailId) async => null;
+
+  @override
+  Future<String?> deleteEmails(List<String> emailIds) async => null;
 
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
@@ -531,6 +538,25 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<int> flushOutbox(String accountId, String password) async => 0;
+
+  /// Result returned by [sendNow]; defaults to a successful send. Tests set this
+  /// to exercise the queued/failed SnackBar branches.
+  SendNowResult sendNowResult = const SendNowResult(SendNowOutcome.sent);
+
+  /// The `outboxRowId`s passed to [sendNow], in call order.
+  final List<int?> sendNowRowIds = [];
+
+  /// When set, [sendNow] throws this instead of returning [sendNowResult], so
+  /// tests can exercise the Retry error path (e.g. no stored password).
+  Object? sendNowError;
+
+  @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async {
+    sendNowRowIds.add(outboxRowId);
+    final error = sendNowError;
+    if (error != null) throw error;
+    return sendNowResult;
+  }
 
   /// Bytes written to disk by [downloadAttachment]. Defaults to a valid 1×1
   /// PNG so image-preview tests pass the signature sniff in the detail screen;
@@ -716,6 +742,31 @@ class _NoOpManageSieveProbeService implements ManageSieveProbeService {
 ///
 /// Providers are replaced with [overrides], so no database or network is used.
 /// A fresh [GoRouter] is created for every call so tests are independent.
+/// A minimal two-route router: a `/home` landing spot a test can navigate away
+/// from, plus `/compose` built by [compose].
+///
+/// Shared rather than copied: three widget tests had drifted into their own
+/// copies of this scaffolding, which the duplication gate correctly flags as one
+/// clone. Pass [compose] to decide what `/compose` renders -- the real
+/// ComposeScreen, a prefilled one, or a bare stub.
+GoRouter homeAndComposeRouter({
+  required Widget Function(GoRouterState state) compose,
+}) =>
+    GoRouter(
+      initialLocation: '/home',
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (ctx, state) =>
+              const Scaffold(body: Center(child: Text('home'))),
+        ),
+        GoRoute(
+          path: '/compose',
+          builder: (ctx, state) => compose(state),
+        ),
+      ],
+    );
+
 Widget buildApp({
   required String initialLocation,
   required List<Override> overrides,
@@ -842,6 +893,7 @@ Widget buildApp({
             prefillCc: extra?['prefillCc'] as String?,
             prefillSubject: extra?['prefillSubject'] as String?,
             prefillBody: extra?['prefillBody'] as String?,
+            draftId: extra?['draftId'] as int?,
           );
         },
       ),
@@ -919,6 +971,7 @@ List<Override> baseOverrides({
   DiscoveryResult? discovery,
   Exception? connectionError,
   String? connectionIdentityWarning,
+  AccountRepository? accountRepository,
   ShareKeyRepository? shareKeyRepository,
   bool hasStoredPassword = true,
   SyncHealthRow? syncHealth,
@@ -927,7 +980,8 @@ List<Override> baseOverrides({
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository(accounts)..hasPassword = hasStoredPassword,
+        accountRepository ??
+            (FakeAccountRepository(accounts)..hasPassword = hasStoredPassword),
       ),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
@@ -1113,4 +1167,29 @@ class FakeSearchHistoryRepository implements SearchHistoryRepository {
 
   @override
   Future<void> clearHistory() async => _history.clear();
+}
+
+/// Walks every rich-text span on screen and returns the tap recognizers
+/// attached to a span whose text is exactly [url] — mirrors how
+/// LinkifiedText renders hyperlinks, so tests can invoke the same callback a
+/// real tap would.
+List<GestureRecognizer> linkRecognizersFor(WidgetTester tester, String url) {
+  final recognizers = <GestureRecognizer>[];
+  for (final richText in tester.widgetList<Text>(
+    find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+  )) {
+    void walk(InlineSpan span) {
+      if (span is TextSpan) {
+        if (span.text == url && span.recognizer != null) {
+          recognizers.add(span.recognizer!);
+        }
+        for (final child in span.children ?? const <InlineSpan>[]) {
+          walk(child);
+        }
+      }
+    }
+
+    walk(richText.textSpan!);
+  }
+  return recognizers;
 }

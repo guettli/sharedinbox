@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/report_limits.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
@@ -40,6 +41,7 @@ class BugReportScreen extends ConsumerStatefulWidget {
 
 class _BugReportScreenState extends ConsumerState<BugReportScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _emailController = TextEditingController();
 
@@ -68,6 +70,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
   @override
   void dispose() {
+    _titleController.dispose();
     _descriptionController.dispose();
     _emailController.dispose();
     super.dispose();
@@ -87,11 +90,6 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           _attachedEmail = email;
           _includeEncryptedMail = true;
           _selectedAccountId = email.accountId;
-          final fromStr =
-              email.from.isNotEmpty ? email.from.first.toString() : 'unknown';
-          final subjectStr = email.subject ?? '(no subject)';
-          _descriptionController.text =
-              'Problem with email from $fromStr: "$subjectStr"\n\n';
         }
       }
 
@@ -209,7 +207,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       );
 
       // ── Public fields — these appear in cleartext in the GitHub issue. ──
-      request.fields['description'] = _descriptionController.text;
+      // Truncated exactly like the server does, so nothing is cut twice.
+      request.fields['title'] =
+          truncateReportField(_titleController.text, reportTitleMaxRunes);
+      request.fields['description'] = truncateReportField(
+        _descriptionController.text,
+        reportDescriptionMaxRunes,
+      );
 
       PackageInfo? pkg;
       try {
@@ -221,12 +225,15 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           _accounts.where((a) => a.type == AccountType.jmap).length;
 
       if (!mounted) return;
-      request.fields['about_info'] = buildAboutMarkdown(
-        context: context,
-        pkg: pkg,
-        imapCount: imapCount,
-        jmapCount: jmapCount,
-        deviceModel: _deviceModel,
+      request.fields['about_info'] = truncateReportField(
+        buildAboutMarkdown(
+          context: context,
+          pkg: pkg,
+          imapCount: imapCount,
+          jmapCount: jmapCount,
+          deviceModel: _deviceModel,
+        ),
+        reportAboutInfoMaxRunes,
       );
 
       // Sync Log
@@ -303,7 +310,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
 
       if (response.statusCode == 201) {
         final resData = jsonDecode(response.body) as Map<String, dynamic>;
-        await _onIssueCreated(resData['issueUrl'] as String);
+        await _onIssueCreated(
+          resData['issueUrl'] as String,
+          issueNumber: (resData['issueNumber'] as num?)?.toInt(),
+          reportId: resData['id'] as String?,
+        );
       } else if (response.statusCode == 429) {
         final retryAfter = response.headers['retry-after'] ?? '6';
         context.showAppSnackBar(
@@ -349,7 +360,11 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
     }
   }
 
-  Future<void> _onIssueCreated(String issueUrl) async {
+  Future<void> _onIssueCreated(
+    String issueUrl, {
+    int? issueNumber,
+    String? reportId,
+  }) async {
     // Record the URL in the App Log so the user can find it again later.
     await ref.read(appLoggerProvider).log(
       level: AppLogLevel.info,
@@ -359,6 +374,18 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       emailId: _attachedEmail?.id,
       data: {'issueUrl': issueUrl},
     );
+    // Persist the report so it can be listed in the ChangeLog view. A DB
+    // failure here must never block the success dialog.
+    try {
+      await ref.read(dbProvider).recordBugReport(
+            issueUrl: issueUrl,
+            issueNumber: issueNumber,
+            reportId: reportId,
+            createdAt: DateTime.now(),
+          );
+    } catch (_) {
+      // Best-effort local record; ignore failures.
+    }
     if (!mounted) return;
     await _showResultDialog(
       title: 'Issue Created',
@@ -573,20 +600,47 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Description Text Field (optional) — public.
+                  // Title Text Field (required) — public.
+                  _PublicField(
+                    child: TextFormField(
+                      controller: _titleController,
+                      autofocus: true,
+                      maxLength: reportTitleMaxRunes,
+                      decoration: const InputDecoration(
+                        labelText: 'Subject',
+                        border: OutlineInputBorder(),
+                        helperText: 'A short summary of the problem.',
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please enter a subject.';
+                        }
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  // Description Text Field (required) — public.
                   _PublicField(
                     child: TextFormField(
                       controller: _descriptionController,
-                      autofocus: true,
+                      maxLength: reportDescriptionMaxRunes,
                       maxLines: 8,
                       minLines: 4,
                       decoration: const InputDecoration(
-                        labelText: 'What went wrong? (optional)',
+                        labelText: 'What went wrong?',
                         alignLabelWithHint: true,
                         border: OutlineInputBorder(),
                         helperText:
                             'Please describe the problem and how to reproduce it.',
                       ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please describe what went wrong.';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),

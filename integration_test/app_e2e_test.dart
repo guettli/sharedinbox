@@ -293,6 +293,13 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.edit));
       await tester.pumpAndSettle();
+      // A draft left behind by an earlier run brings up the draft chooser
+      // (#1047) — start a fresh message instead.
+      final createNew = find.text('Create new message');
+      if (createNew.evaluate().isNotEmpty) {
+        await tester.tap(createNew);
+        await tester.pumpAndSettle();
+      }
 
       final subject = 'E2E-${DateTime.now().millisecondsSinceEpoch}';
 
@@ -333,9 +340,11 @@ void main() {
       await tapSync(tester);
 
       // ── Check Sent folder ──────────────────────────────────────────────────
-      // The Sent folder is created server-side by the IMAP send, then picked
-      // up by the next syncMailboxes pass. Poll the drawer for it (Stalwart
-      // delivery + sync timing is bounded by syncNow).
+      // The sent copy is APPENDed to the account's real Sent folder — on
+      // Stalwart that is "Sent Items" (role=sent), not a folder literally named
+      // "Sent". That folder already exists from the account's mailbox sync; poll
+      // the drawer for it, then sync it to pull in the appended message
+      // (Stalwart delivery + sync timing is bounded by syncNow).
       Future<void> openDrawer() async {
         await tester.tap(find.byTooltip('Open folders'));
         await tester.pumpAndSettle();
@@ -351,9 +360,9 @@ void main() {
       final sentDeadline = DateTime.now().add(const Duration(seconds: 90));
       while (true) {
         await openDrawer();
-        if (tester.any(find.text('Sent'))) break;
+        if (tester.any(find.text('Sent Items'))) break;
         if (DateTime.now().isAfter(sentDeadline)) {
-          throw Exception('Sent folder never appeared in drawer');
+          throw Exception('Sent Items folder never appeared in drawer');
         }
         // Close drawer, kick another full sync cycle, give it ~5 s.
         await closeDrawerIfOpen();
@@ -362,7 +371,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 200));
         }
       }
-      await tester.tap(find.text('Sent'));
+      await tester.tap(find.text('Sent Items'));
       await tester.pumpAndSettle();
 
       // Sync Sent folder to fetch the appended message.

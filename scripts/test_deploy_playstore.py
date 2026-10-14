@@ -192,6 +192,78 @@ class TestUploadRetry(unittest.TestCase):
             self._run_main([ValueError("err"), ValueError("err"), ValueError("err")])
         self.assertIn(str(deploy_playstore._MAX_UPLOAD_ATTEMPTS), str(ctx.exception))
 
+    @staticmethod
+    def _wrapped_http_error(status, text="body"):
+        """Build the exact exception shape production raises: an HTTPError
+        carrying the response, wrapped by _raise_for_status via `raise ... from`."""
+        import requests
+
+        resp = MagicMock(status_code=status, text=text)
+        cause = requests.HTTPError(f"{status} Error", response=resp)
+        try:
+            raise RuntimeError(f"uploading the AAB failed: {status}") from cause
+        except RuntimeError as exc:
+            return exc
+
+    def test_client_error_is_not_retried(self):
+        """A 4xx means the REQUEST is wrong, so re-sending the same bytes cannot
+        help. Retrying it only buries the real error under copies of itself --
+        which is exactly how the 2026-09-26 deploy failure came to look like a
+        flake (three identical 400s, no stated cause).
+
+        The single-element side_effect list is the assertion: a second call would
+        exhaust it and raise StopIteration instead of the RuntimeError below."""
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main([self._wrapped_http_error(400)])
+        self.assertIn("1 of", str(ctx.exception))
+
+    def test_server_error_is_retried(self):
+        """A 5xx is the server failing, not the request -- worth another go."""
+        self._run_main([self._wrapped_http_error(503), {"versionCode": 11}])
+
+    def test_429_is_retried(self):
+        """429 is an explicit 'try again', despite being a 4xx."""
+        self._run_main([self._wrapped_http_error(429), {"versionCode": 12}])
+
+
+class TestRaiseForStatus(unittest.TestCase):
+    """The Play API explains its rejections in the response body; requests'
+    raise_for_status() throws that away. These pin it being surfaced."""
+
+    def _resp(self, status, text):
+        import requests
+
+        resp = MagicMock(text=text)
+        resp.raise_for_status.side_effect = requests.HTTPError(
+            f"{status} Client Error", response=resp
+        )
+        return resp
+
+    def test_body_is_included_in_the_error(self):
+        resp = self._resp(400, '{"error":{"message":"Version code 7 already used"}}')
+        with self.assertRaises(RuntimeError) as ctx:
+            deploy_playstore._raise_for_status(resp, "uploading the AAB")
+        msg = str(ctx.exception)
+        self.assertIn("uploading the AAB", msg)
+        self.assertIn("Version code 7 already used", msg)
+
+    def test_empty_body_says_so_rather_than_nothing(self):
+        resp = self._resp(400, "")
+        with self.assertRaises(RuntimeError) as ctx:
+            deploy_playstore._raise_for_status(resp, "creating the Play edit")
+        self.assertIn("(empty)", str(ctx.exception))
+
+    def test_long_body_is_truncated(self):
+        resp = self._resp(400, "x" * 5000)
+        with self.assertRaises(RuntimeError) as ctx:
+            deploy_playstore._raise_for_status(resp, "uploading the AAB")
+        self.assertIn("truncated", str(ctx.exception))
+
+    def test_success_passes_through(self):
+        resp = MagicMock(text="")
+        resp.raise_for_status.return_value = None
+        deploy_playstore._raise_for_status(resp, "whatever")  # must not raise
+
     def test_backoff_delays_are_10s_then_20s(self):
         import tempfile
 

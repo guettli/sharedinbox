@@ -9,10 +9,31 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/utils/host_utils.dart';
 
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
+  _allowDevPlaintextHosts();
   setUpAll(_loadMaterialFonts);
   await testMain();
+}
+
+/// Backend/integration tests reach a dev Stalwart over plaintext — JMAP over
+/// http and ManageSieve over a plain socket — addressed by its docker service
+/// name rather than localhost. Register those hosts so the credential-bearing
+/// clients allow plaintext to them across the whole suite, not just the tests
+/// that call `StalwartEnv.fromPlatform` first. A no-op when the vars are unset
+/// (unit-test isolates, so their remote-plaintext rejection tests are
+/// unaffected), and the clients ignore the set in release builds.
+void _allowDevPlaintextHosts() {
+  for (final key in const ['STALWART_URL', 'STALWART_IMAP_HOST']) {
+    final value = Platform.environment[key];
+    if (value == null || value.isEmpty) continue;
+    // STALWART_URL is a full URL; STALWART_IMAP_HOST is a bare host.
+    final host = value.contains('://') ? Uri.tryParse(value)?.host : value;
+    if (host != null && host.isNotEmpty) {
+      debugAllowedPlaintextHosts.add(host);
+    }
+  }
 }
 
 Future<void> _loadMaterialFonts() async {

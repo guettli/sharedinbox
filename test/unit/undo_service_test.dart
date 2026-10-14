@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/di.dart';
 
+import 'helpers/undo_mock_stubs.dart';
 import 'undo_service_test.mocks.dart';
 
 /// Pushes [count] distinct move actions (`a0`..`a{count-1}`) onto [notifier],
@@ -49,10 +50,7 @@ void main() {
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => []);
     when(mockUndoRepo.clearHistory()).thenAnswer((_) async {});
-    when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
-    when(
-      mockEmailRepo.findEmailByMessageId(any, any),
-    ).thenAnswer((_) async => null);
+    stubUndoEmailLookupsMiss(mockEmailRepo);
 
     container = ProviderContainer(
       overrides: [

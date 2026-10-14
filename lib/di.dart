@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/net/resettable_client.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -90,7 +91,10 @@ final dbEncryptionServiceProvider = Provider<DbEncryptionService>((ref) {
 });
 
 final httpClientProvider = Provider<http.Client>((ref) {
-  final client = http.Client();
+  // ResettableClient so a connectivity reconnect can drop pooled connections
+  // that went stale while offline / mid-handoff (see reconnectFlushProvider,
+  // issue #1012). Delegate is a plain http.Client() — IOClient on mobile.
+  final client = ResettableClient(http.Client.new);
   ref.onDispose(client.close);
   return client;
 });
@@ -401,7 +405,12 @@ final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
   final connectivity = ref.watch(connectivityServiceProvider);
   final outbox = ref.watch(outboxRepositoryProvider);
   final syncManager = ref.watch(syncManagerProvider);
+  final httpClient = ref.watch(httpClientProvider);
   final sub = connectivity.onOnline.listen((_) async {
+    // Drop any pooled connection that went stale while the device was offline
+    // or mid-handoff, so the sync kicked below opens fresh sockets instead of
+    // hanging on a dead keep-alive until it times out (issue #1012).
+    if (httpClient is ResettableClient) httpClient.reset();
     await outbox.resetPendingBackoff();
     syncManager.syncAll();
   });
@@ -622,6 +631,7 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
   );
 });
 
@@ -629,9 +639,41 @@ final installedVersionsProvider = FutureProvider<Map<String, DateTime>>((ref) {
   return ref.watch(dbProvider).loadInstalledVersions();
 });
 
-/// Stream of notes for a specific email, identified by (accountId, messageId).
-final notesProvider =
-    StreamProvider.autoDispose.family<List<EmailNote>, (String, String)>(
-  (ref, params) =>
-      ref.watch(noteRepositoryProvider).observeNotes(params.$1, params.$2),
-);
+/// UI-facing view of a locally recorded bug report (no data-layer type crosses
+/// the ui boundary). Newest first.
+typedef BugReportInfo = ({
+  String issueUrl,
+  int? issueNumber,
+  DateTime createdAt
+});
+
+final bugReportsProvider = FutureProvider<List<BugReportInfo>>((ref) async {
+  final rows = await ref.watch(dbProvider).loadBugReports();
+  return [
+    for (final r in rows)
+      (
+        issueUrl: r.issueUrl,
+        issueNumber: r.issueNumber,
+        createdAt: r.createdAt
+      ),
+  ];
+});
+
+/// Notes of every mail in the conversation of one email, so a note added to
+/// the Sent copy shows up when reading the reply (#870). Key is
+/// `(accountId, messageId, threadId)`; without a thread only the mail's own
+/// notes are returned.
+final conversationNotesProvider = StreamProvider.autoDispose
+    .family<List<EmailNote>, (String, String, String?)>((ref, key) {
+  final (accountId, messageId, threadId) = key;
+  final repo = ref.watch(noteRepositoryProvider);
+  if (threadId == null) return repo.observeNotes(accountId, messageId);
+  final emails = ref.watch(threadEmailsProvider((accountId, threadId))).value ??
+      const <Email>[];
+  final ids = {
+    messageId,
+    for (final e in emails)
+      if (e.messageId != null) e.messageId!,
+  };
+  return repo.observeNotesForMessages(accountId, ids);
+});

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -6,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 
@@ -84,6 +87,57 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    // Regression for the row-overflow class of #965, here via the dropdown.
+    // DropdownButton sizes itself from the WIDEST ITEM, not the selected one,
+    // so this overflowed by 426px on a real phone at font_scale 2.0 while the
+    // short "Select an account" hint was the thing on screen — the long item
+    // the user had not opened yet was setting the width.
+    //
+    // This pins isExpanded only. selectedItemBuilder is not pinned: with the
+    // mutation verified to have actually applied, the closed button measures
+    // 80px either way, so nothing here can tell them apart. It is kept because
+    // the menu can never be wider than the button, so truncating the items
+    // instead would leave the user choosing between unreadable addresses.
+    testWidgets('From dropdown does not overflow at large text scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 2400); // 360x800 logical
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      // A realistic display-name-plus-address, which is what the item renders.
+      const longAccount = Account(
+        id: 'acc-2',
+        displayName: 'Code8Test',
+        email: 'code8@thomas-guettler.de',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: _composeOverrides(
+            accounts: const [kTestAccount, longAccount],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Prove the scale reached the widget; without it the row fits and this
+      // would pass against the bug.
+      final scaler = MediaQuery.textScalerOf(
+        tester.element(find.byType(DropdownButtonFormField<String>)),
+      );
+      expect(scaler.scale(14), greaterThan(16));
+
+      // What pins the fix is the reported RenderFlex overflow surfacing
+      // here. A width assertion would be tautological: a vertical sliver
+      // hands its child a tight cross-axis width, so the field measures 328
+      // no matter what the button does.
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
       'does not auto-select an account with several configured, and '
       'blocks send until one is chosen (#463)',
@@ -122,42 +176,38 @@ void main() {
     );
 
     testWidgets(
-      'kicks the sync loop after queueing so the message goes out now, not '
-      'on the next cycle (#801)',
+      'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {
-        final kicked = <String>[];
-        final email = FakeEmailRepository();
-        final router = _homeAndCompose();
-        await tester.pumpWidget(
-          _wrap(
-            router: router,
-            overrides: _composeOverrides(
-              email: email,
-              syncNow: (accountId) {
-                kicked.add(accountId);
-                return true;
-              },
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        unawaited(router.push('/compose'));
-        await tester.pumpAndSettle();
+        final email = FakeEmailRepository()
+          ..sendNowResult = const SendNowResult(SendNowOutcome.sent);
+        await _pumpComposeAndSend(tester, email: email);
 
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'),
-          'bob@example.com',
-        );
-        await tester.pump();
-
-        await tester.tap(find.byIcon(Icons.send));
-        await tester.pumpAndSettle();
-
-        // The draft was queued and the sync loop was woken with the same
-        // account, so the outbox drains immediately instead of after the next
-        // IDLE cycle.
+        // The draft was queued and then sent right away (not left for the next
+        // IDLE cycle), and the concrete result is surfaced to the user.
         expect(email.sentEmailAccountId, kTestAccount.id);
-        expect(kicked, [kTestAccount.id]);
+        expect(
+          email.sendNowRowIds,
+          isNotEmpty,
+          reason: 'compose must attempt the send now, not just enqueue it',
+        );
+        expect(find.text('Message sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'surfaces a failed direct send with its reason (#755)',
+      (tester) async {
+        final email = FakeEmailRepository()
+          ..sendNowResult = const SendNowResult(
+            SendNowOutcome.permanentlyFailed,
+            message: 'SMTP rejected: mailbox full',
+          );
+        await _pumpComposeAndSend(tester, email: email);
+
+        expect(
+          find.text('Send failed: SMTP rejected: mailbox full'),
+          findsOneWidget,
+        );
       },
     );
 
@@ -192,19 +242,36 @@ void main() {
       expect(_bodyText(tester), 'Cheers,\nAlice\n\n> quoted original');
     });
 
-    testWidgets('restores saved draft when no prefill is provided', (
+    testWidgets('starts blank even when a saved draft exists (#1047)', (
       tester,
     ) async {
       final fakeDrafts = FakeDraftRepository();
-      await fakeDrafts.saveDraft(
-        toText: 'carol@example.com',
-        ccText: '',
-        subjectText: 'Restored subject',
-        bodyText: 'Draft body',
-      );
+      await _seedRestoredDraft(fakeDrafts);
       await tester.pumpWidget(
         _buildDirect(
           screen: const ComposeScreen(),
+          overrides: _composeOverrides(drafts: fakeDrafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextFormField, 'carol@example.com'),
+        findsNothing,
+      );
+      expect(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        findsNothing,
+      );
+      expect(_bodyText(tester), isEmpty);
+    });
+
+    testWidgets('restores the draft passed by draftId', (tester) async {
+      final fakeDrafts = FakeDraftRepository();
+      final saved = await _seedRestoredDraft(fakeDrafts);
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
           overrides: _composeOverrides(drafts: fakeDrafts),
         ),
       );
@@ -217,6 +284,39 @@ void main() {
       expect(
         find.widgetWithText(TextFormField, 'Restored subject'),
         findsOneWidget,
+      );
+      expect(_bodyText(tester), 'Draft body');
+    });
+
+    testWidgets('typing before a slow restore is not overwritten (#1047)', (
+      tester,
+    ) async {
+      final fakeDrafts = _SlowDraftRepository();
+      final saved = await _seedRestoredDraft(fakeDrafts);
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: fakeDrafts),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Subject'),
+        'Typed subject',
+      );
+      await tester.pump();
+
+      fakeDrafts.release.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextFormField, 'Typed subject'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(TextFormField, 'carol@example.com'),
+        findsNothing,
       );
     });
 
@@ -272,9 +372,7 @@ void main() {
 
     testWidgets('discard deletes the restored draft and pops', (tester) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // The saved draft has been restored into the fields.
       expect(
@@ -310,9 +408,7 @@ void main() {
       tester,
     ) async {
       final fakeDrafts = _RecordingDraftRepository();
-      final saved = await _seedRestoredDraft(fakeDrafts);
-      final router = _homeAndCompose();
-      await _pumpComposeFromHome(tester, router: router, drafts: fakeDrafts);
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
 
       // Dirty the draft so the dispose flush would otherwise fire.
       await tester.enterText(
@@ -326,7 +422,7 @@ void main() {
 
       // The row stays deleted — dispose did not resurrect it.
       expect(await fakeDrafts.getDraft(saved.id), isNull);
-      expect(await fakeDrafts.findDraft(), isNull);
+      expect(await fakeDrafts.listNewMessageDrafts(), isEmpty);
     });
   });
 }
@@ -340,6 +436,18 @@ class _RecordingDraftRepository extends FakeDraftRepository {
   Future<void> deleteDraft(int id) async {
     deleted.add(id);
     return super.deleteDraft(id);
+  }
+}
+
+/// A [FakeDraftRepository] whose [getDraft] blocks until [release] completes,
+/// so a test can type while a draft restore is still in flight.
+class _SlowDraftRepository extends FakeDraftRepository {
+  final Completer<void> release = Completer<void>();
+
+  @override
+  Future<SavedDraft?> getDraft(int id) async {
+    await release.future;
+    return super.getDraft(id);
   }
 }
 
@@ -387,33 +495,67 @@ Future<SavedDraft> _seedRestoredDraft(FakeDraftRepository drafts) =>
       bodyText: 'Draft body',
     );
 
+/// Seeds the canonical restored draft and opens it in compose (by draftId)
+/// from a home route — the shared setup for the discard-a-restored-draft tests.
+Future<SavedDraft> _pumpRestoredDraftFromHome(
+  WidgetTester tester,
+  FakeDraftRepository drafts,
+) async {
+  final saved = await _seedRestoredDraft(drafts);
+  await _pumpComposeFromHome(
+    tester,
+    router: _homeAndCompose(),
+    drafts: drafts,
+    draftId: saved.id,
+  );
+  return saved;
+}
+
+/// Pumps compose from a home route, fills in a recipient and taps Send —
+/// the shared setup for the direct-send (#755) tests, which differ only in
+/// the [email] fake's configured outcome.
+Future<void> _pumpComposeAndSend(
+  WidgetTester tester, {
+  required FakeEmailRepository email,
+}) async {
+  final router = _homeAndCompose();
+  await tester.pumpWidget(
+    _wrap(router: router, overrides: _composeOverrides(email: email)),
+  );
+  await tester.pumpAndSettle();
+  unawaited(router.push('/compose'));
+  await tester.pumpAndSettle();
+
+  await tester.enterText(
+    find.widgetWithText(TextFormField, 'To'),
+    'bob@example.com',
+  );
+  await tester.pump();
+
+  await tester.tap(find.byIcon(Icons.send));
+  await tester.pumpAndSettle();
+}
+
 /// Pumps the compose screen reached from a home route so discard can pop back.
 Future<void> _pumpComposeFromHome(
   WidgetTester tester, {
   required GoRouter router,
   required FakeDraftRepository drafts,
+  int? draftId,
 }) async {
   await tester.pumpWidget(_buildRouter(router: router, drafts: drafts));
   await tester.pumpAndSettle();
-  unawaited(router.push('/compose'));
+  unawaited(router.push('/compose', extra: {'draftId': draftId}));
   await tester.pumpAndSettle();
 }
 
 /// A router with a home screen under a compose route so [context.pop()] has
-/// somewhere to land.
-GoRouter _homeAndCompose() => GoRouter(
-      initialLocation: '/home',
-      routes: [
-        GoRoute(
-          path: '/home',
-          builder: (ctx, state) =>
-              const Scaffold(body: Center(child: Text('home'))),
-        ),
-        GoRoute(
-          path: '/compose',
-          builder: (ctx, state) => const ComposeScreen(),
-        ),
-      ],
+/// somewhere to land. The scaffolding is shared with the other tests that need
+/// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
+GoRouter _homeAndCompose() => homeAndComposeRouter(
+      compose: (state) => ComposeScreen(
+        draftId: (state.extra as Map<String, dynamic>?)?['draftId'] as int?,
+      ),
     );
 
 Widget _buildRouter({

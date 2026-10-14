@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 
+import '../unit/helpers/undo_mock_stubs.dart';
 import '../unit/undo_service_test.mocks.dart';
 
 void main() {
@@ -23,10 +24,7 @@ void main() {
     ).thenAnswer((_) async {});
     when(mockUndoRepo.clearHistory()).thenAnswer((_) async {});
     // Some tests tap UNDO, which triggers repo access; give minimal stubs.
-    when(mockEmailRepo.getEmail(any)).thenAnswer((_) async => null);
-    when(
-      mockEmailRepo.findEmailByMessageId(any, any),
-    ).thenAnswer((_) async => null);
+    stubUndoEmailLookupsMiss(mockEmailRepo);
     when(
       mockEmailRepo.cancelPendingChange(any, any),
     ).thenAnswer((_) async => false);

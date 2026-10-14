@@ -251,7 +251,10 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     ref.read(reconnectFlushProvider);
     // Handle "compose email" intents (mailto: links, Share → Email) by
     // pushing /compose onto the running router. No-op on non-Android.
-    _mailIntentHandler = MailIntentHandler(router: router);
+    _mailIntentHandler = MailIntentHandler(
+      router: router,
+      logger: ref.read(appLoggerProvider),
+    );
     unawaited(_mailIntentHandler.initialize());
     if (_kGitHash.isNotEmpty) {
       unawaited(

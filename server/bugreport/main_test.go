@@ -115,7 +115,7 @@ func TestEncryptedReportHandlerCreatesIssue(t *testing.T) {
 	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
 
 	body, ct := encryptedReportBody(t,
-		map[string]string{"description": "it broke", "about_info": "v1.2.3"},
+		map[string]string{"title": "login fails", "description": "it broke", "about_info": "v1.2.3"},
 		[]byte("ciphertext-bytes"),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
@@ -132,6 +132,9 @@ func TestEncryptedReportHandlerCreatesIssue(t *testing.T) {
 	}
 	if resp["issueUrl"] != "https://github.com/guettli/sharedinbox/issues/42" {
 		t.Errorf("issueUrl = %v", resp["issueUrl"])
+	}
+	if issuer.title != "Bug report: login fails" {
+		t.Errorf("issue title = %q, want %q", issuer.title, "Bug report: login fails")
 	}
 	if !strings.Contains(issuer.body, "it broke") {
 		t.Errorf("issue body missing description: %q", issuer.body)
@@ -168,10 +171,14 @@ func TestEncryptedReportHandlerValidation(t *testing.T) {
 		mail   []byte
 		want   int
 	}{
-		// Description and mail are both optional; about_info is the only floor.
-		{"missing description", map[string]string{"about_info": "x"}, []byte("c"), http.StatusCreated},
-		{"no mail is allowed", map[string]string{"description": "d", "about_info": "x"}, nil, http.StatusCreated},
-		{"missing about_info", map[string]string{"description": "d"}, []byte("c"), http.StatusBadRequest},
+		// title, description and about_info are all required; the mail is optional.
+		{"all present", map[string]string{"title": "t", "description": "d", "about_info": "x"}, []byte("c"), http.StatusCreated},
+		{"no mail is allowed", map[string]string{"title": "t", "description": "d", "about_info": "x"}, nil, http.StatusCreated},
+		{"missing title", map[string]string{"description": "d", "about_info": "x"}, []byte("c"), http.StatusBadRequest},
+		{"blank title", map[string]string{"title": "   ", "description": "d", "about_info": "x"}, []byte("c"), http.StatusBadRequest},
+		{"missing description", map[string]string{"title": "t", "about_info": "x"}, []byte("c"), http.StatusBadRequest},
+		{"blank description", map[string]string{"title": "t", "description": "  ", "about_info": "x"}, []byte("c"), http.StatusBadRequest},
+		{"missing about_info", map[string]string{"title": "t", "description": "d"}, []byte("c"), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,7 +226,7 @@ func TestEncryptedReportHandlerStoresScreenshots(t *testing.T) {
 	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
 
 	body, ct := encryptedReportBody(t,
-		map[string]string{"description": "see the screenshots", "about_info": "v1"},
+		map[string]string{"title": "screenshots", "description": "see the screenshots", "about_info": "v1"},
 		[]byte("mail-cipher"),
 		[]byte("shot-1-cipher"),
 		[]byte("shot-2-cipher"),
@@ -277,7 +284,7 @@ func TestEncryptedReportHandlerGeneralNoMail(t *testing.T) {
 	h := encryptedReportHandler(dir, "https://sharedinbox.de", issuer)
 
 	body, ct := encryptedReportBody(t,
-		map[string]string{"description": "app crashes on start", "about_info": "v1.2.3"},
+		map[string]string{"title": "crash on start", "description": "app crashes on start", "about_info": "v1.2.3"},
 		nil,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
@@ -286,6 +293,10 @@ func TestEncryptedReportHandlerGeneralNoMail(t *testing.T) {
 	h(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	// The issue title is always "Bug report: <user subject>", even with no mail.
+	if issuer.title != "Bug report: crash on start" {
+		t.Errorf("issue title = %q, want %q", issuer.title, "Bug report: crash on start")
 	}
 	if !strings.Contains(issuer.body, "app crashes on start") {
 		t.Errorf("issue body missing description: %q", issuer.body)
@@ -307,8 +318,10 @@ func TestEncryptedReportHandlerStoresMetadata(t *testing.T) {
 
 	buf := &bytes.Buffer{}
 	mw := multipart.NewWriter(buf)
-	if err := mw.WriteField("about_info", "v1"); err != nil {
-		t.Fatalf("WriteField: %v", err)
+	for k, v := range map[string]string{"title": "metadata", "description": "d", "about_info": "v1"} {
+		if err := mw.WriteField(k, v); err != nil {
+			t.Fatalf("WriteField: %v", err)
+		}
 	}
 	fw, err := mw.CreateFormFile("encrypted_metadata", "metadata.enc")
 	if err != nil {
@@ -360,7 +373,7 @@ func TestEncryptedReportHandlerRejectsTooManyScreenshots(t *testing.T) {
 	for i := range shots {
 		shots[i] = []byte(fmt.Sprintf("shot-%d", i))
 	}
-	body, ct := encryptedReportBody(t, map[string]string{"description": "too many", "about_info": "v1"}, []byte("mail"), shots...)
+	body, ct := encryptedReportBody(t, map[string]string{"title": "too many", "description": "too many", "about_info": "v1"}, []byte("mail"), shots...)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
 	req.Header.Set("Content-Type", ct)
 	rec := httptest.NewRecorder()

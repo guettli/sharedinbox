@@ -14,6 +14,8 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart'
+    show SendNowOutcome;
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -30,6 +32,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillCc,
     this.prefillSubject,
     this.prefillBody,
+    this.draftId,
   });
 
   final String? accountId;
@@ -38,6 +41,10 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? prefillCc;
   final String? prefillSubject;
   final String? prefillBody;
+
+  /// The saved draft to resume. Compose only ever restores a draft the user
+  /// explicitly picked — without this it always starts blank (#1047).
+  final int? draftId;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -87,12 +94,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;
     unawaited(_loadAccounts());
-    // Only restore if no prefill fields were provided (avoids overwriting a
-    // fresh reply with an old draft from a previous reply to the same email).
-    final hasPrefill = widget.prefillTo != null ||
-        widget.prefillSubject != null ||
-        widget.prefillBody != null;
-    if (!hasPrefill) unawaited(_restoreDraft());
+    if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
     for (final c in [_to, _cc, _subject, _body]) {
       c.addListener(_onTextChanged);
@@ -154,12 +156,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _suppressAutoSave = false;
   }
 
-  Future<void> _restoreDraft() async {
-    final draft = await ref.read(draftRepositoryProvider).findDraft(
-          replyToEmailId: widget.replyToEmailId,
-          accountId: widget.accountId,
-        );
+  Future<void> _restoreDraft(int id) async {
+    final draft = await _draftRepo.getDraft(id);
     if (draft == null || !mounted) return;
+    // The user already started typing — never splice the draft into it.
+    if (_draftDirty) return;
+    // Programmatic fill — don't count it as the user dirtying the draft.
+    _suppressAutoSave = true;
     setState(() {
       _draftRestored = true;
       _draftId = draft.id;
@@ -171,6 +174,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _sigAccountId = _accountId;
       _sigBlock = '';
     });
+    _suppressAutoSave = false;
   }
 
   void _onTextChanged() {
@@ -389,24 +393,56 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           _attachments.map((a) => a.path).toList(),
         ),
       );
-      // Enqueue rather than send-and-await so a flaky network never blocks the
-      // UI. The outbox is drained on every sync cycle (see AccountSyncManager).
-      await ref.read(emailRepositoryProvider).enqueueSend(_accountId!, draft);
-      // Wake the sync loop so the message goes out now instead of waiting for
-      // the next cycle — an IMAP loop can sit in IDLE for many minutes between
-      // cycles, which is why sending "took several minutes" (#801). Mirrors the
-      // kick the outbox Retry button already does.
-      ref.read(syncNowProvider)(_accountId!);
+      // Enqueue first so the message is durably persisted even if the send
+      // below is interrupted; the outbox is also drained on every sync cycle.
+      final rowId = await ref
+          .read(emailRepositoryProvider)
+          .enqueueSend(_accountId!, draft);
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on.
       if (_draftId != null) {
         await _draftRepo.deleteDraft(_draftId!);
       }
+      // Attempt the send right now instead of only kicking the background loop,
+      // so the message goes out "directly" and the user sees the concrete
+      // outcome via a SnackBar (which AppMessenger also mirrors to the app log)
+      // rather than a fire-and-forget "queued" with no follow-up (#755).
+      final result = await ref
+          .read(emailRepositoryProvider)
+          .sendNow(_accountId!, outboxRowId: rowId);
       if (mounted) {
-        messenger.show(
-          'Message queued',
-          duration: const Duration(seconds: 3),
-        );
+        switch (result.outcome) {
+          case SendNowOutcome.sent:
+            messenger.show(
+              'Message sent',
+              event: 'compose.sent',
+              accountId: _accountId,
+              duration: const Duration(seconds: 3),
+            );
+          case SendNowOutcome.transientFailed:
+            messenger.show(
+              'Queued — will retry: ${result.message}',
+              level: AppLogLevel.warn,
+              event: 'compose.send_queued',
+              accountId: _accountId,
+              duration: const Duration(seconds: 5),
+            );
+          case SendNowOutcome.permanentlyFailed:
+            messenger.show(
+              'Send failed: ${result.message}',
+              level: AppLogLevel.error,
+              event: 'compose.send_failed',
+              accountId: _accountId,
+              duration: const Duration(seconds: 5),
+            );
+          case SendNowOutcome.queued:
+            messenger.show(
+              'Message queued',
+              event: 'compose.queued',
+              accountId: _accountId,
+              duration: const Duration(seconds: 3),
+            );
+        }
         context.pop();
       }
     } catch (e, stack) {
@@ -512,12 +548,37 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   labelText: 'From',
                   border: OutlineInputBorder(),
                 ),
+                // Without isExpanded the button sizes itself to the WIDEST
+                // ITEM, not to whatever is displayed — so this overflowed by
+                // 426px on a 411dp screen at text scale 2.0 while the short
+                // "Select an account" hint was the only thing on screen.
+                // isExpanded clamps the button to the field it sits in.
+                isExpanded: true,
+                // With the button clamped, an un-ellipsized item would wrap
+                // instead, making the collapsed field two or three lines tall.
+                // selectedItemBuilder truncates only the closed button, so the
+                // open menu keeps the full address readable — the menu can
+                // never be wider than the button, so ellipsizing the items
+                // themselves would leave the user choosing between addresses
+                // they cannot read.
+                // No Align: DropdownButton already puts these in an
+                // IndexedStack aligned centerStart, and a bare Align expands
+                // to fill any bounded height it is handed.
+                selectedItemBuilder: (context) => _accounts
+                    .map(
+                      (a) => Text(
+                        accountFromLabel(a),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                    .toList(),
                 hint: const Text('Select an account'),
                 items: _accounts
                     .map(
                       (a) => DropdownMenuItem(
                         value: a.id,
-                        child: Text('${a.displayName} <${a.email}>'),
+                        child: Text(accountFromLabel(a)),
                       ),
                     )
                     .toList(),
@@ -535,9 +596,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   labelText: 'From',
                   border: OutlineInputBorder(),
                 ),
-                child: Text(
-                  '${_accounts.first.displayName} <${_accounts.first.email}>',
-                ),
+                // Deliberately NOT ellipsized. There is no menu to open in
+                // this branch, so truncating would hide the sending address
+                // with no way to recover it. It wraps instead, which costs a
+                // couple of lines inside a ListView that already scrolls.
+                child: Text(accountFromLabel(_accounts.first)),
               ),
             ),
           _addressField(_to, _toFocus, 'To'),

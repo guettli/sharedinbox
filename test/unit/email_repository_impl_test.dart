@@ -15,6 +15,8 @@ import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart'
+    show SendNowOutcome, deleteExpectedMailboxZoneKey;
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/imap/object_id.dart';
@@ -27,7 +29,8 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart' show FakeImapClient, SnoozeSpyImapClient;
+import 'fake_imap.dart'
+    show FakeImapClient, FakeSmtpClient, SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -93,27 +96,74 @@ http.Client _mockJmapEmails({
   });
 }
 
-Map<String, dynamic> _emailGetResponse({
+/// The request sequence a full sync makes, as separate API calls.
+///
+/// It used to be a single call per page: `Email/query` with `Email/get` chained
+/// onto its result, which asked the server for a whole page of full message
+/// bodies at once — the request shape that timed out in #967. The sweep now
+/// captures the state with one id-less `Email/get`, then per page issues an
+/// ids-only `Email/query` followed by batched `Email/get`s.
+///
+/// Each entry in [pages] is one `Email/query` page; with fewer than 50 emails
+/// per page each is fetched in a single batch.
+List<Map<String, dynamic>> _fullSyncResponses({
   required String state,
-  required List<Map<String, dynamic>> list,
+  required List<List<Map<String, dynamic>>> pages,
   int? total,
-}) =>
-    {
+}) {
+  // One Email/get response per page assumes the page fits in a single batch; a
+  // larger page makes production issue a second Email/get, which would consume
+  // the next page's Email/query response and fail somewhere unhelpful.
+  for (final page in pages) {
+    if (page.length > 50) {
+      throw ArgumentError.value(
+        page.length,
+        'pages',
+        'a page must fit one Email/get batch (50)',
+      );
+    }
+  }
+  final every = [for (final page in pages) ...page];
+  return [
+    for (var i = 0; i < pages.length; i++) ...[
+      {
+        'sessionState': 'sess1',
+        'methodResponses': [
+          [
+            'Email/query',
+            {
+              'accountId': 'acct1',
+              'ids': [for (final e in pages[i]) e['id']],
+              'total': total ?? every.length,
+            },
+            '0',
+          ],
+          // The id-less Email/get that captures the state rides along with
+          // the first page's query.
+          if (i == 0)
+            [
+              'Email/get',
+              {'accountId': 'acct1', 'state': state, 'list': <dynamic>[]},
+              '1',
+            ],
+        ],
+      },
+      _emailGetOnly(state: state, list: pages[i]),
+    ],
+  ];
+}
+
+/// An `Email/changes` refusal. RFC 8620 §5.2 uses one error type both for a
+/// `sinceState` the server can no longer resolve and for one it cannot step to
+/// an intermediate state from, so the client cannot tell them apart from the
+/// response alone — see the retry in `_jmapIncrementalEmailSync` (#967).
+Map<String, dynamic> _cannotCalculateChanges() => {
       'sessionState': 'sess1',
       'methodResponses': [
         [
-          'Email/query',
-          {
-            'accountId': 'acct1',
-            'ids': list.map((e) => e['id']).toList(),
-            'total': total ?? list.length,
-          },
+          'error',
+          {'type': 'cannotCalculateChanges'},
           '0',
-        ],
-        [
-          'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
-          '1',
         ],
       ],
     };
@@ -144,16 +194,24 @@ Map<String, dynamic> _emailChangesResponse({
       ],
     };
 
+/// [notFound] must name every requested id missing from [list], as a real
+/// server does (RFC 8620 §5.1) — the client deletes on the strength of it.
 Map<String, dynamic> _emailGetOnly({
   required String state,
   required List<Map<String, dynamic>> list,
+  List<String> notFound = const [],
 }) =>
     {
       'sessionState': 'sess1',
       'methodResponses': [
         [
           'Email/get',
-          {'accountId': 'acct1', 'state': state, 'list': list},
+          {
+            'accountId': 'acct1',
+            'state': state,
+            'list': list,
+            'notFound': notFound,
+          },
           '1',
         ],
       ],
@@ -367,6 +425,50 @@ class _MoveFailsImapClient extends FakeImapClient {
       throw Exception('server said no');
 }
 
+/// Fake IMAP client that records the Sent-copy APPEND so the send path can be
+/// asserted without a network. Both [createMailbox] and [appendMessage] are
+/// recorded rather than hitting the wire.
+class _SentCaptureImapClient extends FakeImapClient {
+  String? appendTargetPath;
+  String? createdMailbox;
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    createdMailbox = path;
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appendTargetPath = targetMailboxPath;
+    return imap.GenericImapResult();
+  }
+}
+
+/// Fake SMTP client whose `sendMessage` always succeeds, so the send path
+/// proceeds to the Sent-copy APPEND. `quit` is inherited from [FakeSmtpClient].
+class _OkSmtpClient extends FakeSmtpClient {
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async =>
+      imap.SmtpResponse(const ['250 OK']);
+}
+
 /// Fake IMAP client that returns a *different* message than the row expects for
 /// a given UID — the shape produced by an optimistic snooze/unsnooze/move whose
 /// destination UID happens to collide with an unrelated message (#616). The
@@ -426,6 +528,112 @@ void main() {
       final r = _makeRepos();
       expect(await r.emails.getEmail('no-such-id'), isNull);
     });
+
+    test(
+      'sendNow reports transientFailed and keeps the row when SMTP is down',
+      () async {
+        // _noSmtpConnect errors, so the guarded flush inside sendNow sees a
+        // (non-permanent) failure and must surface it as a transient outcome
+        // while leaving the row queued for a later retry (#755).
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hi',
+            body: 'body',
+          ),
+        );
+
+        final result = await r.emails.sendNow(_account.id, outboxRowId: rowId);
+        expect(result.outcome, SendNowOutcome.transientFailed);
+        expect(
+          await r.db.select(r.db.outbox).get(),
+          hasLength(1),
+          reason: 'a transient failure must leave the row queued',
+        );
+      },
+    );
+
+    test(
+      'IMAP Sent copy is appended to the resolved Sent folder, not a '
+      'hard-coded "Sent"',
+      () async {
+        final sentImap = _SentCaptureImapClient();
+        final r = _makeRepos(
+          imapConnect: (a, u, p) async => sentImap,
+          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        // This account's real Sent folder is "Sent Items" (role sent), as on
+        // Exchange/Stalwart — not literally "Sent".
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Sent Items',
+                accountId: 'acc-1',
+                path: 'Sent Items',
+                name: 'Sent Items',
+                role: const Value('sent'),
+              ),
+            );
+
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hello',
+            body: 'body',
+          ),
+        );
+        final result = await r.emails.sendNow(_account.id, outboxRowId: rowId);
+
+        expect(result.outcome, SendNowOutcome.sent);
+        expect(
+          sentImap.appendTargetPath,
+          'Sent Items',
+          reason: 'the copy must land in the resolved Sent folder',
+        );
+        expect(
+          sentImap.createdMailbox,
+          isNull,
+          reason: 'must not create a stray "Sent" when a Sent folder exists',
+        );
+      },
+    );
+
+    test(
+      'IMAP Sent copy falls back to creating "Sent" when no Sent folder is '
+      'known',
+      () async {
+        final sentImap = _SentCaptureImapClient();
+        final r = _makeRepos(
+          imapConnect: (a, u, p) async => sentImap,
+          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        // No mailboxes synced → no role=sent folder is known.
+
+        final rowId = await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hello',
+            body: 'body',
+          ),
+        );
+        await r.emails.sendNow(_account.id, outboxRowId: rowId);
+
+        expect(sentImap.createdMailbox, 'Sent');
+        expect(sentImap.appendTargetPath, 'Sent');
+      },
+    );
 
     test('observeEmails reflects inserted row', () async {
       final r = _makeRepos();
@@ -2694,6 +2902,7 @@ void main() {
       AppLogRepositoryImpl logs,
     }) makeLoggedRepos({
       Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
+      http.Client? httpClient,
     }) {
       final db = openTestDatabase();
       final storage = MapSecureStorage();
@@ -2704,6 +2913,9 @@ void main() {
         accounts,
         imapConnect: imapConnect ?? _noImapConnect,
         smtpConnect: _noSmtpConnect,
+        fetchObjectIds: _noObjectIds,
+        fetchPreviewSnippets: _noPreviewSnippets,
+        httpClient: httpClient,
         appLogger: AppLogger(logs),
       );
       return (db: db, accounts: accounts, emails: emails, logs: logs);
@@ -2829,6 +3041,166 @@ void main() {
       final data =
           jsonDecode(deleteRows.single.dataJson!) as Map<String, dynamic>;
       expect(data['permanent'], true);
+    });
+
+    // A bulk delete runs in one transaction and kicks the sync loop once,
+    // instead of once per message (#917) — while still trashing, queueing and
+    // logging every message exactly like deleteEmail.
+    test('deleteEmails trashes, queues and logs every message, kicks once',
+        () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      final ids = [for (var i = 1; i <= 50; i++) 'acc-1:$i'];
+      for (var i = 1; i <= 50; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                threadId: Value('t$i'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+      final kicks = <String>[];
+      final sub = r.emails.onChangesQueued.listen(kicks.add);
+      addTearDown(sub.cancel);
+
+      final dest = await r.emails.deleteEmails(ids);
+      await pumpEventQueue();
+
+      expect(dest, 'Trash');
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows, hasLength(50));
+      expect(rows.every((e) => e.mailboxPath == 'Trash'), isTrue);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes, hasLength(50));
+      expect(changes.every((c) => c.changeType == 'move'), isTrue);
+      final threads = await r.db.select(r.db.threads).get();
+      expect(threads.where((t) => t.mailboxPath == 'INBOX'), isEmpty);
+      expect(threads.where((t) => t.mailboxPath == 'Trash'), hasLength(50));
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.trash'), hasLength(50));
+      expect(kicks, ['acc-1']);
+    });
+
+    test('deleteEmails hard-deletes when there is no Trash folder', () async {
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      for (var i = 1; i <= 3; i++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      final dest = await r.emails.deleteEmails(['acc-1:1', 'acc-1:3', 'nope']);
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:2']);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => c.changeType), ['delete', 'delete']);
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.delete'), hasLength(2));
+    });
+
+    test('deleteEmails skips a row that moved out of its selected mailbox',
+        () async {
+      // The row is already in Trash, as if a first delete moved it there. A
+      // stale second delete whose selection snapshot said INBOX must NOT
+      // hard-delete it from Trash (#1010).
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Trash',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await runZoned(
+        () => r.emails.deleteEmails(['acc-1:1']),
+        zoneValues: {
+          deleteExpectedMailboxZoneKey: {'acc-1:1': 'INBOX'},
+        },
+      );
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:1']);
+      expect(rows.single.mailboxPath, 'Trash');
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(logs.where((e) => e.event == 'email.delete'), isEmpty);
+    });
+
+    test('deleteEmails hard-deletes from Trash when Trash IS the selected box',
+        () async {
+      // The complement: a deliberate delete-from-Trash (expected == current ==
+      // Trash) still hard-deletes (#1010).
+      final r = makeLoggedRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Trash',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      final dest = await runZoned(
+        () => r.emails.deleteEmails(['acc-1:1']),
+        zoneValues: {
+          deleteExpectedMailboxZoneKey: {'acc-1:1': 'Trash'},
+        },
+      );
+      await pumpEventQueue();
+
+      expect(dest, isNull);
+      expect(await r.db.select(r.db.emails).get(), isEmpty);
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => c.changeType), ['delete']);
     });
 
     test('snoozeEmail records an email.snooze entry', () async {
@@ -2975,6 +3347,101 @@ void main() {
       expect(await logsFor(r.logs, oldId), isEmpty);
       final moved = await logsFor(r.logs, newId);
       expect(moved.single.event, 'email.move');
+    });
+
+    group('email.fetched (#920)', () {
+      test('an IMAP sync logs the fetch once, as the first entry of the mail',
+          () async {
+        final messages = {
+          42: _PreviewTestMessage(
+            subject: 'Hello',
+            from: 'sender@example.com',
+            text: 'Body',
+            messageId: '<m42@example.com>',
+          ),
+        };
+        final r = makeLoggedRepos(
+          imapConnect: (_, __, ___) async =>
+              _PreviewSyncImapClient(messages: messages),
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        const emailId = 'acc-1:INBOX:42';
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        final fetched = await logsFor(r.logs, emailId);
+        expect(fetched.single.event, 'email.fetched');
+        expect(fetched.single.level, AppLogLevel.info);
+        expect(fetched.single.accountId, 'acc-1');
+        expect(fetched.single.mailboxPath, 'INBOX');
+        expect(fetched.single.message, contains('Hello'));
+        final data =
+            jsonDecode(fetched.single.dataJson!) as Map<String, dynamic>;
+        expect(data['protocol'], 'imap');
+
+        // Re-fetching the already-stored mail must not log it again.
+        await r.emails.syncEmails('acc-1', 'INBOX');
+        await r.emails.setFlag(emailId, flagged: true);
+
+        final entries = await logsFor(r.logs, emailId);
+        expect(entries.map((e) => e.event), ['email.flag', 'email.fetched']);
+      });
+
+      test('a JMAP sync logs only mails that are new locally', () async {
+        final r = makeLoggedRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                created: ['e3'],
+                updated: ['e1'],
+              ),
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
+                  _jmapEmail(id: 'e3', mailboxId: 'mbx1', subject: 'Third'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('First'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        for (final resourceType in ['Email', 'JMAP:Reconcile:mbx1']) {
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: resourceType,
+                  state: resourceType == 'Email'
+                      ? 'est1'
+                      : DateTime.now().toIso8601String(),
+                  syncedAt: DateTime.now(),
+                ),
+              );
+        }
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        expect(await logsFor(r.logs, 'jmap-1:e1'), isEmpty);
+        final created = await logsFor(r.logs, 'jmap-1:e3');
+        expect(created.single.event, 'email.fetched');
+        expect(created.single.accountId, 'jmap-1');
+        expect(created.single.mailboxPath, 'mbx1');
+        final data =
+            jsonDecode(created.single.dataJson!) as Map<String, dynamic>;
+        expect(data['protocol'], 'jmap');
+      });
     });
   });
 
@@ -3343,6 +3810,166 @@ void main() {
         expect(moved!.uid, 99);
       },
     );
+
+    group('Undo of a delete (#1048)', () {
+      const oldId = 'acc-1:INBOX:5';
+      const messageId = '<msg-1@example.com>';
+
+      Future<void> seedInboxEmail(AppDatabase db) => db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: oldId,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value(messageId),
+            ),
+          );
+
+      Future<void> queueMove(
+        AppDatabase db, {
+        required int uid,
+        required String src,
+        required String dest,
+        String resourceId = oldId,
+      }) =>
+          db.into(db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'Email',
+                  resourceId: resourceId,
+                  changeType: 'move',
+                  payload: jsonEncode({
+                    'uid': uid,
+                    'mailboxPath': src,
+                    'dest': dest,
+                    'messageId': messageId,
+                  }),
+                  createdAt: DateTime.now(),
+                ),
+              );
+
+      test('a change cancelled after the flush snapshot is not applied',
+          () async {
+        final spy = SnoozeSpyImapClient();
+        late final ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+        }) r;
+        var cancelled = false;
+        r = _makeRepos(
+          imapConnect: (_, __, ___) async {
+            // Undo tapped while the flush is still connecting.
+            cancelled = await r.emails.cancelPendingChange(oldId, 'move');
+            return spy;
+          },
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Trash');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(cancelled, isTrue);
+        expect(spy.moves, isEmpty);
+      });
+
+      test('a change being applied can no longer be cancelled', () async {
+        bool? cancelled;
+        late final ({
+          AppDatabase db,
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+        }) r;
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42},
+          // Undo tapped while the MOVE is on the wire.
+          onUidMove: () async =>
+              cancelled ??= await r.emails.cancelPendingChange(oldId, 'move'),
+        );
+        r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Trash');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        // The cancel must fail so Undo enqueues a real reverse move.
+        expect(cancelled, isFalse);
+        expect(spy.moves, ['INBOX:5->Trash']);
+        expect(await r.emails.getEmail('acc-1:Trash:42'), isNotNull);
+      });
+
+      test(
+          'reverse move queued behind the original targets the re-keyed UID '
+          'in the same flush', () async {
+        // Delete while offline: the move to Trash failed once, so Undo could
+        // not cancel it and queued the reverse move (still carrying the INBOX
+        // UID) behind it.
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {5: 42, 42: 7},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await r.emails.moveEmail(oldId, 'Trash');
+        await (r.db.update(r.db.pendingChanges)
+              ..where((t) => t.resourceId.equals(oldId)))
+            .write(const PendingChangesCompanion(attempts: Value(1)));
+        await r.emails.moveEmail(oldId, 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['INBOX:5->Trash', 'Trash:42->INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        final restored = await r.emails.getEmail('acc-1:INBOX:7');
+        expect(restored, isNotNull);
+        expect(restored!.mailboxPath, 'INBOX');
+      });
+
+      test('move with a stale UID re-resolves it by Message-ID', () async {
+        // The reverse move was queued with the pre-delete INBOX UID; on the
+        // server the message sits in Trash under UID 205. The first MOVE is
+        // an OK no-op without COPYUID.
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {205: 7},
+          searchResultsByMailbox: const {
+            'Trash': [205],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['Trash:5->INBOX', 'Trash:205->INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail('acc-1:INBOX:7'), isNotNull);
+      });
+
+      test('move that cannot be located is kept for a retry, not dropped',
+          () async {
+        final spy = SnoozeSpyImapClient(
+          searchResultsByMailbox: const {},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        final change = (await r.db.select(r.db.pendingChanges).get()).single;
+        expect(change.attempts, 1);
+        expect(change.lastError, contains(messageId));
+      });
+    });
 
     test(
       'move flush rewrites pending undo_actions referencing the old id',
@@ -3885,6 +4512,58 @@ void main() {
 
       final mirror = await r.emails.getEmail('imap-p:5');
       expect(mirror!.mailboxPath, 'Archive');
+    });
+
+    // Stalwart names its trash folder "Deleted Items", so a second folder
+    // called "Trash" carries role `trash` as well. The mirror must land in the
+    // folder the user actually picked — mirroring into the sibling trash folder
+    // files the shared server message in two folders at once, which the
+    // single-folder local model cannot represent (#910).
+    test('move mirror disambiguates two same-role folders by name', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_imapPair, 'pw');
+      await r.accounts.addAccount(_jmapPair, 'pw');
+      await seedMailbox(r.db, 'imap-p', 'INBOX', 'Inbox', role: 'inbox');
+      await seedMailbox(r.db, 'imap-p', 'Trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'imap-p',
+        'Deleted Items',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedMailbox(r.db, 'jmap-p', 'mbx-inbox', 'Inbox', role: 'inbox');
+      // The decoy sorts first both by insertion and by id, so a role-only match
+      // lands on it whatever order the rows come back in.
+      await seedMailbox(r.db, 'jmap-p', 'mbx-a-trash', 'Trash', role: 'trash');
+      await seedMailbox(
+        r.db,
+        'jmap-p',
+        'mbx-b-deleted',
+        'Deleted Items',
+        role: 'trash',
+      );
+      await seedEmail(r.db, 'imap-p:5', 'imap-p', 'INBOX', '<abc@example.com>');
+      await seedEmail(
+        r.db,
+        'jmap-p:e1',
+        'jmap-p',
+        'mbx-inbox',
+        'abc@example.com',
+      );
+
+      await r.emails.moveEmail('imap-p:5', 'Deleted Items');
+
+      final mirror = await r.emails.getEmail('jmap-p:e1');
+      expect(mirror!.mailboxPath, 'mbx-b-deleted');
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.accountId.equals('jmap-p')))
+          .get();
+      expect(changes, hasLength(1));
+      expect(
+        jsonDecode(changes.first.payload),
+        {'src': 'mbx-inbox', 'dest': 'mbx-b-deleted'},
+      );
     });
 
     test('spam move mirrors to the counterpart junk mailbox', () async {
@@ -4463,10 +5142,10 @@ void main() {
     test('full sync upserts emails and persists state', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'First'),
                 _jmapEmail(
                   id: 'e2',
@@ -4475,8 +5154,8 @@ void main() {
                   seen: true,
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4618,10 +5297,11 @@ void main() {
       ];
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(state: 'est1', list: page1, total: 4),
-            _emailGetResponse(state: 'est1', list: page2, total: 4),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [page1, page2],
+            total: 4,
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4781,14 +5461,12 @@ void main() {
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
-            apiResponses: [
-              _emailGetResponse(
-                state: 'est1',
-                list: [
-                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept'),
-                ],
-              ),
-            ],
+            apiResponses: _fullSyncResponses(
+              state: 'est1',
+              pages: [
+                [_jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'kept')],
+              ],
+            ),
           ),
         );
         await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -4819,22 +5497,23 @@ void main() {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
             apiResponses: [
-              // Call 1: Email/changes with error
-              {
-                'sessionState': 'sess1',
-                'methodResponses': [
-                  [
-                    'error',
-                    {'type': 'cannotCalculateChanges'},
-                    '0',
-                  ],
-                ],
-              },
-              // Call 2: full sync Email/query + Email/get
-              _emailGetResponse(
+              // Call 1: bounded Email/changes, refused.
+              _cannotCalculateChanges(),
+              // Call 2: the unbounded retry (#967) — a server whose stored
+              // state is genuinely unresolvable refuses this one too, which is
+              // what tells the client to give up and resync.
+              _cannotCalculateChanges(),
+              // Calls 3+: the full sync it falls back to.
+              ..._fullSyncResponses(
                 state: 'est-new',
-                list: [
-                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                pages: [
+                  [
+                    _jmapEmail(
+                      id: 'e-live',
+                      mailboxId: 'mbx1',
+                      subject: 'live',
+                    ),
+                  ],
                 ],
               ),
             ],
@@ -4879,8 +5558,73 @@ void main() {
       },
     );
 
+    // #967: sending `maxChanges` makes RFC 8620 §5.2's "cannot produce an
+    // intermediate state" refusal reachable where it was not before. A server
+    // that merely dislikes a bounded window must not cost a full resync of the
+    // folder on every single cycle.
     test(
-      'incremental sync drops row that Email/get omits (server treats as gone)',
+      'incremental sync retries unbounded before falling back to full sync',
+      () async {
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              // Call 1: the bounded request is refused …
+              _cannotCalculateChanges(),
+              // Call 2: … but the same state resolves fine unbounded.
+              _emailChangesResponse(
+                oldState: 'est-ancient',
+                newState: 'est-new',
+                updated: ['e-live'],
+              ),
+              // Call 3: Email/get for the one changed id.
+              _emailGetOnly(
+                state: 'est-new',
+                list: [
+                  _jmapEmail(id: 'e-live', mailboxId: 'mbx1', subject: 'live'),
+                ],
+              ),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Email:mbx1',
+                state: 'est-ancient',
+                syncedAt: DateTime.now(),
+              ),
+            );
+        // Fresh stamp so the 15-minutely reconcile pass stays out of the way.
+        await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'JMAP:Reconcile:mbx1',
+                state: DateTime.now().toIso8601String(),
+                syncedAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final subjects = (await r.emails.observeEmails('jmap-1', 'mbx1').first)
+            .map((e) => e.subject)
+            .toSet();
+        expect(
+          subjects,
+          {'live'},
+          reason: 'the unbounded retry must carry the sweep, not a full resync',
+        );
+
+        final state = await (r.db.select(r.db.syncStates)
+              ..where((t) => t.resourceType.equals('JMAP:Email:mbx1')))
+            .getSingle();
+        expect(state.state, 'est-new');
+      },
+    );
+
+    test(
+      'incremental sync drops row that Email/get disclaims as notFound',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
@@ -4892,7 +5636,8 @@ void main() {
               ),
               _emailGetOnly(
                 state: 'est2',
-                // e-gone omitted — server no longer has it.
+                // e-gone omitted and disclaimed — server no longer has it.
+                notFound: ['e-gone'],
                 list: [
                   _jmapEmail(
                     id: 'e-live',
@@ -5390,6 +6135,65 @@ void main() {
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     });
 
+    // A queued move carries the folder the row sat in when it was enqueued.
+    // Patching `mailboxIds/dest: true` + `mailboxIds/src: null` leaves the mail
+    // in two folders when that `src` has gone stale, so the move must set
+    // `mailboxIds` outright instead (#910).
+    test('move replaces mailboxIds instead of unsetting the queued src',
+        () async {
+      Map<String, dynamic>? capturedUpdate;
+      final client = MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        final call = (body['methodCalls'] as List).first as List;
+        final args = call[1] as Map<String, dynamic>;
+        final update = args['update'] as Map<String, dynamic>;
+        capturedUpdate = update['e1'] as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                {'accountId': 'acct1', 'updated': {}},
+                '0',
+              ],
+            ],
+          }),
+          200,
+        );
+      });
+
+      final r = _makeRepos(httpClient: client);
+      await seedChange(
+        r.db,
+        r.accounts,
+        changeType: 'move',
+        payload: '{"src":"mbx1","dest":"mbx2"}',
+      );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(capturedUpdate, {
+        'mailboxIds': {'mbx2': true},
+      });
+    });
+
     test('sends delete and removes change on success', () async {
       final r = _makeRepos(httpClient: mockFlush(200));
       await seedChange(r.db, r.accounts, changeType: 'delete', payload: '{}');
@@ -5800,10 +6604,10 @@ void main() {
     test('full sync caches bodies when bodyValues are present', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [
                 jmapEmailWithBody(
                   id: 'e1',
                   mailboxId: 'mbx1',
@@ -5811,8 +6615,8 @@ void main() {
                   htmlContent: '<p>Hello</p>',
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -5827,12 +6631,12 @@ void main() {
     test('full sync does not write body row when bodyValues absent', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
-          apiResponses: [
-            _emailGetResponse(
-              state: 'est1',
-              list: [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
-            ),
-          ],
+          apiResponses: _fullSyncResponses(
+            state: 'est1',
+            pages: [
+              [_jmapEmail(id: 'e1', mailboxId: 'mbx1')],
+            ],
+          ),
         ),
       );
       await r.accounts.addAccount(_jmapAccount, 'pw');
@@ -6934,44 +7738,62 @@ void main() {
       );
     });
 
-    test('sendEmail aborts with TimeoutException when IMAP connect hangs',
-        () async {
-      final r = _makeRepos(
-        sendOperationTimeout: const Duration(milliseconds: 50),
-        smtpConnect: (Account _, String __, String ___) async =>
-            _NoOpSmtpClient(),
-        imapConnect: (Account _, String __, String ___) =>
-            Completer<imap.ImapClient>().future,
-      );
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'sendEmail treats a hung IMAP Sent-copy connect as best-effort (#755)',
+      () async {
+        // The SMTP send has already committed the message, so a hung IMAP
+        // connect for the Sent copy must NOT fail the send — otherwise the
+        // outbox would re-send an already-delivered message. It is swallowed
+        // and logged instead.
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) =>
+              Completer<imap.ImapClient>().future,
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_account, 'pw');
 
-      await expectLater(
-        r.emails.sendEmail('acc-1', draft),
-        throwsA(isA<TimeoutException>()),
-      );
-    });
+        // Completes normally rather than throwing.
+        await r.emails.sendEmail('acc-1', draft);
+        expect(
+          recorder.entries.map((e) => e.event),
+          contains('outbox.send.sent_copy_failed'),
+        );
+      },
+    );
 
-    test('sendEmail aborts with TimeoutException when IMAP createMailbox hangs',
-        () async {
-      final hangingMailbox = _HangingCreateMailboxImapClient();
-      final r = _makeRepos(
-        sendOperationTimeout: const Duration(milliseconds: 50),
-        smtpConnect: (Account _, String __, String ___) async =>
-            _NoOpSmtpClient(),
-        imapConnect: (Account _, String __, String ___) async => hangingMailbox,
-      );
-      await r.accounts.addAccount(_account, 'pw');
+    test(
+      'sendEmail still logs out after a hung IMAP createMailbox (#755)',
+      () async {
+        final hangingMailbox = _HangingCreateMailboxImapClient();
+        final recorder = _PushStatusRecorder();
+        final r = _makeRepos(
+          sendOperationTimeout: const Duration(milliseconds: 50),
+          smtpConnect: (Account _, String __, String ___) async =>
+              _NoOpSmtpClient(),
+          imapConnect: (Account _, String __, String ___) async =>
+              hangingMailbox,
+          appLogger: AppLogger(recorder),
+        );
+        await r.accounts.addAccount(_account, 'pw');
 
-      await expectLater(
-        r.emails.sendEmail('acc-1', draft),
-        throwsA(isA<TimeoutException>()),
-      );
-      expect(
-        hangingMailbox.logoutCalled,
-        isTrue,
-        reason: 'logout must run in finally',
-      );
-    });
+        // Best-effort Sent copy: the hang is swallowed, the send succeeds, and
+        // logout still runs in the finally so the connection isn't leaked.
+        await r.emails.sendEmail('acc-1', draft);
+        expect(
+          hangingMailbox.logoutCalled,
+          isTrue,
+          reason: 'logout must run in finally even when the Sent copy fails',
+        );
+        expect(
+          recorder.entries.map((e) => e.event),
+          contains('outbox.send.sent_copy_failed'),
+        );
+      },
+    );
 
     test(
       'SMTP connect timeout carries phase name + host:port so the sent-queue '
@@ -7003,30 +7825,26 @@ void main() {
     );
 
     test(
-      'IMAP connect timeout carries the IMAP host:port',
+      'a failed IMAP Sent copy is logged with the IMAP host:port (#755)',
       () async {
+        // The information that used to ride on the thrown error now lands in
+        // the best-effort warning log instead (the send itself succeeds).
+        final recorder = _PushStatusRecorder();
         final r = _makeRepos(
           sendOperationTimeout: const Duration(milliseconds: 50),
           smtpConnect: (Account _, String __, String ___) async =>
               _NoOpSmtpClient(),
           imapConnect: (Account _, String __, String ___) =>
               Completer<imap.ImapClient>().future,
+          appLogger: AppLogger(recorder),
         );
         await r.accounts.addAccount(_account, 'pw');
 
-        await expectLater(
-          r.emails.sendEmail('acc-1', draft),
-          throwsA(
-            isA<TimeoutException>().having(
-              (e) => e.message,
-              'message',
-              allOf(
-                contains('IMAP connect/login'),
-                contains('imap.example.com'),
-              ),
-            ),
-          ),
+        await r.emails.sendEmail('acc-1', draft);
+        final warning = recorder.entries.firstWhere(
+          (e) => e.event == 'outbox.send.sent_copy_failed',
         );
+        expect(warning.message, contains('imap.example.com'));
       },
     );
   });

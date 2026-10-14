@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ClickHouse package ships one multi-call binary that dispatches on argv[0], so
 # `clickhouse-client` is a symlink to it.
 ARG GRPCURL_VERSION=1.9.4
-ARG CLICKHOUSE_VERSION=24.12.6.70
+ARG CLICKHOUSE_VERSION=26.9.14.10
 RUN set -eux; \
     deb_arch="$(dpkg --print-architecture)"; \
     case "$deb_arch" in \
@@ -106,7 +106,7 @@ RUN curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BI
 # (prek-<arch>-unknown-linux-gnu/prek), so --strip-components=1 drops that
 # leading dir and lands the bare `prek` in /usr/local/bin. Extracting a
 # top-level `prek` member instead fails with "tar: prek: Not found in archive".
-RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.3/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
+RUN curl -fsSL "https://github.com/j178/prek/releases/download/v0.5.5/prek-$(uname -m)-unknown-linux-gnu.tar.gz" \
       | tar -xz -C /usr/local/bin --strip-components=1 \
     && ln -s prek /usr/local/bin/pre-commit
 
@@ -120,7 +120,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # image IS the worker and agentloop calls the acpx baked in here, so this pin
 # must match the acpx version of the agentloop release you run (currently
 # 0.13.0); Renovate tracks it (renovate.json). A skew breaks the agent runner.
-RUN npm install -g acpx@0.13.2
+RUN npm install -g acpx@0.19.4
 
 # Flutter / Dart / fvm are intentionally absent (see the header). Install guard
 # shims so a stray `flutter …` / `dart …` / `fvm …` fails LOUDLY with a pointer
@@ -155,11 +155,11 @@ USER ci
 ENV HOME=/home/ci
 ENV PATH=/home/ci/.pub-cache/bin:$PATH
 # All Dagger work runs against the REMOTE engine over an SSH tunnel that
-# scripts/worker_dagger_tunnel.sh opens on localhost:8080. Baking this here means
+# scripts/worker_dagger_tunnel.sh opens on 127.0.0.1:8080. Baking this here means
 # every shell (the agent's separate bash calls included) uses the tunnel once
 # it's up, without needing to re-export anything. Harmless until the tunnel
 # exists — `dagger` simply cannot connect, which is the intended "run the tunnel
 # first" signal.
-ENV _EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080
+ENV _EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080
 
 WORKDIR /src

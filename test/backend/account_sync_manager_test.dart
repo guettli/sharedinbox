@@ -654,12 +654,16 @@ class _FakeEmails implements EmailRepository {
   @override
   Future<Email?> findEmailByMessageId(
     String accountId,
-    String messageId,
-  ) async =>
+    String messageId, {
+    String? preferMailboxPath,
+  }) async =>
       null;
 
   @override
   Future<String?> deleteEmail(String id) async => null;
+
+  @override
+  Future<String?> deleteEmails(List<String> ids) async => null;
 
   @override
   Stream<String> get onChangesQueued => const Stream.empty();
@@ -675,6 +679,10 @@ class _FakeEmails implements EmailRepository {
 
   @override
   Future<int> flushOutbox(String accountId, String password) async => 0;
+
+  @override
+  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async =>
+      const SendNowResult(SendNowOutcome.sent);
 
   @override
   Future<String> downloadAttachment(
@@ -858,6 +866,13 @@ class _FakeNotes implements NoteRepository {
 
   @override
   Stream<List<EmailNote>> observeNotes(String accountId, String messageId) =>
+      const Stream.empty();
+
+  @override
+  Stream<List<EmailNote>> observeNotesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) =>
       const Stream.empty();
 
   @override

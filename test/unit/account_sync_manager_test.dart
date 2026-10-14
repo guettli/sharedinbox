@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -152,6 +153,130 @@ void main() {
     expect(protocolLog, contains('BAD Could not parse command'));
 
     m.dispose();
+  });
+
+  // Regression test for issue #967: the mailbox loop had no per-mailbox error
+  // handling, so the first folder that failed threw out of the whole cycle.
+  // Every folder behind it was never tried, and the failure log hardcoded
+  // zeros — so a cycle that had already synced two folders was reported as
+  // "Emails fetched 0 / Mailboxes synced 0", which is what made the original
+  // bug report look like nothing had happened at all.
+  group('one failing mailbox', () {
+    test('does not stop the folders behind it', () async {
+      final emails = _OneFolderFailsEmailRepository(failingPath: 'Archive');
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        emails,
+        syncLog: _RecordingSyncLog(),
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      expect(
+        emails.attempted,
+        ['INBOX', 'Archive', 'Sent'],
+        reason: 'the folder after the failing one must still be tried',
+      );
+    });
+
+    test('reports the work that landed instead of zeros', () async {
+      final syncLog = _RecordingSyncLog();
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        _OneFolderFailsEmailRepository(failingPath: 'Archive'),
+        syncLog: syncLog,
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      final failure = syncLog.firstFailure;
+      expect(
+        failure[#emailsFetched],
+        4,
+        reason: 'INBOX fetched 3 and Sent fetched 1 before the cycle ended',
+      );
+      expect(
+        (failure[#mailboxStats] as List).length,
+        2,
+        reason: 'per-folder stats must survive the failure',
+      );
+    });
+
+    test('names the folder that failed and why', () async {
+      final syncLog = _RecordingSyncLog();
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        _OneFolderFailsEmailRepository(
+          failingPath: 'Archive',
+          error: TimeoutException('server too slow'),
+        ),
+        syncLog: syncLog,
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      final message = syncLog.firstFailure[#errorMessage] as String;
+      expect(message, contains('1 of 3 folders failed'));
+      expect(message, contains('Archive'));
+    });
+
+    test('a cycle where every folder fails still reports what landed',
+        () async {
+      final syncLog = _RecordingSyncLog();
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        _OneFolderFailsEmailRepository(failingPath: null),
+        syncLog: syncLog,
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      final failure = syncLog.firstFailure;
+      // A total outage is not a partial cycle — the ordinary offline case must
+      // not read as "3 of 3 folders failed" — so the raw cause is reported.
+      final message = failure[#errorMessage] as String;
+      expect(message, isNot(contains('folders failed')));
+      expect(message, contains('folder INBOX is broken'));
+      // …but `syncMailboxes` ran and succeeded before the folders did, so its
+      // counter is real and must survive. Hardcoding zeros here is what made
+      // the #967 report read as "nothing happened".
+      expect(
+        failure[#mailboxesSynced],
+        3,
+        reason: 'mailbox sync succeeded before the folders failed',
+      );
+    });
+
+    test('a folder failing permanently stops the account even if later',
+        () async {
+      final syncLog = _RecordingSyncLog();
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        _OneFolderFailsEmailRepository(
+          failingPath: 'INBOX',
+          error: TimeoutException('slow'),
+          alsoFailingPath: 'Sent',
+          alsoError: Exception('authentication failed'),
+        ),
+        syncLog: syncLog,
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      // The transient first failure must not mask the permanent later one —
+      // otherwise the account retries forever and never learns.
+      expect(syncLog.firstFailure[#isPermanent], isTrue);
+    });
   });
 }
 
@@ -392,4 +517,67 @@ class _RecordingSyncLog implements SyncLogRepository {
   /// The named arguments of the first failed (`success: false`) log call.
   Map<Symbol, dynamic> get firstFailure =>
       calls.firstWhere((c) => c[#success] == false);
+}
+
+/// Three folders, so a cycle can fail on the middle one and still have a
+/// folder behind it that must be tried.
+class _ThreeFolderMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  static const _paths = ['INBOX', 'Archive', 'Sent'];
+
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        for (final path in _paths)
+          Mailbox(
+            id: '1:$path',
+            accountId: '1',
+            path: path,
+            name: path,
+            unreadCount: 0,
+            totalCount: 0,
+            role: path == 'INBOX' ? 'inbox' : null,
+          ),
+      ]);
+
+  @override
+  Future<int> syncMailboxes(String id) async => _paths.length;
+}
+
+/// Fails [failingPath] and succeeds elsewhere, recording the order in which
+/// folders were attempted. A null [failingPath] fails every folder, which is
+/// the account-level-outage case rather than a partial cycle.
+class _OneFolderFailsEmailRepository extends FakeEmailRepositoryBase {
+  _OneFolderFailsEmailRepository({
+    required this.failingPath,
+    this.error,
+    this.alsoFailingPath,
+    this.alsoError,
+  });
+
+  final String? failingPath;
+  final Object? error;
+
+  /// A second folder that fails with a different error, so a cycle can hold
+  /// one transient and one permanent failure at once.
+  final String? alsoFailingPath;
+  final Object? alsoError;
+
+  final attempted = <String>[];
+
+  static const _fetchCounts = {'INBOX': 3, 'Sent': 1};
+
+  @override
+  Future<SyncEmailsResult> syncEmails(String accountId, String mailbox) async {
+    attempted.add(mailbox);
+    if (mailbox == alsoFailingPath) {
+      throw alsoError ?? Exception('folder $mailbox is broken');
+    }
+    if (failingPath == null || mailbox == failingPath) {
+      throw error ?? Exception('folder $mailbox is broken');
+    }
+    return SyncEmailsResult(
+      fetched: _fetchCounts[mailbox] ?? 0,
+      skipped: 0,
+      bytesTransferred: 0,
+    );
+  }
 }

@@ -154,7 +154,7 @@ tunnel_rc=0
 _t0=$SECONDS
 for attempt in $(seq 1 "$TUNNEL_MAX_ATTEMPTS"); do
     tunnel_rc=0
-    timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -f -N -L 8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" || tunnel_rc=$?
+    timeout "$TUNNEL_TIMEOUT_S" ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -f -N -L 127.0.0.1:8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" || tunnel_rc=$?
     if [ "$tunnel_rc" -eq 0 ]; then
         break
     fi
@@ -178,9 +178,17 @@ if [ "$_elapsed" -gt 10 ]; then
 fi
 
 # Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://localhost:8080"
+# 127.0.0.1, NOT localhost: the tunnel binds the IPv4 loopback only, but
+# `localhost` resolves to both 127.0.0.1 and ::1, and dagger's engine client
+# would try [::1]:8080 first (nothing listens there) -- when the tunnel is
+# healthy it falls back to 127.0.0.1 and works, but when the tunnel is down
+# BOTH addresses refuse and the logged error is the ::1 attempt. That red
+# herring made gitops#686 hard to read (1190 `dial tcp [::1]:8080` spans).
+# Pinning v4 means a failure says 127.0.0.1 -- i.e. "the tunnel is down",
+# which is the truth.
+export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://127.0.0.1:8080"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://localhost:8080" >> "$GITHUB_ENV"
+    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080" >> "$GITHUB_ENV"
 fi
 
 # Verify the connection AND that the runner's Dagger CLI matches the engine.
@@ -232,12 +240,12 @@ if [ "$verify_rc" -ne 0 ]; then
         echo "::error::\`dagger core --help\` timed out before the engine replied."
         echo "::error::This usually means the engine is down or unreachable; check"
         echo "::error::the engine on the remote host (gitops:"
-        echo "::error::ansible/p16/systemd/system/dagger-engine.service)."
+        echo "::error::ansible/tc/systemd/system/dagger-engine.service.j2)."
     else
         echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
         echo "::error::and the port forward is up, so this is NOT a network problem."
         echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
-        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: ansible/p16/systemd/system/dagger-engine.service, then restart dagger-engine"
+        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: dagger_version in ansible/group_vars/all.yml, then re-run tc.yml and restart dagger-engine"
         echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
     fi
     echo "--- diagnostics ---"
@@ -250,3 +258,41 @@ if [ "$verify_rc" -ne 0 ]; then
     exit 1
 fi
 echo "Dagger connection verified successfully (CLI ${CLI_VERSION:-unknown})."
+
+# Keep the tunnel alive for the rest of the job (gitops#686). The `ssh -f`
+# above is one-shot: if the engine host (tc, which is oversubscribed --
+# gitops#690) stalls past ServerAliveInterval*ServerAliveCountMax (~45s), ssh
+# exits, the :8080 forward disappears, and nothing re-creates it. dagger then
+# retries a dead socket for its full ~10-min engine-connect timeout and the
+# run fails -- observed ~monthly (two back-to-back 10-min hangs on 2026-10-02),
+# each a trace of `starting engine` + ~595 refused Control/Info and no build.
+#
+# This watchdog re-establishes the forward whenever :8080 stops listening, so a
+# transient stall self-heals: the tunnel comes back and dagger's own retry
+# reconnects, instead of the run hanging to the timeout. It is additive -- the
+# fail-fast establish+verify above is unchanged, so a genuinely-down engine
+# still fails the job at setup rather than here. The ephemeral arc-runner pod is
+# destroyed at job end, which reaps this background process (nothing leaks
+# between jobs); a persistently-unreachable engine mid-job still bounds at the
+# workflow's timeout-minutes.
+# Export so the backgrounded child shell below inherits the host (it is a local
+# var otherwise) and the body can stay single-quoted (no fragile quote-breaking).
+export DAGGER_ENGINE_HOST
+nohup bash -c '
+  while true; do
+    sleep 10
+    # :8080 listening? (bash /dev/tcp, no nc dependency). If the connect
+    # succeeds the forward is up; close the fd and move on.
+    if (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then
+      exec 3>&- 3<&- 2>/dev/null || true
+      continue
+    fi
+    echo "[dagger-tunnel-watchdog] :8080 not listening, re-establishing tunnel" >&2
+    timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no \
+      -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+      -f -N -L 127.0.0.1:8080:/run/dagger/engine.sock "dagger@$DAGGER_ENGINE_HOST" \
+      2>&1 | sed "s/^/[dagger-tunnel-watchdog] /" >&2 || true
+  done
+' >~/.dagger-tunnel-watchdog.log 2>&1 &
+disown
+echo "Dagger tunnel watchdog started (pid $!, log ~/.dagger-tunnel-watchdog.log)."

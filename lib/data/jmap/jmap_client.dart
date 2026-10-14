@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
+import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
 
@@ -59,6 +61,46 @@ class JmapClient {
   /// SSE push URL advertised by the server, or null if push is unsupported.
   String? get eventSourceUrl => _eventSourceUrl;
 
+  /// Request timeout for an API call that only moves metadata — ids, flags,
+  /// mailboxes, state tokens. Those payloads are small in both directions, so
+  /// a server that has not answered within this long is not about to.
+  static const metadataTimeout = Duration(seconds: 10);
+
+  /// Request timeout for an API call the server cannot answer from an index
+  /// alone, and so needs a far larger budget than a metadata round trip:
+  ///
+  /// - `Email/get` with `fetchTextBodyValues` / `fetchHTMLBodyValues`, which
+  ///   has to read and serialize every requested message first;
+  /// - `Email/query` with `calculateTotal`, which forces a server-side count
+  ///   of the whole result set.
+  ///
+  /// One flat 10 s for everything was enough to fail a routine catch-up
+  /// against a demonstrably healthy server, and because the failure surfaced
+  /// as a `TimeoutException` it was reported to the user as "could not reach
+  /// the mail server" (issue #967).
+  static const slowRequestTimeout = Duration(seconds: 60);
+
+  /// Timeout for moving a whole blob in or out (attachment upload/download).
+  /// Bounded by the attachment size and the user's uplink, not by server
+  /// think-time.
+  static const blobTimeout = Duration(seconds: 30);
+
+  /// Total attempts for the session fetch in [connect] before giving up on a
+  /// timeout or transient transport error (1 initial + retries).
+  ///
+  /// The session `GET` is the *first* request of every sync cycle, so on
+  /// mobile it runs against the worst-case radio state: a cold/dozed data
+  /// connection that needs to be brought up, or a keep-alive socket the
+  /// carrier already killed while the client slept. A single slow or dead
+  /// first attempt would otherwise fail the whole cycle with `0 fetched`
+  /// (issue #1012), even though the very next attempt usually succeeds.
+  ///
+  /// Kept deliberately small: [Future.timeout] does not cancel the underlying
+  /// request, so each timed-out attempt leaves one request in flight, and
+  /// [connect] runs several times per cycle — a generous count would multiply
+  /// [metadataTimeout] waits under a genuinely bad connection.
+  static const _connectMaxAttempts = 3;
+
   /// Fetches the JMAP Session object from [jmapUrl] and returns a connected
   /// client. Throws [JmapException] on HTTP errors or missing capabilities.
   static Future<JmapClient> connect({
@@ -67,21 +109,50 @@ class JmapClient {
     required String username,
     required String password,
   }) async {
+    // The session GET carries `Authorization: Basic`, so refuse to make it over
+    // cleartext: https anywhere, http only to a localhost dev server. A
+    // relative or scheme-less URL is rejected too — there is nothing for it to
+    // inherit from at the entry point (#1018).
+    if (!isSecureUrl(jmapUrl)) {
+      throw JmapException(
+        'JMAP URL must use https ($jmapUrl) — refusing to send credentials '
+        'over cleartext. http is allowed only for a localhost dev server.',
+      );
+    }
     final credentials = base64.encode(utf8.encode('$username:$password'));
     http.Response resp;
-    var attempt = 0;
+    var rateLimitAttempt = 0;
+    var transientAttempt = 0;
     while (true) {
-      resp = await httpClient.get(
-        jmapUrl,
-        headers: {
-          'Authorization': 'Basic $credentials',
-        },
-      ).timeout(const Duration(seconds: 10));
-      if (resp.statusCode != 429 || attempt >= 4) {
+      try {
+        resp = await httpClient.get(
+          jmapUrl,
+          headers: {
+            'Authorization': 'Basic $credentials',
+          },
+        ).timeout(metadataTimeout);
+      } on Exception catch (e) {
+        // A slow first request (cold/dozed radio) throws TimeoutException; a
+        // dropped or stale pooled socket surfaces from IOClient as a
+        // ClientException. Both are worth a bounded retry; anything else
+        // (e.g. a programming error) propagates.
+        final transient = e is TimeoutException || e is http.ClientException;
+        if (!transient || transientAttempt >= _connectMaxAttempts - 1) rethrow;
+        // Cumulative across the whole connect() — not reset by an intervening
+        // 429 retry — so the total number of attempts stays bounded.
+        transientAttempt++;
+        await Future<void>.delayed(
+          Duration(milliseconds: 300 * transientAttempt),
+        );
+        continue;
+      }
+      if (resp.statusCode != 429 || rateLimitAttempt >= 4) {
         break;
       }
-      attempt++;
-      await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+      rateLimitAttempt++;
+      await Future<void>.delayed(
+        Duration(milliseconds: 200 * rateLimitAttempt),
+      );
     }
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
@@ -106,6 +177,14 @@ class JmapClient {
     final uploadUrl = session['uploadUrl'] as String?;
     final downloadUrl = session['downloadUrl'] as String?;
     final eventSourceUrl = session['eventSourceUrl'] as String?;
+    // These session-advertised URLs also carry the credentials (blob transfer,
+    // SSE push), so a server must not be able to downgrade them to http for a
+    // remote host. Validated by their real parsed host; the blob send sites
+    // re-check the expanded URL, and eventSourceUrl (consumed by the push lane
+    // outside this class) is guarded here.
+    _requireSecureSessionUrl(uploadUrl, 'uploadUrl');
+    _requireSecureSessionUrl(downloadUrl, 'downloadUrl');
+    _requireSecureSessionUrl(eventSourceUrl, 'eventSourceUrl');
 
     return JmapClient._(
       httpClient: httpClient,
@@ -127,11 +206,16 @@ class JmapClient {
   /// Pass [withSubmission] to include `urn:ietf:params:jmap:submission` in
   /// the `using` declaration (required for `EmailSubmission/set` calls).
   ///
+  /// Pass [timeout] to override the budget this call is given. By default it is
+  /// derived from the request: [slowRequestTimeout] when a method call asks
+  /// the server for real work, [metadataTimeout] otherwise.
+  ///
   /// Throws [JmapException] on HTTP errors or a top-level JMAP error response.
   Future<List<dynamic>> call(
     List<List<dynamic>> methodCalls, {
     bool withSubmission = false,
     bool withSieve = false,
+    Duration? timeout,
   }) async {
     final using = [
       ..._coreUsing,
@@ -149,7 +233,7 @@ class JmapClient {
           },
           body: body,
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(timeout ?? defaultTimeoutFor(methodCalls));
 
     final log = Zone.current[verboseLogKey] as StringBuffer?;
     if (log != null) {
@@ -175,6 +259,31 @@ class JmapClient {
     return decoded['methodResponses'] as List<dynamic>;
   }
 
+  /// Picks the request budget from what [methodCalls] asks the server to do.
+  ///
+  /// Deliberately derived here rather than passed in at each of the ~40 call
+  /// sites: a new expensive call then cannot forget to ask for the larger
+  /// budget, which is how the original flat 10 s went unnoticed.
+  ///
+  /// Response-shaped only — it says nothing about how long a large *upload*
+  /// (an `Email/set` with inline `bodyValues`, a `SieveScript/set`) takes the
+  /// server to accept. Those keep the short budget, as they always had.
+  @visibleForTesting
+  static Duration defaultTimeoutFor(List<List<dynamic>> methodCalls) {
+    for (final methodCall in methodCalls) {
+      if (methodCall.length < 2) continue;
+      final args = methodCall[1];
+      if (args is! Map) continue;
+      if (args['fetchTextBodyValues'] == true ||
+          args['fetchHTMLBodyValues'] == true ||
+          args['fetchAllBodyValues'] == true ||
+          args['calculateTotal'] == true) {
+        return slowRequestTimeout;
+      }
+    }
+    return metadataTimeout;
+  }
+
   /// Uploads [data] as a blob and returns the server-assigned `blobId`.
   ///
   /// Used to attach files to outgoing emails before calling `Email/set`.
@@ -185,6 +294,10 @@ class JmapClient {
     final url = Uri.parse(
       _uploadUrl.replaceAll('{accountId}', Uri.encodeComponent(_accountId)),
     );
+    // Validate the fully-parsed URL that will actually carry the credential:
+    // Uri.host correctly separates userinfo from host, which string scanning
+    // of the template cannot (http://127.0.0.1:x@evil.com/ has host evil.com).
+    _requireSecureRequestUrl(url, 'uploadUrl');
     final resp = await _httpClient
         .post(
           url,
@@ -194,7 +307,7 @@ class JmapClient {
           },
           body: data,
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(blobTimeout);
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw JmapException('Blob upload failed (HTTP ${resp.statusCode})');
     }
@@ -222,12 +335,13 @@ class JmapClient {
           .replaceAll('{name}', Uri.encodeComponent(name))
           .replaceAll('{type}', Uri.encodeComponent(type)),
     );
+    _requireSecureRequestUrl(url, 'downloadUrl');
     final resp = await _httpClient.get(
       url,
       headers: {
         'Authorization': 'Basic $_credentials',
       },
-    ).timeout(const Duration(seconds: 30));
+    ).timeout(blobTimeout);
     if (resp.statusCode != 200) {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
     }
@@ -239,8 +353,60 @@ class JmapClient {
     if (raw == null || raw.isEmpty) {
       throw JmapException('Session missing apiUrl');
     }
-    // apiUrl may be relative (RFC 8620 §2 allows it)
-    return sessionUri.resolve(raw);
+    // apiUrl may be relative (RFC 8620 §2 allows it); a relative one inherits
+    // the session's already-validated scheme.
+    final resolved = sessionUri.resolve(raw);
+    // Every call() request goes here with the credentials, so a server that
+    // returns an absolute http:// apiUrl must not be able to downgrade the
+    // whole session after an https session fetch.
+    if (!isSecureUrl(resolved)) {
+      throw JmapException(
+        'Session apiUrl is not https ($resolved) — refusing to send '
+        'credentials over cleartext.',
+      );
+    }
+    return resolved;
+  }
+
+  /// Whether [url] may carry credentials: it must have a host, and be https to
+  /// any host or http only to a localhost (or test-registered dev) host. The
+  /// host check uses [Uri.host], which correctly separates userinfo from host
+  /// — never string-scan an authority for this (`http://127.0.0.1:x@evil.com/`
+  /// has host `evil.com`, not `127.0.0.1`). A scheme-less/host-less URL is not
+  /// secure on its own. The plaintext carve-out ([isPlaintextAllowedHost]) is
+  /// shared with ManageSieveClient and inert in release builds.
+  ///
+  /// Public so the other credential-bearing JMAP path (ConnectionTestService,
+  /// which does not go through [connect]) enforces the identical rule.
+  static bool isSecureUrl(Uri url) {
+    if (url.host.isEmpty) return false;
+    if (url.scheme == 'https') return true;
+    return url.scheme == 'http' && isPlaintextAllowedHost(url.host);
+  }
+
+  /// Throws unless [url] — the fully-parsed URL a request is about to send the
+  /// credential to — is secure. Used at every credential-bearing send site.
+  static void _requireSecureRequestUrl(Uri url, String label) {
+    if (isSecureUrl(url)) return;
+    throw JmapException(
+      '$label ($url) is not https — refusing to send credentials over '
+      'cleartext. Use https (or localhost for development).',
+    );
+  }
+
+  /// Connect-time guard for a session-advertised URL [raw] (RFC 8620/8887 URI
+  /// templates like `uploadUrl`/`eventSourceUrl`). Substitutes the `{…}`
+  /// placeholders with a dummy so the value parses, then validates the REAL
+  /// parsed host via [isSecureUrl] — fails early and clearly rather than at
+  /// first blob/push use. (The send sites re-check the expanded URL too.)
+  static void _requireSecureSessionUrl(String? raw, String label) {
+    if (raw == null || raw.isEmpty) return;
+    final uri = Uri.tryParse(raw.replaceAll(RegExp(r'\{[^}]*\}'), 'x'));
+    if (uri != null && isSecureUrl(uri)) return;
+    throw JmapException(
+      '$label ($raw) is not an https URL — refusing to send credentials over '
+      'cleartext. Use https (or localhost for development).',
+    );
   }
 
   static Set<String> _extractCapabilities(Map<String, dynamic> session) {

@@ -50,9 +50,8 @@ class _FakeSyncEmailsResult_1 extends _i1.SmartFake
         );
 }
 
-class _FakeReliabilityResult_2 extends _i1.SmartFake
-    implements _i2.ReliabilityResult {
-  _FakeReliabilityResult_2(
+class _FakeSendNowResult_2 extends _i1.SmartFake implements _i3.SendNowResult {
+  _FakeSendNowResult_2(
     Object parent,
     Invocation parentInvocation,
   ) : super(
@@ -61,9 +60,20 @@ class _FakeReliabilityResult_2 extends _i1.SmartFake
         );
 }
 
-class _FakeMailboxDiagnostics_3 extends _i1.SmartFake
+class _FakeReliabilityResult_3 extends _i1.SmartFake
+    implements _i2.ReliabilityResult {
+  _FakeReliabilityResult_3(
+    Object parent,
+    Invocation parentInvocation,
+  ) : super(
+          parent,
+          parentInvocation,
+        );
+}
+
+class _FakeMailboxDiagnostics_4 extends _i1.SmartFake
     implements _i2.MailboxDiagnostics {
-  _FakeMailboxDiagnostics_3(
+  _FakeMailboxDiagnostics_4(
     Object parent,
     Invocation parentInvocation,
   ) : super(
@@ -286,6 +296,16 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<String?>);
 
   @override
+  _i4.Future<String?> deleteEmails(List<String>? emailIds) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #deleteEmails,
+          [emailIds],
+        ),
+        returnValue: _i4.Future<String?>.value(),
+      ) as _i4.Future<String?>);
+
+  @override
   _i4.Future<void> sendEmail(
     String? accountId,
     _i2.EmailDraft? draft,
@@ -333,6 +353,27 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
         ),
         returnValue: _i4.Future<int>.value(0),
       ) as _i4.Future<int>);
+
+  @override
+  _i4.Future<_i3.SendNowResult> sendNow(
+    String? accountId, {
+    int? outboxRowId,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #sendNow,
+          [accountId],
+          {#outboxRowId: outboxRowId},
+        ),
+        returnValue: _i4.Future<_i3.SendNowResult>.value(_FakeSendNowResult_2(
+          this,
+          Invocation.method(
+            #sendNow,
+            [accountId],
+            {#outboxRowId: outboxRowId},
+          ),
+        )),
+      ) as _i4.Future<_i3.SendNowResult>);
 
   @override
   _i4.Future<String> downloadAttachment(
@@ -583,8 +624,9 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
   @override
   _i4.Future<_i2.Email?> findEmailByMessageId(
     String? accountId,
-    String? messageId,
-  ) =>
+    String? messageId, {
+    String? preferMailboxPath,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #findEmailByMessageId,
@@ -592,6 +634,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             messageId,
           ],
+          {#preferMailboxPath: preferMailboxPath},
         ),
         returnValue: _i4.Future<_i2.Email?>.value(),
       ) as _i4.Future<_i2.Email?>);
@@ -667,7 +710,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
           ],
         ),
         returnValue:
-            _i4.Future<_i2.ReliabilityResult>.value(_FakeReliabilityResult_2(
+            _i4.Future<_i2.ReliabilityResult>.value(_FakeReliabilityResult_3(
           this,
           Invocation.method(
             #verifySyncReliability,
@@ -693,7 +736,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
           ],
         ),
         returnValue:
-            _i4.Future<_i2.MailboxDiagnostics>.value(_FakeMailboxDiagnostics_3(
+            _i4.Future<_i2.MailboxDiagnostics>.value(_FakeMailboxDiagnostics_4(
           this,
           Invocation.method(
             #diagnoseMailbox,

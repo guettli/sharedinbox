@@ -13,8 +13,14 @@ cd "$(git rev-parse --show-toplevel)"
 # git grep -n emits "path:lineno:content". Exclude the hook config and markdown,
 # then drop lines that already pass and lines that are comments (first
 # non-space char is '#').
+#
+# This script is excluded too: the grep below carries the pattern as code, not
+# as a comment, so the comment filter cannot spare it and the hook reported
+# itself as an offender — #684 all over again, on a clean tree. Nothing here
+# invokes dagger, so there is nothing to check in it.
 offenders=$(
-  git --no-pager grep -n 'dagger call' -- ':!.pre-commit-config.yaml' ':!*.md' \
+  git --no-pager grep -n 'dagger call' \
+    -- ':!.pre-commit-config.yaml' ':!*.md' ':!scripts/check-dagger-progress-plain.sh' \
     | grep -v -- '--progress=plain' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
     || true

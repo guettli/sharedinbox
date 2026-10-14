@@ -93,9 +93,13 @@ class _CompareBody extends StatelessWidget {
                 children: [
                   const Icon(Icons.verified, color: Colors.green),
                   const SizedBox(width: AppSpacing.sm),
-                  Text(
-                    'Local DBs are identical',
-                    style: theme.textTheme.titleMedium,
+                  // Expanded so the label wraps beside the fixed-size icon
+                  // instead of overflowing the row at large text scales (#965).
+                  Expanded(
+                    child: Text(
+                      'Local DBs are identical',
+                      style: theme.textTheme.titleMedium,
+                    ),
                   ),
                 ],
               )

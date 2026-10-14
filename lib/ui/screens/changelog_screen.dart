@@ -97,6 +97,7 @@ class ChangeLogScreen extends ConsumerWidget {
         children: [
           const _StatusHeader(),
           const Divider(height: 1),
+          const _BugReportsSection(),
           Expanded(child: _buildBody(context, ref)),
         ],
       ),
@@ -149,6 +150,16 @@ class _StatusHeader extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // A release build is pinned to a tag, so the "behind main" line below
+          // it is expected rather than a problem to fix — it would otherwise
+          // read as "out of date" right next to an absent update banner.
+          if (kRunningReleaseVersion.isNotEmpty) ...[
+            Text(
+              'Running release $kRunningReleaseVersion',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+          ],
           status.when(
             loading: () => const Row(
               mainAxisSize: MainAxisSize.min,
@@ -168,10 +179,19 @@ class _StatusHeader extends ConsumerWidget {
           ),
           if (update != null) ...[
             const SizedBox(height: 6),
-            _AppLink(
-              text: 'A new app version is available (${update.latestVersion})',
-              onTap: () => ChangeLogScreen._launch(update.downloadUrl),
-            ),
+            // mise owns its install dir — tell those users the upgrade command
+            // instead of linking a tarball they should not unpack over it.
+            if (update.upgradeCommand != null)
+              SelectableText(
+                'A new app version is available (${update.latestVersion}) — '
+                'run: ${update.upgradeCommand}',
+              )
+            else
+              _AppLink(
+                text:
+                    'A new app version is available (${update.latestVersion})',
+                onTap: () => ChangeLogScreen._launch(update.downloadUrl),
+              ),
           ],
         ],
       ),
@@ -207,6 +227,45 @@ class _StatusHeader extends ConsumerWidget {
           onTap: () => ChangeLogScreen._launch(_mainCommitsUrl),
         );
     }
+  }
+}
+
+/// Bug reports filed from this install, shown at the top of the ChangeLog.
+/// Only reports that opened a GitHub issue are recorded; the list is empty
+/// until the user files one. Newest first, all rows retained.
+class _BugReportsSection extends ConsumerWidget {
+  const _BugReportsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reports = ref.watch(bugReportsProvider).value ?? const [];
+    if (reports.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Bug reports from this app',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 6),
+          for (final r in reports)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: _AppLink(
+                text: r.issueNumber != null
+                    ? 'Issue #${r.issueNumber} — '
+                        '${ChangeLogScreen._formatCommitDate(r.createdAt)}'
+                    : 'Bug report — '
+                        '${ChangeLogScreen._formatCommitDate(r.createdAt)}',
+                onTap: () => ChangeLogScreen._launch(r.issueUrl),
+              ),
+            ),
+          const Divider(height: 1),
+        ],
+      ),
+    );
   }
 }
 
