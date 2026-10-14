@@ -340,11 +340,13 @@ void main() {
       await tapSync(tester);
 
       // ── Check Sent folder ──────────────────────────────────────────────────
-      // The sent copy is APPENDed to the account's real Sent folder — on
-      // Stalwart that is "Sent Items" (role=sent), not a folder literally named
-      // "Sent". That folder already exists from the account's mailbox sync; poll
-      // the drawer for it, then sync it to pull in the appended message
-      // (Stalwart delivery + sync timing is bounded by syncNow).
+      // The copy is APPENDed to the server's own \Sent folder — Stalwart calls
+      // it "Sent Items" — or, when no sent-role folder is known yet, to a
+      // freshly created "Sent" (#918). Poll the drawer for either (Stalwart
+      // delivery + sync timing is bounded by syncNow).
+      final sentFolder = find.byWidgetPredicate(
+        (w) => w is Text && (w.data == 'Sent' || w.data == 'Sent Items'),
+      );
       Future<void> openDrawer() async {
         await tester.tap(find.byTooltip('Open folders'));
         await tester.pumpAndSettle();
@@ -360,9 +362,9 @@ void main() {
       final sentDeadline = DateTime.now().add(const Duration(seconds: 90));
       while (true) {
         await openDrawer();
-        if (tester.any(find.text('Sent Items'))) break;
+        if (tester.any(sentFolder)) break;
         if (DateTime.now().isAfter(sentDeadline)) {
-          throw Exception('Sent Items folder never appeared in drawer');
+          throw Exception('Sent folder never appeared in drawer');
         }
         // Close drawer, kick another full sync cycle, give it ~5 s.
         await closeDrawerIfOpen();
@@ -371,7 +373,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 200));
         }
       }
-      await tester.tap(find.text('Sent Items'));
+      await tester.tap(sentFolder.first);
       await tester.pumpAndSettle();
 
       // Sync Sent folder to fetch the appended message.
