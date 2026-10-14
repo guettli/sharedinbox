@@ -9,17 +9,21 @@
 /// bracket-less form.
 library;
 
-/// Returns [raw] with a single pair of surrounding `<>` stripped and any
+/// Returns [raw] with all surrounding `<>` pairs stripped and any
 /// leading/trailing whitespace removed. Empty or `null` input yields `null`.
+///
+/// Repeated stripping canonicalises doubled brackets such as the
+/// `<<foo@bar>>` `Message-ID` that Stalwart emits on delivery-status
+/// notifications (see #859) down to the same bracket-less form the IMAP
+/// ENVELOPE and JMAP arrays produce, so equality-based lookups still match.
 String? normaliseMessageId(String? raw) {
   if (raw == null) return null;
-  final trimmed = raw.trim();
-  if (trimmed.isEmpty) return null;
-  if (trimmed.startsWith('<') && trimmed.endsWith('>') && trimmed.length >= 2) {
-    final inner = trimmed.substring(1, trimmed.length - 1);
-    return inner.isEmpty ? null : inner;
+  var id = raw.trim();
+  if (id.isEmpty) return null;
+  while (id.length >= 2 && id.startsWith('<') && id.endsWith('>')) {
+    id = id.substring(1, id.length - 1);
   }
-  return trimmed;
+  return id.isEmpty ? null : id;
 }
 
 /// Normalises a whitespace-separated list of Message-IDs. Each token is run
