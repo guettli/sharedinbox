@@ -27,6 +27,7 @@ Email _row({
       fromJson: '[]',
       toAddresses: '[]',
       ccJson: '[]',
+      replyToJson: '[]',
       isSeen: isSeen,
       isFlagged: false,
       hasAttachment: false,

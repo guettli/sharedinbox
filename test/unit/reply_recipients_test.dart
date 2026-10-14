@@ -86,5 +86,28 @@ void main() {
       );
       expect(r, isEmpty);
     });
+
+    test('Reply-To replaces From as the reply target', () {
+      final r = replyRecipients(
+        ownEmail: own,
+        from: const [EmailAddress(email: 'bob@example.com')],
+        replyTo: const [EmailAddress(email: 'support@example.com')],
+        to: const [EmailAddress(email: 'alice@example.com')],
+        cc: const [],
+      );
+      expect(r.map((e) => e.address.email), ['support@example.com']);
+      expect(r.single.isCc, isFalse);
+    });
+
+    test('Reply-To naming only the own address falls back to From', () {
+      final r = replyRecipients(
+        ownEmail: own,
+        from: const [EmailAddress(email: 'bob@example.com')],
+        replyTo: const [EmailAddress(email: 'alice@example.com')],
+        to: const [EmailAddress(email: 'alice@example.com')],
+        cc: const [],
+      );
+      expect(r.map((e) => e.address.email), ['bob@example.com']);
+    });
   });
 }

@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 58);
+      expect(db.schemaVersion, 59);
       await db.close();
     });
 
@@ -125,6 +125,9 @@ void main() {
 
       // v53: move-stable server id (RFC 8474 EMAILID / Gmail X-GM-MSGID).
       expect(emailColumns, contains('server_email_id'));
+
+      // v59: Reply-To addresses (#919).
+      expect(emailColumns, contains('reply_to_json'));
 
       // v55: previews poisoned by the mis-parsed partial body fetch (#680) are
       // cleared so getEmailBody's backfill can replace them; real previews are

@@ -104,6 +104,8 @@ class Emails extends Table {
   TextColumn get fromJson => text().withDefault(const Constant('[]'))();
   TextColumn get toAddresses => text().withDefault(const Constant('[]'))();
   TextColumn get ccJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v59: RFC 5322 Reply-To addresses (#919).
+  TextColumn get replyToJson => text().withDefault(const Constant('[]'))();
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
@@ -1282,6 +1284,10 @@ class AppDatabase extends _$AppDatabase {
           if (from < 58) {
             // Local record of bug reports that opened a GitHub issue (#835).
             await m.createTable(bugReports);
+          }
+          if (from < 59 && await _tableExists(this, 'emails')) {
+            // Reply-To addresses, so replies go where the sender asked (#919).
+            await m.addColumn(emails, emails.replyToJson);
           }
         },
       );

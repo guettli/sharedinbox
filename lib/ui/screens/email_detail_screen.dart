@@ -1357,6 +1357,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         from: header.from,
         to: header.to,
         cc: header.cc,
+        replyTo: header.replyTo,
       ))
         _Candidate(r.address, r.isCc ? _Placement.cc : _Placement.to),
     ];

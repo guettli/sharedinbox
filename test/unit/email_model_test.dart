@@ -128,6 +128,32 @@ void main() {
       expect(decoded.snoozedFromMailboxPath, 'INBOX');
     });
 
+    test('JSON roundtrip keeps replyTo and tolerates legacy JSON (#919)', () {
+      final email = Email(
+        id: 'acc:1',
+        accountId: 'acc',
+        mailboxPath: 'INBOX',
+        uid: 1,
+        receivedAt: DateTime(2024),
+        from: const [EmailAddress(email: 'a@a.com')],
+        to: const [],
+        cc: const [],
+        replyTo: const [EmailAddress(name: 'Help', email: 'help@a.com')],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      final json = email.toJson();
+      final decoded = Email.fromJson(json);
+      expect(decoded.replyTo.single.email, 'help@a.com');
+      expect(decoded.replyTo.single.name, 'Help');
+      expect(email.copyWith(subject: 'x').replyTo, email.replyTo);
+
+      final legacy = Email.fromJson(json..remove('replyTo'));
+      expect(legacy.replyTo, isEmpty);
+    });
+
     test('copyWith works', () {
       final email = Email(
         id: 'acc:1',
