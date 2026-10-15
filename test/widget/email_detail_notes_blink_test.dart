@@ -1,17 +1,17 @@
-// Regression test for #1053.
+// Regression tests for #1053 (the blink) and #1056 (the memoization).
 //
 // The single-mail view blinked its HTML body while a sync was running. The
-// Notes section (rendered above the body) is fed by conversationNotesProvider,
-// which watches threadEmailsProvider — a drift .watch() that re-emits on every
-// write to the emails table, so it resubscribes and passes through
-// AsyncLoading constantly during a sync. With the default
-// skipLoadingOnReload: false the section collapsed to zero height and back on
-// every emit, shifting the WebView below it up and down.
+// Notes section (above the body) is fed by conversationNotesProvider, which
+// watches threadEmailsProvider — a drift .watch() that re-emits on every write
+// to the emails table, constantly during a sync.
 //
-// This test drives that exact reload: it shows a note, then makes
-// threadEmailsProvider re-emit (as a sync write would). It asserts the notes
-// stream really does resubscribe AND that the note stays on screen through the
-// reload — i.e. the section no longer collapses.
+// Two guarantees are locked in here:
+//  - #1056: an emails-table write that does NOT change the thread's set of
+//    message IDs must not resubscribe the notes stream (no redundant query).
+//  - #1053: when membership *does* change, the stream resubscribes (passing
+//    through AsyncLoading), and skipLoadingOnReload keeps the current notes on
+//    screen through that reload so the section doesn't collapse and shift the
+//    body below it.
 
 import 'dart:async';
 
@@ -26,7 +26,7 @@ import 'package:sharedinbox/di.dart';
 import 'helpers.dart';
 
 /// A [NoteRepository] whose observe streams are driven by the test, with a
-/// counter so the test can prove a resubscription (reload) actually happened.
+/// counter so the test can prove whether a resubscription happened.
 class _FakeNoteRepository implements NoteRepository {
   _FakeNoteRepository(this._stream);
 
@@ -56,30 +56,37 @@ class _FakeNoteRepository implements NoteRepository {
   Future<void> deleteNote(String noteId) async {}
 }
 
+Email _mail({
+  required String id,
+  required String messageId,
+  String mailboxPath = 'INBOX',
+}) =>
+    Email(
+      id: id,
+      accountId: 'acc-1',
+      mailboxPath: mailboxPath,
+      uid: 42,
+      subject: 'Threaded mail',
+      receivedAt: DateTime(2024, 6),
+      sentAt: DateTime(2024, 6),
+      from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+      to: const [EmailAddress(email: 'alice@example.com')],
+      cc: const [],
+      isSeen: true,
+      isFlagged: false,
+      hasAttachment: false,
+      messageId: messageId,
+      threadId: 'thread-1',
+    );
+
 void main() {
   testWidgets(
-    'notes stay on screen while threadEmailsProvider churns during sync '
-    '(#1053)',
+    'notes survive sync churn: unchanged membership does not resubscribe, '
+    'a membership change keeps notes visible through the reload (#1053, #1056)',
     (tester) async {
       const route = '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42';
 
-      final email = Email(
-        id: 'acc-1:42',
-        accountId: 'acc-1',
-        mailboxPath: 'INBOX',
-        uid: 42,
-        subject: 'Threaded mail',
-        receivedAt: DateTime(2024, 6),
-        sentAt: DateTime(2024, 6),
-        from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
-        to: const [EmailAddress(email: 'alice@example.com')],
-        cc: const [],
-        isSeen: true,
-        isFlagged: false,
-        hasAttachment: false,
-        messageId: 'msg-1',
-        threadId: 'thread-1',
-      );
+      final email = _mail(id: 'acc-1:42', messageId: 'msg-1');
       const body = EmailBody(
         emailId: 'acc-1:42',
         textBody: 'Body text',
@@ -130,20 +137,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Remember to reply'), findsOneWidget);
 
-      // A sync write makes threadEmailsProvider re-emit, forcing
-      // conversationNotesProvider to resubscribe the notes stream. The new
-      // subscription has no buffered event, so the provider sits in
-      // AsyncLoading — exactly the state that used to blank the section.
+      // #1056: a sync write re-emits threadEmailsProvider but the message-ID
+      // set is unchanged (still {msg-1}), so the notes stream must NOT
+      // resubscribe — no redundant query — and the note stays on screen.
       threadCtrl.add(const <Email>[]);
       await tester.pumpAndSettle();
-
       expect(
         noteRepo.observeForMessagesCalls,
-        greaterThanOrEqualTo(2),
-        reason: 'the reload path must actually be exercised',
+        1,
+        reason: 'unchanged membership must not resubscribe (#1056)',
       );
-      // The fix: the note must remain visible through that reload.
       expect(find.text('Remember to reply'), findsOneWidget);
+
+      // #1053: now the thread gains a mail (a new message ID), so membership
+      // changes and the stream legitimately resubscribes — passing through
+      // AsyncLoading. skipLoadingOnReload must keep the note visible.
+      threadCtrl.add([_mail(id: 'acc-1:43', messageId: 'msg-2')]);
+      await tester.pumpAndSettle();
+      expect(
+        noteRepo.observeForMessagesCalls,
+        2,
+        reason: 'a membership change resubscribes exactly once (#1056)',
+      );
+      expect(
+        find.text('Remember to reply'),
+        findsOneWidget,
+        reason: 'note stays visible through the reload (#1053)',
+      );
     },
   );
 }
