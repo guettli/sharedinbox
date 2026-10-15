@@ -659,6 +659,35 @@ final bugReportsProvider = FutureProvider<List<BugReportInfo>>((ref) async {
   ];
 });
 
+/// Value-comparable set of the message IDs whose notes feed one conversation,
+/// used as the `.select` key for [conversationNotesProvider].
+///
+/// Riverpod compares `.select` values with `==`, and Dart collections compare
+/// by identity, so watching a raw `Set`/`List` would re-fire on every emit. The
+/// IDs are deduped and sorted so equal membership always produces an equal key
+/// regardless of source order.
+class _ConversationNoteIds {
+  _ConversationNoteIds(Iterable<String> ids)
+      : ids = List<String>.unmodifiable(ids.toSet().toList()..sort());
+
+  final List<String> ids;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! _ConversationNoteIds || ids.length != other.ids.length) {
+      return false;
+    }
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] != other.ids[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(ids);
+}
+
 /// Notes of every mail in the conversation of one email, so a note added to
 /// the Sent copy shows up when reading the reply (#870). Key is
 /// `(accountId, messageId, threadId)`; without a thread only the mail's own
@@ -668,12 +697,19 @@ final conversationNotesProvider = StreamProvider.autoDispose
   final (accountId, messageId, threadId) = key;
   final repo = ref.watch(noteRepositoryProvider);
   if (threadId == null) return repo.observeNotes(accountId, messageId);
-  final emails = ref.watch(threadEmailsProvider((accountId, threadId))).value ??
-      const <Email>[];
-  final ids = {
-    messageId,
-    for (final e in emails)
-      if (e.messageId != null) e.messageId!,
-  };
-  return repo.observeNotesForMessages(accountId, ids);
+  // threadEmailsProvider is a drift .watch() that re-emits a fresh list on
+  // every write to the emails table — constant while a sync runs. Only the
+  // *set* of message IDs feeds the notes query, so select a value-comparable
+  // key: the provider then resubscribes (and re-queries) only when thread
+  // membership actually changes, not on every re-emit (#1056).
+  final idSet = ref.watch(
+    threadEmailsProvider((accountId, threadId)).select(
+      (async) => _ConversationNoteIds([
+        messageId,
+        for (final e in (async.value ?? const <Email>[]))
+          if (e.messageId != null) e.messageId!,
+      ]),
+    ),
+  );
+  return repo.observeNotesForMessages(accountId, idSet.ids);
 });
