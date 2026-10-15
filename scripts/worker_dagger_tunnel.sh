@@ -59,20 +59,39 @@ chmod 600 ~/.ssh/dagger_key
 echo "Opening SSH tunnel to dagger@${DAGGER_ENGINE_HOST} (127.0.0.1:${PORT} -> /run/dagger/engine.sock)…"
 # StrictHostKeyChecking=no is acceptable: the engine host is only reachable over
 # the private WireGuard net. -f -N detaches a persistent forward-only tunnel.
+# ConnectTimeout bounds the TCP/auth handshake. ServerAliveInterval/CountMax only
+# govern an *already-established* connection, so without ConnectTimeout an
+# unreachable engine host (WireGuard down, host rebooting, node saturated) leaves
+# ssh in connect-retry until the kernel gives up — ~2min, i.e. the whole
+# agentloop preflight budget, killed with only a bare "timed out" and no cause
+# (issue #1002). Bound it so a blip fails fast with a diagnostic instead.
+ssh_rc=0
 ssh -i ~/.ssh/dagger_key \
+    -o ConnectTimeout=15 \
     -o StrictHostKeyChecking=no \
     -o BatchMode=yes \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=3 \
-    -f -N -L "127.0.0.1:${PORT}:/run/dagger/engine.sock" "dagger@${DAGGER_ENGINE_HOST}"
+    -f -N -L "127.0.0.1:${PORT}:/run/dagger/engine.sock" "dagger@${DAGGER_ENGINE_HOST}" || ssh_rc=$?
+if [ "$ssh_rc" -ne 0 ]; then
+    echo "ERROR: could not open the SSH tunnel to dagger@${DAGGER_ENGINE_HOST} within ConnectTimeout (ssh exit ${ssh_rc})." >&2
+    echo "       The engine host did not complete the handshake in time. Likely cause:" >&2
+    echo "       the WireGuard net is down, the engine host is rebooting, or its node is" >&2
+    echo "       saturated — not a problem with this repo. Verify DAGGER_ENGINE_HOST is" >&2
+    echo "       reachable and sshd on the engine is up, then re-run this script." >&2
+    exit 1
+fi
 
 # Verify the CLI can actually reach the engine over the tunnel (also catches a
 # CLI/engine version mismatch, which looks like an unreachable engine).
-if dagger core --help >/dev/null 2>&1; then
+if timeout 15 dagger core --help >/dev/null 2>&1; then
     echo "dagger engine reachable via tunnel (CLI $(dagger version 2>/dev/null | grep -oE 'v[0-9.]+' | head -1))."
 else
-    echo "WARNING: tunnel is up but 'dagger core' failed — likely a CLI/engine version mismatch (both must be the same, see DAGGER.md)." >&2
+    echo "WARNING: tunnel is up but 'dagger core' did not answer within 15s — the engine is" >&2
+    echo "         not responding, or the CLI and engine versions differ (they must match," >&2
+    echo "         see DAGGER.md). Left unbounded this check could itself hang out the" >&2
+    echo "         preflight clock (issue #1002)." >&2
     exit 1
 fi
 
@@ -102,7 +121,7 @@ nohup bash -c '
       continue
     fi
     echo "[dagger-worker-tunnel-watchdog] 127.0.0.1:$PORT not listening, re-establishing tunnel" >&2
-    timeout 30 ssh -i ~/.ssh/dagger_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+    timeout 30 ssh -i ~/.ssh/dagger_key -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes \
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
       -f -N -L "127.0.0.1:$PORT:/run/dagger/engine.sock" "dagger@$DAGGER_ENGINE_HOST" \
       2>&1 | sed "s/^/[dagger-worker-tunnel-watchdog] /" >&2 || true
