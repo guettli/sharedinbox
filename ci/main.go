@@ -2020,6 +2020,13 @@ func (m *Ci) FetchPlayStoreApks(
 	// the retry loop a silent no-op (see #432).
 	// +optional
 	cacheBuster string,
+	// versionCode pins the alpha versionCode to fetch, skipping its
+	// resolution — which has to open a Play edit. The wrapper passes the code
+	// its first attempt resolved on every retry: each new edit deletes any
+	// other open edit for the app, so re-resolving every ~60s kept killing
+	// the Deploy workflow's in-flight upload edit (see #1059).
+	// +optional
+	versionCode string,
 ) *dagger.Directory {
 	scriptSource := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/fetch_playstore_apks.py"},
@@ -2037,6 +2044,7 @@ func (m *Ci) FetchPlayStoreApks(
 		WithEnvVariable("PLAY_APKS_POLL_TIMEOUT_SECONDS", "0").
 		// Changing env var busts the exec cache key so each retry re-runs.
 		WithEnvVariable("FETCH_CACHE_BUSTER", cacheBuster).
+		WithEnvVariable("PLAY_APKS_VERSION_CODE", versionCode).
 		WithWorkdir("/src").
 		WithUser("nobody").
 		WithExec([]string{"/bin/sh", "-c",

@@ -139,15 +139,15 @@ class TestMainHappyPath(unittest.TestCase):
 
 
 class TestUploadRetry(unittest.TestCase):
-    def _run_main(self, upload_side_effects, sleep_mock=None):
+    def _run_main(self, upload_side_effects, sleep_mock=None, edit_ids=("edit-1",)):
         import tempfile
 
         mock_session = MagicMock()
+        # One edit-create POST per edit id, then the commit. The deobfuscation
+        # upload is patched out below, so it consumes no POST.
         post_responses = [
-            MagicMock(**{"json.return_value": {"id": "edit-1"}}),
-            MagicMock(**{"content": b"", "json.return_value": {}}),
-            MagicMock(),
-        ]
+            MagicMock(**{"json.return_value": {"id": edit_id}}) for edit_id in edit_ids
+        ] + [MagicMock()]
         mock_session.post.side_effect = post_responses
         mock_session.put.return_value = MagicMock()
 
@@ -170,6 +170,8 @@ class TestUploadRetry(unittest.TestCase):
             patch("deploy_playstore._upload_deobfuscation_file", return_value={}),
             patch("deploy_playstore.time.sleep"),
         ]
+        if isinstance(upload_side_effects, MagicMock):
+            patches[4] = patch("deploy_playstore._upload_aab_resumable", upload_side_effects)
         for p in patches:
             p.start()
         try:
@@ -178,6 +180,7 @@ class TestUploadRetry(unittest.TestCase):
             for p in patches:
                 p.stop()
             os.unlink(mapping_path)
+        return mock_session
 
     def test_succeeds_on_first_attempt(self):
         # side_effect list with a single result means the mock returns after
@@ -224,6 +227,32 @@ class TestUploadRetry(unittest.TestCase):
     def test_429_is_retried(self):
         """429 is an explicit 'try again', despite being a 4xx."""
         self._run_main([self._wrapped_http_error(429), {"versionCode": 12}])
+
+    _EDIT_DELETED_BODY = (
+        '{"error": {"code": 400, "message": "This Edit has been deleted.", '
+        '"status": "FAILED_PRECONDITION"}}'
+    )
+
+    def test_deleted_edit_is_retried_on_a_fresh_edit(self):
+        """Opening another edit (the Firebase Tests poller does) deletes ours
+        mid-upload (#1059). That 400 is not the request's fault: re-upload, but
+        into a NEW edit -- the old one is gone for good -- and commit that one."""
+        upload = MagicMock(side_effect=[
+            self._wrapped_http_error(400, self._EDIT_DELETED_BODY),
+            {"versionCode": 13},
+        ])
+        session = self._run_main(upload, edit_ids=("edit-1", "edit-2"))
+        self.assertEqual([c[0][2] for c in upload.call_args_list], ["edit-1", "edit-2"])
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        self.assertTrue(post_urls[-1].endswith("/edits/edit-2:commit"), post_urls)
+
+    def test_deleted_edit_gives_up_after_all_attempts(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main(
+                [self._wrapped_http_error(400, self._EDIT_DELETED_BODY)] * 3,
+                edit_ids=("edit-1", "edit-2", "edit-3"),
+            )
+        self.assertIn("3 of 3", str(ctx.exception))
 
 
 class TestRaiseForStatus(unittest.TestCase):

@@ -49,6 +49,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 cat >"$SCRATCH/dagger" <<EOF
 #!/usr/bin/env bash
 n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
+echo "\$*" >"$SCRATCH/args.\$n"
 
 # The loop passes the dest dir as \`-o <dir>\`; mirror Dagger's export into it.
 dest=""
@@ -141,6 +142,23 @@ elif [ "$attempts" -ne 3 ]; then
     _fail "pending: expected 3 attempts (got $attempts)" "$out"
 elif ! printf '%s' "$out" | grep -q "Play still generating split APKs"; then
     _fail "pending: should log that Play is still generating" "$out"
+else
+    _pass
+fi
+
+# --- Retries pin the resolved versionCode so they open no Play edit (#1059) ---
+# Resolving the versionCode opens a Play edit, and every new edit deletes the
+# Deploy workflow's in-flight upload edit. Only the first answered attempt may
+# resolve; every retry must pass the code it got.
+out=$(run_fetch "124 pending pending ready")
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    _fail "pin: should exit 0 once Play catches up" "$out"
+elif grep -q -- "--version-code" "$SCRATCH/args.1" "$SCRATCH/args.2"; then
+    _fail "pin: attempts before the first answer must resolve the versionCode" "$(cat "$SCRATCH/args.1" "$SCRATCH/args.2")"
+elif ! grep -q -- "--version-code 1790309773" "$SCRATCH/args.3" ||
+     ! grep -q -- "--version-code 1790309773" "$SCRATCH/args.4"; then
+    _fail "pin: retries after a PENDING answer must pin the versionCode" "$(cat "$SCRATCH/args.3" "$SCRATCH/args.4")"
 else
     _pass
 fi

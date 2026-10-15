@@ -108,6 +108,15 @@ _REQUEST_RETRY_BACKOFF_SECONDS = int(
     os.environ.get("PLAY_APKS_REQUEST_BACKOFF_SECONDS", "3")
 )
 
+# A versionCode the caller already resolved. When set (non-empty), the fetch
+# skips :func:`_resolve_version_code` entirely and so opens NO Play edit. The
+# wrapper (scripts/run_firebase_test.sh) resolves the versionCode on its first
+# attempt and pins it for every retry: Play allows one open edit per app, so
+# creating a new edit deletes any other open one. Re-resolving on every ~60s
+# poll kept deleting the Deploy workflow's in-flight upload edit, failing it
+# with "This Edit has been deleted." (see #1059).
+_PINNED_VERSION_CODE_ENV = "PLAY_APKS_VERSION_CODE"
+
 
 def _is_transient_play_error(exc):
     """Whether ``exc`` is a transient Play API hiccup worth retrying.
@@ -401,8 +410,13 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
-    print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    pinned = os.environ.get(_PINNED_VERSION_CODE_ENV, "").strip()
+    if pinned:
+        version_code = int(pinned)
+        print(f"Using pinned {TRACK} versionCode: {version_code}", file=sys.stderr)
+    else:
+        version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
+        print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
     try:
         listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)

@@ -166,6 +166,13 @@ FETCH_TOTAL_BUDGET_SECONDS="${FIREBASE_FETCH_TOTAL_BUDGET_S:-5400}"
 FETCH_RETRY_INTERVAL_SECONDS="${FIREBASE_FETCH_RETRY_INTERVAL_S:-60}"
 FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
 
+# The versionCode the first answered attempt resolved, pinned for every retry.
+# Resolving it means opening a Play edit, and opening an edit deletes any other
+# open edit for the app — re-resolving on every ~60s poll kept deleting the
+# Deploy workflow's in-flight upload edit ("This Edit has been deleted.", see
+# #1059). With the code pinned, a retry only reads generatedApks, which needs
+# no edit.
+PINNED_VERSION_CODE=""
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
 FETCH_CONSECUTIVE_TIMEOUTS=0
@@ -187,6 +194,7 @@ while :; do
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env:PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+            ${PINNED_VERSION_CODE:+--version-code "$PINNED_VERSION_CODE"} \
             -o "$APK_DIR" || FETCH_RC=$?
     # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
     # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".
@@ -216,6 +224,7 @@ while :; do
         echo "ERROR: $APK_DIR/versionCode is empty" >&2
         exit 1
     fi
+    PINNED_VERSION_CODE="$VERSION_CODE"
     # No PENDING marker means the split APKs were downloaded — proceed to test.
     if [ ! -f "$APK_DIR/PENDING" ]; then
         break

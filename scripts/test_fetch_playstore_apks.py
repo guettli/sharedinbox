@@ -853,5 +853,30 @@ class TestMainWritesVersionCodeFile(unittest.TestCase):
             self.assertEqual(vc_path.read_text().strip(), "42")
 
 
+class TestMainPinnedVersionCode(unittest.TestCase):
+    """Resolving the versionCode opens a Play edit, which deletes any other
+    open edit — including the Deploy workflow's in-flight upload (#1059). When
+    the wrapper pins the code, the fetch must use it and open no edit."""
+
+    def _run(self, env):
+        resolve = MagicMock(return_value=42)
+        with tempfile.TemporaryDirectory() as dest_dir:
+            patches = _patches(dest_dir, version_code=42, list_apks={}, env=env)
+            patches[4] = patch("fetch_playstore_apks._resolve_version_code", resolve)
+            _with_patches(patches, fetch_playstore_apks.main)
+            written = (Path(dest_dir) / "versionCode").read_text().strip()
+        return resolve, written
+
+    def test_pinned_version_code_skips_resolution(self):
+        resolve, written = self._run({"PLAY_APKS_VERSION_CODE": "1790309773"})
+        resolve.assert_not_called()
+        self.assertEqual(written, "1790309773")
+
+    def test_empty_pin_resolves(self):
+        resolve, written = self._run({"PLAY_APKS_VERSION_CODE": ""})
+        resolve.assert_called_once()
+        self.assertEqual(written, "42")
+
+
 if __name__ == "__main__":
     unittest.main()
