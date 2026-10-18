@@ -190,6 +190,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   void _autoSave() => _autoSaveInFlight = _saveDraftNow();
 
+  /// Waits for an in-flight auto-save so the row it creates is the one that
+  /// gets deleted. A failed save is irrelevant here — the caller is about to
+  /// drop the draft — so its error must not fail the send or discard.
+  Future<void> _settleAutoSave() async {
+    try {
+      await _autoSaveInFlight;
+    } on Object catch (_) {
+      // Ignored: see above.
+    }
+  }
+
   Future<void> _saveDraftNow() async {
     if (!_draftDirty || !mounted) return;
     _draftDirty = false;
@@ -376,6 +387,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     setState(() => _sending = true);
     final messenger = context.appMessenger();
+    // Set once the message is in the outbox: from then on a failure must not
+    // leave the screen open for a second Send, nor bring the draft back.
+    var queued = false;
     try {
       final account =
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
@@ -404,6 +418,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final rowId = await ref
           .read(emailRepositoryProvider)
           .enqueueSend(_accountId!, draft);
+      queued = true;
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on. As in [_discard], first stop the
       // pending auto-save and the [dispose] flush: typing and pressing Send
@@ -413,7 +428,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _saveTimer?.cancel();
       _draftDirty = false;
       _suppressAutoSave = true;
-      await _autoSaveInFlight;
+      await _settleAutoSave();
       if (_draftId != null) {
         await _draftRepo.deleteDraft(_draftId!);
       }
@@ -461,6 +476,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       }
     } catch (e, stack) {
       if (!mounted) return;
+      if (queued) {
+        // The outbox already holds the message and retries it on every sync
+        // cycle, so report it as queued and close, as for a transient failure.
+        messenger.show(
+          'Queued — will retry: $e',
+          level: AppLogLevel.warn,
+          event: 'compose.send_queued',
+          accountId: _accountId,
+          error: e,
+          stack: stack,
+          duration: const Duration(seconds: 5),
+        );
+        context.pop();
+        return;
+      }
       messenger.show(
         'Queue failed: $e',
         level: AppLogLevel.error,
@@ -487,6 +517,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _suppressAutoSave = true;
     final messenger = context.appMessenger();
     try {
+      // As in [_send]: an auto-save still writing would otherwise create the
+      // row after we delete it (or under an id we never saw).
+      await _settleAutoSave();
       if (_draftId != null) {
         await _draftRepo.deleteDraft(_draftId!);
       }
