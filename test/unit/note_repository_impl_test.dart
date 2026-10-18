@@ -267,22 +267,9 @@ class _StubImapAccounts extends _SingleAccountRepository {
 /// Fake IMAP client for the notes incremental-sync path. Serves UID searches
 /// from [searchResults] and never returns message bodies (the incremental
 /// prune test appends no new UIDs).
-class _NotesFakeImap extends FakeImapClient {
+class _NotesFakeImap extends SelectingFakeImapClient {
   _NotesFakeImap(this.searchResults);
   final Map<String, List<int>> searchResults;
-
-  @override
-  Future<imap.Mailbox> selectMailboxByPath(
-    String path, {
-    bool enableCondStore = false,
-    imap.QResyncParameters? qresync,
-  }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        pathSeparator: '/',
-        flags: [],
-      );
 
   @override
   Future<imap.SearchImapResult> uidSearchMessages({

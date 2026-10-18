@@ -26,16 +26,56 @@ String? normaliseMessageId(String? raw) {
   return id.isEmpty ? null : id;
 }
 
-/// Normalises a whitespace-separated list of Message-IDs. Each token is run
-/// through [normaliseMessageId]; empty tokens are dropped. Returns `null`
-/// when the result is empty.
+/// Normalises a list of Message-IDs to bracket-less ids joined by single
+/// spaces. Whitespace and the `<`/`>` brackets all count as separators (an
+/// id cannot contain either, RFC 5322 §3.6.4), so `<a><b>` without a space
+/// and a half-stripped `a> <b` both come out as `a b`. Returns `null` when
+/// no id is left.
 String? normaliseReferences(String? raw) {
   if (raw == null) return null;
-  final tokens = raw
-      .split(RegExp(r'\s+'))
-      .map(normaliseMessageId)
-      .whereType<String>()
-      .toList();
+  final tokens =
+      raw.split(RegExp(r'[\s<>]+')).where((t) => t.isNotEmpty).toList();
   if (tokens.isEmpty) return null;
   return tokens.join(' ');
 }
+
+/// How many of the most recent ancestors [replyThreading] keeps after the
+/// thread root, so a long back-and-forth does not grow References without
+/// bound (RFC 5322 §3.6.4 allows trimming; the root and the nearest
+/// ancestors are what clients thread on).
+const maxReplyReferenceTail = 20;
+
+/// The `In-Reply-To` and `References` ids a reply must carry (RFC 5322
+/// §3.6.4), given the parent's stored headers: the parent's own id, and the
+/// parent's References (or, lacking those, its In-Reply-To) followed by the
+/// parent's id, trimmed to the root plus the last [maxReplyReferenceTail]
+/// ids. All ids come back bracket-less. Returns null when the parent has no
+/// Message-ID, since a reply to it cannot be threaded at all.
+({String inReplyTo, List<String> references})? replyThreading({
+  required String? messageId,
+  String? inReplyTo,
+  String? references,
+}) {
+  final parent = normaliseMessageId(messageId);
+  if (parent == null) return null;
+  final ancestors =
+      normaliseReferences(references) ?? normaliseReferences(inReplyTo) ?? '';
+  final chain = [
+    for (final id in ancestors.split(' '))
+      if (id.isNotEmpty && id != parent) id,
+    parent,
+  ];
+  if (chain.length > maxReplyReferenceTail + 1) {
+    chain.replaceRange(1, chain.length - maxReplyReferenceTail, const []);
+  }
+  return (inReplyTo: parent, references: chain);
+}
+
+/// Renders bracket-less ids as an RFC 5322 header value: `<a> <b>`.
+String bracketMessageIds(Iterable<String> ids) =>
+    ids.map((id) => '<$id>').join(' ');
+
+/// [ids] (a draft's References) run through [normaliseMessageId], dropping
+/// any that end up empty, so senders never bracket an id twice.
+List<String> normaliseDraftReferences(Iterable<String> ids) =>
+    ids.map(normaliseMessageId).whereType<String>().toList();
