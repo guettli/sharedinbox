@@ -79,7 +79,7 @@ void main() {
   test('a kick during a running sync cycle starts the next cycle at once',
       () async {
     final release = Completer<void>();
-    final mailboxes = _BlockingFailingMailboxRepository(release.future);
+    final mailboxes = _BlockingMailboxRepository(release.future, fail: true);
     final m = AccountSyncManager(
       _OkAccountRepository(),
       mailboxes,
@@ -88,15 +88,9 @@ void main() {
     );
     addTearDown(m.dispose);
 
-    m.start();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
-
-    // Kick mid-cycle, then let the cycle finish (it fails, so the loop would
-    // otherwise sit out a 5 s backoff before cycle two).
-    expect(m.syncNow('1'), isTrue);
-    release.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // The cycle fails, so without the kick the loop would sit out a 5 s
+    // backoff before cycle two.
+    await _kickMidFirstCycle(m, mailboxes, release);
 
     expect(mailboxes.calls, 2);
   });
@@ -127,13 +121,7 @@ void main() {
     );
     addTearDown(m.dispose);
 
-    m.start();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
-
-    expect(m.syncNow('1'), isTrue);
-    release.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await _kickMidFirstCycle(m, mailboxes, release);
 
     expect(mailboxes.calls, 2);
     expect(connectsBeforeSecondCycle, 0, reason: 'IDLE was not entered');
@@ -159,13 +147,7 @@ void main() {
     );
     addTearDown(m.dispose);
 
-    m.start();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
-
-    expect(m.syncNow('1'), isTrue);
-    release.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await _kickMidFirstCycle(m, mailboxes, release);
 
     expect(mailboxes.calls, 2);
     expect(pushWaitsBeforeSecondCycle, 0, reason: 'push wait was not entered');
@@ -598,39 +580,41 @@ class _FailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
   }
 }
 
-/// A mailbox repository whose [syncMailboxes] waits for [release] and then
-/// fails, so a test can act while a sync cycle is in flight. Counts the calls,
-/// one per cycle.
-class _BlockingFailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
-  _BlockingFailingMailboxRepository(this.release);
+/// A mailbox repository whose [syncMailboxes] waits for [release], so a test
+/// can act while a sync cycle is in flight, then succeeds — or throws when
+/// [fail] is set. [onCall] sees the 1-based call number, one per sync cycle.
+class _BlockingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  _BlockingMailboxRepository(this.release, {this.onCall, this.fail = false});
 
   final Future<void> release;
+  final void Function(int call)? onCall;
+  final bool fail;
   int calls = 0;
 
   @override
   Future<int> syncMailboxes(String id) async {
     calls++;
+    onCall?.call(calls);
     await release;
-    throw Exception('server unavailable');
+    if (fail) throw Exception('server unavailable');
+    return 1;
   }
 }
 
-/// A mailbox repository whose first [syncMailboxes] waits for [release]; every
-/// call succeeds. [onCall] sees the 1-based call number, one per sync cycle.
-class _BlockingMailboxRepository extends FakeMailboxRepositoryWithInbox {
-  _BlockingMailboxRepository(this.release, {required this.onCall});
+/// Starts [m], kicks account '1' while its first sync cycle is held in
+/// [mailboxes], then lets that cycle finish and gives the loop time to act.
+Future<void> _kickMidFirstCycle(
+  AccountSyncManager m,
+  _BlockingMailboxRepository mailboxes,
+  Completer<void> release,
+) async {
+  m.start();
+  await Future<void>.delayed(const Duration(milliseconds: 50));
+  expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
 
-  final Future<void> release;
-  final void Function(int call) onCall;
-  int calls = 0;
-
-  @override
-  Future<int> syncMailboxes(String id) async {
-    calls++;
-    onCall(calls);
-    if (calls == 1) await release;
-    return 1;
-  }
+  expect(m.syncNow('1'), isTrue);
+  release.complete();
+  await Future<void>.delayed(const Duration(milliseconds: 200));
 }
 
 /// Counts JMAP push waits; the push stream never fires nor closes, like a
