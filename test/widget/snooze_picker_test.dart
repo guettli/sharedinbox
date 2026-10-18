@@ -68,6 +68,24 @@ void main() {
     expect(find.text('That time has passed. Pick a later one'), findsOneWidget);
     expect(results, isEmpty);
 
+    // The second ask offers 23:00, the next full hour, which is accepted.
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(results, [DateTime(2026, 10, 18, 23)]);
+  });
+
+  testWidgets('Cancel on the second ask keeps the sheet open', (
+    tester,
+  ) async {
+    final results = await _openPicker(tester);
+
+    await tester.tap(find.text('Pick date & time…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(results, isEmpty);

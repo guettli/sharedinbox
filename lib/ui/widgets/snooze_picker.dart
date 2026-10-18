@@ -62,10 +62,11 @@ class SnoozePicker extends StatelessWidget {
             // over, and such a snooze would wake on the next sync: ask again
             // until the time is in the future or the user cancels.
             String? helpText;
+            var initialTime = const TimeOfDay(hour: 8, minute: 0);
             while (true) {
               final time = await showTimePicker(
                 context: context,
-                initialTime: const TimeOfDay(hour: 8, minute: 0),
+                initialTime: initialTime,
                 helpText: helpText,
               );
               if (time == null || !context.mounted) return;
@@ -81,6 +82,9 @@ class SnoozePicker extends StatelessWidget {
                 return;
               }
               helpText = 'That time has passed. Pick a later one';
+              // Offer the next full hour instead of the time just refused.
+              final current = this.now ?? DateTime.now();
+              initialTime = TimeOfDay(hour: (current.hour + 1) % 24, minute: 0);
             }
           },
         ),
