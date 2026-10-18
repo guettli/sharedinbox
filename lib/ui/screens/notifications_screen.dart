@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/notification_rule.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
+import 'package:sharedinbox/ui/widgets/text_prompt_dialog.dart';
 
 /// Per-account "pop up for these mails" configuration. New mail is silent by
 /// default; the user turns on the master switch and adds rules describing which
@@ -166,10 +167,11 @@ class NotificationsScreen extends ConsumerWidget {
   }
 
   Future<void> _addSender(BuildContext context, WidgetRef ref) async {
-    final address = await _promptText(
+    final address = await showTextPrompt(
       context,
+      confirmLabel: 'Add',
       title: 'Add sender',
-      label: 'Email address',
+      labelText: 'Email address',
       keyboardType: TextInputType.emailAddress,
     );
     if (address == null || address.trim().isEmpty) return;
@@ -190,10 +192,11 @@ class NotificationsScreen extends ConsumerWidget {
   }
 
   Future<void> _addSubjectKeyword(BuildContext context, WidgetRef ref) async {
-    final text = await _promptText(
+    final text = await showTextPrompt(
       context,
+      confirmLabel: 'Add',
       title: 'Add mailing list / subject keyword',
-      label: 'Subject contains',
+      labelText: 'Subject contains',
     );
     if (text == null || text.trim().isEmpty) return;
     final filter = FilterGroup(
@@ -234,38 +237,6 @@ class NotificationsScreen extends ConsumerWidget {
       await repo.updateRule(rule.id, result.filter, name: result.name);
     }
     if (context.mounted) context.showAppSnackBar('Rule saved');
-  }
-
-  Future<String?> _promptText(
-    BuildContext context, {
-    required String title,
-    required String label,
-    TextInputType? keyboardType,
-  }) {
-    final controller = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: keyboardType,
-          decoration: InputDecoration(labelText: label),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
   }
 }
 
