@@ -98,9 +98,12 @@ class ConversationTree extends ConsumerWidget {
 
     // A node of its own, so assistive tech can tell the lines apart and
     // activate one; otherwise the first line merges into the mail header.
+    // `enabled` must be explicit: without it the Linux accessibility bridge
+    // reports the button as disabled and refuses to activate it.
     return Semantics(
       container: true,
       button: !isCurrent,
+      enabled: !isCurrent,
       selected: isCurrent,
       child: InkWell(
         onTap: isCurrent

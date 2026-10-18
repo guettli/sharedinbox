@@ -166,7 +166,7 @@ void main() {
 
     expect(
       tester.getSemantics(textLine('From me')),
-      isSemantics(isButton: true, isSelected: false),
+      isSemantics(isButton: true, isEnabled: true, isSelected: false),
     );
     expect(
       tester.getSemantics(textLine('From bob@example.com')),
