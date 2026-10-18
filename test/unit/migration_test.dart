@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 59);
+      expect(db.schemaVersion, 60);
       await db.close();
     });
 
@@ -390,6 +390,20 @@ void main() {
           bytes_transferred INTEGER NOT NULL DEFAULT 0
         );
       ''');
+        // v60 backfill input: thread t-att has a message with an attachment,
+        // t-plain has none.
+        rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at,
+                            has_attachment, thread_id)
+        VALUES ('e-att', 'acc-x', 'INBOX', 1, 0, 1, 't-att'),
+               ('e-plain', 'acc-x', 'INBOX', 2, 0, 0, 't-plain');
+      ''');
+        rawDb.execute('''
+        INSERT INTO threads (account_id, mailbox_path, id, latest_date,
+                             latest_email_id)
+        VALUES ('acc-x', 'INBOX', 't-att', 0, 'e-att'),
+               ('acc-x', 'INBOX', 't-plain', 0, 'e-plain');
+      ''');
         rawDb.execute('PRAGMA user_version = 22;');
         rawDb.close();
 
@@ -399,6 +413,16 @@ void main() {
 
         final emailColumns = await _tableColumns(db, 'emails');
         expect(emailColumns, contains('list_unsubscribe_header'));
+
+        // v60: threads.has_attachment added to the existing table and
+        // backfilled from its emails.
+        final attachmentByThread = {
+          for (final row in await db
+              .customSelect('SELECT id, has_attachment FROM threads')
+              .get())
+            row.read<String>('id'): row.read<bool>('has_attachment'),
+        };
+        expect(attachmentByThread, {'t-att': true, 't-plain': false});
 
         final draftColumns = await _tableColumns(db, 'drafts');
         expect(draftColumns, contains('imap_server_id'));
