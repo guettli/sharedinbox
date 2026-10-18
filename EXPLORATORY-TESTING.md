@@ -88,6 +88,7 @@ curl -s $A/shot -o /tmp/screen.png   # screenshot (then view the PNG)
 c log lines=50                       # app stdout/stderr: assertions, exceptions
 c click name='Add account'           # exact accessible name
 c click name=SSL/TLS contains=1 role='toggle button' index=1
+c click name=From contains=1 role='push button' force=1   # see [disabled] below
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …
@@ -114,8 +115,10 @@ How to read the output:
   widget whose semantics carry no enabled state at all as disabled, and
   `click` then refuses it with "present but not enabled". The From dropdown in
   Compose and its menu items are examples. Look at a screenshot: if the
-  control is drawn as enabled, click it with `force=1`. If it then works, it is
-  this quirk, not an app bug.
+  control is drawn as enabled, click it with `force=1`, always together with
+  `role`, so the match cannot land on a text such as an error banner. If it
+  then works, the control is not broken, but its missing enabled state is
+  still an accessibility gap: a screen reader may call it disabled.
 - `click-unnamed` presses a button that has no accessible name (`role`, `index`
   in tree order). On Linux that includes icon buttons that only have a tooltip:
   Flutter's Linux embedder does not pass tooltips on as AT-SPI names, while
