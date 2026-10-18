@@ -1599,25 +1599,10 @@ func (m *Ci) GuiTestRelease(
 	}
 	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/gui_driver.py", "scripts/gui_release_test.py",
-			"scripts/gui_test_entrypoint.sh"},
+			"scripts/gui_session.sh", "scripts/gui_test_entrypoint.sh"},
 	})
 
-	ctr := dag.Container().
-		From("ubuntu:24.04").
-		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
-		WithExec([]string{"/bin/sh", "-c",
-			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
-				"ca-certificates curl socat " +
-				// the app's own runtime dependencies (README's apt line)
-				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
-				// virtual display + screenshots
-				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
-				// accessibility: at-spi plus the GSettings machinery Flutter
-				// consults before it will build a semantics tree at all
-				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
-				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
-		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
-		WithExec([]string{"install", "-d", "-o", "tester", "/shots"}).
+	ctr := guiRuntime().
 		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithUser("tester").
 		WithEnvVariable("HOME", "/home/tester").
@@ -1645,6 +1630,69 @@ func (m *Ci) GuiTestRelease(
 	return m.WithStalwart(ctr).
 		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
 		Stdout(ctx)
+}
+
+// guiRuntime is a clean Ubuntu with what a Linux build of the app needs to run
+// (but not to build) plus a virtual display and the accessibility stack that
+// scripts/gui_driver.py drives it through. Runs as the unprivileged "tester"
+// user with /shots writable; see scripts/gui_session.sh for the bring-up.
+func guiRuntime() *dagger.Container {
+	return dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl socat " +
+				// the app's own runtime dependencies (README's apt line)
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// virtual display + screenshots
+				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
+				// accessibility: at-spi plus the GSettings machinery Flutter
+				// consults before it will build a semantics tree at all
+				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
+				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithExec([]string{"install", "-d", "-o", "tester", "/shots"})
+}
+
+// ExploreLinux runs a debug build of the current source on a virtual desktop
+// next to a throwaway Stalwart, for exploratory testing by an agent (see
+// EXPLORATORY-TESTING.md). It is a long-running service, not a check:
+//
+//	task explore-linux
+//
+// Port 8765 is scripts/explore_server.py, an HTTP API that drives the app
+// through its accessibility tree; 1430/1025/8080 reach Stalwart's IMAP, SMTP
+// and JMAP, to seed and inspect the mailbox the app syncs. The task maps them
+// to offset host ports so they do not collide with `task stalwart`.
+//
+// A debug build on purpose: framework assertions stay on, so a misuse that a
+// release build silently tolerates shows up in /log.
+func (m *Ci) ExploreLinux() *dagger.Service {
+	bundle := m.setup(m.linuxSrc()).
+		WithExec([]string{"flutter", "build", "linux", "--debug"}).
+		Directory("build/linux/x64/debug/bundle")
+	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/gui_driver.py", "scripts/gui_session.sh",
+			"scripts/explore_entrypoint.sh", "scripts/explore_server.py"},
+	})
+	ctr := guiRuntime().
+		// A Secret Service, so flutter_secure_storage can save an account
+		// password. Only here: in the release test it would register a D-Bus
+		// activatable keyring whose first-use prompt could cover the app.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends gnome-keyring"}).
+		WithDirectory("/app", bundle, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithExposedPort(8765). // explore_server.py
+		WithExposedPort(1430). // IMAP, forwarded to Stalwart
+		WithExposedPort(1025). // SMTP
+		WithExposedPort(8080)  // JMAP
+	return m.WithStalwart(ctr).AsService(dagger.ContainerAsServiceOpts{
+		Args: []string{"bash", "/src/scripts/explore_entrypoint.sh"},
+	})
 }
 
 // CheckMiseInstall installs a published release with mise inside a clean
