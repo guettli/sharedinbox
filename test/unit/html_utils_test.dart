@@ -126,4 +126,63 @@ void main() {
       expect(result, contains('Bob'));
     });
   });
+
+  group('htmlHasRemoteResources', () {
+    test('false for markup without any images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<h1>Hi</h1><p>A <a href="https://example.com">link</a>.</p>',
+        ),
+        isFalse,
+      );
+    });
+
+    test('false for inline cid: and data: images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:logo@x"><img src="data:image/png;base64,AAAA">',
+        ),
+        isFalse,
+      );
+    });
+
+    test('true for an http(s) img src, quoted or not', () {
+      expect(
+        htmlHasRemoteResources('<img src="https://x.test/a.png">'),
+        isTrue,
+      );
+      expect(htmlHasRemoteResources("<IMG SRC='http://x.test/a.png'>"), isTrue);
+      expect(htmlHasRemoteResources('<img src=https://x.test/a.png>'), isTrue);
+    });
+
+    test('true for a protocol-relative src', () {
+      expect(htmlHasRemoteResources('<img src="//x.test/pixel.gif">'), isTrue);
+    });
+
+    test('true for srcset and legacy background attributes', () {
+      expect(
+        htmlHasRemoteResources('<img srcset="https://x.test/a.png 2x">'),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources('<td background="https://x.test/bg.jpg">'),
+        isTrue,
+      );
+    });
+
+    test('true for CSS url(), including entity-quoted ones', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:url(https://x.test/bg.jpg)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background-image:url(&quot;https://x.test/b.jpg&quot;)">',
+        ),
+        isTrue,
+      );
+    });
+  });
 }

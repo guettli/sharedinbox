@@ -100,3 +100,21 @@ String _fromCodePoint(int? code, String original) {
   }
   return String.fromCharCode(code);
 }
+
+/// A URL-valued attribute or CSS `url(...)` whose target is fetched over the
+/// network: `http:`, `https:` or protocol-relative `//`. The optional quote may
+/// be a literal `"`/`'` or its entity form, as found inside `style="..."`.
+final RegExp _remoteResource = RegExp(
+  r'''(?:\b(?:src|srcset|background|poster)\s*=\s*|url\(\s*)'''
+  r'''(?:["']|&quot;|&#0*34;|&#0*39;|&apos;)?\s*(?:https?:|//)''',
+  caseSensitive: false,
+);
+
+/// Whether [html] references any resource the email WebView would fetch from
+/// the network once remote images are allowed (`<img src>`, `srcset`, legacy
+/// `background=`, CSS `url(...)`).
+///
+/// Used to hide the "Load remote images" button on mail that has nothing to
+/// load. Inline `cid:` and `data:` images never match. Not a full parser: it
+/// errs on the side of matching, so a false positive only shows the button.
+bool htmlHasRemoteResources(String html) => _remoteResource.hasMatch(html);

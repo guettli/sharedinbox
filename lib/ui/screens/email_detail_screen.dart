@@ -557,6 +557,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final isTrusted = senderEmail != null &&
         trustedSenders.any((p) => globMatch(senderEmail, p));
     final effectiveLoadImages = _loadRemoteImages || isTrusted;
+    // Offering to load images on mail that has none would also silently add
+    // the sender to the trusted list for nothing.
+    final offerRemoteImages = hasHtml &&
+        !effectiveLoadImages &&
+        htmlHasRemoteResources(body.htmlBody!);
 
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -567,7 +572,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           _buildLoadFailedNotice(ctx, body.loadError!),
         if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
         if (hasHtml) ...[
-          if (!effectiveLoadImages)
+          if (offerRemoteImages)
             Align(
               alignment: Alignment.centerLeft,
               child: Padding(
