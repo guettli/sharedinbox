@@ -101,30 +101,11 @@ void main() {
         () async {
       // The IMAP/JMAP senders rebuild the message from job.draft, so the
       // reply headers must survive the envelope, not only the stored MIME.
-      final db = openTestDatabase();
-      await _seedAccount(db);
-      final repo = OutboxRepositoryImpl(db);
-      final base = _makeDraft(subject: 'Re: Hello');
-      await repo.enqueue(
-        _accountId,
-        EmailDraft(
-          from: base.from,
-          to: base.to,
-          cc: base.cc,
-          subject: base.subject,
-          body: base.body,
-          inReplyTo: 'parent@example.com',
-          references: const ['root@example.com', 'parent@example.com'],
-        ),
+      final (:repo, :mime) = await _enqueueReply(
+        inReplyTo: 'parent@example.com',
+        references: const ['root@example.com', 'parent@example.com'],
       );
-
-      final rows = await db.select(db.outbox).get();
-      final mime = utf8.decode(base64.decode(rows.first.mimeBase64));
-      expect(mime, contains('In-Reply-To: <parent@example.com>'));
-      expect(
-        mime,
-        contains('References: <root@example.com> <parent@example.com>'),
-      );
+      _expectReplyHeaders(mime);
 
       EmailDraft? seen;
       await repo.flush(_accountId, (job) async => seen = job.draft);
@@ -134,30 +115,11 @@ void main() {
 
     test('a reply with still-bracketed ids does not double the brackets',
         () async {
-      final db = openTestDatabase();
-      await _seedAccount(db);
-      final repo = OutboxRepositoryImpl(db);
-      final base = _makeDraft(subject: 'Re: Hello');
-      await repo.enqueue(
-        _accountId,
-        EmailDraft(
-          from: base.from,
-          to: base.to,
-          cc: base.cc,
-          subject: base.subject,
-          body: base.body,
-          inReplyTo: '<parent@example.com>',
-          references: const ['<root@example.com>', 'parent@example.com'],
-        ),
+      final (:repo, :mime) = await _enqueueReply(
+        inReplyTo: '<parent@example.com>',
+        references: const ['<root@example.com>', 'parent@example.com'],
       );
-
-      final rows = await db.select(db.outbox).get();
-      final mime = utf8.decode(base64.decode(rows.first.mimeBase64));
-      expect(mime, contains('In-Reply-To: <parent@example.com>'));
-      expect(
-        mime,
-        contains('References: <root@example.com> <parent@example.com>'),
-      );
+      _expectReplyHeaders(mime);
       expect(mime, isNot(contains('<<')));
     });
 
@@ -633,4 +595,39 @@ void main() {
       expect(rows.map((r) => r.subject), ['First', 'Second']);
     });
   });
+}
+
+/// Enqueues a reply to `parent@example.com` with the given header ids and
+/// returns the repository plus the stored MIME text.
+Future<({OutboxRepositoryImpl repo, String mime})> _enqueueReply({
+  required String inReplyTo,
+  required List<String> references,
+}) async {
+  final db = openTestDatabase();
+  await _seedAccount(db);
+  final repo = OutboxRepositoryImpl(db);
+  final base = _makeDraft(subject: 'Re: Hello');
+  await repo.enqueue(
+    _accountId,
+    EmailDraft(
+      from: base.from,
+      to: base.to,
+      cc: base.cc,
+      subject: base.subject,
+      body: base.body,
+      inReplyTo: inReplyTo,
+      references: references,
+    ),
+  );
+  final rows = await db.select(db.outbox).get();
+  return (repo: repo, mime: utf8.decode(base64.decode(rows.first.mimeBase64)));
+}
+
+/// The bracketed reply headers every [_enqueueReply] case must produce.
+void _expectReplyHeaders(String mime) {
+  expect(mime, contains('In-Reply-To: <parent@example.com>'));
+  expect(
+    mime,
+    contains('References: <root@example.com> <parent@example.com>'),
+  );
 }
