@@ -649,7 +649,9 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 			// A raw NUL byte makes grep treat the whole file as binary: searches
 			// (and grep-based checks such as CheckLayers) then silently skip it.
 			// Write the escape \u0000 in Dart strings instead.
-			"NUL=$(grep -rlaP '\\x00' --include='*.dart' lib test integration_test 2>/dev/null || true); if [ -n \"$NUL\" ]; then echo \"ERROR: raw NUL byte in source (use an escape such as \\\\u0000):\"; echo \"$NUL\"; exit 1; fi; " +
+			// grep exits 1 for "no match" but 2 when it fails itself (e.g. no -P
+			// support); only the former may pass.
+			"rc=0; NUL=$(grep -rlaP '\\x00' --include='*.dart' --exclude-dir=.dart_tool --exclude-dir=build .) || rc=$?; if [ $rc -gt 1 ]; then echo \"ERROR: NUL check: grep failed ($rc)\"; exit 1; fi; if [ -n \"$NUL\" ]; then echo \"ERROR: raw NUL byte in source (use an escape such as \\\\u0000):\"; echo \"$NUL\"; exit 1; fi; " +
 			"echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
 }
