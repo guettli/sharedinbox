@@ -175,15 +175,10 @@ class NotificationsScreen extends ConsumerWidget {
       keyboardType: TextInputType.emailAddress,
     );
     if (address == null) return;
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.from_,
-          comparison: FilterComparison.is_,
-          value: address,
-        ),
-      ],
+    final filter = FilterGroup.single(
+      FilterField.from_,
+      FilterComparison.is_,
+      address,
     );
     await ref.read(notificationRuleRepositoryProvider).addRule(
           accountId,
@@ -199,15 +194,10 @@ class NotificationsScreen extends ConsumerWidget {
       labelText: 'Subject contains',
     );
     if (text == null) return;
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.subject,
-          comparison: FilterComparison.contains,
-          value: text,
-        ),
-      ],
+    final filter = FilterGroup.single(
+      FilterField.subject,
+      FilterComparison.contains,
+      text,
     );
     await ref.read(notificationRuleRepositoryProvider).addRule(
           accountId,

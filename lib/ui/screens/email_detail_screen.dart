@@ -1667,15 +1667,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         account.copyWith(notificationsEnabled: true),
       );
     }
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.from_,
-          comparison: FilterComparison.is_,
-          value: sender,
-        ),
-      ],
+    final filter = FilterGroup.single(
+      FilterField.from_,
+      FilterComparison.is_,
+      sender,
     );
     final ruleId = await ruleRepo.addRule(header.accountId, filter);
 
