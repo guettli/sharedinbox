@@ -282,23 +282,11 @@ void main() {
         // then landed after the screen closed.
         final drafts = _TrackingDraftRepository();
         final email = FakeEmailRepository();
-        final router = _homeAndCompose();
-        await tester.pumpWidget(
-          _wrap(
-            router: router,
-            overrides: _composeOverrides(email: email, drafts: drafts),
-          ),
+        final gate = await _pumpComposeWithHeldSave(
+          tester,
+          drafts: drafts,
+          email: email,
         );
-        await tester.pumpAndSettle();
-        unawaited(router.push('/compose'));
-        await tester.pumpAndSettle();
-
-        final gate = drafts.gate = Completer<void>();
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'),
-          'bob@example.com',
-        );
-        await tester.pump(const Duration(seconds: 3));
         expect(drafts.pendingSaves, 1);
 
         await tester.tap(find.byIcon(Icons.send));
@@ -320,23 +308,11 @@ void main() {
       (tester) async {
         final drafts = _TrackingDraftRepository();
         final email = FakeEmailRepository();
-        final router = _homeAndCompose();
-        await tester.pumpWidget(
-          _wrap(
-            router: router,
-            overrides: _composeOverrides(email: email, drafts: drafts),
-          ),
+        final gate = await _pumpComposeWithHeldSave(
+          tester,
+          drafts: drafts,
+          email: email,
         );
-        await tester.pumpAndSettle();
-        unawaited(router.push('/compose'));
-        await tester.pumpAndSettle();
-
-        final gate = drafts.gate = Completer<void>();
-        await tester.enterText(
-          find.widgetWithText(TextFormField, 'To'),
-          'bob@example.com',
-        );
-        await tester.pump(const Duration(seconds: 3));
 
         await tester.tap(find.byIcon(Icons.send));
         await tester.pump();
@@ -638,44 +614,22 @@ class _RecordingDraftRepository extends FakeDraftRepository {
   }
 }
 
-/// A [FakeDraftRepository] that records every id it saved, so tests can look
-/// rows up by id (reply drafts are hidden from [listNewMessageDrafts]), and
-/// whose [saveDraft] blocks on [gate] while one is set.
+/// A [_RecordingDraftRepository] whose saves block on [gate] while one is
+/// set, so a test can act while an auto-save is still writing.
 class _TrackingDraftRepository extends _RecordingDraftRepository {
-  final Set<int> savedIds = {};
   Completer<void>? gate;
   int pendingSaves = 0;
 
   @override
-  Future<SavedDraft> saveDraft({
-    int? id,
-    String? accountId,
-    String? replyToEmailId,
-    required String toText,
-    required String ccText,
-    required String subjectText,
-    required String bodyText,
-  }) async {
+  Future<void> beforeSave() async {
     final g = gate;
-    if (g != null) {
-      pendingSaves++;
-      try {
-        await g.future;
-      } finally {
-        pendingSaves--;
-      }
+    if (g == null) return;
+    pendingSaves++;
+    try {
+      await g.future;
+    } finally {
+      pendingSaves--;
     }
-    final saved = await super.saveDraft(
-      id: id,
-      accountId: accountId,
-      replyToEmailId: replyToEmailId,
-      toText: toText,
-      ccText: ccText,
-      subjectText: subjectText,
-      bodyText: bodyText,
-    );
-    savedIds.add(saved.id);
-    return saved;
   }
 
   /// The saved rows that still exist, reply drafts included.
@@ -767,6 +721,27 @@ Future<void> _pumpComposeAndSend(
   String? replyToEmailId,
   Future<void> Function()? beforeSend,
 }) async {
+  await _openComposeWithRecipient(
+    tester,
+    email: email,
+    drafts: drafts,
+    replyToEmailId: replyToEmailId,
+  );
+  await tester.pump();
+  await beforeSend?.call();
+
+  await tester.tap(find.byIcon(Icons.send));
+  await tester.pumpAndSettle();
+}
+
+/// Opens compose from a home route and types a recipient — the common start
+/// of [_pumpComposeAndSend] and [_pumpComposeWithHeldSave].
+Future<void> _openComposeWithRecipient(
+  WidgetTester tester, {
+  required FakeEmailRepository email,
+  FakeDraftRepository? drafts,
+  String? replyToEmailId,
+}) async {
   final router = _homeAndCompose();
   await tester.pumpWidget(
     _wrap(
@@ -784,11 +759,20 @@ Future<void> _pumpComposeAndSend(
     find.widgetWithText(TextFormField, 'To'),
     'bob@example.com',
   );
-  await tester.pump();
-  await beforeSend?.call();
+}
 
-  await tester.tap(find.byIcon(Icons.send));
-  await tester.pumpAndSettle();
+/// Opens a new compose from a home route and types a recipient, so the
+/// auto-save starts and then holds on [drafts]' gate. Returns that gate.
+Future<Completer<void>> _pumpComposeWithHeldSave(
+  WidgetTester tester, {
+  required _TrackingDraftRepository drafts,
+  required FakeEmailRepository email,
+}) async {
+  // Nothing saves before the first edit, so the gate can be set up front.
+  final gate = drafts.gate = Completer<void>();
+  await _openComposeWithRecipient(tester, email: email, drafts: drafts);
+  await tester.pump(const Duration(seconds: 3));
+  return gate;
 }
 
 /// Pumps the compose screen reached from a home route so discard can pop back.
