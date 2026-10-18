@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -191,6 +192,37 @@ void main() {
           reason: 'compose must attempt the send now, not just enqueue it',
         );
         expect(find.text('Message sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a reply carries In-Reply-To and References to the original',
+      (tester) async {
+        // Without these the recipient's client cannot thread the answer, and
+        // neither can this app once the copy in Sent syncs back.
+        final original = Email(
+          id: 'orig',
+          accountId: kTestAccount.id,
+          mailboxPath: 'INBOX',
+          uid: 1,
+          subject: 'Re: Project kickoff',
+          receivedAt: DateTime(2026, 10, 18),
+          from: const [EmailAddress(email: 'alice@example.com')],
+          to: [EmailAddress(email: kTestAccount.email)],
+          cc: const [],
+          isSeen: true,
+          isFlagged: false,
+          hasAttachment: false,
+          messageId: 'reply-1@example.com',
+          inReplyTo: 'root@example.com',
+          references: 'root@example.com',
+        );
+        final email = FakeEmailRepository(emails: [original]);
+        await _pumpComposeAndSend(tester, email: email, replyToEmailId: 'orig');
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, 'reply-1@example.com');
+        expect(draft.references, ['root@example.com', 'reply-1@example.com']);
       },
     );
 
@@ -517,13 +549,14 @@ Future<SavedDraft> _pumpRestoredDraftFromHome(
 Future<void> _pumpComposeAndSend(
   WidgetTester tester, {
   required FakeEmailRepository email,
+  String? replyToEmailId,
 }) async {
   final router = _homeAndCompose();
   await tester.pumpWidget(
     _wrap(router: router, overrides: _composeOverrides(email: email)),
   );
   await tester.pumpAndSettle();
-  unawaited(router.push('/compose'));
+  unawaited(router.push('/compose', extra: {'replyToEmailId': replyToEmailId}));
   await tester.pumpAndSettle();
 
   await tester.enterText(
@@ -553,9 +586,13 @@ Future<void> _pumpComposeFromHome(
 /// somewhere to land. The scaffolding is shared with the other tests that need
 /// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
 GoRouter _homeAndCompose() => homeAndComposeRouter(
-      compose: (state) => ComposeScreen(
-        draftId: (state.extra as Map<String, dynamic>?)?['draftId'] as int?,
-      ),
+      compose: (state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        return ComposeScreen(
+          draftId: extra?['draftId'] as int?,
+          replyToEmailId: extra?['replyToEmailId'] as String?,
+        );
+      },
     );
 
 Widget _buildRouter({

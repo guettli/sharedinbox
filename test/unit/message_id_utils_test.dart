@@ -81,4 +81,41 @@ void main() {
       );
     });
   });
+
+  group('replyThreading', () {
+    test('appends the parent to its References chain', () {
+      final t = replyThreading(
+        messageId: '<p@x>',
+        inReplyTo: '<b@x>',
+        references: '<a@x> <b@x>',
+      );
+      expect(t?.inReplyTo, 'p@x');
+      expect(t?.references, ['a@x', 'b@x', 'p@x']);
+    });
+
+    test('falls back to In-Reply-To when the parent has no References', () {
+      final t = replyThreading(messageId: 'p@x', inReplyTo: '<b@x>');
+      expect(t?.references, ['b@x', 'p@x']);
+    });
+
+    test('starts a chain for a parent that answers nothing', () {
+      final t = replyThreading(messageId: '<p@x>');
+      expect(t?.inReplyTo, 'p@x');
+      expect(t?.references, ['p@x']);
+    });
+
+    test('lists the parent once even if its References already name it', () {
+      final t = replyThreading(messageId: 'p@x', references: 'a@x p@x');
+      expect(t?.references, ['a@x', 'p@x']);
+    });
+
+    test('is null when the parent has no Message-ID', () {
+      expect(replyThreading(messageId: null, references: 'a@x'), isNull);
+      expect(replyThreading(messageId: '<>'), isNull);
+    });
+  });
+
+  test('bracketMessageIds renders a header value', () {
+    expect(bracketMessageIds(['a@x', 'b@y']), '<a@x> <b@y>');
+  });
 }

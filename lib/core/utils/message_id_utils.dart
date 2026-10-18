@@ -39,3 +39,29 @@ String? normaliseReferences(String? raw) {
   if (tokens.isEmpty) return null;
   return tokens.join(' ');
 }
+
+/// The `In-Reply-To` and `References` ids a reply must carry (RFC 5322
+/// §3.6.4), given the parent's stored headers: the parent's own id, and the
+/// parent's References (or, lacking those, its In-Reply-To) followed by the
+/// parent's id. All ids come back bracket-less. Returns null when the parent
+/// has no Message-ID, since a reply to it cannot be threaded at all.
+({String inReplyTo, List<String> references})? replyThreading({
+  required String? messageId,
+  String? inReplyTo,
+  String? references,
+}) {
+  final parent = normaliseMessageId(messageId);
+  if (parent == null) return null;
+  final ancestors =
+      normaliseReferences(references) ?? normaliseReferences(inReplyTo) ?? '';
+  final chain = [
+    for (final id in ancestors.split(' '))
+      if (id.isNotEmpty && id != parent) id,
+    parent,
+  ];
+  return (inReplyTo: parent, references: chain);
+}
+
+/// Renders bracket-less ids as an RFC 5322 header value: `<a> <b>`.
+String bracketMessageIds(Iterable<String> ids) =>
+    ids.map((id) => '<$id>').join(' ');
