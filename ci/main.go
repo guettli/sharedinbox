@@ -645,7 +645,12 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 	return m.Base().
 		WithDirectory("/src", m.Source, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
-		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
+		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; " +
+			// A raw NUL byte makes grep treat the whole file as binary: searches
+			// (and grep-based checks such as CheckLayers) then silently skip it.
+			// Write the escape \u0000 in Dart strings instead.
+			"NUL=$(grep -rlaP '\\x00' --include='*.dart' lib test integration_test 2>/dev/null || true); if [ -n \"$NUL\" ]; then echo \"ERROR: raw NUL byte in source (use an escape such as \\\\u0000):\"; echo \"$NUL\"; exit 1; fi; " +
+			"echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
 }
 

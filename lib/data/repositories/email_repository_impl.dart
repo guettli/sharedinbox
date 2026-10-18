@@ -263,7 +263,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // Stable per-group key: the lowest account id across the group.
       final groupIds = [account.id, for (final c in counterparts) c.id]..sort();
-      final dedupKey = '${groupIds.first} $mid';
+      final dedupKey = '${groupIds.first}\u0000$mid';
 
       final existingIndex = keptIndexByKey[dedupKey];
       if (existingIndex == null) {
