@@ -107,14 +107,22 @@ def find(name: str, role: str | None = None, app_name: str = "sharedinbox", inde
     return matches[index] if len(matches) > index else None
 
 
-def find_containing(substring: str, role: str | None = None, app_name: str = "sharedinbox"):
-    """Return the first node whose accessible name contains `substring`."""
+def find_containing(substring: str, role: str | None = None, app_name: str = "sharedinbox",
+                    index: int = 0):
+    """Return the index-th node whose accessible name contains `substring`.
+
+    Needed for widgets whose name merges several texts, e.g. a SwitchListTile
+    is named 'SSL/TLS\\nOff: upgrade with STARTTLS (IMAP 143)'.
+    """
     app = _app_root(app_name)
     if app is None:
         return None
+    seen = 0
     for node, _ in _walk(app):
         if substring in (node.name or "") and (role is None or node.getRoleName() == role):
-            return node
+            if seen == index:
+                return node
+            seen += 1
     return None
 
 
@@ -123,7 +131,7 @@ def wait_for(name: str, role: str | None = None, timeout: float = DEFAULT_TIMEOU
     """Block until a matching node appears, or raise with the tree attached."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        node = (find_containing(name, role) if contains
+        node = (find_containing(name, role, index=index) if contains
                 else find(name, role, index=index))
         if node is not None:
             return node
@@ -151,9 +159,9 @@ def assert_absent(substring: str) -> None:
 
 
 def click(name: str, role: str | None = None, timeout: float = DEFAULT_TIMEOUT,
-          index: int = 0):
+          index: int = 0, contains: bool = False):
     """Activate a widget through its own action, not a pixel coordinate."""
-    node = wait_for(name, role, timeout, index=index)
+    node = wait_for(name, role, timeout, contains=contains, index=index)
     states = node.getState()
     if not states.contains(pyatspi.STATE_ENABLED):
         raise GuiError(f"{name!r} is present but not enabled; cannot click it")
@@ -193,8 +201,9 @@ def click_unnamed(role: str = "push button", index: int = 0):
     return matches[index]
 
 
-def focus(name: str, role: str | None = None, index: int = 0):
-    node = wait_for(name, role, index=index)
+def focus(name: str, role: str | None = None, index: int = 0, contains: bool = False,
+          timeout: float = DEFAULT_TIMEOUT):
+    node = wait_for(name, role, timeout, contains=contains, index=index)
     action = node.queryAction()
     names = [action.getName(i) for i in range(action.nActions)]
     if "Focus" in names:
@@ -204,9 +213,10 @@ def focus(name: str, role: str | None = None, index: int = 0):
     return node
 
 
-def fill(name: str, text: str, role: str | None = "text", index: int = 0) -> None:
+def fill(name: str, text: str, role: str | None = "text", index: int = 0,
+         contains: bool = False, timeout: float = DEFAULT_TIMEOUT) -> None:
     """Focus a field and replace its contents."""
-    focus(name, role, index=index)
+    focus(name, role, index=index, contains=contains, timeout=timeout)
     press("ctrl+a")
     type_text(text)
 
