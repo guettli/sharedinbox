@@ -306,6 +306,7 @@ class EmailRepositoryImpl implements EmailRepository {
       messageCount: row.messageCount,
       hasUnread: row.hasUnread,
       isFlagged: row.isFlagged,
+      hasAttachment: row.hasAttachment,
       participants: parseAddresses(row.participantsJson),
       preview: row.preview,
       latestEmailId: row.latestEmailId,
@@ -373,6 +374,7 @@ class EmailRepositoryImpl implements EmailRepository {
             messageCount: Value(threadEmails.length),
             hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
             isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+            hasAttachment: Value(threadEmails.any((e) => e.hasAttachment)),
             participantsJson: Value(jsonEncode(participants)),
             preview: Value(latest.preview),
             latestEmailId: latest.id,
@@ -1634,6 +1636,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 ),
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+                // enough_mail counts parts with Content-Disposition: attachment;
+                // JMAP's hasAttachment (below) is server-defined, so the two
+                // protocols may disagree on e.g. inline images.
                 hasAttachment: Value(msg.hasAttachments()),
                 threadId: Value(threadId),
                 messageId: Value(msgId),
@@ -3622,6 +3627,8 @@ class EmailRepositoryImpl implements EmailRepository {
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
+              // Server-defined (RFC 8621); IMAP instead counts
+              // Content-Disposition: attachment parts.
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
               threadId: Value(jmapThreadId),
               messageId: Value(jmapMessageId),

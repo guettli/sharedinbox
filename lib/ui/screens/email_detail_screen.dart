@@ -58,6 +58,11 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _isFlagged = false;
   bool _loadRemoteImages = false;
+
+  /// [htmlHasRemoteResources] result for the body last checked, so the regex
+  /// scan runs once per loaded body instead of on every rebuild.
+  String? _remoteCheckedHtml;
+  bool _remoteCheckedResult = false;
   final Set<String> _downloading = {};
 
   /// Non-null while a destructive or move action (delete, archive, spam, move,
@@ -544,6 +549,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  bool _hasRemoteResources(String html) {
+    if (!identical(html, _remoteCheckedHtml)) {
+      _remoteCheckedHtml = html;
+      _remoteCheckedResult = htmlHasRemoteResources(html);
+    }
+    return _remoteCheckedResult;
+  }
+
   Widget _buildBody(
     BuildContext ctx,
     Email? header,
@@ -557,6 +570,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final isTrusted = senderEmail != null &&
         trustedSenders.any((p) => globMatch(senderEmail, p));
     final effectiveLoadImages = _loadRemoteImages || isTrusted;
+    // Offering to load images on mail that has none would also silently add
+    // the sender to the trusted list for nothing.
+    final offerRemoteImages =
+        hasHtml && !effectiveLoadImages && _hasRemoteResources(body.htmlBody!);
 
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -567,7 +584,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           _buildLoadFailedNotice(ctx, body.loadError!),
         if (body.decodeFailed) _buildDecodeFailedNotice(ctx, header),
         if (hasHtml) ...[
-          if (!effectiveLoadImages)
+          if (offerRemoteImages)
             Align(
               alignment: Alignment.centerLeft,
               child: Padding(

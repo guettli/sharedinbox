@@ -193,6 +193,9 @@ class Threads extends Table {
   IntColumn get messageCount => integer().withDefault(const Constant(1))();
   BoolColumn get hasUnread => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
+  // Added in schema v60: any message in the thread has an attachment.
+  BoolColumn get hasAttachment =>
+      boolean().withDefault(const Constant(false))();
   // JSON-encoded List<{name,email}>
   TextColumn get participantsJson => text().withDefault(const Constant('[]'))();
   TextColumn get preview => text().nullable()();
@@ -1288,6 +1291,26 @@ class AppDatabase extends _$AppDatabase {
           if (from < 59 && await _tableExists(this, 'emails')) {
             // Reply-To addresses, so replies go where the sender asked (#919).
             await m.addColumn(emails, emails.replyToJson);
+          }
+          if (from < 60 &&
+              await _tableExists(this, 'threads') &&
+              await _tableExists(this, 'emails')) {
+            // v17 creates `threads` with the current columns, so only tables
+            // from v17+ need the column added. Its insert leaves the column
+            // at its default, so every upgrade still needs the backfill.
+            if (from >= 17) {
+              await m.addColumn(threads, threads.hasAttachment);
+            }
+            // Paperclip in the thread list: backfill from the emails.
+            await customStatement('''
+              UPDATE threads SET has_attachment = EXISTS (
+                SELECT 1 FROM emails e
+                WHERE e.account_id = threads.account_id
+                  AND e.mailbox_path = threads.mailbox_path
+                  AND COALESCE(e.thread_id, e.id) = threads.id
+                  AND e.has_attachment = 1
+              )
+            ''');
           }
         },
       );
