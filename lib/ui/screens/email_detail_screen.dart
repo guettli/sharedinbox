@@ -1428,6 +1428,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       context.push(
         '/compose',
         extra: {
+          // Answer from the account the mail arrived in. Without it Compose
+          // only picks an account when there is exactly one.
+          'accountId': header.accountId,
           'replyToEmailId': widget.emailId,
           'prefillTo': to,
           'prefillSubject': subject,
@@ -1577,7 +1580,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     unawaited(
       context.push(
         '/compose',
-        extra: {'prefillSubject': subject, 'prefillBody': quoted},
+        extra: {
+          'accountId': header.accountId,
+          'prefillSubject': subject,
+          'prefillBody': quoted,
+        },
       ),
     );
   }
