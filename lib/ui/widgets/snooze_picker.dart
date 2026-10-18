@@ -2,14 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 class SnoozePicker extends StatelessWidget {
-  const SnoozePicker({super.key});
+  const SnoozePicker({super.key, this.now});
+
+  /// Overrides the current time, for tests.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
+    final now = this.now ?? DateTime.now();
     final tomorrow = DateTime(now.year, now.month, now.day + 1, 8);
     final thisEvening = DateTime(now.year, now.month, now.day, 18);
-    final nextWeek = now.add(const Duration(days: 7));
+    // Same weekday next week at 08:00, as the tile says, not the current
+    // time of day. Built from fields rather than now + 7 days, which would
+    // also be an hour off across a DST change.
+    final nextWeek = DateTime(now.year, now.month, now.day + 7, 8);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -52,13 +58,18 @@ class SnoozePicker extends StatelessWidget {
             if (date == null) return;
             if (!context.mounted) return;
 
-            final time = await showTimePicker(
-              context: context,
-              initialTime: const TimeOfDay(hour: 8, minute: 0),
-            );
-            if (time == null) return;
-
-            if (context.mounted) {
+            // Today is a valid date, so the default 08:00 can already be
+            // over, and such a snooze would wake on the next sync: ask again
+            // until the time is in the future or the user cancels.
+            String? helpText;
+            var initialTime = const TimeOfDay(hour: 8, minute: 0);
+            while (true) {
+              final time = await showTimePicker(
+                context: context,
+                initialTime: initialTime,
+                helpText: helpText,
+              );
+              if (time == null || !context.mounted) return;
               final chosen = DateTime(
                 date.year,
                 date.month,
@@ -66,7 +77,14 @@ class SnoozePicker extends StatelessWidget {
                 time.hour,
                 time.minute,
               );
-              Navigator.pop(context, chosen);
+              if (chosen.isAfter(this.now ?? DateTime.now())) {
+                Navigator.pop(context, chosen);
+                return;
+              }
+              helpText = 'That time has passed. Pick a later one';
+              // Offer the next full hour instead of the time just refused.
+              final current = this.now ?? DateTime.now();
+              initialTime = TimeOfDay(hour: (current.hour + 1) % 24, minute: 0);
             }
           },
         ),

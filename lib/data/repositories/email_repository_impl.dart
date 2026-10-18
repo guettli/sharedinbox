@@ -41,6 +41,7 @@ import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_snippet.dart';
+import 'package:sharedinbox/data/imap/reply_headers.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
@@ -6673,6 +6674,7 @@ class EmailRepositoryImpl implements EmailRepository {
       ..subject = draft.subject
       ..messageId = draft.messageId
       ..text = draft.body;
+    addReplyHeaders(builder, draft);
     for (final filePath in draft.attachmentFilePaths) {
       final file = File(filePath);
       final mediaType = imap.MediaType.guessFromFileName(filePath);
@@ -6956,6 +6958,12 @@ class EmailRepositoryImpl implements EmailRepository {
       // JMAP messageId is an array of bracket-less ids (RFC 8621 §4.1.2.3).
       if (draft.messageId != null)
         'messageId': [normaliseMessageId(draft.messageId)],
+      // Same bracket-less array form for the reply headers (RFC 8621 §4.1.2.3).
+      if (normaliseMessageId(draft.inReplyTo) case final inReplyTo?)
+        'inReplyTo': [inReplyTo],
+      if (normaliseDraftReferences(draft.references) case final refs
+          when refs.isNotEmpty)
+        'references': refs,
       'bodyValues': {
         bodyPartId: {
           'value': draft.body,
