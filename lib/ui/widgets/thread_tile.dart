@@ -4,14 +4,41 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
+final _timeFmt = DateFormat.Hm();
 final _dateFmt = DateFormat('MMM d');
+final _dateWithYearFmt = DateFormat('MMM d, y');
 // Cache formatted dates by local calendar day to avoid repeated DateFormat.format calls.
+// Only past days are cached: today shows a time, which differs per message.
 final _formattedDates = <int, String>{};
+int? _cachedForDay;
 
 int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
 
-String _fmtDate(DateTime dt) =>
-    _formattedDates[_dayKey(dt)] ??= _dateFmt.format(dt);
+/// Clears the date cache so tests don't depend on each other's order.
+@visibleForTesting
+void resetThreadDateCache() {
+  _formattedDates.clear();
+  _cachedForDay = null;
+}
+
+/// The list date for a thread whose latest message is at [dt]: the time for
+/// messages from today, "MMM d" for this year, and "MMM d, y" for older ones —
+/// a bare "Oct 15" from a previous year read as this year.
+@visibleForTesting
+String formatThreadDate(DateTime dt, {DateTime? now}) {
+  final local = dt.toLocal();
+  final today = (now ?? DateTime.now()).toLocal();
+  final todayKey = _dayKey(today);
+  if (_cachedForDay != todayKey) {
+    _formattedDates.clear();
+    _cachedForDay = todayKey;
+  }
+  final key = _dayKey(local);
+  if (key == todayKey) return _timeFmt.format(local);
+  return _formattedDates[key] ??= local.year == today.year
+      ? _dateFmt.format(local)
+      : _dateWithYearFmt.format(local);
+}
 
 /// A list tile for an [EmailThread].
 ///
@@ -114,11 +141,19 @@ class ThreadTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (thread.hasAttachment)
+            const Icon(
+              Icons.attach_file,
+              size: AppIconSize.sm,
+              semanticLabel: 'Has attachment',
+            ),
+          if (thread.hasAttachment && thread.isFlagged)
+            const SizedBox(width: AppSpacing.xs),
           if (thread.isFlagged)
             const Icon(Icons.star, color: Colors.amber, size: AppIconSize.sm),
           const SizedBox(width: AppSpacing.xs),
           Text(
-            _fmtDate(thread.latestDate),
+            formatThreadDate(thread.latestDate),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],

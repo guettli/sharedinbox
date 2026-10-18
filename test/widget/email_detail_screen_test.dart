@@ -2267,6 +2267,28 @@ void main() {
     });
 
     testWidgets(
+      'Load remote images button is hidden when the HTML has no remote images',
+      (tester) async {
+        const body = EmailBody(
+          emailId: 'acc-1:42',
+          htmlBody:
+              '<h1>Hi</h1><p>A <a href="https://example.com">link</a></p>',
+          attachments: [],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: _overrides(body: body),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Load remote images'), findsNothing);
+      },
+    );
+
+    testWidgets(
       'Load remote images snack bar auto-dismisses after 3 seconds',
       (tester) async {
         const body = EmailBody(

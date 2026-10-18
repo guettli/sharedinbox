@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 59);
+      expect(db.schemaVersion, 60);
       await db.close();
     });
 
@@ -76,11 +76,13 @@ void main() {
         "INSERT INTO accounts (id, display_name, email, imap_host, imap_port, imap_ssl, smtp_host, smtp_port, smtp_ssl) VALUES ('acc-1', 'Alice', 'alice@example.com', 'imap.example.com', 993, 1, 'smtp.example.com', 465, 1);",
       );
       // Two pre-existing rows for the v55 preview repair (#680): one poisoned
-      // with the partial-fetch offset token, one with a real preview.
+      // with the partial-fetch offset token, one with a real preview. The
+      // first also has an attachment, for the v60 thread backfill.
       rawDb.execute('''
-        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at, preview)
-        VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, 0, '0>'),
-               ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, 0, 'A real preview.');
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at,
+                            preview, has_attachment)
+        VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, 0, '0>', 1),
+               ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, 0, 'A real preview.', 0);
       ''');
       rawDb.execute('PRAGMA user_version = 1;');
       rawDb.close();
@@ -140,6 +142,17 @@ void main() {
       };
       expect(previews['acc-1:INBOX:1'], isNull);
       expect(previews['acc-1:INBOX:2'], 'A real preview.');
+
+      // v60: threads built by the v17 step get has_attachment backfilled.
+      final threadAttachments = [
+        for (final row in await db
+            .customSelect(
+              'SELECT has_attachment FROM threads ORDER BY has_attachment',
+            )
+            .get())
+          row.read<bool>('has_attachment'),
+      ];
+      expect(threadAttachments, [false, true]);
 
       // v8: mailboxes role column.
       final mailboxColumns = await _tableColumns(db, 'mailboxes');
@@ -390,6 +403,20 @@ void main() {
           bytes_transferred INTEGER NOT NULL DEFAULT 0
         );
       ''');
+        // v60 backfill input: thread t-att has a message with an attachment,
+        // t-plain has none.
+        rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at,
+                            has_attachment, thread_id)
+        VALUES ('e-att', 'acc-x', 'INBOX', 1, 0, 1, 't-att'),
+               ('e-plain', 'acc-x', 'INBOX', 2, 0, 0, 't-plain');
+      ''');
+        rawDb.execute('''
+        INSERT INTO threads (account_id, mailbox_path, id, latest_date,
+                             latest_email_id)
+        VALUES ('acc-x', 'INBOX', 't-att', 0, 'e-att'),
+               ('acc-x', 'INBOX', 't-plain', 0, 'e-plain');
+      ''');
         rawDb.execute('PRAGMA user_version = 22;');
         rawDb.close();
 
@@ -399,6 +426,16 @@ void main() {
 
         final emailColumns = await _tableColumns(db, 'emails');
         expect(emailColumns, contains('list_unsubscribe_header'));
+
+        // v60: threads.has_attachment added to the existing table and
+        // backfilled from its emails.
+        final attachmentByThread = {
+          for (final row in await db
+              .customSelect('SELECT id, has_attachment FROM threads')
+              .get())
+            row.read<String>('id'): row.read<bool>('has_attachment'),
+        };
+        expect(attachmentByThread, {'t-att': true, 't-plain': false});
 
         final draftColumns = await _tableColumns(db, 'drafts');
         expect(draftColumns, contains('imap_server_id'));

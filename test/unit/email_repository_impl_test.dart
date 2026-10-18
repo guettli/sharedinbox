@@ -1078,6 +1078,48 @@ void main() {
       expect(threads.first.emailIds, ['acc-1:1', 'acc-1:2']);
     });
 
+    test('a rebuilt thread carries hasAttachment from its messages', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Two messages of one thread: uid 7 has an attachment and stays on the
+      // server, uid 5 is gone. Reconciling deletes uid 5 and rebuilds the
+      // thread row from what is left.
+      for (final (uid, att) in [(5, false), (7, true)]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                receivedAt: DateTime(2024, 1, uid),
+                threadId: const Value('tid-att'),
+                hasAttachment: Value(att),
+              ),
+            );
+      }
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 'tid-att',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              latestDate: DateTime(2024, 1, 7),
+              latestEmailId: 'acc-1:INBOX:7',
+            ),
+          );
+
+      await r.emails.reconcileDeletedImapForTest(
+        'acc-1',
+        'INBOX',
+        const [7],
+        serverMessageCount: 1,
+      );
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(threads.single.messageCount, 1);
+      expect(threads.single.hasAttachment, isTrue);
+    });
+
     test('observeThreads returns starred threads before unstarred', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');

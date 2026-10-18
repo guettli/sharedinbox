@@ -189,6 +189,7 @@ class EmailThread {
   final int messageCount;
   final bool hasUnread;
   final bool isFlagged;
+  final bool hasAttachment;
   final String latestEmailId;
   final String? preview;
   final String accountId;
@@ -205,6 +206,7 @@ class EmailThread {
     required this.messageCount,
     required this.hasUnread,
     required this.isFlagged,
+    this.hasAttachment = false,
     required this.latestEmailId,
     this.preview,
     required this.emailIds,
@@ -221,6 +223,7 @@ class EmailThread {
         messageCount: 1,
         hasUnread: !e.isSeen,
         isFlagged: e.isFlagged,
+        hasAttachment: e.hasAttachment,
         latestEmailId: e.id,
         preview: e.preview,
         emailIds: [e.id],

@@ -138,7 +138,6 @@ const _excluded = <String, String>{
       'Widget-only shared error-screen shell + Copy/Report buttons',
   'lib/ui/widgets/email_thread_list.dart':
       'Widget with a controller — controller has unit test, widget slice needs BuildContext',
-  'lib/ui/widgets/email_tile.dart': 'Widget-only list tile',
   'lib/ui/widgets/filter_builder.dart':
       'Widget-only interactive FilterGroup editor',
   'lib/ui/widgets/qr_scanner_view.dart':
