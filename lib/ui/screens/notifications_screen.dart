@@ -174,14 +174,14 @@ class NotificationsScreen extends ConsumerWidget {
       labelText: 'Email address',
       keyboardType: TextInputType.emailAddress,
     );
-    if (address == null || address.trim().isEmpty) return;
+    if (address == null) return;
     final filter = FilterGroup(
       operator: FilterOperator.and_,
       children: [
         FilterLeaf(
           field: FilterField.from_,
           comparison: FilterComparison.is_,
-          value: address.trim(),
+          value: address,
         ),
       ],
     );
@@ -198,14 +198,14 @@ class NotificationsScreen extends ConsumerWidget {
       title: 'Add mailing list / subject keyword',
       labelText: 'Subject contains',
     );
-    if (text == null || text.trim().isEmpty) return;
+    if (text == null) return;
     final filter = FilterGroup(
       operator: FilterOperator.and_,
       children: [
         FilterLeaf(
           field: FilterField.subject,
           comparison: FilterComparison.contains,
-          value: text.trim(),
+          value: text,
         ),
       ],
     );
