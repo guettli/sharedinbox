@@ -175,6 +175,36 @@ void main() {
       },
     );
 
+    testWidgets('blocks send while To is empty (#1061)', (tester) async {
+      final email = FakeEmailRepository();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/compose',
+          overrides: _composeOverrides(email: email),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Whitespace and stray commas do not count as a recipient.
+      await tester.enterText(find.widgetWithText(TextFormField, 'To'), ' , ');
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Subject'),
+        'No recipient',
+      );
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(find.text('Add a recipient in To first'), findsOneWidget);
+      expect(email.sentEmailAccountId, isNull);
+      expect(email.sendNowRowIds, isEmpty);
+      expect(find.byType(ComposeScreen), findsOneWidget);
+
+      // Let the SnackBar auto-dismiss so no timer leaks into teardown.
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets(
       'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {

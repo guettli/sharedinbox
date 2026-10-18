@@ -368,6 +368,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       return;
     }
+    final to = _to.text
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .map((e) => EmailAddress(email: e))
+        .toList();
+    if (to.isEmpty) {
+      context.showAppSnackBar(
+        'Add a recipient in To first',
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
     setState(() => _sending = true);
     final messenger = context.appMessenger();
     try {
@@ -375,12 +388,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
-        to: _to.text
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .map((e) => EmailAddress(email: e))
-            .toList(),
+        to: to,
         cc: _cc.text
             .split(',')
             .map((s) => s.trim())
