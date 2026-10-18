@@ -275,8 +275,9 @@ void main() {
         cc: base.cc,
         subject: 'Re: ${base.subject}',
         body: base.body,
-        inReplyTo: 'parent@example.com',
-        references: const ['root@example.com', 'parent@example.com'],
+        // Bracketed on purpose: the create must not send `<x>` ids.
+        inReplyTo: '<parent@example.com>',
+        references: const ['<root@example.com>', 'parent@example.com'],
       ),
     );
 

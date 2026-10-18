@@ -132,6 +132,35 @@ void main() {
       expect(seen?.references, ['root@example.com', 'parent@example.com']);
     });
 
+    test('a reply with still-bracketed ids does not double the brackets',
+        () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+      final base = _makeDraft(subject: 'Re: Hello');
+      await repo.enqueue(
+        _accountId,
+        EmailDraft(
+          from: base.from,
+          to: base.to,
+          cc: base.cc,
+          subject: base.subject,
+          body: base.body,
+          inReplyTo: '<parent@example.com>',
+          references: const ['<root@example.com>', 'parent@example.com'],
+        ),
+      );
+
+      final rows = await db.select(db.outbox).get();
+      final mime = utf8.decode(base64.decode(rows.first.mimeBase64));
+      expect(mime, contains('In-Reply-To: <parent@example.com>'));
+      expect(
+        mime,
+        contains('References: <root@example.com> <parent@example.com>'),
+      );
+      expect(mime, isNot(contains('<<')));
+    });
+
     test(
       'flush passes the decoded draft to the sender and deletes on success',
       () async {

@@ -368,14 +368,30 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   /// `In-Reply-To` / `References` for a reply, from the original message's
-  /// stored headers. Null for a new message, or when the original is gone or
-  /// has no Message-ID; the reply is then sent unthreaded rather than not at
-  /// all.
+  /// stored headers. Null for a new message, or when the original is gone,
+  /// has no Message-ID or cannot be read; the reply is then sent unthreaded
+  /// rather than not at all.
   Future<({String inReplyTo, List<String> references})?>
       _replyThreading() async {
     final id = _replyToEmailId;
     if (id == null) return null;
-    final parent = await ref.read(emailRepositoryProvider).getEmail(id);
+    final Email? parent;
+    try {
+      parent = await ref.read(emailRepositoryProvider).getEmail(id);
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'compose.reply_threading_failed',
+              'Could not load the original message; sending unthreaded',
+              screen: 'ComposeScreen',
+              accountId: _accountId,
+              emailId: id,
+              error: e,
+              stack: stack,
+            ),
+      );
+      return null;
+    }
     if (parent == null) return null;
     return replyThreading(
       messageId: parent.messageId,

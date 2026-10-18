@@ -74,6 +74,15 @@ void main() {
       expect(normaliseReferences('<> <>'), isNull);
     });
 
+    test('splits ids written without whitespace between them', () {
+      expect(normaliseReferences('<a@x><b@y>'), 'a@x b@y');
+    });
+
+    test('recovers ids from a half-stripped multi-id value', () {
+      // normaliseMessageId('<a@x> <b@y>') strips only the outer pair.
+      expect(normaliseReferences('a@x> <b@y'), 'a@x b@y');
+    });
+
     test('preserves order', () {
       expect(
         normaliseReferences('<c@z> <a@x> <b@y>'),
@@ -109,10 +118,30 @@ void main() {
       expect(t?.references, ['a@x', 'p@x']);
     });
 
+    test('falls back to a multi-id In-Reply-To without mangling it', () {
+      final t = replyThreading(messageId: 'p@x', inReplyTo: 'a@x> <b@x');
+      expect(t?.references, ['a@x', 'b@x', 'p@x']);
+    });
+
+    test('caps References at the root plus the most recent ids', () {
+      final ancestors = [for (var i = 0; i < 30; i++) '<m$i@x>'].join(' ');
+      final t = replyThreading(messageId: 'p@x', references: ancestors);
+      expect(t?.references, [
+        'm0@x',
+        for (var i = 11; i < 30; i++) 'm$i@x',
+        'p@x',
+      ]);
+      expect(t?.references, hasLength(maxReplyReferenceTail + 1));
+    });
+
     test('is null when the parent has no Message-ID', () {
       expect(replyThreading(messageId: null, references: 'a@x'), isNull);
       expect(replyThreading(messageId: '<>'), isNull);
     });
+  });
+
+  test('normaliseDraftReferences strips brackets and drops empty ids', () {
+    expect(normaliseDraftReferences(['<a@x>', 'b@y', '<>']), ['a@x', 'b@y']);
   });
 
   test('bracketMessageIds renders a header value', () {

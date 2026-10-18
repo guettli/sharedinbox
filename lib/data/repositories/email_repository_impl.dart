@@ -6943,8 +6943,11 @@ class EmailRepositoryImpl implements EmailRepository {
       if (draft.messageId != null)
         'messageId': [normaliseMessageId(draft.messageId)],
       // Same bracket-less array form for the reply headers (RFC 8621 §4.1.2.3).
-      if (draft.inReplyTo != null) 'inReplyTo': [draft.inReplyTo],
-      if (draft.references.isNotEmpty) 'references': draft.references,
+      if (normaliseMessageId(draft.inReplyTo) case final inReplyTo?)
+        'inReplyTo': [inReplyTo],
+      if (normaliseDraftReferences(draft.references) case final refs
+          when refs.isNotEmpty)
+        'references': refs,
       'bodyValues': {
         bodyPartId: {
           'value': draft.body,
