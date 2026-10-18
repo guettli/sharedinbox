@@ -27,6 +27,7 @@ import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
+import 'package:sharedinbox/core/utils/imap_date.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
@@ -1509,8 +1510,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // separately by [_fetchPreviewSnippetsSafely]: enough_mail's response
     // tokeniser mis-parses any partial `BODY.PEEK[…]<0.n>` item, so asking for
     // it here would set the message body to the literal string `0>` (#680).
-    const fetchItems = '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE '
-        'BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
+    const fetchItems = '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE '
+        'RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1615,7 +1616,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 uid: uid,
                 subject: Value(subject),
                 sentAt: Value(envelope.date),
-                receivedAt: envelope.date ?? DateTime.now(),
+                // The server's arrival time, like JMAP `receivedAt`. Never
+                // the local fetch time when the server knows better: mail
+                // without a Date header used to be re-dated to "now" on every
+                // re-fetch, so a resync or reinstall moved it to the top.
+                receivedAt: parseImapDateTime(msg.internalDate) ??
+                    envelope.date ??
+                    DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
