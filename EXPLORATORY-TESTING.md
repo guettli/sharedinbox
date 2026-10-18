@@ -193,6 +193,12 @@ IMAP is available too, at `localhost:21430` (plaintext).
   `lib/ui/widgets/secure_email_webview.dart`), because webview_flutter has no
   Linux support. Judge HTML layout on Android. On Linux, check only that the
   text is complete and readable.
+- **Type ASCII only.** `xdotool` types a non-ASCII character such as `ü` by
+  temporarily remapping a keycode. Flutter's GTK key handling then logs
+  `CRITICAL … update_pressing_state … assertion … failed` and the keystrokes
+  are lost. Worse, the app can drop off the accessibility bus (`texts` says
+  `<app not on the accessibility bus>`) until `c restart`. To test non-ASCII
+  input, seed it through SMTP (see **Seed mail** above) or check it on Android.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The
