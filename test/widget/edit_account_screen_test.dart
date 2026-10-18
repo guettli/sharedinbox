@@ -204,6 +204,9 @@ void main() {
         expect(saved.imapHost, isNot('localhost'));
         expect(saved.imapSsl, isFalse);
         expect(saved.smtpSsl, isFalse);
+        // Each switch moved its own form's standard port along.
+        expect(saved.imapPort, 143);
+        expect(saved.smtpPort, 587);
       },
     );
 
