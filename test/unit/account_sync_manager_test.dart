@@ -69,6 +69,38 @@ void main() {
     },
   );
 
+  // A kick (a local change was queued, or Retry was pressed) that lands while
+  // a sync cycle is running used to be dropped: kick() only completed an
+  // active wait, and the loop then idled — IMAP IDLE for up to 25 minutes —
+  // with the change still queued. Seen on a device as an Undo that never
+  // reached the server, because the archive before it had just started a
+  // cycle. The kick must instead cut the following wait short.
+  test('a kick during a running sync cycle starts the next cycle at once',
+      () async {
+    final release = Completer<void>();
+    final mailboxes = _BlockingFailingMailboxRepository(release.future);
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      mailboxes,
+      FakeEmailRepository(),
+      syncLog: FakeSyncLogRepository(),
+    );
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
+
+    // Kick mid-cycle, then let the cycle finish (it fails, so the loop would
+    // otherwise sit out a 5 s backoff before cycle two).
+    expect(m.syncNow('1'), isTrue);
+    release.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    expect(mailboxes.calls, 2);
+
+    m.dispose();
+  });
+
   // Regression test for issue #501: pressing Retry on a queued message used to
   // pop a "Retrying send…" snackbar even when the account's sync loop had
   // already stopped on a permanent error — so nothing ran and no log entry
@@ -489,6 +521,23 @@ class _FailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
     zone.print('C: 99 SOMEBROKENCOMMAND');
     zone.print('S: 99 BAD Could not parse command');
     throw Exception('BAD Could not parse command');
+  }
+}
+
+/// A mailbox repository whose [syncMailboxes] waits for [release] and then
+/// fails, so a test can act while a sync cycle is in flight. Counts the calls,
+/// one per cycle.
+class _BlockingFailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  _BlockingFailingMailboxRepository(this.release);
+
+  final Future<void> release;
+  int calls = 0;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    calls++;
+    await release;
+    throw Exception('server unavailable');
   }
 }
 

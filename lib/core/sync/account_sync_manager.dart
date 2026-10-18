@@ -683,9 +683,42 @@ abstract class _SyncLoop {
   bool get isRunning;
 }
 
+/// The wake-up signal shared by the IMAP and JMAP sync loops.
+///
+/// A loop waits (IDLE, push, poll or backoff) on [_stopSignal]; [kick]
+/// completes it so queued local changes are flushed at once. A kick that
+/// lands while a sync cycle is running has no wait to complete — it used to be
+/// dropped, leaving e.g. an undo that followed an archive queued until the next
+/// IDLE wake-up, up to 25 minutes later. It is now remembered and the next
+/// wait returns immediately.
+mixin _KickableWait implements _SyncLoop {
+  Completer<void>? _stopSignal;
+  bool _kickPending = false;
+
+  @override
+  void kick() {
+    if (_stopSignal != null && !_stopSignal!.isCompleted) {
+      _stopSignal!.complete();
+      return;
+    }
+    _kickPending = true;
+  }
+
+  /// Starts a wait: a fresh [_stopSignal], already completed when a kick
+  /// arrived while no wait was active.
+  Completer<void> _beginWait() {
+    final signal = Completer<void>();
+    if (_kickPending) {
+      _kickPending = false;
+      signal.complete();
+    }
+    return _stopSignal = signal;
+  }
+}
+
 // ── IMAP ──────────────────────────────────────────────────────────────────────
 
-class _AccountSync implements _SyncLoop {
+class _AccountSync with _KickableWait implements _SyncLoop {
   _AccountSync(
     this.account,
     this._accounts,
@@ -718,7 +751,6 @@ class _AccountSync implements _SyncLoop {
   imap.ImapClient? _idleClient;
   bool _running = false;
   int _backoffSeconds = 5;
-  Completer<void>? _stopSignal;
   Timer? _waitTimer;
 
   /// Credential-redacted protocol trace captured for the most recent failed
@@ -744,13 +776,6 @@ class _AccountSync implements _SyncLoop {
     }
     _idleClient?.logout().ignore();
     _idleClient = null;
-  }
-
-  @override
-  void kick() {
-    if (_stopSignal != null && !_stopSignal!.isCompleted) {
-      _stopSignal!.complete();
-    }
   }
 
   Future<void> _loop() async {
@@ -892,7 +917,7 @@ class _AccountSync implements _SyncLoop {
 
   Future<void> _waitSeconds(int seconds) async {
     if (!_running) return;
-    _stopSignal = Completer<void>();
+    _beginWait();
     _waitTimer = Timer(Duration(seconds: seconds), () {
       if (!_stopSignal!.isCompleted) _stopSignal!.complete();
     });
@@ -1007,7 +1032,11 @@ class _AccountSync implements _SyncLoop {
 
   Future<void> _idle() async {
     if (!_running) return;
-    _stopSignal = Completer<void>();
+    if (_beginWait().isCompleted) {
+      // A change was queued during the last cycle: sync again right away.
+      _stopSignal = null;
+      return;
+    }
     final password = await _accounts.getPassword(account.id);
     final username =
         account.username.isNotEmpty ? account.username : account.email;
@@ -1059,7 +1088,7 @@ class _AccountSync implements _SyncLoop {
 
 // ── JMAP ──────────────────────────────────────────────────────────────────────
 
-class _JmapAccountSync implements _SyncLoop {
+class _JmapAccountSync with _KickableWait implements _SyncLoop {
   _JmapAccountSync(
     this.account,
     this._mailboxes,
@@ -1089,7 +1118,6 @@ class _JmapAccountSync implements _SyncLoop {
 
   bool _running = false;
   int _backoffSeconds = 5;
-  Completer<void>? _stopSignal;
   Timer? _waitTimer;
 
   /// Poll interval used only when JMAP push (SSE) is unavailable — e.g. the
@@ -1110,13 +1138,6 @@ class _JmapAccountSync implements _SyncLoop {
   @override
   void stop() {
     _running = false;
-    if (_stopSignal != null && !_stopSignal!.isCompleted) {
-      _stopSignal!.complete();
-    }
-  }
-
-  @override
-  void kick() {
     if (_stopSignal != null && !_stopSignal!.isCompleted) {
       _stopSignal!.complete();
     }
@@ -1260,7 +1281,7 @@ class _JmapAccountSync implements _SyncLoop {
 
   Future<void> _waitSeconds(int seconds) async {
     if (!_running) return;
-    _stopSignal = Completer<void>();
+    _beginWait();
     _waitTimer = Timer(Duration(seconds: seconds), () {
       if (!_stopSignal!.isCompleted) _stopSignal!.complete();
     });
@@ -1366,7 +1387,11 @@ class _JmapAccountSync implements _SyncLoop {
 
   Future<void> _wait() async {
     if (!_running) return;
-    _stopSignal = Completer<void>();
+    if (_beginWait().isCompleted) {
+      // A change was queued during the last cycle: sync again right away.
+      _stopSignal = null;
+      return;
+    }
     final password = await _accounts.getPassword(account.id);
 
     // Try JMAP push (RFC 8887 EventSource). When the stream stays open the
