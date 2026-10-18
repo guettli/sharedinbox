@@ -184,5 +184,82 @@ void main() {
         isTrue,
       );
     });
+
+    test('true for SVG <image>/<feImage> href and xlink:href', () {
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image xlink:href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><filter><feImage href="//x.test/a.png"/></filter></svg>',
+        ),
+        isTrue,
+      );
+    });
+
+    test('false for a plain <a href> link', () {
+      expect(
+        htmlHasRemoteResources('<svg><a href="https://x.test/">x</a></svg>'),
+        isFalse,
+      );
+    });
+
+    test('true for CSS image-set() with bare strings', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:image-set("https://x.test/a.png" 1x)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:-webkit-image-set(&quot;a.png&quot; 1x, '
+          '&quot;https://x.test/b.png&quot; 2x)">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for a remote srcset candidate that is not the first', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:a" srcset="a.png 1x, https://x.test/b.png 2x">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for url() quoted with hex entities', () {
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#x22;https://x.test/b.jpg&#x22;)">',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#X27;//x.test/b.jpg&#X27;)">',
+        ),
+        isTrue,
+      );
+    });
+
+    // Not a parser: a lazy-load attribute like data-src= also matches, which
+    // only shows the button needlessly (the WebView would not fetch it).
+    test('documented false positive: data-src', () {
+      expect(
+        htmlHasRemoteResources('<img src="cid:a" data-src="https://x.test/a">'),
+        isTrue,
+      );
+    });
   });
 }
