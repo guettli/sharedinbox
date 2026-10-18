@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -85,6 +86,7 @@ void main() {
       FakeEmailRepository(),
       syncLog: FakeSyncLogRepository(),
     );
+    addTearDown(m.dispose);
 
     m.start();
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -97,8 +99,76 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
     expect(mailboxes.calls, 2);
+  });
 
-    m.dispose();
+  // Same, but the cycle succeeds: the loop must not go into IMAP IDLE (where
+  // the queued change would sit for up to 25 minutes) before cycle two.
+  test('a kick during a successful IMAP cycle skips IDLE and syncs again',
+      () async {
+    final release = Completer<void>();
+    var connects = 0;
+    int? connectsBeforeSecondCycle;
+    final mailboxes = _BlockingMailboxRepository(
+      release.future,
+      onCall: (n) {
+        if (n == 2) connectsBeforeSecondCycle = connects;
+      },
+    );
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      mailboxes,
+      FakeEmailRepository(),
+      syncLog: FakeSyncLogRepository(),
+      imapConnect: (_, __, ___) {
+        connects++;
+        // Never connects: the loop would hang here in place of a real IDLE.
+        return Completer<imap.ImapClient>().future;
+      },
+    );
+    addTearDown(m.dispose);
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
+
+    expect(m.syncNow('1'), isTrue);
+    release.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    expect(mailboxes.calls, 2);
+    expect(connectsBeforeSecondCycle, 0, reason: 'IDLE was not entered');
+  });
+
+  // The JMAP loop waits on push (EventSource) instead of IDLE; a mid-cycle
+  // kick must skip that wait the same way.
+  test('a kick during a successful JMAP cycle skips the push wait', () async {
+    final release = Completer<void>();
+    final emails = _PushCountingEmailRepository();
+    int? pushWaitsBeforeSecondCycle;
+    final mailboxes = _BlockingMailboxRepository(
+      release.future,
+      onCall: (n) {
+        if (n == 2) pushWaitsBeforeSecondCycle = emails.pushWatches;
+      },
+    );
+    final m = AccountSyncManager(
+      _OkAccountRepository(type: AccountType.jmap),
+      mailboxes,
+      emails,
+      syncLog: FakeSyncLogRepository(),
+    );
+    addTearDown(m.dispose);
+
+    m.start();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
+
+    expect(m.syncNow('1'), isTrue);
+    release.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    expect(mailboxes.calls, 2);
+    expect(pushWaitsBeforeSecondCycle, 0, reason: 'push wait was not entered');
   });
 
   // Regression test for issue #501: pressing Retry on a queued message used to
@@ -474,12 +544,16 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 /// sync fails. Implemented via [noSuchMethod] so it carries no repository
 /// boilerplate to duplicate.
 class _OkAccountRepository implements AccountRepository {
-  static const _account = Account(
-    id: '1',
-    displayName: 'Test',
-    email: 'test@example.com',
-    imapHost: 'imap.example.com',
-  );
+  _OkAccountRepository({AccountType type = AccountType.imap})
+      : _account = Account(
+          id: '1',
+          displayName: 'Test',
+          email: 'test@example.com',
+          imapHost: 'imap.example.com',
+          type: type,
+        );
+
+  final Account _account;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
@@ -538,6 +612,36 @@ class _BlockingFailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
     calls++;
     await release;
     throw Exception('server unavailable');
+  }
+}
+
+/// A mailbox repository whose first [syncMailboxes] waits for [release]; every
+/// call succeeds. [onCall] sees the 1-based call number, one per sync cycle.
+class _BlockingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  _BlockingMailboxRepository(this.release, {required this.onCall});
+
+  final Future<void> release;
+  final void Function(int call) onCall;
+  int calls = 0;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    calls++;
+    onCall(calls);
+    if (calls == 1) await release;
+    return 1;
+  }
+}
+
+/// Counts JMAP push waits; the push stream never fires nor closes, like a
+/// connected but silent EventSource.
+class _PushCountingEmailRepository extends FakeEmailRepositoryBase {
+  int pushWatches = 0;
+
+  @override
+  Stream<void> watchJmapPush(String a, String password) {
+    pushWatches++;
+    return StreamController<void>().stream;
   }
 }
 

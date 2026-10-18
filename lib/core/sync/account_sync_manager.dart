@@ -714,11 +714,24 @@ mixin _KickableWait implements _SyncLoop {
     }
     return _stopSignal = signal;
   }
+
+  /// Called right before a cycle flushes the pending-changes queue: that
+  /// flush sends everything queued so far, so an earlier kick needs no extra
+  /// cycle. A kick that lands once the flush has started still counts.
+  void _clearKickBeforeFlush() => _kickPending = false;
+
+  /// For an IDLE/push wait: when a kick arrived during the last cycle, returns
+  /// true (the caller syncs again right away instead of waiting).
+  bool _consumePendingKick() {
+    if (!_beginWait().isCompleted) return false;
+    _stopSignal = null;
+    return true;
+  }
 }
 
 // ── IMAP ──────────────────────────────────────────────────────────────────────
 
-class _AccountSync with _KickableWait implements _SyncLoop {
+class _AccountSync with _KickableWait {
   _AccountSync(
     this.account,
     this._accounts,
@@ -961,6 +974,7 @@ class _AccountSync with _KickableWait implements _SyncLoop {
     // Check for expired snoozes and move them back to Inbox before syncing.
     await _emails.wakeUpEmails(account.id);
 
+    _clearKickBeforeFlush();
     final pendingFlushed = await _emails.flushPendingChanges(
       account.id,
       password,
@@ -1032,11 +1046,8 @@ class _AccountSync with _KickableWait implements _SyncLoop {
 
   Future<void> _idle() async {
     if (!_running) return;
-    if (_beginWait().isCompleted) {
-      // A change was queued during the last cycle: sync again right away.
-      _stopSignal = null;
-      return;
-    }
+    // A change was queued during the last cycle: sync again right away.
+    if (_consumePendingKick()) return;
     final password = await _accounts.getPassword(account.id);
     final username =
         account.username.isNotEmpty ? account.username : account.email;
@@ -1088,7 +1099,7 @@ class _AccountSync with _KickableWait implements _SyncLoop {
 
 // ── JMAP ──────────────────────────────────────────────────────────────────────
 
-class _JmapAccountSync with _KickableWait implements _SyncLoop {
+class _JmapAccountSync with _KickableWait {
   _JmapAccountSync(
     this.account,
     this._mailboxes,
@@ -1316,6 +1327,7 @@ class _JmapAccountSync with _KickableWait implements _SyncLoop {
     await _emails.wakeUpEmails(account.id);
 
     // Drain outbound queue before pulling from server.
+    _clearKickBeforeFlush();
     final pendingFlushed = await _emails.flushPendingChanges(
       account.id,
       password,
@@ -1387,11 +1399,8 @@ class _JmapAccountSync with _KickableWait implements _SyncLoop {
 
   Future<void> _wait() async {
     if (!_running) return;
-    if (_beginWait().isCompleted) {
-      // A change was queued during the last cycle: sync again right away.
-      _stopSignal = null;
-      return;
-    }
+    // A change was queued during the last cycle: sync again right away.
+    if (_consumePendingKick()) return;
     final password = await _accounts.getPassword(account.id);
 
     // Try JMAP push (RFC 8887 EventSource). When the stream stays open the
