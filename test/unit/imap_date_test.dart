@@ -30,5 +30,21 @@ void main() {
       expect(parseImapDateTime('Thu, 15 Oct 2026 12:22:10 +0000'), isNull);
       expect(parseImapDateTime('15-Foo-2026 12:22:10 +0000'), isNull);
     });
+
+    test('returns null for out-of-range fields instead of rolling over', () {
+      expect(parseImapDateTime('31-Feb-2026 12:00:00 +0000'), isNull);
+      expect(parseImapDateTime('29-Feb-2026 12:00:00 +0000'), isNull);
+      expect(parseImapDateTime('00-Oct-2026 12:00:00 +0000'), isNull);
+      expect(parseImapDateTime('15-Oct-2026 99:00:00 +0000'), isNull);
+      expect(parseImapDateTime('15-Oct-2026 12:60:00 +0000'), isNull);
+      expect(parseImapDateTime('15-Oct-2026 12:00:61 +0000'), isNull);
+    });
+
+    test('accepts a leap day in a leap year', () {
+      expect(
+        parseImapDateTime('29-Feb-2024 23:59:59 +0000'),
+        DateTime.utc(2024, 2, 29, 23, 59, 59),
+      );
+    });
   });
 }

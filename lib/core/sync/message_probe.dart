@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/utils/imap_date.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
@@ -165,7 +166,8 @@ class MessageProbeImpl implements MessageProbe {
       await client.selectUnicodeMailboxByPath(mailboxPath);
       final result = await client.uidFetchMessage(
         uid,
-        '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE BODY.PEEK[HEADER])',
+        '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE RFC822.SIZE '
+        'BODY.PEEK[HEADER])',
       );
       final msg = result.messages.firstOrNull;
       if (msg == null) return const ProbeResult.notFound();
@@ -192,7 +194,8 @@ class MessageProbeImpl implements MessageProbe {
           messageId: normaliseMessageId(envelope?.messageId),
           subject: envelope?.subject,
           sentAt: envelope?.date,
-          receivedAt: envelope?.date,
+          // Same source as the sync (INTERNALDATE), so the two agree.
+          receivedAt: parseImapDateTime(msg.internalDate) ?? envelope?.date,
           isSeen: msg.flags?.contains(r'\Seen') ?? false,
           isFlagged: msg.flags?.contains(r'\Flagged') ?? false,
           hasAttachment: msg.hasAttachments(),

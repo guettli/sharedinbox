@@ -27,17 +27,25 @@ DateTime? parseImapDateTime(String? value) {
   if (m == null) return null;
   final month = _months[m.group(2)!.toLowerCase()];
   if (month == null) return null;
-  final local = DateTime.utc(
-    int.parse(m.group(3)!),
-    month,
-    int.parse(m.group(1)!),
-    int.parse(m.group(4)!),
-    int.parse(m.group(5)!),
-    int.parse(m.group(6)!),
-  );
+  final year = int.parse(m.group(3)!);
+  final day = int.parse(m.group(1)!);
+  final hour = int.parse(m.group(4)!);
+  final minute = int.parse(m.group(5)!);
+  final second = int.parse(m.group(6)!);
+  final wall = DateTime.utc(year, month, day, hour, minute, second);
+  // DateTime.utc rolls out-of-range fields over (31-Feb becomes 3-Mar, hour
+  // 99 the next days) instead of rejecting them; treat that as malformed.
+  if (wall.year != year ||
+      wall.month != month ||
+      wall.day != day ||
+      wall.hour != hour ||
+      wall.minute != minute ||
+      wall.second != second) {
+    return null;
+  }
   final offset = Duration(
     hours: int.parse(m.group(8)!),
     minutes: int.parse(m.group(9)!),
   );
-  return m.group(7) == '+' ? local.subtract(offset) : local.add(offset);
+  return m.group(7) == '+' ? wall.subtract(offset) : wall.add(offset);
 }

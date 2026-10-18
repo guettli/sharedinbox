@@ -327,8 +327,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.mailboxPath.equals(mailboxPath) &
                 t.threadId.equals(threadId),
           )
+          // Same key as `latestDate` below, so an undated message sorts by
+          // its arrival time rather than first (SQLite orders NULL lowest).
           ..orderBy([
-            (t) => OrderingTerm.asc(t.sentAt),
+            (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
             (t) => OrderingTerm.asc(t.receivedAt),
           ]))
         .get();

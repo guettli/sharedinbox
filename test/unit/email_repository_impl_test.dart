@@ -8696,6 +8696,44 @@ void main() {
       expect(dated.receivedAt.toUtc(), DateTime.utc(2024, 6, 16, 8));
     });
 
+    test(
+        'syncEmails makes an undated message the thread latest when it '
+        'arrived last', () async {
+      // The reply has no Date header but the latest INTERNALDATE.
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'Topic',
+          from: 'a@example.com',
+          text: 'First',
+          messageId: '<m42@example.com>',
+          internalDate: '15-Jun-2024 12:00:00 +0000',
+        ),
+        43: _PreviewTestMessage(
+          subject: 'Re: Topic',
+          from: 'b@example.com',
+          text: 'Second',
+          messageId: '<m43@example.com>',
+          inReplyTo: '<m42@example.com>',
+          hasDateHeader: false,
+          internalDate: '17-Jun-2024 09:00:00 +0000',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      final thread = threads.single;
+      expect(thread.messageCount, 2);
+      expect(thread.latestEmailId, 'acc-1:INBOX:43');
+      expect(thread.latestDate.toUtc(), DateTime.utc(2024, 6, 17, 9));
+    });
+
     test('syncEmails stores the Reply-To envelope addresses (#919)', () async {
       final messages = {
         42: _PreviewTestMessage(
@@ -9576,7 +9614,11 @@ class _PreviewTestMessage {
     this.replyTo,
     this.hasDateHeader = true,
     this.internalDate,
+    this.inReplyTo,
   });
+
+  /// The envelope's In-Reply-To, threading this message under that one.
+  final String? inReplyTo;
 
   /// False builds a message whose envelope carries no Date.
   final bool hasDateHeader;
@@ -9629,6 +9671,7 @@ class _PreviewTestMessage {
         to: const [imap.MailAddress(null, 'alice@example.com')],
         replyTo: replyTo == null ? null : [imap.MailAddress(null, replyTo!)],
         messageId: messageId,
+        inReplyTo: inReplyTo,
       );
     return msg;
   }
@@ -9709,9 +9752,15 @@ class _PreviewSyncImapClient extends FakeImapClient {
     int? changedSinceModSequence,
     Duration? responseTimeout,
   }) async {
+    // Like a real server, only answer INTERNALDATE when it was asked for.
+    final wantsInternalDate =
+        fetchContentDefinition?.contains('INTERNALDATE') ?? false;
     final built = <imap.MimeMessage>[
       for (final uid in sequence.toList())
-        if (messages[uid] != null) messages[uid]!.build(uid),
+        if (messages[uid] != null)
+          messages[uid]!.build(uid)
+            ..internalDate =
+                wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
   }
