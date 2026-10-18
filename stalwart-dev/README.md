@@ -71,6 +71,11 @@ base URL you passed).
 
 ## 3. Drive the Android app against it
 
+> For most exploratory testing, the Linux build is quicker: no device, no
+> reinstall, and an accessibility-tree API instead of pixel taps. See
+> [EXPLORATORY-TESTING.md](../EXPLORATORY-TESTING.md). Use the device for
+> Android-specific behaviour.
+
 For end-to-end / exploratory testing, point the installed app
 (`de.sharedinbox.mua`) on a USB-connected device — `adb devices` to confirm one
 is attached — at the throwaway Stalwart and click through it from the shell. No
