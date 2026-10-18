@@ -36,7 +36,7 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 mkdir -p "${GUI_SHOT_DIR:-/shots}"
 
 gui_session_forward_stalwart
-[ -n "${STALWART_READY:-}" ] || echo "         (the IMAP test will be skipped)"
+[ -n "${STALWART_READY:-}" ] || echo "Stalwart unavailable: the IMAP test will be skipped"
 gui_session_start_desktop
 
 sharedinbox >/tmp/app.log 2>&1 &

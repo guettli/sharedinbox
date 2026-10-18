@@ -1650,11 +1650,7 @@ func guiRuntime() *dagger.Container {
 				// accessibility: at-spi plus the GSettings machinery Flutter
 				// consults before it will build a semantics tree at all
 				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
-				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service " +
-				// a Secret Service, so flutter_secure_storage can save an
-				// account password (ExploreLinux adds accounts; the release
-				// test stops before saving)
-				"gnome-keyring"}).
+				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
 		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
 		WithExec([]string{"install", "-d", "-o", "tester", "/shots"})
 }
@@ -1663,12 +1659,12 @@ func guiRuntime() *dagger.Container {
 // next to a throwaway Stalwart, for exploratory testing by an agent (see
 // EXPLORATORY-TESTING.md). It is a long-running service, not a check:
 //
-//	dagger call --progress=plain -m ci --source=. explore-linux up \
-//	  --ports 8765:8765,1430:1430,1025:1025,8080:8080
+//	task explore-linux
 //
 // Port 8765 is scripts/explore_server.py, an HTTP API that drives the app
 // through its accessibility tree; 1430/1025/8080 reach Stalwart's IMAP, SMTP
-// and JMAP, to seed and inspect the mailbox the app syncs.
+// and JMAP, to seed and inspect the mailbox the app syncs. The task maps them
+// to offset host ports so they do not collide with `task stalwart`.
 //
 // A debug build on purpose: framework assertions stay on, so a misuse that a
 // release build silently tolerates shows up in /log.
@@ -1681,6 +1677,11 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 			"scripts/explore_entrypoint.sh", "scripts/explore_server.py"},
 	})
 	ctr := guiRuntime().
+		// A Secret Service, so flutter_secure_storage can save an account
+		// password. Only here: in the release test it would register a D-Bus
+		// activatable keyring whose first-use prompt could cover the app.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends gnome-keyring"}).
 		WithDirectory("/app", bundle, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithUser("tester").
@@ -1688,8 +1689,7 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 		WithExposedPort(8765). // explore_server.py
 		WithExposedPort(1430). // IMAP, forwarded to Stalwart
 		WithExposedPort(1025). // SMTP
-		WithExposedPort(8080). // JMAP
-		WithExposedPort(4190)  // ManageSieve
+		WithExposedPort(8080)  // JMAP
 	return m.WithStalwart(ctr).AsService(dagger.ContainerAsServiceOpts{
 		Args: []string{"bash", "/src/scripts/explore_entrypoint.sh"},
 	})

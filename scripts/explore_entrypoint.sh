@@ -8,13 +8,10 @@ set -euo pipefail
 # shellcheck source=scripts/gui_session.sh
 . "$(dirname "$0")/gui_session.sh"
 
-# JMAP and ManageSieve too, so the agent can seed and inspect the mailbox
-# through the same tunnel the app's IMAP/SMTP go through.
+# JMAP, so the agent can inspect the mailbox through the same tunnel the app's
+# IMAP/SMTP go through, and ManageSieve, which the app probes on localhost.
 gui_session_forward_stalwart 8080:8080 4190:4190
 gui_session_start_desktop
 
-# A Secret Service for flutter_secure_storage (libsecret). Without one the app
-# cannot store an account password and adding an account fails.
-echo -n explore | gnome-keyring-daemon --unlock --components=secrets >/tmp/keyring.log 2>&1 || true
-
+# explore_server.py starts the keyring (and restarts it on a wipe) and the app.
 exec python3 "$(dirname "$0")/explore_server.py"

@@ -23,14 +23,16 @@ mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 
 # Forward local ports to the Stalwart service binding. Sets STALWART_READY=1
 # once IMAP answers on localhost. Extra "local:remote" pairs (e.g. JMAP) may
-# be passed as arguments; they forward to the same Stalwart host.
+# be passed as arguments. All protocols are served by one Stalwart, so the
+# extra pairs and a missing SMTP host fall back to the IMAP host.
 gui_session_forward_stalwart() {
     [ -n "${STALWART_IMAP_HOST:-}" ] || return 0
-    socat TCP-LISTEN:1430,fork,reuseaddr "TCP:${STALWART_IMAP_HOST}:${STALWART_IMAP_PORT:-1430}" &
-    socat TCP-LISTEN:1025,fork,reuseaddr "TCP:${STALWART_SMTP_HOST}:${STALWART_SMTP_PORT:-1025}" &
+    local host="$STALWART_IMAP_HOST"
+    socat TCP-LISTEN:1430,fork,reuseaddr "TCP:${host}:${STALWART_IMAP_PORT:-1430}" &
+    socat TCP-LISTEN:1025,fork,reuseaddr "TCP:${STALWART_SMTP_HOST:-$host}:${STALWART_SMTP_PORT:-1025}" &
     local pair
     for pair in "$@"; do
-        socat "TCP-LISTEN:${pair%%:*},fork,reuseaddr" "TCP:${STALWART_IMAP_HOST}:${pair#*:}" &
+        socat "TCP-LISTEN:${pair%%:*},fork,reuseaddr" "TCP:${host}:${pair#*:}" &
     done
     sleep 2
     if timeout 5 bash -c "cat < /dev/null > /dev/tcp/localhost/1430" 2>/dev/null; then
@@ -43,7 +45,7 @@ gui_session_forward_stalwart() {
 
 # Xvfb, a session bus, accessibility switched on, and the AT-SPI bus.
 gui_session_start_desktop() {
-    Xvfb :99 -screen 0 "${GUI_SCREEN:-1280x900x24}" -ac >/tmp/xvfb.log 2>&1 &
+    Xvfb :99 -screen 0 1280x900x24 -ac >/tmp/xvfb.log 2>&1 &
     sleep 3
 
     dbus-daemon --session --address=unix:path=/tmp/session_bus --nofork &

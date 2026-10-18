@@ -201,8 +201,9 @@ def click_unnamed(role: str = "push button", index: int = 0):
     return matches[index]
 
 
-def focus(name: str, role: str | None = None, index: int = 0, contains: bool = False):
-    node = wait_for(name, role, contains=contains, index=index)
+def focus(name: str, role: str | None = None, index: int = 0, contains: bool = False,
+          timeout: float = DEFAULT_TIMEOUT):
+    node = wait_for(name, role, timeout, contains=contains, index=index)
     action = node.queryAction()
     names = [action.getName(i) for i in range(action.nActions)]
     if "Focus" in names:
@@ -213,9 +214,9 @@ def focus(name: str, role: str | None = None, index: int = 0, contains: bool = F
 
 
 def fill(name: str, text: str, role: str | None = "text", index: int = 0,
-         contains: bool = False) -> None:
+         contains: bool = False, timeout: float = DEFAULT_TIMEOUT) -> None:
     """Focus a field and replace its contents."""
-    focus(name, role, index=index, contains=contains)
+    focus(name, role, index=index, contains=contains, timeout=timeout)
     press("ctrl+a")
     type_text(text)
 

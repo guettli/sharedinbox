@@ -40,12 +40,13 @@ start the service in the background. It keeps running until you stop it.
 
 ```bash
 task explore-linux
-# = dagger call -m ci --source=. explore-linux up \
+# = dagger call --progress=plain -m ci --source=. explore-linux up \
 #     --ports 8765:8765 --ports 21430:1430 --ports 21025:1025 --ports 28080:8080
 ```
 
 The first run compiles the debug build, which takes a few minutes. After that
-the build is cached until `lib/`, `linux/`, `assets/` or `pubspec.*` change.
+the build is cached until `lib/`, `linux/`, `assets/`, `drift_schemas/` or
+`pubspec.*` change.
 Wait until the API answers:
 
 ```bash
@@ -69,36 +70,51 @@ the service.
 
 ## The API
 
-All parameters can go in the query string or a form body, with GET or POST. For
-the full list, see the docstring of `scripts/explore_server.py` (or `GET /` on
-any unknown path).
+All parameters can go in the query string or a form body, with GET or POST.
+Values are URL-decoded, so always send them with `--data-urlencode`: with plain
+`-d`, a `+` arrives as a space and a `&` cuts the value short, without any
+error. The helper below does that for every `key=value` argument. For the full
+list of endpoints, see the docstring of `scripts/explore_server.py`, which any
+unknown path (e.g. `GET /`) also returns.
 
 ```bash
-A=localhost:8765; c(){ curl -s "$A/$1" "${@:2}"; }
+A=localhost:8765
+c(){ local p=$1 a=() kv; shift; for kv in "$@"; do a+=(--data-urlencode "$kv"); done
+     curl -s "$A/$p" "${a[@]}"; }
 
-c texts                                   # what is on screen, one node per line
-c tree                                    # the same, with hierarchy
-c shot -o /tmp/screen.png                 # screenshot (then view the PNG)
-c log -d lines=50                         # app stdout/stderr: assertions, exceptions
-c click -d name='Add account'             # exact accessible name
-c click -d name=SSL/TLS -d contains=1 -d index=1   # substring, 2nd match
-c fill --data-urlencode name='Email address' -d text=bob@example.com
-c fill -d name=Password -d text=secret --data-urlencode role='password text'
-c key -d key=Escape                       # xdotool key names: Return, ctrl+a, …
-c restart -d wipe=1                       # fresh install: no accounts, no data
+c texts                              # what is on screen, one node per line
+c tree                               # the same, with hierarchy
+curl -s $A/shot -o /tmp/screen.png   # screenshot (then view the PNG)
+c log lines=50                       # app stdout/stderr: assertions, exceptions
+c click name='Add account'           # exact accessible name
+c click name=SSL/TLS contains=1 role='toggle button' index=1
+c fill name='Email address' text=bob@example.com
+c fill name=Password text=secret role='password text'
+c key key=Escape                     # xdotool key names: Return, ctrl+a, …
+c restart wipe=1                     # fresh install: no data, empty keyring
 ```
 
 How to read the output:
 
 - `texts` prints `role [states]: name`. States are `checked`, `focused`,
-  `selected`, `expanded` and `disabled`. A list tile's name merges all of its
-  texts (sender, subject, preview, date, separated by newlines), so match it
-  with `contains=1`.
+  `selected`, `expanded`, `disabled` and `read-only`. Nodes whose text is not in their name
+  (the plain-text mail body, a filled field) get ` = 'their text'` appended.
+- A list tile's name merges all of its texts (sender, subject, preview, date,
+  separated by newlines), so match it with `contains=1`. Add a `role` too: a
+  substring also matches body text, such as an error banner that says "Try
+  toggling 'SSL/TLS' off", and clicking that fails with "not enabled".
 - Repeated labels, such as the two `Host` fields (IMAP and SMTP), are told
   apart with `index`, in tree order, which matches visual order.
-- A failed lookup returns HTTP 409 with the whole tree attached.
-- `click-unnamed` presses a button that has no label. Every time you need it,
-  you have found a missing semantic label.
+- A lookup waits up to 20 seconds for its node (`timeout=` changes that). The
+  server handles one request at a time, so while it waits every other call
+  blocks. When you only want to know whether something is there, read `texts`.
+- A failed lookup returns HTTP 409 with the message and the tree, truncated at
+  400 nodes. Anything unexpected returns 500 with the traceback.
+- `click-unnamed` presses a button that has no accessible name (`role`, `index`
+  in tree order). On Linux that includes icon buttons that only have a tooltip:
+  Flutter's Linux embedder does not pass tooltips on as AT-SPI names, while
+  Android does. Check on Android or in the code before reporting one as
+  unlabelled.
 - Text goes in through synthetic key events (`xdotool`) into the focused field,
   because Flutter text fields do not implement the AT-SPI text-editing
   interface.
@@ -112,17 +128,18 @@ localhost:1025 to Stalwart. Inside the app, use those ports, not the offset
 host ports.
 
 ```bash
-c click -d name='Add account'
-c fill --data-urlencode name='Email address' -d text=bob@example.com
-c click -d name=Continue                        # auto-detect fails, as expected
-c click --data-urlencode name='IMAP / SMTP'
-c fill --data-urlencode name='Display name' -d text=Bob
-c fill -d name=Password -d text=secret --data-urlencode role='password text'
-c fill -d name=Host -d text=localhost -d index=0; c fill -d name=Port -d text=1430 -d index=0
-c fill -d name=Host -d text=localhost -d index=1; c fill -d name=Port -d text=1025 -d index=1
-c click -d name=SSL/TLS -d contains=1 -d index=0
-c click -d name=SSL/TLS -d contains=1 -d index=1
-c click -d name=Save
+c click name='Add account'
+c fill name='Email address' text=bob@example.com
+c click name=Continue                            # auto-detect fails, as expected
+c click name='IMAP / SMTP'
+c fill name='Display name' text=Bob
+c fill name=Password text=secret role='password text'
+c fill name=Host text=localhost index=0; c fill name=Port text=1430 index=0
+c fill name=Host text=localhost index=1; c fill name=Port text=1025 index=1
+c texts | grep toggle                            # both switches start [checked]
+c click name=SSL/TLS contains=1 role='toggle button' index=0
+c click name=SSL/TLS contains=1 role='toggle button' index=1
+c click name=Save
 ```
 
 **Seed mail** from the host through the SMTP forward, as Alice:
@@ -172,6 +189,10 @@ IMAP is available too, at `localhost:21430` (plaintext).
 - **Software rendering:** the debug build under Xvfb is noticeably slower than a
   release build. Give a screen a second or two after a click before you read
   it.
+- **Linux renders HTML mail as plain text** (`htmlToPlain` in
+  `lib/ui/widgets/secure_email_webview.dart`), because webview_flutter has no
+  Linux support. Judge HTML layout on Android. On Linux, check only that the
+  text is complete and readable.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The
