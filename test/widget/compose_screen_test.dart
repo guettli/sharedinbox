@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -191,6 +192,78 @@ void main() {
           reason: 'compose must attempt the send now, not just enqueue it',
         );
         expect(find.text('Message sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a reply carries In-Reply-To and References to the original',
+      (tester) async {
+        // Without these the recipient's client cannot thread the answer, and
+        // neither can this app once the copy in Sent syncs back.
+        final email = FakeEmailRepository(emails: [_originalEmail]);
+        await _pumpComposeAndSend(tester, email: email, replyToEmailId: 'orig');
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, 'reply-1@example.com');
+        expect(draft.references, ['root@example.com', 'reply-1@example.com']);
+      },
+    );
+
+    testWidgets(
+      'a reply resumed from its draft alone is still sent threaded',
+      (tester) async {
+        // Opened from the drafts list the route carries only the draftId, so
+        // the link to the original has to come from the saved draft.
+        final drafts = FakeDraftRepository();
+        final saved = await drafts.saveDraft(
+          accountId: kTestAccount.id,
+          replyToEmailId: 'orig',
+          toText: 'alice@example.com',
+          ccText: '',
+          subjectText: 'Re: Project kickoff',
+          bodyText: 'Draft body',
+        );
+        final email = FakeEmailRepository(emails: [_originalEmail]);
+        final router = _homeAndCompose();
+        await tester.pumpWidget(
+          _wrap(
+            router: router,
+            overrides: _composeOverrides(drafts: drafts, email: email),
+          ),
+        );
+        await tester.pumpAndSettle();
+        unawaited(router.push('/compose', extra: {'draftId': saved.id}));
+        await tester.pumpAndSettle();
+
+        // An edit re-saves the draft; it must stay a reply draft.
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Draft body'),
+          'Edited body',
+        );
+        await tester.pump(const Duration(seconds: 3));
+        expect((await drafts.getDraft(saved.id))?.replyToEmailId, 'orig');
+        // Let the "Draft saved" indicator's hide timer run out.
+        await tester.pump(const Duration(seconds: 2));
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pumpAndSettle();
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, 'reply-1@example.com');
+        expect(draft.references, ['root@example.com', 'reply-1@example.com']);
+      },
+    );
+
+    testWidgets(
+      'a reply whose original cannot be read is sent unthreaded',
+      (tester) async {
+        final email = _ThrowingGetEmailRepository();
+        await _pumpComposeAndSend(tester, email: email, replyToEmailId: 'orig');
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, isNull);
+        expect(draft.references, isEmpty);
+        expect(find.textContaining('Queue failed'), findsNothing);
       },
     );
 
@@ -427,6 +500,33 @@ void main() {
   });
 }
 
+/// The message the reply tests answer: itself a reply to `root@example.com`.
+final _originalEmail = Email(
+  id: 'orig',
+  accountId: kTestAccount.id,
+  mailboxPath: 'INBOX',
+  uid: 1,
+  subject: 'Re: Project kickoff',
+  receivedAt: DateTime(2026, 10, 18),
+  from: const [EmailAddress(email: 'alice@example.com')],
+  to: [EmailAddress(email: kTestAccount.email)],
+  cc: const [],
+  isSeen: true,
+  isFlagged: false,
+  hasAttachment: false,
+  messageId: 'reply-1@example.com',
+  inReplyTo: 'root@example.com',
+  references: 'root@example.com',
+);
+
+/// A [FakeEmailRepository] whose [getEmail] fails, as a broken local store
+/// would.
+class _ThrowingGetEmailRepository extends FakeEmailRepository {
+  @override
+  Future<Email?> getEmail(String emailId) async =>
+      throw StateError('database is locked');
+}
+
 /// A [FakeDraftRepository] that records which draft ids were deleted so tests
 /// can assert on the discard flow.
 class _RecordingDraftRepository extends FakeDraftRepository {
@@ -517,13 +617,14 @@ Future<SavedDraft> _pumpRestoredDraftFromHome(
 Future<void> _pumpComposeAndSend(
   WidgetTester tester, {
   required FakeEmailRepository email,
+  String? replyToEmailId,
 }) async {
   final router = _homeAndCompose();
   await tester.pumpWidget(
     _wrap(router: router, overrides: _composeOverrides(email: email)),
   );
   await tester.pumpAndSettle();
-  unawaited(router.push('/compose'));
+  unawaited(router.push('/compose', extra: {'replyToEmailId': replyToEmailId}));
   await tester.pumpAndSettle();
 
   await tester.enterText(
@@ -553,9 +654,13 @@ Future<void> _pumpComposeFromHome(
 /// somewhere to land. The scaffolding is shared with the other tests that need
 /// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
 GoRouter _homeAndCompose() => homeAndComposeRouter(
-      compose: (state) => ComposeScreen(
-        draftId: (state.extra as Map<String, dynamic>?)?['draftId'] as int?,
-      ),
+      compose: (state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        return ComposeScreen(
+          draftId: extra?['draftId'] as int?,
+          replyToEmailId: extra?['replyToEmailId'] as String?,
+        );
+      },
     );
 
 Widget _buildRouter({

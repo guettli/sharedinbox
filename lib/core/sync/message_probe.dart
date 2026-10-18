@@ -470,9 +470,9 @@ String _addressesToKey(List<EmailAddress> addresses) {
 
 /// References may arrive from IMAP as one string containing `<a@b><c@d>` with
 /// no whitespace between adjacent ids (some clients skip the space), so this
-/// helper is more aggressive than [normaliseReferences]: it treats `<` and `>`
-/// as token boundaries. Only used by the per-message probe comparison, which
-/// needs to reconcile heterogeneous sources.
+/// helper treats `<` and `>` as token boundaries. Only used by the
+/// per-message probe comparison, which needs to reconcile heterogeneous
+/// sources.
 String? _normaliseReferences(String? raw) {
   if (raw == null) return null;
   final tokens = raw
