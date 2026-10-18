@@ -195,6 +195,52 @@ void main() {
     );
 
     testWidgets(
+      'sending right after typing leaves no draft behind',
+      (tester) async {
+        // Typing and pressing Send within the auto-save delay left the field
+        // dirty; when the screen closed, dispose saved the sent message back
+        // as a new draft, which then synced to the server's Drafts folder.
+        final drafts = FakeDraftRepository();
+        final email = FakeEmailRepository();
+        await _pumpComposeAndSend(tester, email: email, drafts: drafts);
+
+        expect(email.sendNowRowIds, isNotEmpty);
+        expect(await drafts.listNewMessageDrafts(), isEmpty);
+      },
+    );
+
+    testWidgets(
+      'sending deletes the auto-saved draft and does not write it back',
+      (tester) async {
+        final drafts = FakeDraftRepository();
+        final email = FakeEmailRepository();
+        await _pumpComposeAndSend(
+          tester,
+          email: email,
+          drafts: drafts,
+          beforeSend: () async {
+            // Let the auto-save land, then edit again so the field is dirty
+            // once more when Send is pressed.
+            await tester.pump(const Duration(seconds: 3));
+            expect(await drafts.listNewMessageDrafts(), hasLength(1));
+            await tester.enterText(
+              find.widgetWithText(TextFormField, 'Subject'),
+              'Final subject',
+            );
+            await tester.pump();
+          },
+        );
+
+        expect(await drafts.listNewMessageDrafts(), isEmpty);
+
+        // Let the "Draft saved" indicator and the SnackBar time out so no
+        // timer leaks into teardown.
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
       'surfaces a failed direct send with its reason (#755)',
       (tester) async {
         final email = FakeEmailRepository()
@@ -517,10 +563,15 @@ Future<SavedDraft> _pumpRestoredDraftFromHome(
 Future<void> _pumpComposeAndSend(
   WidgetTester tester, {
   required FakeEmailRepository email,
+  FakeDraftRepository? drafts,
+  Future<void> Function()? beforeSend,
 }) async {
   final router = _homeAndCompose();
   await tester.pumpWidget(
-    _wrap(router: router, overrides: _composeOverrides(email: email)),
+    _wrap(
+      router: router,
+      overrides: _composeOverrides(email: email, drafts: drafts),
+    ),
   );
   await tester.pumpAndSettle();
   unawaited(router.push('/compose'));
@@ -531,6 +582,7 @@ Future<void> _pumpComposeAndSend(
     'bob@example.com',
   );
   await tester.pump();
+  await beforeSend?.call();
 
   await tester.tap(find.byIcon(Icons.send));
   await tester.pumpAndSettle();
