@@ -9,20 +9,7 @@ import 'fake_imap.dart';
 
 /// Serves one message for `MessageProbeImpl`'s IMAP branch, returning its
 /// INTERNALDATE only when the FETCH asked for it, like a real server.
-class _ProbeImapClient extends FakeImapClient {
-  @override
-  Future<imap.Mailbox> selectMailboxByPath(
-    String path, {
-    bool enableCondStore = false,
-    imap.QResyncParameters? qresync,
-  }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        flags: [],
-        pathSeparator: '/',
-      );
-
+class _ProbeImapClient extends SelectingFakeImapClient {
   @override
   Future<imap.FetchImapResult> uidFetchMessage(
     int messageUid,
