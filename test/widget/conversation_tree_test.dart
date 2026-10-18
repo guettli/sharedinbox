@@ -18,6 +18,7 @@ void main() {
   Email mail({
     required String id,
     required String fromEmail,
+    String? fromName,
     required DateTime sentAt,
     String mailboxPath = 'INBOX',
     String? messageId,
@@ -31,7 +32,7 @@ void main() {
         subject: 'Subject',
         receivedAt: sentAt,
         sentAt: sentAt,
-        from: [EmailAddress(email: fromEmail)],
+        from: [EmailAddress(name: fromName, email: fromEmail)],
         to: const [EmailAddress(email: 'alice@example.com')],
         cc: const [],
         isSeen: true,
@@ -117,19 +118,80 @@ void main() {
   testWidgets('hidden when the conversation has a single message',
       (tester) async {
     await pumpTree(tester, emails: [incoming], open: incoming);
-    expect(textLine('To me'), findsNothing);
+    expect(textLine('From bob@example.com'), findsNothing);
     expect(textLine('From me'), findsNothing);
   });
 
-  testWidgets('lists one line per message with direction and date',
+  testWidgets('lists one line per message with sender and date',
       (tester) async {
     await pumpTree(tester, emails: [incoming, reply], open: incoming);
 
-    expect(textLine('To me'), findsOneWidget);
+    expect(textLine('From bob@example.com'), findsOneWidget);
     expect(textLine('From me'), findsOneWidget);
-    final incomingLine = tester.widget<Text>(textLine('To me')).data!;
+    final incomingLine =
+        tester.widget<Text>(textLine('From bob@example.com')).data!;
     expect(incomingLine, contains('Jun 1'));
     expect(incomingLine, isNot(contains('2024')));
+  });
+
+  testWidgets('names the sender, so two other people are told apart',
+      (tester) async {
+    // A shared-inbox conversation: two outside senders and the account. "To
+    // me" on both outside lines said neither who wrote which, nor the truth
+    // when the mail was not addressed to this account.
+    final fromCarol = mail(
+      id: 'acc-1:3',
+      fromEmail: 'carol@example.com',
+      fromName: 'Carol',
+      sentAt: DateTime(2024, 6, 3, 11),
+      messageId: 'msg-c',
+      inReplyTo: 'msg-a',
+    );
+    await pumpTree(
+      tester,
+      emails: [incoming, reply, fromCarol],
+      open: incoming,
+    );
+
+    expect(textLine('From bob@example.com'), findsOneWidget);
+    expect(textLine('From Carol'), findsOneWidget);
+    expect(textLine('From me'), findsOneWidget);
+    expect(textLine('To me'), findsNothing);
+  });
+
+  testWidgets('each line is its own button; the open one is selected',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await pumpTree(tester, emails: [incoming, reply], open: incoming);
+
+      expect(
+        tester.getSemantics(textLine('From me')),
+        isSemantics(isButton: true, isEnabled: true, isSelected: false),
+      );
+      // Not a button, so no enabled state: otherwise read out as "disabled".
+      expect(
+        tester.getSemantics(textLine('From bob@example.com')),
+        isSemantics(isButton: false, isSelected: true, hasEnabledState: false),
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('falls back to the address when the sender name is empty',
+      (tester) async {
+    final noName = mail(
+      id: 'acc-1:4',
+      fromEmail: 'dave@example.com',
+      fromName: '',
+      sentAt: DateTime(2024, 6, 4, 12),
+      messageId: 'msg-d',
+      inReplyTo: 'msg-a',
+    );
+    await pumpTree(tester, emails: [incoming, noName], open: incoming);
+
+    expect(textLine('From dave@example.com'), findsOneWidget);
   });
 
   testWidgets('tags each message with its folder', (tester) async {
@@ -149,14 +211,14 @@ void main() {
         .firstWhere((e) => e.top == AppSpacing.xs && e.bottom == AppSpacing.xs)
         .left;
 
-    expect(lineIndent('To me'), 0);
+    expect(lineIndent('From bob@example.com'), 0);
     expect(lineIndent('From me'), AppSpacing.md);
   });
 
   testWidgets('highlights the open message', (tester) async {
     await pumpTree(tester, emails: [incoming, reply], open: incoming);
 
-    final currentLine = tester.widget<Text>(textLine('To me'));
+    final currentLine = tester.widget<Text>(textLine('From bob@example.com'));
     final otherLine = tester.widget<Text>(textLine('From me'));
     expect(currentLine.style?.fontWeight, FontWeight.bold);
     expect(otherLine.style?.fontWeight, FontWeight.normal);

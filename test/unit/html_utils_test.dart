@@ -126,4 +126,140 @@ void main() {
       expect(result, contains('Bob'));
     });
   });
+
+  group('htmlHasRemoteResources', () {
+    test('false for markup without any images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<h1>Hi</h1><p>A <a href="https://example.com">link</a>.</p>',
+        ),
+        isFalse,
+      );
+    });
+
+    test('false for inline cid: and data: images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:logo@x"><img src="data:image/png;base64,AAAA">',
+        ),
+        isFalse,
+      );
+    });
+
+    test('true for an http(s) img src, quoted or not', () {
+      expect(
+        htmlHasRemoteResources('<img src="https://x.test/a.png">'),
+        isTrue,
+      );
+      expect(htmlHasRemoteResources("<IMG SRC='http://x.test/a.png'>"), isTrue);
+      expect(htmlHasRemoteResources('<img src=https://x.test/a.png>'), isTrue);
+    });
+
+    test('true for a protocol-relative src', () {
+      expect(htmlHasRemoteResources('<img src="//x.test/pixel.gif">'), isTrue);
+    });
+
+    test('true for srcset and legacy background attributes', () {
+      expect(
+        htmlHasRemoteResources('<img srcset="https://x.test/a.png 2x">'),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources('<td background="https://x.test/bg.jpg">'),
+        isTrue,
+      );
+    });
+
+    test('true for CSS url(), including entity-quoted ones', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:url(https://x.test/bg.jpg)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background-image:url(&quot;https://x.test/b.jpg&quot;)">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for SVG <image>/<feImage> href and xlink:href', () {
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image xlink:href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><filter><feImage href="//x.test/a.png"/></filter></svg>',
+        ),
+        isTrue,
+      );
+    });
+
+    test('false for a plain <a href> link', () {
+      expect(
+        htmlHasRemoteResources('<svg><a href="https://x.test/">x</a></svg>'),
+        isFalse,
+      );
+    });
+
+    test('true for CSS image-set() with bare strings', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:image-set("https://x.test/a.png" 1x)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:-webkit-image-set(&quot;a.png&quot; 1x, '
+          '&quot;https://x.test/b.png&quot; 2x)">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for a remote srcset candidate that is not the first', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:a" srcset="a.png 1x, https://x.test/b.png 2x">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for url() quoted with hex entities', () {
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#x22;https://x.test/b.jpg&#x22;)">',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#X27;//x.test/b.jpg&#X27;)">',
+        ),
+        isTrue,
+      );
+    });
+
+    // Not a parser: a lazy-load attribute like data-src= also matches, which
+    // only shows the button needlessly (the WebView would not fetch it).
+    test('documented false positive: data-src', () {
+      expect(
+        htmlHasRemoteResources('<img src="cid:a" data-src="https://x.test/a">'),
+        isTrue,
+      );
+    });
+  });
 }

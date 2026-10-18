@@ -446,8 +446,11 @@ void main() {
       final saved = repo.accounts.single;
       expect(saved.imapHost, 'imap.example.com');
       expect(saved.imapSsl, isFalse);
+      // The switch moved the standard port along: 993 -> 143.
+      expect(saved.imapPort, 143);
       expect(saved.smtpHost, 'smtp.example.com');
       expect(saved.smtpSsl, isFalse);
+      expect(saved.smtpPort, 587);
     });
 
     testWidgets('unsupported autoconfig shows the reason on choose-type', (
