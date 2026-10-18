@@ -100,3 +100,38 @@ String _fromCodePoint(int? code, String original) {
   }
   return String.fromCharCode(code);
 }
+
+/// An optional attribute/CSS quote: a literal `"`/`'` or its named, decimal or
+/// hex entity form, as found inside `style="..."`.
+const String _q = r'''(?:["']|&quot;|&apos;|&#0*3[49];|&#x0*2[27];)?\s*''';
+
+/// The start of a URL fetched over the network: `http:`, `https:` or
+/// protocol-relative `//`.
+const String _remote = r'(?:https?:|//)';
+
+/// Any spot where the email WebView would fetch a remote image:
+/// - `src=`, `background=`, `poster=` and CSS `url(...)` pointing at [_remote];
+/// - SVG `<image>`/`<feImage>` with `href=` or `xlink:href=`;
+/// - a remote candidate anywhere in `srcset` (not only the first);
+/// - a remote candidate anywhere in CSS `image-set(...)`, which accepts bare
+///   strings without `url()`.
+final RegExp _remoteResource = RegExp(
+  '(?:${[
+    r'\b(?:src|background|poster)\s*=\s*' + _q,
+    r'url\(\s*' + _q,
+    r'<(?:image|feimage)\b[^>]*?\b(?:xlink:)?href\s*=\s*' + _q,
+    r'''\bsrcset\s*=\s*["']?[^"'>]*?''',
+    r'image-set\([^}>]*?',
+  ].join('|')})$_remote',
+  caseSensitive: false,
+);
+
+/// Whether [html] references any resource the email WebView would fetch from
+/// the network once remote images are allowed (`<img src>`, `srcset`, legacy
+/// `background=`, CSS `url(...)`/`image-set(...)`, SVG `<image href>`).
+///
+/// Used to hide the "Load remote images" button on mail that has nothing to
+/// load. Inline `cid:` and `data:` images never match. Not a full parser: it
+/// errs on the side of matching, so a false positive only shows the button
+/// (e.g. a lazy-load `data-src=` also matches).
+bool htmlHasRemoteResources(String html) => _remoteResource.hasMatch(html);
