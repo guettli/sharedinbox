@@ -76,11 +76,13 @@ void main() {
         "INSERT INTO accounts (id, display_name, email, imap_host, imap_port, imap_ssl, smtp_host, smtp_port, smtp_ssl) VALUES ('acc-1', 'Alice', 'alice@example.com', 'imap.example.com', 993, 1, 'smtp.example.com', 465, 1);",
       );
       // Two pre-existing rows for the v55 preview repair (#680): one poisoned
-      // with the partial-fetch offset token, one with a real preview.
+      // with the partial-fetch offset token, one with a real preview. The
+      // first also has an attachment, for the v60 thread backfill.
       rawDb.execute('''
-        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at, preview)
-        VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, 0, '0>'),
-               ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, 0, 'A real preview.');
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at,
+                            preview, has_attachment)
+        VALUES ('acc-1:INBOX:1', 'acc-1', 'INBOX', 1, 0, '0>', 1),
+               ('acc-1:INBOX:2', 'acc-1', 'INBOX', 2, 0, 'A real preview.', 0);
       ''');
       rawDb.execute('PRAGMA user_version = 1;');
       rawDb.close();
@@ -140,6 +142,17 @@ void main() {
       };
       expect(previews['acc-1:INBOX:1'], isNull);
       expect(previews['acc-1:INBOX:2'], 'A real preview.');
+
+      // v60: threads built by the v17 step get has_attachment backfilled.
+      final threadAttachments = [
+        for (final row in await db
+            .customSelect(
+              'SELECT has_attachment FROM threads ORDER BY has_attachment',
+            )
+            .get())
+          row.read<bool>('has_attachment'),
+      ];
+      expect(threadAttachments, [false, true]);
 
       // v8: mailboxes role column.
       final mailboxColumns = await _tableColumns(db, 'mailboxes');

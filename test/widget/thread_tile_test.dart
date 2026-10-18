@@ -30,6 +30,8 @@ void main() {
   group('formatThreadDate', () {
     final now = DateTime(2026, 10, 18, 15);
 
+    setUp(resetThreadDateCache);
+
     test('shows the time for a message from today', () {
       expect(formatThreadDate(DateTime(2026, 10, 18, 9, 5), now: now), '09:05');
     });
@@ -47,11 +49,15 @@ void main() {
     });
 
     test('a cached day is re-formatted once "today" moves on', () {
-      expect(formatThreadDate(DateTime(2026, 10, 18, 9, 5), now: now), '09:05');
-      final tomorrow = DateTime(2026, 10, 19, 8);
+      // Dec 30 is cached as "this year" on Dec 31 and must gain the year
+      // once "today" is in 2027.
       expect(
-        formatThreadDate(DateTime(2026, 10, 18, 9, 5), now: tomorrow),
-        'Oct 18',
+        formatThreadDate(DateTime(2026, 12, 30), now: DateTime(2026, 12, 31)),
+        'Dec 30',
+      );
+      expect(
+        formatThreadDate(DateTime(2026, 12, 30), now: DateTime(2027)),
+        'Dec 30, 2026',
       );
     });
   });

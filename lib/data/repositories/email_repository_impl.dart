@@ -1627,6 +1627,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 ),
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+                // enough_mail counts parts with Content-Disposition: attachment;
+                // JMAP's hasAttachment (below) is server-defined, so the two
+                // protocols may disagree on e.g. inline images.
                 hasAttachment: Value(msg.hasAttachments()),
                 threadId: Value(threadId),
                 messageId: Value(msgId),
@@ -3615,6 +3618,8 @@ class EmailRepositoryImpl implements EmailRepository {
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
+              // Server-defined (RFC 8621); IMAP instead counts
+              // Content-Disposition: attachment parts.
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
               threadId: Value(jmapThreadId),
               messageId: Value(jmapMessageId),

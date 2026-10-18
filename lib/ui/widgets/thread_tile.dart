@@ -14,13 +14,20 @@ int? _cachedForDay;
 
 int _dayKey(DateTime dt) => dt.year * 10000 + dt.month * 100 + dt.day;
 
+/// Clears the date cache so tests don't depend on each other's order.
+@visibleForTesting
+void resetThreadDateCache() {
+  _formattedDates.clear();
+  _cachedForDay = null;
+}
+
 /// The list date for a thread whose latest message is at [dt]: the time for
 /// messages from today, "MMM d" for this year, and "MMM d, y" for older ones —
 /// a bare "Oct 15" from a previous year read as this year.
 @visibleForTesting
 String formatThreadDate(DateTime dt, {DateTime? now}) {
   final local = dt.toLocal();
-  final today = now ?? DateTime.now();
+  final today = (now ?? DateTime.now()).toLocal();
   final todayKey = _dayKey(today);
   if (_cachedForDay != todayKey) {
     _formattedDates.clear();
@@ -140,6 +147,8 @@ class ThreadTile extends StatelessWidget {
               size: AppIconSize.sm,
               semanticLabel: 'Has attachment',
             ),
+          if (thread.hasAttachment && thread.isFlagged)
+            const SizedBox(width: AppSpacing.xs),
           if (thread.isFlagged)
             const Icon(Icons.star, color: Colors.amber, size: AppIconSize.sm),
           const SizedBox(width: AppSpacing.xs),

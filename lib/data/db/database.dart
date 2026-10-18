@@ -1292,14 +1292,16 @@ class AppDatabase extends _$AppDatabase {
             // Reply-To addresses, so replies go where the sender asked (#919).
             await m.addColumn(emails, emails.replyToJson);
           }
-          // v17 creates `threads` with the current columns, so only older
-          // existing tables need the column added.
-          if (from >= 17 &&
-              from < 60 &&
+          if (from < 60 &&
               await _tableExists(this, 'threads') &&
               await _tableExists(this, 'emails')) {
+            // v17 creates `threads` with the current columns, so only tables
+            // from v17+ need the column added. Its insert leaves the column
+            // at its default, so every upgrade still needs the backfill.
+            if (from >= 17) {
+              await m.addColumn(threads, threads.hasAttachment);
+            }
             // Paperclip in the thread list: backfill from the emails.
-            await m.addColumn(threads, threads.hasAttachment);
             await customStatement('''
               UPDATE threads SET has_attachment = EXISTS (
                 SELECT 1 FROM emails e
