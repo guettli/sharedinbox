@@ -208,6 +208,11 @@ IMAP is available too, at `localhost:21430` (plaintext).
   are lost. Worse, the app can drop off the accessibility bus (`texts` says
   `<app not on the accessibility bus>`) until `c restart`. To test non-ASCII
   input, seed it through SMTP (see **Seed mail** above) or check it on Android.
+- **The paperclip opens the system file chooser.** Attaching a file opens a
+  GTK file dialog in the app's process. While it is open, the app is off the
+  accessibility bus (`texts` says `<app not on the accessibility bus>`) and
+  `key Escape` does not reach the dialog. Recover with `c restart`; drafts are
+  kept. Test attachments by seeding mail with them, or on Android.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The
