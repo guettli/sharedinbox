@@ -84,7 +84,11 @@ class ConversationTree extends ConsumerWidget {
     // Name the sender, not the direction: in a conversation with several
     // people, or a shared mailbox where the mail was not addressed to this
     // account at all, "To me" told neither who wrote it nor the truth.
-    final from = fromMe ? 'me' : (sender?.name ?? sender?.email ?? 'unknown');
+    final name = sender?.name;
+    final from = fromMe
+        ? 'me'
+        : (name != null && name.isNotEmpty ? name : sender?.email) ??
+            '(unknown)';
     final date = m.sentAt != null ? _lineFmt.format(m.sentAt!) : '';
     final label = 'From $from · $date';
     final theme = Theme.of(ctx);
@@ -98,13 +102,15 @@ class ConversationTree extends ConsumerWidget {
 
     // A node of its own, so assistive tech can tell the lines apart and
     // activate one; otherwise the first line merges into the mail header.
-    // `enabled` must be explicit: without it the Linux accessibility bridge
-    // reports the button as disabled and refuses to activate it.
+    // `enabled` must be explicit on the buttons: without it the Linux
+    // accessibility bridge reports them as disabled and refuses to activate
+    // them. The open message is not a button, so it carries no enabled state
+    // at all rather than being announced as "disabled".
     return Semantics(
       container: true,
       button: !isCurrent,
-      enabled: !isCurrent,
-      selected: isCurrent,
+      enabled: isCurrent ? null : true,
+      selected: isCurrent ? true : null,
       child: InkWell(
         onTap: isCurrent
             ? null

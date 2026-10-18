@@ -38,8 +38,8 @@ void main() {
         threadId: threadId,
       );
 
-  // A two-message thread: Bob's message ("From bob@example.com") and Alice's reply
-  // from the account's own address ("From me").
+  // A two-message thread: Bob's message ("From bob@example.com") and Alice's
+  // reply from the account's own address ("From me").
   final incoming = threadEmail(
     id: 'acc-1:1',
     subject: 'Question',
@@ -123,6 +123,24 @@ void main() {
       final otherLine = tester.widget<Text>(textLine('From me'));
       expect(currentLine.style?.fontWeight, FontWeight.bold);
       expect(otherLine.style?.fontWeight, FontWeight.normal);
+    });
+
+    testWidgets('the first line is a semantics node apart from the header',
+        (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        await pumpWith(tester, emails: [incoming, reply], openId: incoming.id);
+
+        // Without a node of its own the first line merged into the mail
+        // header, so assistive tech read it as part of the subject block.
+        final header = tester.getSemantics(find.text('Question'));
+        final firstLine = tester.getSemantics(textLine('From bob@example.com'));
+        expect(firstLine.id, isNot(header.id));
+        expect(firstLine.label, isNot(contains('Question')));
+        expect(header.label, isNot(contains('From bob@example.com')));
+      } finally {
+        semantics.dispose();
+      }
     });
 
     testWidgets('tapping another line opens that message', (tester) async {

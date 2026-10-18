@@ -162,17 +162,36 @@ void main() {
   testWidgets('each line is its own button; the open one is selected',
       (tester) async {
     final semantics = tester.ensureSemantics();
-    await pumpTree(tester, emails: [incoming, reply], open: incoming);
+    try {
+      await pumpTree(tester, emails: [incoming, reply], open: incoming);
 
-    expect(
-      tester.getSemantics(textLine('From me')),
-      isSemantics(isButton: true, isEnabled: true, isSelected: false),
+      expect(
+        tester.getSemantics(textLine('From me')),
+        isSemantics(isButton: true, isEnabled: true, isSelected: false),
+      );
+      // Not a button, so no enabled state: otherwise read out as "disabled".
+      expect(
+        tester.getSemantics(textLine('From bob@example.com')),
+        isSemantics(isButton: false, isSelected: true, hasEnabledState: false),
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('falls back to the address when the sender name is empty',
+      (tester) async {
+    final noName = mail(
+      id: 'acc-1:4',
+      fromEmail: 'dave@example.com',
+      fromName: '',
+      sentAt: DateTime(2024, 6, 4, 12),
+      messageId: 'msg-d',
+      inReplyTo: 'msg-a',
     );
-    expect(
-      tester.getSemantics(textLine('From bob@example.com')),
-      isSemantics(isButton: false, isSelected: true),
-    );
-    semantics.dispose();
+    await pumpTree(tester, emails: [incoming, noName], open: incoming);
+
+    expect(textLine('From dave@example.com'), findsOneWidget);
   });
 
   testWidgets('tags each message with its folder', (tester) async {
