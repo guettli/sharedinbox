@@ -142,6 +142,13 @@ Notes:
 - Requires the Dagger engine to be reachable (`DAGGER_ENGINE_HOST` + SSH key);
   if `dagger` cannot connect, stop and report it rather than working blind.
 
+## Exploratory testing
+
+To use the app like a user would and hunt for bugs, run `task explore-linux`.
+It starts a debug Linux build next to a throwaway Stalwart, all on the Dagger
+engine, and drives it over an HTTP API on `localhost:8765`. No SDK, display or
+phone is needed. See [EXPLORATORY-TESTING.md](EXPLORATORY-TESTING.md).
+
 ## Code conventions
 
 - Avoid `else`, use "early return".
