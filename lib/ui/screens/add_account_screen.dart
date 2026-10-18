@@ -524,6 +524,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               protocol: TlsProtocol.imap,
               value: _imapSsl,
               portController: _imapPortCtrl,
+              isLocalhost: isLocalhost(_imapHostCtrl.text),
               onChanged: (v) => setState(() => _imapSsl = v),
             ),
             const Divider(height: 32),
@@ -535,6 +536,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
               protocol: TlsProtocol.smtp,
               value: _smtpSsl,
               portController: _smtpPortCtrl,
+              isLocalhost: isLocalhost(_smtpHostCtrl.text),
               onChanged: (v) => setState(() => _smtpSsl = v),
             ),
             TryConnectionButton(
