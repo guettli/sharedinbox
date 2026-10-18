@@ -1680,8 +1680,11 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 		// A Secret Service, so flutter_secure_storage can save an account
 		// password. Only here: in the release test it would register a D-Bus
 		// activatable keyring whose first-use prompt could cover the app.
+		// The emoji font makes screenshots show what users see instead of
+		// tofu boxes, so a rendering judgement is not a container artifact.
 		WithExec([]string{"/bin/sh", "-c",
-			"apt-get -qq update && apt-get install -y -qq --no-install-recommends gnome-keyring"}).
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"gnome-keyring fonts-noto-color-emoji"}).
 		WithDirectory("/app", bundle, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithUser("tester").
