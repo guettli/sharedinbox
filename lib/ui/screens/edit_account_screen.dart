@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
+import 'package:sharedinbox/ui/widgets/tls_switch_tile.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
 
 class EditAccountScreen extends ConsumerStatefulWidget {
@@ -333,22 +334,22 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
               Text('IMAP', style: Theme.of(context).textTheme.titleSmall),
               _field(_imapHostCtrl, 'Host', validator: validateHostname),
               _field(_imapPortCtrl, 'Port', keyboardType: TextInputType.number),
-              SwitchListTile(
-                key: const Key('imapSslSwitch'),
-                title: const Text('SSL/TLS'),
-                subtitle: const Text('Off: upgrade with STARTTLS (IMAP 143)'),
+              TlsSwitchTile(
+                switchKey: const Key('imapSslSwitch'),
+                protocol: TlsProtocol.imap,
                 value: _imapSsl,
+                portController: _imapPortCtrl,
                 onChanged: (v) => setState(() => _imapSsl = v),
               ),
               const Divider(height: 32),
               Text('SMTP', style: Theme.of(context).textTheme.titleSmall),
               _field(_smtpHostCtrl, 'Host', validator: validateHostname),
               _field(_smtpPortCtrl, 'Port', keyboardType: TextInputType.number),
-              SwitchListTile(
-                key: const Key('smtpSslSwitch'),
-                title: const Text('SSL/TLS'),
-                subtitle: const Text('Off: upgrade with STARTTLS (SMTP 587)'),
+              TlsSwitchTile(
+                switchKey: const Key('smtpSslSwitch'),
+                protocol: TlsProtocol.smtp,
                 value: _smtpSsl,
+                portController: _smtpPortCtrl,
                 onChanged: (v) => setState(() => _smtpSsl = v),
               ),
               const Divider(height: 32),
