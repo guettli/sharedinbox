@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -68,6 +69,89 @@ void main() {
       m.dispose();
     },
   );
+
+  // A kick (a local change was queued, or Retry was pressed) that lands while
+  // a sync cycle is running used to be dropped: kick() only completed an
+  // active wait, and the loop then idled — IMAP IDLE for up to 25 minutes —
+  // with the change still queued. Seen on a device as an Undo that never
+  // reached the server, because the archive before it had just started a
+  // cycle. The kick must instead cut the following wait short.
+  test('a kick during a running sync cycle starts the next cycle at once',
+      () async {
+    final release = Completer<void>();
+    final mailboxes = _BlockingMailboxRepository(release.future, fail: true);
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      mailboxes,
+      FakeEmailRepository(),
+      syncLog: FakeSyncLogRepository(),
+    );
+    addTearDown(m.dispose);
+
+    // The cycle fails, so without the kick the loop would sit out a 5 s
+    // backoff before cycle two.
+    await _kickMidFirstCycle(m, mailboxes, release);
+
+    expect(mailboxes.calls, 2);
+  });
+
+  // Same, but the cycle succeeds: the loop must not go into IMAP IDLE (where
+  // the queued change would sit for up to 25 minutes) before cycle two.
+  test('a kick during a successful IMAP cycle skips IDLE and syncs again',
+      () async {
+    final release = Completer<void>();
+    var connects = 0;
+    int? connectsBeforeSecondCycle;
+    final mailboxes = _BlockingMailboxRepository(
+      release.future,
+      onCall: (n) {
+        if (n == 2) connectsBeforeSecondCycle = connects;
+      },
+    );
+    final m = AccountSyncManager(
+      _OkAccountRepository(),
+      mailboxes,
+      FakeEmailRepository(),
+      syncLog: FakeSyncLogRepository(),
+      imapConnect: (_, __, ___) {
+        connects++;
+        // Never connects: the loop would hang here in place of a real IDLE.
+        return Completer<imap.ImapClient>().future;
+      },
+    );
+    addTearDown(m.dispose);
+
+    await _kickMidFirstCycle(m, mailboxes, release);
+
+    expect(mailboxes.calls, 2);
+    expect(connectsBeforeSecondCycle, 0, reason: 'IDLE was not entered');
+  });
+
+  // The JMAP loop waits on push (EventSource) instead of IDLE; a mid-cycle
+  // kick must skip that wait the same way.
+  test('a kick during a successful JMAP cycle skips the push wait', () async {
+    final release = Completer<void>();
+    final emails = _PushCountingEmailRepository();
+    int? pushWaitsBeforeSecondCycle;
+    final mailboxes = _BlockingMailboxRepository(
+      release.future,
+      onCall: (n) {
+        if (n == 2) pushWaitsBeforeSecondCycle = emails.pushWatches;
+      },
+    );
+    final m = AccountSyncManager(
+      _OkAccountRepository(type: AccountType.jmap),
+      mailboxes,
+      emails,
+      syncLog: FakeSyncLogRepository(),
+    );
+    addTearDown(m.dispose);
+
+    await _kickMidFirstCycle(m, mailboxes, release);
+
+    expect(mailboxes.calls, 2);
+    expect(pushWaitsBeforeSecondCycle, 0, reason: 'push wait was not entered');
+  });
 
   // Regression test for issue #501: pressing Retry on a queued message used to
   // pop a "Retrying send…" snackbar even when the account's sync loop had
@@ -442,12 +526,16 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 /// sync fails. Implemented via [noSuchMethod] so it carries no repository
 /// boilerplate to duplicate.
 class _OkAccountRepository implements AccountRepository {
-  static const _account = Account(
-    id: '1',
-    displayName: 'Test',
-    email: 'test@example.com',
-    imapHost: 'imap.example.com',
-  );
+  _OkAccountRepository({AccountType type = AccountType.imap})
+      : _account = Account(
+          id: '1',
+          displayName: 'Test',
+          email: 'test@example.com',
+          imapHost: 'imap.example.com',
+          type: type,
+        );
+
+  final Account _account;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
@@ -489,6 +577,55 @@ class _FailingMailboxRepository extends FakeMailboxRepositoryWithInbox {
     zone.print('C: 99 SOMEBROKENCOMMAND');
     zone.print('S: 99 BAD Could not parse command');
     throw Exception('BAD Could not parse command');
+  }
+}
+
+/// A mailbox repository whose [syncMailboxes] waits for [release], so a test
+/// can act while a sync cycle is in flight, then succeeds — or throws when
+/// [fail] is set. [onCall] sees the 1-based call number, one per sync cycle.
+class _BlockingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  _BlockingMailboxRepository(this.release, {this.onCall, this.fail = false});
+
+  final Future<void> release;
+  final void Function(int call)? onCall;
+  final bool fail;
+  int calls = 0;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    calls++;
+    onCall?.call(calls);
+    await release;
+    if (fail) throw Exception('server unavailable');
+    return 1;
+  }
+}
+
+/// Starts [m], kicks account '1' while its first sync cycle is held in
+/// [mailboxes], then lets that cycle finish and gives the loop time to act.
+Future<void> _kickMidFirstCycle(
+  AccountSyncManager m,
+  _BlockingMailboxRepository mailboxes,
+  Completer<void> release,
+) async {
+  m.start();
+  await Future<void>.delayed(const Duration(milliseconds: 50));
+  expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
+
+  expect(m.syncNow('1'), isTrue);
+  release.complete();
+  await Future<void>.delayed(const Duration(milliseconds: 200));
+}
+
+/// Counts JMAP push waits; the push stream never fires nor closes, like a
+/// connected but silent EventSource.
+class _PushCountingEmailRepository extends FakeEmailRepositoryBase {
+  int pushWatches = 0;
+
+  @override
+  Stream<void> watchJmapPush(String a, String password) {
+    pushWatches++;
+    return StreamController<void>().stream;
   }
 }
 

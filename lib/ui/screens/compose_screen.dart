@@ -18,6 +18,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SendNowOutcome;
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -58,6 +59,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _subject = TextEditingController();
   final _body = TextEditingController();
   String? _accountId;
+
+  /// The message this compose answers: from the route, or from a restored
+  /// reply draft, so a resumed reply is still sent as a reply.
+  String? _replyToEmailId;
   List<Account> _accounts = [];
   bool _sending = false;
   final List<_AttachmentInfo> _attachments = [];
@@ -97,6 +102,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) _body.text = widget.prefillBody!;
     _accountId = widget.accountId;
+    _replyToEmailId = widget.replyToEmailId;
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
@@ -135,7 +141,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             '';
     if (!mounted) return;
     _sigAccountId = accountId;
-    final isReply = widget.replyToEmailId != null;
+    final isReply = _replyToEmailId != null;
     final newBlock = signature.isEmpty
         ? ''
         : (isReply ? '$signature\n\n' : '\n\n$signature');
@@ -170,6 +176,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() {
       _draftRestored = true;
       _draftId = draft.id;
+      _replyToEmailId = draft.replyToEmailId ?? _replyToEmailId;
       _to.text = draft.toText;
       _cc.text = draft.ccText;
       _subject.text = draft.subjectText;
@@ -207,7 +214,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final saved = await _draftRepo.saveDraft(
       id: _draftId,
       accountId: _accountId,
-      replyToEmailId: widget.replyToEmailId,
+      replyToEmailId: _replyToEmailId,
       toText: _to.text,
       ccText: _cc.text,
       subjectText: _subject.text,
@@ -244,7 +251,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _draftRepo.saveDraft(
           id: _draftId,
           accountId: _accountId,
-          replyToEmailId: widget.replyToEmailId,
+          replyToEmailId: _replyToEmailId,
           toText: _to.text,
           ccText: _cc.text,
           subjectText: _subject.text,
@@ -377,6 +384,39 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return lookupMimeType(filename) ?? 'application/octet-stream';
   }
 
+  /// `In-Reply-To` / `References` for a reply, from the original message's
+  /// stored headers. Null for a new message, or when the original is gone,
+  /// has no Message-ID or cannot be read; the reply is then sent unthreaded
+  /// rather than not at all.
+  Future<({String inReplyTo, List<String> references})?>
+      _replyThreading() async {
+    final id = _replyToEmailId;
+    if (id == null) return null;
+    final Email? parent;
+    try {
+      parent = await ref.read(emailRepositoryProvider).getEmail(id);
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'compose.reply_threading_failed',
+              'Could not load the original message; sending unthreaded',
+              screen: 'ComposeScreen',
+              accountId: _accountId,
+              emailId: id,
+              error: e,
+              stack: stack,
+            ),
+      );
+      return null;
+    }
+    if (parent == null) return null;
+    return replyThreading(
+      messageId: parent.messageId,
+      inReplyTo: parent.inReplyTo,
+      references: parent.references,
+    );
+  }
+
   Future<void> _send() async {
     if (_accountId == null) {
       context.showAppSnackBar(
@@ -393,6 +433,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     try {
       final account =
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
+      final threading = await _replyThreading();
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
         to: _to.text
@@ -412,6 +453,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         attachmentFilePaths: List.unmodifiable(
           _attachments.map((a) => a.path).toList(),
         ),
+        inReplyTo: threading?.inReplyTo,
+        references: threading?.references ?? const [],
       );
       // Enqueue first so the message is durably persisted even if the send
       // below is interrupted; the outbox is also drained on every sync cycle.

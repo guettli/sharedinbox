@@ -17,6 +17,23 @@ class FakeImapClient extends imap.ImapClient {
   Future<dynamic> logout() async {}
 }
 
+/// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
+/// mailbox of that name.
+class SelectingFakeImapClient extends FakeImapClient {
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        pathSeparator: '/',
+        flags: [],
+      );
+}
+
 /// Spy IMAP client that records snooze-related operations and succeeds silently.
 class SnoozeSpyImapClient extends FakeImapClient {
   SnoozeSpyImapClient({
