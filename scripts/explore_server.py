@@ -23,9 +23,11 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
     GET  /tree?max=N      the same nodes with their hierarchy (default 2000)
     GET  /shot            PNG screenshot of the whole virtual screen
     GET  /log?lines=N     tail of the app's stdout/stderr (assertions land here)
-    POST /click           name, [role], [index], [contains=1], [timeout]
+    POST /click           name, [role], [index], [contains=1], [force=1],
+                          [timeout]
                           activate by accessible name; contains=1 matches a
-                          substring, index picks among matches in tree order
+                          substring, index picks among matches in tree order,
+                          force=1 clicks a node reported as disabled
     POST /click-unnamed   [role], [index] — for widgets without a label
     POST /focus           name, [role], [index], [contains=1], [timeout]
     POST /fill            name, text, [role], [index], [contains=1], [timeout]
@@ -130,8 +132,12 @@ def _role(params: dict) -> str | None:
     return params.get("role") or None
 
 
+def _flag(params: dict, key: str) -> bool:
+    return params.get(key) in ("1", "true", "yes")
+
+
 def _contains(params: dict) -> bool:
-    return params.get("contains") in ("1", "true", "yes")
+    return _flag(params, "contains")
 
 
 def _timeout(params: dict) -> float:
@@ -214,7 +220,8 @@ def log(params: dict) -> str:
 
 def click(params: dict) -> str:
     node = g.click(params["name"], _role(params), _timeout(params),
-                   index=_int(params, "index", 0), contains=_contains(params))
+                   index=_int(params, "index", 0), contains=_contains(params),
+                   force=_flag(params, "force"))
     return f"clicked {node.getRoleName()}: {node.name!r}\n"
 
 
@@ -254,7 +261,7 @@ def tap(params: dict) -> str:
 
 def restart(params: dict) -> str:
     stop_app()
-    if params.get("wipe") in ("1", "true", "yes"):
+    if _flag(params, "wipe"):
         failures = wipe_data()
         if failures:
             raise g.GuiError("wipe incomplete, app not restarted:\n" + "\n".join(failures))

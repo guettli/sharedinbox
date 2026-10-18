@@ -110,6 +110,12 @@ How to read the output:
   blocks. When you only want to know whether something is there, read `texts`.
 - A failed lookup returns HTTP 409 with the message and the tree, truncated at
   400 nodes. Anything unexpected returns 500 with the traceback.
+- `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
+  widget whose semantics carry no enabled state at all as disabled, and
+  `click` then refuses it with "present but not enabled". The From dropdown in
+  Compose and its menu items are examples. Look at a screenshot: if the
+  control is drawn as enabled, click it with `force=1`. If it then works, it is
+  this quirk, not an app bug.
 - `click-unnamed` presses a button that has no accessible name (`role`, `index`
   in tree order). On Linux that includes icon buttons that only have a tooltip:
   Flutter's Linux embedder does not pass tooltips on as AT-SPI names, while

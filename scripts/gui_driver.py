@@ -159,11 +159,16 @@ def assert_absent(substring: str) -> None:
 
 
 def click(name: str, role: str | None = None, timeout: float = DEFAULT_TIMEOUT,
-          index: int = 0, contains: bool = False):
-    """Activate a widget through its own action, not a pixel coordinate."""
+          index: int = 0, contains: bool = False, force: bool = False):
+    """Activate a widget through its own action, not a pixel coordinate.
+
+    force skips the enabled check. Flutter's Linux bridge reports a widget
+    whose semantics carry no enabled state at all (dropdown menu items, for
+    one) as disabled, although it works; tests should keep the check.
+    """
     node = wait_for(name, role, timeout, contains=contains, index=index)
     states = node.getState()
-    if not states.contains(pyatspi.STATE_ENABLED):
+    if not force and not states.contains(pyatspi.STATE_ENABLED):
         raise GuiError(f"{name!r} is present but not enabled; cannot click it")
     action = node.queryAction()
     names = [action.getName(i) for i in range(action.nActions)]
