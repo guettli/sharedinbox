@@ -131,6 +131,13 @@ class FakeDraftRepository implements DraftRepository {
   int _nextId = 1;
   final Map<int, SavedDraft> _drafts = {};
 
+  /// Ids of every row [saveDraft] wrote, reply drafts included.
+  final Set<int> savedIds = {};
+
+  /// Awaited at the start of every [saveDraft]. Override it to hold a save
+  /// in flight (or fail it) without restating [saveDraft]'s signature.
+  Future<void> beforeSave() async {}
+
   @override
   Future<SavedDraft> saveDraft({
     int? id,
@@ -141,6 +148,7 @@ class FakeDraftRepository implements DraftRepository {
     required String subjectText,
     required String bodyText,
   }) async {
+    await beforeSave();
     final draftId = id ?? _nextId++;
     final draft = SavedDraft(
       id: draftId,
@@ -153,6 +161,7 @@ class FakeDraftRepository implements DraftRepository {
       updatedAt: DateTime.now(),
     );
     _drafts[draftId] = draft;
+    savedIds.add(draftId);
     return draft;
   }
 
