@@ -88,6 +88,7 @@ curl -s $A/shot -o /tmp/screen.png   # screenshot (then view the PNG)
 c log lines=50                       # app stdout/stderr: assertions, exceptions
 c click name='Add account'           # exact accessible name
 c click name=SSL/TLS contains=1 role='toggle button' index=1
+c click name=From contains=1 role='push button' force=1   # see [disabled] below
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …
@@ -110,6 +111,14 @@ How to read the output:
   blocks. When you only want to know whether something is there, read `texts`.
 - A failed lookup returns HTTP 409 with the message and the tree, truncated at
   400 nodes. Anything unexpected returns 500 with the traceback.
+- `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
+  widget whose semantics carry no enabled state at all as disabled, and
+  `click` then refuses it with "present but not enabled". The From dropdown in
+  Compose and its menu items are examples. Look at a screenshot: if the
+  control is drawn as enabled, click it with `force=1`, always together with
+  `role`, so the match cannot land on a text such as an error banner. If it
+  then works, the control is not broken, but its missing enabled state is
+  still an accessibility gap: a screen reader may call it disabled.
 - `click-unnamed` presses a button that has no accessible name (`role`, `index`
   in tree order). On Linux that includes icon buttons that only have a tooltip:
   Flutter's Linux embedder does not pass tooltips on as AT-SPI names, while
@@ -199,6 +208,11 @@ IMAP is available too, at `localhost:21430` (plaintext).
   are lost. Worse, the app can drop off the accessibility bus (`texts` says
   `<app not on the accessibility bus>`) until `c restart`. To test non-ASCII
   input, seed it through SMTP (see **Seed mail** above) or check it on Android.
+- **The paperclip opens the system file chooser.** Attaching a file opens a
+  GTK file dialog in the app's process. While it is open, the app is off the
+  accessibility bus (`texts` says `<app not on the accessibility bus>`) and
+  `key Escape` does not reach the dialog. Recover with `c restart`; drafts are
+  kept. Test attachments by seeding mail with them, or on Android.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The

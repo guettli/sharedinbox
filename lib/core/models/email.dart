@@ -388,6 +388,13 @@ class EmailDraft {
   /// the real message that arrives later share the same id (see #545).
   final String? messageId;
 
+  /// For a reply: the parent's Message-ID and the References chain to send
+  /// (RFC 5322 §3.6.4), bracket-less like every stored id (see
+  /// `message_id_utils.dart`). Without them the recipient's client cannot
+  /// thread the reply. Build them with `replyThreading`.
+  final String? inReplyTo;
+  final List<String> references;
+
   const EmailDraft({
     required this.from,
     required this.to,
@@ -396,6 +403,8 @@ class EmailDraft {
     required this.body,
     this.attachmentFilePaths = const [],
     this.messageId,
+    this.inReplyTo,
+    this.references = const [],
   });
 
   EmailDraft copyWith({String? messageId}) => EmailDraft(
@@ -406,6 +415,8 @@ class EmailDraft {
         body: body,
         attachmentFilePaths: attachmentFilePaths,
         messageId: messageId ?? this.messageId,
+        inReplyTo: inReplyTo,
+        references: references,
       );
 }
 

@@ -56,12 +56,15 @@ List<Override> _overrides({
   required EmailBody body,
   Email? email,
   List<Account> accounts = const [kTestAccount],
+  FakeMailboxRepository? mailboxes,
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
         FakeAccountRepository(accounts),
       ),
-      mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+      mailboxRepositoryProvider.overrideWithValue(
+        mailboxes ?? FakeMailboxRepository(),
+      ),
       emailRepositoryProvider.overrideWithValue(
         FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
       ),
@@ -1122,6 +1125,42 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Mark as unread'), findsOneWidget);
+    });
+
+    testWidgets('Move to a new folder closes the name dialog without crashing',
+        (
+      tester,
+    ) async {
+      // The folder-name dialog used to dispose its TextEditingController as
+      // soon as showDialog returned, while the TextField was still on screen
+      // for the exit animation: a framework assertion replaced the whole
+      // screen with the error page.
+      final mailboxes = FakeMailboxRepository();
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+            mailboxes: mailboxes,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Move to folder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create new folder…'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Projects');
+      await tester.tap(find.text('Create'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Create new folder'), findsNothing);
+      final created = await mailboxes.observeMailboxes('acc-1').first;
+      expect(created.map((m) => m.name), ['Projects']);
     });
 
     testWidgets('Find similar emails entry appears in popup menu', (
