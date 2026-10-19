@@ -313,6 +313,61 @@ void main() {
       await db.close();
     });
 
+    test('a failing upgrade rolls back and can be retried', () async {
+      final dbFile = File('test_migration_rollback.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.select(fresh.accounts).get();
+      await fresh.close();
+
+      // A v58 database (no reply_to_json) whose v60 backfill fails after the
+      // v59 step has added the column.
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('ALTER TABLE emails DROP COLUMN reply_to_json;');
+      rawDb.execute('''
+        INSERT INTO threads (account_id, mailbox_path, id, latest_date,
+                             latest_email_id)
+        VALUES ('acc-x', 'INBOX', 't1', 0, 'e1');
+      ''');
+      rawDb.execute('''
+        CREATE TRIGGER fail_backfill BEFORE UPDATE ON threads
+        BEGIN SELECT RAISE(ABORT, 'backfill failed'); END;
+      ''');
+      rawDb.execute('PRAGMA user_version = 58;');
+      rawDb.close();
+
+      final failing = AppDatabase(NativeDatabase(dbFile));
+      await expectLater(
+        failing.select(failing.accounts).get(),
+        throwsA(anything),
+      );
+      await failing.close();
+
+      final check = sqlite.sqlite3.open(dbFile.path);
+      expect(check.select('PRAGMA user_version').single.values.single, 58);
+      expect(
+        check
+            .select('PRAGMA table_info(emails)')
+            .map((r) => r['name'])
+            .contains('reply_to_json'),
+        isFalse,
+        reason: 'the v59 step must be rolled back with the failed v60 step',
+      );
+      check.execute('DROP TRIGGER fail_backfill;');
+      check.close();
+
+      // The next start replays v59 without "duplicate column name".
+      final db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 60);
+      await db.close();
+    });
+
     test(
       'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
       () async {

@@ -753,570 +753,620 @@ class AppDatabase extends _$AppDatabase {
           await _createEmailBodyFts();
           await _createAppLogsIndexes();
         },
-        onUpgrade: (m, from, to) async {
-          // NOTE: m.createTable(T) creates the LATEST version of table T.
-          // If you later add a column C to T in version X, you must guard
-          // addColumn(T, T.C) with `if (from >= creationVersionOfT && from < X)`.
-          if (from < 2) {
-            await m.addColumn(accounts, accounts.accountType);
-            await m.addColumn(accounts, accounts.jmapUrl);
-          }
-          if (from < 3) {
-            await m.addColumn(accounts, accounts.username);
-          }
-          if (from < 4) {
-            await m.createTable(drafts);
-          }
-          if (from < 5) {
-            await m.createTable(syncStates);
-          }
-          if (from < 6) {
-            await m.createTable(pendingChanges);
-          }
-          if (from < 7) {
-            await m.createTable(syncLogs);
-          }
-          if (from < 8) {
-            await m.addColumn(mailboxes, mailboxes.role);
-          }
-          if (from < 9) {
-            await m.addColumn(emailBodies, emailBodies.cachedAt);
-          }
-          if (from >= 7 && from < 10) {
-            await m.addColumn(syncLogs, syncLogs.protocol);
-            await m.addColumn(syncLogs, syncLogs.mailboxesSynced);
-            await m.addColumn(syncLogs, syncLogs.pendingFlushed);
-          }
-          if (from >= 7 && from < 11) {
-            await m.addColumn(syncLogs, syncLogs.emailsSkipped);
-            await m.addColumn(syncLogs, syncLogs.bytesTransferred);
-          }
-          if (from < 12) {
-            await m.createTable(syncLogMailboxes);
-          }
-          if (from < 13) {
-            await m.addColumn(accounts, accounts.verbose);
-            if (from >= 7) {
-              await m.addColumn(syncLogs, syncLogs.protocolLog);
-            }
-          }
-          if (from < 14) {
-            await m.addColumn(emails, emails.threadId);
-            await m.addColumn(emails, emails.messageId);
-            await m.addColumn(emails, emails.inReplyTo);
-            await m.addColumn(emails, emails.references);
-          }
-          if (from < 15) {
-            await m.addColumn(accounts, accounts.manageSieveHost);
-            await m.addColumn(accounts, accounts.manageSievePort);
-            await m.addColumn(accounts, accounts.manageSieveSsl);
-          }
-          if (from < 16) {
-            await m.addColumn(accounts, accounts.manageSieveAvailable);
-          }
-          if (from < 17) {
-            await m.createTable(threads);
-            // Populate threads from existing emails.
-            final allRows = await _migrationEmailRows();
-            final groups = <String, List<_MigrationEmail>>{};
-            for (final row in allRows) {
-              final key =
-                  '${row.accountId}:${row.mailboxPath}:${row.threadId ?? row.id}';
-              groups.putIfAbsent(key, () => []).add(row);
-            }
-
-            for (final threadEmails in groups.values) {
-              threadEmails.sort((a, b) {
-                final da = a.sentAt ?? a.receivedAt;
-                final db = b.sentAt ?? b.receivedAt;
-                return da.compareTo(db);
-              });
-              final latest = threadEmails.last;
-
-              await into(threads).insert(
-                ThreadsCompanion.insert(
-                  id: latest.threadId ?? latest.id,
-                  accountId: latest.accountId,
-                  mailboxPath: latest.mailboxPath,
-                  subject: Value(latest.subject),
-                  latestDate: latest.sentAt ?? latest.receivedAt,
-                  messageCount: Value(threadEmails.length),
-                  hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
-                  isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
-                  preview: Value(latest.preview),
-                  latestEmailId: latest.id,
-                  emailIdsJson: Value(
-                    jsonEncode(threadEmails.map((e) => e.id).toList()),
-                  ),
-                  participantsJson: Value(
-                    latest.fromJson,
-                  ), // Good enough for migration
-                ),
-              );
-            }
-          }
-          if (from < 18) {
-            // Index for sorting email list by date.
-            await m.createIndex(
-              Index(
-                'emails_received_at',
-                'CREATE INDEX emails_received_at ON emails (account_id, mailbox_path, received_at DESC);',
-              ),
-            );
-            // Index for finding emails in a thread.
-            await m.createIndex(
-              Index(
-                'emails_thread_id',
-                'CREATE INDEX emails_thread_id ON emails (account_id, mailbox_path, thread_id);',
-              ),
-            );
-            // Index for pending changes queue.
-            await m.createIndex(
-              Index(
-                'pending_changes_account_id',
-                'CREATE INDEX pending_changes_account_id ON pending_changes (account_id);',
-              ),
-            );
-          }
-          if (from < 19) {
-            await m.createTable(syncHealth);
-          }
-          if (from < 20) {
-            await m.addColumn(emailBodies, emailBodies.headersJson);
-          }
-          if (from < 21) {
-            await m.createTable(undoActions);
-          }
-          if (from < 22) {
-            final check = await customSelect('PRAGMA table_info(emails)').get();
-            final names = check.map((row) => row.read<String>('name')).toList();
-
-            if (!names.contains('snoozed_until')) {
-              await m.addColumn(emails, emails.snoozedUntil);
-            }
-            if (!names.contains('snoozed_from_mailbox_path')) {
-              await m.addColumn(emails, emails.snoozedFromMailboxPath);
-            }
-
-            await m.createIndex(
-              Index(
-                'emails_snoozed_until',
-                'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (account_id, snoozed_until) WHERE snoozed_until IS NOT NULL;',
-              ),
-            );
-          }
-          if (from < 23) {
-            await m.addColumn(emails, emails.listUnsubscribeHeader);
-          }
-          if (from >= 4 && from < 24) {
-            await m.addColumn(drafts, drafts.imapServerId);
-          }
-          if (from < 25) {
-            // For observeMailboxes: filter by account_id, sort by path.
-            await m.createIndex(
-              Index(
-                'mailboxes_account_id',
-                'CREATE INDEX IF NOT EXISTS mailboxes_account_id ON mailboxes (account_id, path);',
-              ),
-            );
-            // For observeThreads: filter by account_id+mailbox_path, sort by latest_date.
-            await m.createIndex(
-              Index(
-                'threads_latest_date',
-                'CREATE INDEX IF NOT EXISTS threads_latest_date ON threads (account_id, mailbox_path, latest_date DESC);',
-              ),
-            );
-          }
-          if (from < 26) {
-            await _createEmailFts();
-            // Backfill FTS index from existing rows.
-            await customStatement('''
-              INSERT INTO email_fts(rowid, subject, preview, from_json)
-              SELECT rowid, subject, preview, from_json FROM emails
-            ''');
-          }
-          if (from < 27) {
-            await m.createTable(searchHistoryEntries);
-          }
-          if (from < 28) {
-            await m.addColumn(emailBodies, emailBodies.mimeTreeJson);
-          }
-          if (from < 29) {
-            await m.createTable(localSieveScripts);
-          }
-          if (from >= 12 && from < 30) {
-            await m.addColumn(syncLogMailboxes, syncLogMailboxes.durationMs);
-          }
-          if (from < 31) {
-            await m.createTable(shareKeys);
-          }
-          if (from < 32) {
-            await m.createTable(localSieveApplied);
-          }
-          if (from >= 7 && from < 33) {
-            await m.addColumn(syncLogs, syncLogs.errorStackTrace);
-            await m.addColumn(syncLogs, syncLogs.isPermanent);
-          }
-          if (from < 34) {
-            await m.createTable(userPreferences);
-          }
-          if (from >= 34 && from < 35) {
-            await m.addColumn(
-              userPreferences,
-              userPreferences.mailViewButtonPosition,
-            );
-          }
-          if (from >= 34 && from < 36) {
-            await m.addColumn(
-              userPreferences,
-              userPreferences.afterMailViewAction,
-            );
-          }
-          if (from < 37) {
-            await m.createTable(imageTrustedSenders);
-          }
-          if (from >= 34 && from < 38) {
-            await m.addColumn(userPreferences, userPreferences.prefetchMode);
-            await m.addColumn(
-              userPreferences,
-              userPreferences.bodyCacheLimitMb,
-            );
-          }
-          if (from < 39) {
-            await m.createTable(emailNotes);
-          }
-          if (from < 40) {
-            await m.createTable(installedVersions);
-          }
-          if (from < 41) {
-            // Fix IMAP email IDs to include mailboxPath, preventing UID
-            // collisions across mailboxes (IMAP UIDs are mailbox-scoped).
-            // New format: "accountId:mailboxPath:uid" (was "accountId:uid").
-            //
-            // defer_foreign_keys defers the email_bodies→emails FK check
-            // to COMMIT so the two tables can be updated sequentially inside
-            // the migration transaction without a transient FK violation.
-            await customStatement('PRAGMA defer_foreign_keys = ON');
-
-            // 1. Remap email_bodies.email_id before emails.id changes.
-            await customStatement('''
-              UPDATE email_bodies
-              SET email_id = (
-                SELECT e.account_id || ':' || e.mailbox_path || ':' || CAST(e.uid AS TEXT)
-                FROM emails e
-                JOIN accounts a ON a.id = e.account_id
-                WHERE e.id = email_bodies.email_id
-                  AND a.account_type = 'imap'
-              )
-              WHERE EXISTS (
-                SELECT 1 FROM emails e
-                JOIN accounts a ON a.id = e.account_id
-                WHERE e.id = email_bodies.email_id
-                  AND a.account_type = 'imap'
-              )
-            ''');
-
-            // 2. Update emails.thread_id where it was set to the email's own
-            //    id (fallback for messages with no Message-ID header).
-            await customStatement('''
-              UPDATE emails
-              SET thread_id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
-              WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
-                AND thread_id = id
-            ''');
-
-            // 3. Update the primary key on emails.
-            await customStatement('''
-              UPDATE emails
-              SET id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
-              WHERE account_id IN (
-                SELECT id FROM accounts WHERE account_type = 'imap'
-              )
-            ''');
-
-            // 5. Rebuild threads for IMAP accounts from the updated email rows.
-            //    The threads table stores denormalised data (latest_email_id,
-            //    email_ids_json) that references email IDs, so it is simpler to
-            //    delete and reconstruct than to patch the JSON in SQL.
-            await customStatement('''
-              DELETE FROM threads
-              WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
-            ''');
-
-            final imapAccounts = await (select(accounts)
-                  ..where((t) => t.accountType.equals('imap')))
-                .get();
-            for (final acct in imapAccounts) {
-              final emailRows = await _migrationEmailRows(acct.id);
-
-              final groups = <String, List<_MigrationEmail>>{};
-              for (final row in emailRows) {
-                final key = '${row.mailboxPath}:${row.threadId ?? row.id}';
-                groups.putIfAbsent(key, () => []).add(row);
-              }
-
-              for (final threadEmails in groups.values) {
-                threadEmails.sort((a, b) {
-                  final da = a.sentAt ?? a.receivedAt;
-                  final db = b.sentAt ?? b.receivedAt;
-                  return da.compareTo(db);
-                });
-                final latest = threadEmails.last;
-
-                final seen = <String>{};
-                final participants = <Map<String, dynamic>>[];
-                for (final e in threadEmails) {
-                  final from = jsonDecode(e.fromJson) as List<dynamic>;
-                  for (final a in from.cast<Map<String, dynamic>>()) {
-                    final email = a['email'] as String;
-                    if (seen.add(email)) {
-                      participants.add({'name': a['name'], 'email': email});
-                    }
-                  }
-                }
-
-                await into(threads).insert(
-                  ThreadsCompanion.insert(
-                    id: latest.threadId ?? latest.id,
-                    accountId: latest.accountId,
-                    mailboxPath: latest.mailboxPath,
-                    subject: Value(latest.subject),
-                    latestDate: latest.sentAt ?? latest.receivedAt,
-                    messageCount: Value(threadEmails.length),
-                    hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
-                    isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
-                    participantsJson: Value(jsonEncode(participants)),
-                    preview: Value(latest.preview),
-                    latestEmailId: latest.id,
-                    emailIdsJson: Value(
-                      jsonEncode(threadEmails.map((e) => e.id).toList()),
-                    ),
-                  ),
-                );
-              }
-            }
-          }
-          if (from < 42) {
-            // Add FTS5 shadow table for email_notes so note search no longer
-            // falls back to LIKE scans as the local DB grows.
-            await _createEmailNotesFts();
-            await customStatement('''
-              INSERT INTO email_notes_fts(rowid, note_text)
-              SELECT rowid, note_text FROM email_notes
-            ''');
-          }
-          if (from >= 4 && from < 43) {
-            await m.addColumn(drafts, drafts.jmapServerId);
-            await m.addColumn(drafts, drafts.dirty);
-          }
-          if (from < 43) {
-            await m.createTable(draftTombstones);
-          }
-          if (from >= 12 && from < 44) {
-            await m.addColumn(syncLogMailboxes, syncLogMailboxes.mailboxName);
-          }
-          if (from < 45) {
-            await m.createTable(appLogs);
-            await _createAppLogsIndexes();
-          }
-          if (from < 46) {
-            await m.createTable(outbox);
-          }
-          if (from < 47) {
-            // Some legacy test snapshots build only a partial schema, so the
-            // `mailboxes` / `sync_states` tables may not exist. Guard each
-            // step against that so the migration is idempotent even under
-            // incomplete states.
-            if (await _tableExists(this, 'mailboxes')) {
-              await m.addColumn(mailboxes, mailboxes.displayPath);
-              await m.addColumn(mailboxes, mailboxes.parentId);
-              // Backfill display_path from path so IMAP folders (whose path
-              // is already hierarchical + human-readable) render correctly.
-              // JMAP rows still hold the opaque server ID here; the next
-              // mailbox sync recomputes them from the parent chain.
-              await customStatement('''
-                UPDATE mailboxes SET display_path = path
-                WHERE display_path = ''
-              ''');
-            }
-            // Drop the JMAP `Mailbox` sync checkpoint so the next launch
-            // triggers a full re-sync and picks up hierarchical displayPaths.
-            if (await _tableExists(this, 'sync_states') &&
-                await _tableExists(this, 'accounts')) {
-              await customStatement('''
-                DELETE FROM sync_states WHERE resource_type = 'Mailbox'
-                AND account_id IN (SELECT id FROM accounts
-                WHERE account_type = 'jmap')
-              ''');
-            }
-          }
-          if (from < 48) {
-            if (await _tableExists(this, 'email_bodies')) {
-              await m.addColumn(emailBodies, emailBodies.bodySize);
-              // Backfill bodySize for existing rows from the cached text/html.
-              await customStatement('''
-                UPDATE email_bodies
-                SET body_size =
-                  COALESCE(LENGTH(text_body), 0) + COALESCE(LENGTH(html_body), 0)
-              ''');
-            }
-            await m.createTable(attachmentFiles);
-          }
-          if (from < 49) {
-            // Normalise Message-ID / In-Reply-To / References for legacy IMAP
-            // rows written before `_cleanMessageId` (#143) stripped the RFC
-            // 5322 angle brackets at insert time. JMAP rows always stored
-            // them bracket-less (RFC 8621 §4.1.2.3), so a compare against
-            // JMAP would previously see `<foo@bar>` on the IMAP side and
-            // `foo@bar` on the JMAP side and treat them as unrelated. See
-            // #406.
-            if (await _tableExists(this, 'emails')) {
-              await customStatement(
-                'UPDATE emails '
-                'SET message_id = SUBSTR(message_id, 2, LENGTH(message_id) - 2) '
-                "WHERE message_id LIKE '<%>'",
-              );
-              await customStatement(
-                'UPDATE emails '
-                'SET in_reply_to = SUBSTR(in_reply_to, 2, LENGTH(in_reply_to) - 2) '
-                "WHERE in_reply_to LIKE '<%>'",
-              );
-              // References is a whitespace-separated list of ids; strip
-              // per-token in Dart because SQLite has no split/join.
-              final refRows = await customSelect(
-                'SELECT rowid, "references" AS refs FROM emails '
-                'WHERE "references" LIKE \'%<%\'',
-              ).get();
-              for (final r in refRows) {
-                final rowid = r.read<int>('rowid');
-                final refs = r.read<String>('refs');
-                final cleaned = normaliseReferences(refs);
-                if (cleaned == null) {
-                  await customStatement(
-                    'UPDATE emails SET "references" = NULL WHERE rowid = ?',
-                    [rowid],
-                  );
-                } else {
-                  await customStatement(
-                    'UPDATE emails SET "references" = ? WHERE rowid = ?',
-                    [cleaned, rowid],
-                  );
-                }
-              }
-            }
-          }
-          if (from < 50) {
-            // Add FTS5 shadow table for email bodies so full-body search no
-            // longer falls back to LIKE scans as the local DB grows. Some
-            // legacy test snapshots omit email_bodies, so guard the create +
-            // backfill against its absence.
-            if (await _tableExists(this, 'email_bodies')) {
-              await _createEmailBodyFts();
-              await customStatement('''
-                INSERT INTO email_body_fts(rowid, text_body)
-                SELECT rowid, text_body FROM email_bodies
-              ''');
-            }
-          }
-          if (from < 52 && await _tableExists(this, 'emails')) {
-            // Local self-sent "virtual" messages (#545). Marks rows that have
-            // no server counterpart yet so sync doesn't prune them.
-            await m.addColumn(emails, emails.isLocal);
-          }
-          if (from >= 19 &&
-              from < 51 &&
-              await _tableExists(this, 'sync_health')) {
-            // sync_health was created at v19; add the failure-reason column so
-            // a verification that throws surfaces why instead of leaving the
-            // account stuck on "not verified yet". Guarded against legacy test
-            // snapshots that never created the table.
-            await m.addColumn(syncHealth, syncHealth.lastError);
-          }
-          if (from < 53 && await _tableExists(this, 'emails')) {
-            // Server-assigned, move-stable message id (RFC 8474 EMAILID /
-            // Gmail X-GM-MSGID). Populated on the next sync for servers that
-            // advertise the capability; older rows stay null (#589).
-            await m.addColumn(emails, emails.serverEmailId);
-            await m.createIndex(
-              Index(
-                'emails_server_email_id',
-                'CREATE INDEX IF NOT EXISTS emails_server_email_id ON emails '
-                    '(account_id, server_email_id) WHERE server_email_id IS NOT NULL;',
-              ),
-            );
-          }
-          if (from < 54) {
-            // Per-account plain-text signature (#646).
-            await m.addColumn(accounts, accounts.signature);
-          }
-          if (from < 55 && await _tableExists(this, 'emails')) {
-            // Clear previews poisoned by the mis-parsed partial body fetch
-            // (#680): every plain-text message synced over IMAP was stored
-            // with the literal snippet `0>`. Nulling them lets the next
-            // getEmailBody backfill write a real preview — the backfill only
-            // fires on an empty one, so these rows would stay wrong forever.
-            await customStatement(
-              "UPDATE emails SET preview = NULL WHERE preview = '0>'",
-            );
-            if (await _tableExists(this, 'threads')) {
-              await customStatement(
-                "UPDATE threads SET preview = NULL WHERE preview = '0>'",
-              );
-            }
-          }
-          if (from < 56) {
-            // Per-account new-mail notification rules (#272). Brand-new tables
-            // start empty and notifications_enabled defaults to null (read as
-            // false), so existing installs stay silent until the user opts in.
-            await m.createTable(notificationRules);
-            await m.createTable(notifiedEmails);
-            await m.addColumn(accounts, accounts.notificationsEnabled);
-          }
-          if (from < 57 && await _tableExists(this, 'emails')) {
-            // Index for gathering a thread across every folder of an account
-            // (#754). The pre-existing emails_thread_id index is keyed on
-            // (account_id, mailbox_path, thread_id), which is not a usable
-            // prefix for an (account_id, thread_id) lookup.
-            await m.createIndex(
-              Index(
-                'emails_account_thread',
-                'CREATE INDEX IF NOT EXISTS emails_account_thread ON emails (account_id, thread_id);',
-              ),
-            );
-          }
-          if (from < 58) {
-            // Local record of bug reports that opened a GitHub issue (#835).
-            await m.createTable(bugReports);
-          }
-          if (from < 59 && await _tableExists(this, 'emails')) {
-            // Reply-To addresses, so replies go where the sender asked (#919).
-            await m.addColumn(emails, emails.replyToJson);
-          }
-          if (from < 60 &&
-              await _tableExists(this, 'threads') &&
-              await _tableExists(this, 'emails')) {
-            // v17 creates `threads` with the current columns, so only tables
-            // from v17+ need the column added. Its insert leaves the column
-            // at its default, so every upgrade still needs the backfill.
-            // The column can also exist already at v59: migrations are not
-            // transactional, so an upgrade killed after this step, or a
-            // background isolate migrating at the same time, leaves it behind.
-            if (!await _columnExists(this, 'threads', 'has_attachment')) {
-              await m.addColumn(threads, threads.hasAttachment);
-            }
-            // Paperclip in the thread list: backfill from the emails. The
-            // subquery is uncorrelated, so it runs once instead of once per
-            // thread (COALESCE keeps it off the thread_id indexes).
-            await customStatement('''
-              UPDATE threads SET has_attachment =
-                (account_id, mailbox_path, id) IN (
-                  SELECT account_id, mailbox_path, COALESCE(thread_id, id)
-                  FROM emails WHERE has_attachment = 1
-                )
-            ''');
-          }
-        },
+        onUpgrade: _upgradeAtomically,
       );
+
+  /// Runs every upgrade step and the user_version bump as one write
+  /// transaction. Drift runs migrations without one, so an upgrade that was
+  /// killed or failed half-way left its schema changes behind with the old
+  /// user_version, and the next start replayed the steps ("duplicate column
+  /// name: has_attachment"). BEGIN IMMEDIATE also makes a WorkManager isolate
+  /// that opens the database at the same time wait for this upgrade; it then
+  /// sees the new version and skips the steps.
+  Future<void> _upgradeAtomically(Migrator m, int from, int to) async {
+    await customStatement('BEGIN IMMEDIATE');
+    try {
+      final current = (await customSelect('PRAGMA user_version').getSingle())
+          .read<int>('user_version');
+      if (current < to) {
+        await _upgradeSteps(m, current);
+        await customStatement('PRAGMA user_version = $to');
+      }
+      await customStatement('COMMIT');
+    } catch (_) {
+      try {
+        await customStatement('ROLLBACK');
+      } catch (_) {
+        // SQLite already rolled back after the error.
+      }
+      rethrow;
+    }
+  }
+
+  /// Like [Migrator.addColumn], but a no-op when the column already exists,
+  /// so databases left half-upgraded by older builds can still upgrade.
+  Future<void> _addColumnIfMissing(
+    Migrator m,
+    TableInfo<Table, dynamic> table,
+    GeneratedColumn<Object> column,
+  ) async {
+    if (await _columnExists(this, table.actualTableName, column.name)) return;
+    await m.addColumn(table, column);
+  }
+
+  Future<void> _upgradeSteps(Migrator m, int from) async {
+    // NOTE: m.createTable(T) creates the LATEST version of table T.
+    // If you later add a column C to T in version X, you must guard
+    // addColumn(T, T.C) with `if (from >= creationVersionOfT && from < X)`.
+    if (from < 2) {
+      await _addColumnIfMissing(m, accounts, accounts.accountType);
+      await _addColumnIfMissing(m, accounts, accounts.jmapUrl);
+    }
+    if (from < 3) {
+      await _addColumnIfMissing(m, accounts, accounts.username);
+    }
+    if (from < 4) {
+      await m.createTable(drafts);
+    }
+    if (from < 5) {
+      await m.createTable(syncStates);
+    }
+    if (from < 6) {
+      await m.createTable(pendingChanges);
+    }
+    if (from < 7) {
+      await m.createTable(syncLogs);
+    }
+    if (from < 8) {
+      await _addColumnIfMissing(m, mailboxes, mailboxes.role);
+    }
+    if (from < 9) {
+      await _addColumnIfMissing(m, emailBodies, emailBodies.cachedAt);
+    }
+    if (from >= 7 && from < 10) {
+      await _addColumnIfMissing(m, syncLogs, syncLogs.protocol);
+      await _addColumnIfMissing(m, syncLogs, syncLogs.mailboxesSynced);
+      await _addColumnIfMissing(m, syncLogs, syncLogs.pendingFlushed);
+    }
+    if (from >= 7 && from < 11) {
+      await _addColumnIfMissing(m, syncLogs, syncLogs.emailsSkipped);
+      await _addColumnIfMissing(m, syncLogs, syncLogs.bytesTransferred);
+    }
+    if (from < 12) {
+      await m.createTable(syncLogMailboxes);
+    }
+    if (from < 13) {
+      await _addColumnIfMissing(m, accounts, accounts.verbose);
+      if (from >= 7) {
+        await _addColumnIfMissing(m, syncLogs, syncLogs.protocolLog);
+      }
+    }
+    if (from < 14) {
+      await _addColumnIfMissing(m, emails, emails.threadId);
+      await _addColumnIfMissing(m, emails, emails.messageId);
+      await _addColumnIfMissing(m, emails, emails.inReplyTo);
+      await _addColumnIfMissing(m, emails, emails.references);
+    }
+    if (from < 15) {
+      await _addColumnIfMissing(m, accounts, accounts.manageSieveHost);
+      await _addColumnIfMissing(m, accounts, accounts.manageSievePort);
+      await _addColumnIfMissing(m, accounts, accounts.manageSieveSsl);
+    }
+    if (from < 16) {
+      await _addColumnIfMissing(m, accounts, accounts.manageSieveAvailable);
+    }
+    if (from < 17) {
+      await m.createTable(threads);
+      // Populate threads from existing emails.
+      final allRows = await _migrationEmailRows();
+      final groups = <String, List<_MigrationEmail>>{};
+      for (final row in allRows) {
+        final key =
+            '${row.accountId}:${row.mailboxPath}:${row.threadId ?? row.id}';
+        groups.putIfAbsent(key, () => []).add(row);
+      }
+
+      for (final threadEmails in groups.values) {
+        threadEmails.sort((a, b) {
+          final da = a.sentAt ?? a.receivedAt;
+          final db = b.sentAt ?? b.receivedAt;
+          return da.compareTo(db);
+        });
+        final latest = threadEmails.last;
+
+        await into(threads).insert(
+          ThreadsCompanion.insert(
+            id: latest.threadId ?? latest.id,
+            accountId: latest.accountId,
+            mailboxPath: latest.mailboxPath,
+            subject: Value(latest.subject),
+            latestDate: latest.sentAt ?? latest.receivedAt,
+            messageCount: Value(threadEmails.length),
+            hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
+            isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+            preview: Value(latest.preview),
+            latestEmailId: latest.id,
+            emailIdsJson: Value(
+              jsonEncode(threadEmails.map((e) => e.id).toList()),
+            ),
+            participantsJson: Value(
+              latest.fromJson,
+            ), // Good enough for migration
+          ),
+        );
+      }
+    }
+    if (from < 18) {
+      // Index for sorting email list by date.
+      await m.createIndex(
+        Index(
+          'emails_received_at',
+          'CREATE INDEX emails_received_at ON emails (account_id, mailbox_path, received_at DESC);',
+        ),
+      );
+      // Index for finding emails in a thread.
+      await m.createIndex(
+        Index(
+          'emails_thread_id',
+          'CREATE INDEX emails_thread_id ON emails (account_id, mailbox_path, thread_id);',
+        ),
+      );
+      // Index for pending changes queue.
+      await m.createIndex(
+        Index(
+          'pending_changes_account_id',
+          'CREATE INDEX pending_changes_account_id ON pending_changes (account_id);',
+        ),
+      );
+    }
+    if (from < 19) {
+      await m.createTable(syncHealth);
+    }
+    if (from < 20) {
+      await _addColumnIfMissing(m, emailBodies, emailBodies.headersJson);
+    }
+    if (from < 21) {
+      await m.createTable(undoActions);
+    }
+    if (from < 22) {
+      final check = await customSelect('PRAGMA table_info(emails)').get();
+      final names = check.map((row) => row.read<String>('name')).toList();
+
+      if (!names.contains('snoozed_until')) {
+        await _addColumnIfMissing(m, emails, emails.snoozedUntil);
+      }
+      if (!names.contains('snoozed_from_mailbox_path')) {
+        await _addColumnIfMissing(m, emails, emails.snoozedFromMailboxPath);
+      }
+
+      await m.createIndex(
+        Index(
+          'emails_snoozed_until',
+          'CREATE INDEX IF NOT EXISTS emails_snoozed_until ON emails (account_id, snoozed_until) WHERE snoozed_until IS NOT NULL;',
+        ),
+      );
+    }
+    if (from < 23) {
+      await _addColumnIfMissing(m, emails, emails.listUnsubscribeHeader);
+    }
+    if (from >= 4 && from < 24) {
+      await _addColumnIfMissing(m, drafts, drafts.imapServerId);
+    }
+    if (from < 25) {
+      // For observeMailboxes: filter by account_id, sort by path.
+      await m.createIndex(
+        Index(
+          'mailboxes_account_id',
+          'CREATE INDEX IF NOT EXISTS mailboxes_account_id ON mailboxes (account_id, path);',
+        ),
+      );
+      // For observeThreads: filter by account_id+mailbox_path, sort by latest_date.
+      await m.createIndex(
+        Index(
+          'threads_latest_date',
+          'CREATE INDEX IF NOT EXISTS threads_latest_date ON threads (account_id, mailbox_path, latest_date DESC);',
+        ),
+      );
+    }
+    if (from < 26) {
+      await _createEmailFts();
+      // Backfill FTS index from existing rows.
+      await customStatement('''
+        INSERT INTO email_fts(rowid, subject, preview, from_json)
+        SELECT rowid, subject, preview, from_json FROM emails
+      ''');
+    }
+    if (from < 27) {
+      await m.createTable(searchHistoryEntries);
+    }
+    if (from < 28) {
+      await _addColumnIfMissing(m, emailBodies, emailBodies.mimeTreeJson);
+    }
+    if (from < 29) {
+      await m.createTable(localSieveScripts);
+    }
+    if (from >= 12 && from < 30) {
+      await _addColumnIfMissing(
+        m,
+        syncLogMailboxes,
+        syncLogMailboxes.durationMs,
+      );
+    }
+    if (from < 31) {
+      await m.createTable(shareKeys);
+    }
+    if (from < 32) {
+      await m.createTable(localSieveApplied);
+    }
+    if (from >= 7 && from < 33) {
+      await _addColumnIfMissing(m, syncLogs, syncLogs.errorStackTrace);
+      await _addColumnIfMissing(m, syncLogs, syncLogs.isPermanent);
+    }
+    if (from < 34) {
+      await m.createTable(userPreferences);
+    }
+    if (from >= 34 && from < 35) {
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.mailViewButtonPosition,
+      );
+    }
+    if (from >= 34 && from < 36) {
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.afterMailViewAction,
+      );
+    }
+    if (from < 37) {
+      await m.createTable(imageTrustedSenders);
+    }
+    if (from >= 34 && from < 38) {
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.prefetchMode,
+      );
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.bodyCacheLimitMb,
+      );
+    }
+    if (from < 39) {
+      await m.createTable(emailNotes);
+    }
+    if (from < 40) {
+      await m.createTable(installedVersions);
+    }
+    if (from < 41) {
+      // Fix IMAP email IDs to include mailboxPath, preventing UID
+      // collisions across mailboxes (IMAP UIDs are mailbox-scoped).
+      // New format: "accountId:mailboxPath:uid" (was "accountId:uid").
+      //
+      // defer_foreign_keys defers the email_bodies→emails FK check
+      // to COMMIT so the two tables can be updated sequentially inside
+      // the migration transaction without a transient FK violation.
+      await customStatement('PRAGMA defer_foreign_keys = ON');
+
+      // 1. Remap email_bodies.email_id before emails.id changes.
+      await customStatement('''
+        UPDATE email_bodies
+        SET email_id = (
+          SELECT e.account_id || ':' || e.mailbox_path || ':' || CAST(e.uid AS TEXT)
+          FROM emails e
+          JOIN accounts a ON a.id = e.account_id
+          WHERE e.id = email_bodies.email_id
+            AND a.account_type = 'imap'
+        )
+        WHERE EXISTS (
+          SELECT 1 FROM emails e
+          JOIN accounts a ON a.id = e.account_id
+          WHERE e.id = email_bodies.email_id
+            AND a.account_type = 'imap'
+        )
+      ''');
+
+      // 2. Update emails.thread_id where it was set to the email's own
+      //    id (fallback for messages with no Message-ID header).
+      await customStatement('''
+        UPDATE emails
+        SET thread_id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
+        WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+          AND thread_id = id
+      ''');
+
+      // 3. Update the primary key on emails.
+      await customStatement('''
+        UPDATE emails
+        SET id = account_id || ':' || mailbox_path || ':' || CAST(uid AS TEXT)
+        WHERE account_id IN (
+          SELECT id FROM accounts WHERE account_type = 'imap'
+        )
+      ''');
+
+      // 5. Rebuild threads for IMAP accounts from the updated email rows.
+      //    The threads table stores denormalised data (latest_email_id,
+      //    email_ids_json) that references email IDs, so it is simpler to
+      //    delete and reconstruct than to patch the JSON in SQL.
+      await customStatement('''
+        DELETE FROM threads
+        WHERE account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+      ''');
+
+      final imapAccounts = await (select(accounts)
+            ..where((t) => t.accountType.equals('imap')))
+          .get();
+      for (final acct in imapAccounts) {
+        final emailRows = await _migrationEmailRows(acct.id);
+
+        final groups = <String, List<_MigrationEmail>>{};
+        for (final row in emailRows) {
+          final key = '${row.mailboxPath}:${row.threadId ?? row.id}';
+          groups.putIfAbsent(key, () => []).add(row);
+        }
+
+        for (final threadEmails in groups.values) {
+          threadEmails.sort((a, b) {
+            final da = a.sentAt ?? a.receivedAt;
+            final db = b.sentAt ?? b.receivedAt;
+            return da.compareTo(db);
+          });
+          final latest = threadEmails.last;
+
+          final seen = <String>{};
+          final participants = <Map<String, dynamic>>[];
+          for (final e in threadEmails) {
+            final from = jsonDecode(e.fromJson) as List<dynamic>;
+            for (final a in from.cast<Map<String, dynamic>>()) {
+              final email = a['email'] as String;
+              if (seen.add(email)) {
+                participants.add({'name': a['name'], 'email': email});
+              }
+            }
+          }
+
+          await into(threads).insert(
+            ThreadsCompanion.insert(
+              id: latest.threadId ?? latest.id,
+              accountId: latest.accountId,
+              mailboxPath: latest.mailboxPath,
+              subject: Value(latest.subject),
+              latestDate: latest.sentAt ?? latest.receivedAt,
+              messageCount: Value(threadEmails.length),
+              hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
+              isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+              participantsJson: Value(jsonEncode(participants)),
+              preview: Value(latest.preview),
+              latestEmailId: latest.id,
+              emailIdsJson: Value(
+                jsonEncode(threadEmails.map((e) => e.id).toList()),
+              ),
+            ),
+          );
+        }
+      }
+    }
+    if (from < 42) {
+      // Add FTS5 shadow table for email_notes so note search no longer
+      // falls back to LIKE scans as the local DB grows.
+      await _createEmailNotesFts();
+      await customStatement('''
+        INSERT INTO email_notes_fts(rowid, note_text)
+        SELECT rowid, note_text FROM email_notes
+      ''');
+    }
+    if (from >= 4 && from < 43) {
+      await _addColumnIfMissing(m, drafts, drafts.jmapServerId);
+      await _addColumnIfMissing(m, drafts, drafts.dirty);
+    }
+    if (from < 43) {
+      await m.createTable(draftTombstones);
+    }
+    if (from >= 12 && from < 44) {
+      await _addColumnIfMissing(
+        m,
+        syncLogMailboxes,
+        syncLogMailboxes.mailboxName,
+      );
+    }
+    if (from < 45) {
+      await m.createTable(appLogs);
+      await _createAppLogsIndexes();
+    }
+    if (from < 46) {
+      await m.createTable(outbox);
+    }
+    if (from < 47) {
+      // Some legacy test snapshots build only a partial schema, so the
+      // `mailboxes` / `sync_states` tables may not exist. Guard each
+      // step against that so the migration is idempotent even under
+      // incomplete states.
+      if (await _tableExists(this, 'mailboxes')) {
+        await _addColumnIfMissing(m, mailboxes, mailboxes.displayPath);
+        await _addColumnIfMissing(m, mailboxes, mailboxes.parentId);
+        // Backfill display_path from path so IMAP folders (whose path
+        // is already hierarchical + human-readable) render correctly.
+        // JMAP rows still hold the opaque server ID here; the next
+        // mailbox sync recomputes them from the parent chain.
+        await customStatement('''
+          UPDATE mailboxes SET display_path = path
+          WHERE display_path = ''
+        ''');
+      }
+      // Drop the JMAP `Mailbox` sync checkpoint so the next launch
+      // triggers a full re-sync and picks up hierarchical displayPaths.
+      if (await _tableExists(this, 'sync_states') &&
+          await _tableExists(this, 'accounts')) {
+        await customStatement('''
+          DELETE FROM sync_states WHERE resource_type = 'Mailbox'
+          AND account_id IN (SELECT id FROM accounts
+          WHERE account_type = 'jmap')
+        ''');
+      }
+    }
+    if (from < 48) {
+      if (await _tableExists(this, 'email_bodies')) {
+        await _addColumnIfMissing(m, emailBodies, emailBodies.bodySize);
+        // Backfill bodySize for existing rows from the cached text/html.
+        await customStatement('''
+          UPDATE email_bodies
+          SET body_size =
+            COALESCE(LENGTH(text_body), 0) + COALESCE(LENGTH(html_body), 0)
+        ''');
+      }
+      await m.createTable(attachmentFiles);
+    }
+    if (from < 49) {
+      // Normalise Message-ID / In-Reply-To / References for legacy IMAP
+      // rows written before `_cleanMessageId` (#143) stripped the RFC
+      // 5322 angle brackets at insert time. JMAP rows always stored
+      // them bracket-less (RFC 8621 §4.1.2.3), so a compare against
+      // JMAP would previously see `<foo@bar>` on the IMAP side and
+      // `foo@bar` on the JMAP side and treat them as unrelated. See
+      // #406.
+      if (await _tableExists(this, 'emails')) {
+        await customStatement(
+          'UPDATE emails '
+          'SET message_id = SUBSTR(message_id, 2, LENGTH(message_id) - 2) '
+          "WHERE message_id LIKE '<%>'",
+        );
+        await customStatement(
+          'UPDATE emails '
+          'SET in_reply_to = SUBSTR(in_reply_to, 2, LENGTH(in_reply_to) - 2) '
+          "WHERE in_reply_to LIKE '<%>'",
+        );
+        // References is a whitespace-separated list of ids; strip
+        // per-token in Dart because SQLite has no split/join.
+        final refRows = await customSelect(
+          'SELECT rowid, "references" AS refs FROM emails '
+          'WHERE "references" LIKE \'%<%\'',
+        ).get();
+        for (final r in refRows) {
+          final rowid = r.read<int>('rowid');
+          final refs = r.read<String>('refs');
+          final cleaned = normaliseReferences(refs);
+          if (cleaned == null) {
+            await customStatement(
+              'UPDATE emails SET "references" = NULL WHERE rowid = ?',
+              [rowid],
+            );
+          } else {
+            await customStatement(
+              'UPDATE emails SET "references" = ? WHERE rowid = ?',
+              [cleaned, rowid],
+            );
+          }
+        }
+      }
+    }
+    if (from < 50) {
+      // Add FTS5 shadow table for email bodies so full-body search no
+      // longer falls back to LIKE scans as the local DB grows. Some
+      // legacy test snapshots omit email_bodies, so guard the create +
+      // backfill against its absence.
+      if (await _tableExists(this, 'email_bodies')) {
+        await _createEmailBodyFts();
+        await customStatement('''
+          INSERT INTO email_body_fts(rowid, text_body)
+          SELECT rowid, text_body FROM email_bodies
+        ''');
+      }
+    }
+    if (from < 52 && await _tableExists(this, 'emails')) {
+      // Local self-sent "virtual" messages (#545). Marks rows that have
+      // no server counterpart yet so sync doesn't prune them.
+      await _addColumnIfMissing(m, emails, emails.isLocal);
+    }
+    if (from >= 19 && from < 51 && await _tableExists(this, 'sync_health')) {
+      // sync_health was created at v19; add the failure-reason column so
+      // a verification that throws surfaces why instead of leaving the
+      // account stuck on "not verified yet". Guarded against legacy test
+      // snapshots that never created the table.
+      await _addColumnIfMissing(m, syncHealth, syncHealth.lastError);
+    }
+    if (from < 53 && await _tableExists(this, 'emails')) {
+      // Server-assigned, move-stable message id (RFC 8474 EMAILID /
+      // Gmail X-GM-MSGID). Populated on the next sync for servers that
+      // advertise the capability; older rows stay null (#589).
+      await _addColumnIfMissing(m, emails, emails.serverEmailId);
+      await m.createIndex(
+        Index(
+          'emails_server_email_id',
+          'CREATE INDEX IF NOT EXISTS emails_server_email_id ON emails '
+              '(account_id, server_email_id) WHERE server_email_id IS NOT NULL;',
+        ),
+      );
+    }
+    if (from < 54) {
+      // Per-account plain-text signature (#646).
+      await _addColumnIfMissing(m, accounts, accounts.signature);
+    }
+    if (from < 55 && await _tableExists(this, 'emails')) {
+      // Clear previews poisoned by the mis-parsed partial body fetch
+      // (#680): every plain-text message synced over IMAP was stored
+      // with the literal snippet `0>`. Nulling them lets the next
+      // getEmailBody backfill write a real preview — the backfill only
+      // fires on an empty one, so these rows would stay wrong forever.
+      await customStatement(
+        "UPDATE emails SET preview = NULL WHERE preview = '0>'",
+      );
+      if (await _tableExists(this, 'threads')) {
+        await customStatement(
+          "UPDATE threads SET preview = NULL WHERE preview = '0>'",
+        );
+      }
+    }
+    if (from < 56) {
+      // Per-account new-mail notification rules (#272). Brand-new tables
+      // start empty and notifications_enabled defaults to null (read as
+      // false), so existing installs stay silent until the user opts in.
+      await m.createTable(notificationRules);
+      await m.createTable(notifiedEmails);
+      await _addColumnIfMissing(m, accounts, accounts.notificationsEnabled);
+    }
+    if (from < 57 && await _tableExists(this, 'emails')) {
+      // Index for gathering a thread across every folder of an account
+      // (#754). The pre-existing emails_thread_id index is keyed on
+      // (account_id, mailbox_path, thread_id), which is not a usable
+      // prefix for an (account_id, thread_id) lookup.
+      await m.createIndex(
+        Index(
+          'emails_account_thread',
+          'CREATE INDEX IF NOT EXISTS emails_account_thread ON emails (account_id, thread_id);',
+        ),
+      );
+    }
+    if (from < 58) {
+      // Local record of bug reports that opened a GitHub issue (#835).
+      await m.createTable(bugReports);
+    }
+    if (from < 59 && await _tableExists(this, 'emails')) {
+      // Reply-To addresses, so replies go where the sender asked (#919).
+      await _addColumnIfMissing(m, emails, emails.replyToJson);
+    }
+    if (from < 60 &&
+        await _tableExists(this, 'threads') &&
+        await _tableExists(this, 'emails')) {
+      // v17 creates `threads` with the current columns, and builds
+      // whose upgrade was interrupted before upgrades became atomic can
+      // already have it at v59. Its insert leaves the column at its
+      // default, so every upgrade still needs the backfill.
+      await _addColumnIfMissing(m, threads, threads.hasAttachment);
+      // Paperclip in the thread list: backfill from the emails. The
+      // uncorrelated subquery is evaluated once; the old per-thread
+      // EXISTS could not use an index (COALESCE) and was slow on big
+      // folders.
+      await customStatement('''
+        UPDATE threads SET has_attachment =
+          (account_id, mailbox_path, id) IN (
+            SELECT account_id, mailbox_path, COALESCE(thread_id, id)
+            FROM emails WHERE has_attachment = 1
+          )
+      ''');
+    }
+  }
 
   /// Inserts a row for [gitHash] the first time that version is seen.
   /// Subsequent calls for the same hash are silently ignored so the original
@@ -1420,7 +1470,10 @@ Future<bool> _tableExists(AppDatabase db, String name) async {
 }
 
 Future<bool> _columnExists(AppDatabase db, String table, String column) async {
-  final rows = await db.customSelect('PRAGMA table_info($table)').get();
+  final rows = await db.customSelect(
+    'SELECT name FROM pragma_table_info(?)',
+    variables: [Variable<String>(table)],
+  ).get();
   return rows.any((r) => r.read<String>('name') == column);
 }
 
