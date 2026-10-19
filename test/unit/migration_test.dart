@@ -273,6 +273,46 @@ void main() {
       if (dbFile.existsSync()) dbFile.deleteSync();
     });
 
+    test('v59→v60 tolerates threads.has_attachment already present', () async {
+      // An upgrade killed mid-way, or a background isolate migrating at the
+      // same time, leaves the column behind while user_version stays 59.
+      final dbFile = File('test_migration_v59_rerun.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.select(fresh.accounts).get();
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at,
+                            has_attachment)
+        VALUES ('e-att', 'acc-x', 'INBOX', 1, 0, 1),
+               ('e-plain', 'acc-x', 'INBOX', 2, 0, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (account_id, mailbox_path, id, latest_date,
+                             latest_email_id)
+        VALUES ('acc-x', 'INBOX', 'e-att', 0, 'e-att'),
+               ('acc-x', 'INBOX', 'e-plain', 0, 'e-plain');
+      ''');
+      rawDb.execute('PRAGMA user_version = 59;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      final attachmentByThread = {
+        for (final row in await db
+            .customSelect('SELECT id, has_attachment FROM threads')
+            .get())
+          row.read<String>('id'): row.read<bool>('has_attachment'),
+      };
+      expect(attachmentByThread, {'e-att': true, 'e-plain': false});
+      await db.close();
+    });
+
     test(
       'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
       () async {

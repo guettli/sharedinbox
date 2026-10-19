@@ -1298,18 +1298,21 @@ class AppDatabase extends _$AppDatabase {
             // v17 creates `threads` with the current columns, so only tables
             // from v17+ need the column added. Its insert leaves the column
             // at its default, so every upgrade still needs the backfill.
-            if (from >= 17) {
+            // The column can also exist already at v59: migrations are not
+            // transactional, so an upgrade killed after this step, or a
+            // background isolate migrating at the same time, leaves it behind.
+            if (!await _columnExists(this, 'threads', 'has_attachment')) {
               await m.addColumn(threads, threads.hasAttachment);
             }
-            // Paperclip in the thread list: backfill from the emails.
+            // Paperclip in the thread list: backfill from the emails. The
+            // subquery is uncorrelated, so it runs once instead of once per
+            // thread (COALESCE keeps it off the thread_id indexes).
             await customStatement('''
-              UPDATE threads SET has_attachment = EXISTS (
-                SELECT 1 FROM emails e
-                WHERE e.account_id = threads.account_id
-                  AND e.mailbox_path = threads.mailbox_path
-                  AND COALESCE(e.thread_id, e.id) = threads.id
-                  AND e.has_attachment = 1
-              )
+              UPDATE threads SET has_attachment =
+                (account_id, mailbox_path, id) IN (
+                  SELECT account_id, mailbox_path, COALESCE(thread_id, id)
+                  FROM emails WHERE has_attachment = 1
+                )
             ''');
           }
         },
@@ -1414,6 +1417,11 @@ Future<bool> _tableExists(AppDatabase db, String name) async {
     variables: [Variable<String>(name)],
   ).get();
   return rows.isNotEmpty;
+}
+
+Future<bool> _columnExists(AppDatabase db, String table, String column) async {
+  final rows = await db.customSelect('PRAGMA table_info($table)').get();
+  return rows.any((r) => r.read<String>('name') == column);
 }
 
 // Resolved once in main() via initDatabasePath() before runApp().
