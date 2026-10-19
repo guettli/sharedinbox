@@ -36,6 +36,7 @@ import 'package:sharedinbox/ui/widgets/foldable_quote_text.dart';
 import 'package:sharedinbox/ui/widgets/image_viewer_screen.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
+import 'package:sharedinbox/ui/widgets/text_prompt_dialog.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 final _dateFmt = DateFormat('EEE, MMM d yyyy, HH:mm');
@@ -1213,33 +1214,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final messageId = header.messageId;
     if (messageId == null) return;
 
-    final ctrl = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add note'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLines: 4,
-          decoration: const InputDecoration(hintText: 'Type a note…'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+    final text = await showTextPrompt(
+      context,
+      title: 'Add note',
+      hintText: 'Type a note…',
+      confirmLabel: 'Save',
+      maxLines: 4,
     );
-
-    final text = ctrl.text.trim();
-    ctrl.dispose();
-    if (confirmed != true || text.isEmpty) return;
+    if (text == null) return;
     if (!context.mounted) return;
 
     await ref.read(noteRepositoryProvider).addNote(
@@ -1582,42 +1564,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
-  Future<String?> _promptNewFolderName(BuildContext context) async {
-    final controller = TextEditingController();
-    try {
-      return await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Create new folder'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: 'Folder name'),
-            textCapitalization: TextCapitalization.words,
-            onSubmitted: (value) {
-              if (value.trim().isNotEmpty) Navigator.pop(ctx, value.trim());
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = controller.text.trim();
-                if (name.isNotEmpty) Navigator.pop(ctx, name);
-              },
-              child: const Text('Create'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      controller.dispose();
-    }
-  }
-
   Future<void> _moveTo(BuildContext context, Email header) async {
     final nextEmail = await _getNextEmailIfNeeded(header);
 
@@ -1666,7 +1612,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     String destination = chosen;
     if (chosen == createNewSentinel) {
-      final name = await _promptNewFolderName(context);
+      final name = await showTextPrompt(
+        context,
+        title: 'Create new folder',
+        hintText: 'Folder name',
+        confirmLabel: 'Create',
+        textCapitalization: TextCapitalization.words,
+      );
       if (name == null || !context.mounted) return;
       final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
       destination = mailbox.path;
@@ -1715,15 +1667,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         account.copyWith(notificationsEnabled: true),
       );
     }
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.from_,
-          comparison: FilterComparison.is_,
-          value: sender,
-        ),
-      ],
+    final filter = FilterGroup.single(
+      FilterField.from_,
+      FilterComparison.is_,
+      sender,
     );
     final ruleId = await ruleRepo.addRule(header.accountId, filter);
 

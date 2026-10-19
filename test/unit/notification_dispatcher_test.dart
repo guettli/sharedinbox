@@ -13,15 +13,10 @@ import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 
-FilterGroup _subjectContains(String text) => FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.subject,
-          comparison: FilterComparison.contains,
-          value: text,
-        ),
-      ],
+FilterGroup _subjectContains(String text) => FilterGroup.single(
+      FilterField.subject,
+      FilterComparison.contains,
+      text,
     );
 
 Future<void> _seedAccount(
