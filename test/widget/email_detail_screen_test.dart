@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
@@ -54,11 +55,12 @@ class _FakeFile extends Fake implements File {
 List<Override> _overrides({
   required EmailBody body,
   Email? email,
+  List<Account> accounts = const [kTestAccount],
   FakeMailboxRepository? mailboxes,
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
-        FakeAccountRepository([kTestAccount]),
+        FakeAccountRepository(accounts),
       ),
       mailboxRepositoryProvider.overrideWithValue(
         mailboxes ?? FakeMailboxRepository(),
@@ -615,6 +617,61 @@ void main() {
         _editableWithText('bob@example.com'),
         findsNothing,
       );
+    });
+
+    group('with two accounts, compose sends from the mail\'s account', () {
+      // Compose only picks an account by itself when there is exactly one;
+      // with two, Reply and Forward came up with an empty From field.
+      const otherAccount = Account(
+        id: 'acc-2',
+        displayName: 'Bob',
+        email: 'bob@example.org',
+        imapHost: 'imap.example.org',
+        smtpHost: 'smtp.example.org',
+      );
+
+      Future<void> openAndTap(WidgetTester tester, Finder button) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                // A text part keeps _quotedBody off the compute() isolate.
+                body: const EmailBody(
+                  emailId: 'acc-1:42',
+                  textBody: 'Hi',
+                  attachments: [],
+                ),
+                accounts: const [otherAccount, kTestAccount],
+              ),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
+
+      String? selectedFrom(WidgetTester tester) => tester
+          .widget<DropdownButton<String>>(find.byType(DropdownButton<String>))
+          .value;
+
+      testWidgets('Reply', (tester) async {
+        await openAndTap(
+          tester,
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+        );
+        expect(selectedFrom(tester), 'acc-1');
+      });
+
+      testWidgets('Forward', (tester) async {
+        await openAndTap(tester, find.byType(PopupMenuButton<String>));
+        await tester.tap(find.text('Forward'));
+        await tester.pumpAndSettle();
+        expect(selectedFrom(tester), 'acc-1');
+      });
     });
 
     testWidgets('Reply All dialog offers Reply-To, not From (#919)', (
