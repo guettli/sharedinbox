@@ -49,6 +49,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 cat >"$SCRATCH/dagger" <<EOF
 #!/usr/bin/env bash
 n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
+echo "\$*" >>"$SCRATCH/args"
 
 # The loop passes the dest dir as \`-o <dir>\`; mirror Dagger's export into it.
 dest=""
@@ -102,6 +103,7 @@ chmod +x "$SCRATCH/sleep"
 run_fetch() {
     local plan="$1" budget="${2:-3600}"
     echo 0 >"$SCRATCH/attempts"
+    : >"$SCRATCH/args"
     rm -rf "$SCRATCH/apks"
     mkdir -p "$SCRATCH/apks"
     PATH="$SCRATCH:$PATH" \
@@ -141,6 +143,23 @@ elif [ "$attempts" -ne 3 ]; then
     _fail "pending: expected 3 attempts (got $attempts)" "$out"
 elif ! printf '%s' "$out" | grep -q "Play still generating split APKs"; then
     _fail "pending: should log that Play is still generating" "$out"
+else
+    _pass
+fi
+
+# --- Retries pin the versionCode so they don't open Play edits (#1080) ---------
+# Each resolve opens a Play edit, which deletes a concurrent deploy's edit.
+out=$(run_fetch "124 pending pending ready")
+first=$(sed -n 1p "$SCRATCH/args")
+second=$(sed -n 2p "$SCRATCH/args")
+third=$(sed -n 3p "$SCRATCH/args")
+fourth=$(sed -n 4p "$SCRATCH/args")
+if printf '%s' "$first$second" | grep -q -- "--version-code"; then
+    _fail "pin: attempts before the first answer must resolve the versionCode" "$out"
+elif ! printf '%s' "$third" | grep -q -- "--version-code 1790309773"; then
+    _fail "pin: retry after PENDING should pin the versionCode (got: $third)" "$out"
+elif ! printf '%s' "$fourth" | grep -q -- "--version-code 1790309773"; then
+    _fail "pin: every later retry should pin the versionCode (got: $fourth)" "$out"
 else
     _pass
 fi

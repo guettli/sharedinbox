@@ -108,6 +108,11 @@ _REQUEST_RETRY_BACKOFF_SECONDS = int(
     os.environ.get("PLAY_APKS_REQUEST_BACKOFF_SECONDS", "3")
 )
 
+# When set, fetch this versionCode instead of resolving the latest alpha one,
+# so no Play edit is opened (see main()). scripts/run_firebase_test.sh sets it
+# via ci/main.go FetchPlayStoreApks for every retry after the first.
+_PINNED_VERSION_CODE_ENV = "PLAY_APKS_VERSION_CODE"
+
 
 def _is_transient_play_error(exc):
     """Whether ``exc`` is a transient Play API hiccup worth retrying.
@@ -401,8 +406,17 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
-    print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    pinned = os.environ.get(_PINNED_VERSION_CODE_ENV, "").strip()
+    if pinned:
+        # Resolving opens a Play edit, and opening one deletes any other open
+        # edit for the app -- including a deploy's mid-upload (#1080). The
+        # wrapper retries this fetch every minute while Play generates the
+        # split APKs, so it resolves once and pins the result for later tries.
+        version_code = int(pinned)
+        print(f"Using pinned {TRACK} versionCode: {version_code}", file=sys.stderr)
+    else:
+        version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
+        print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
     try:
         listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)

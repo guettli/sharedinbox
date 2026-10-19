@@ -169,6 +169,11 @@ FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
 FETCH_CONSECUTIVE_TIMEOUTS=0
+# Resolving the alpha versionCode opens a Play edit, and Play deletes every
+# other open edit for the app when one is opened — so a fetch every minute for
+# up to 90 minutes kept killing the Deploy workflow's upload mid-flight
+# (#1080). Resolve once, then pin the versionCode for every retry.
+PINNED_VERSION_CODE=""
 while :; do
     FETCH_ATTEMPT=$((FETCH_ATTEMPT + 1))
     # Start each attempt from a clean dest dir so a stale PENDING (or partial
@@ -187,6 +192,7 @@ while :; do
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env:PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+            ${PINNED_VERSION_CODE:+--version-code "$PINNED_VERSION_CODE"} \
             -o "$APK_DIR" || FETCH_RC=$?
     # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
     # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".
@@ -216,6 +222,7 @@ while :; do
         echo "ERROR: $APK_DIR/versionCode is empty" >&2
         exit 1
     fi
+    PINNED_VERSION_CODE="$VERSION_CODE"
     # No PENDING marker means the split APKs were downloaded — proceed to test.
     if [ ! -f "$APK_DIR/PENDING" ]; then
         break

@@ -853,5 +853,32 @@ class TestMainWritesVersionCodeFile(unittest.TestCase):
             self.assertEqual(vc_path.read_text().strip(), "42")
 
 
+
+class TestMainPinnedVersionCode(unittest.TestCase):
+    """Regression for #1080: resolving the versionCode opens a Play edit, which
+    deletes any other open edit for the app -- a concurrent deploy's included.
+    The wrapper pins the versionCode for its retries; a pinned fetch must not
+    open an edit."""
+
+    def test_pinned_version_code_skips_resolution(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            patches = _patches(
+                dest_dir,
+                version_code=200,
+                list_apks=TimeoutError("still generating"),
+                env={"PLAY_APKS_VERSION_CODE": "777"},
+            ) + [
+                patch(
+                    "fetch_playstore_apks._resolve_version_code",
+                    side_effect=AssertionError("must not open a Play edit"),
+                ),
+            ]
+            with contextlib.redirect_stdout(io.StringIO()):
+                _with_patches(patches, fetch_playstore_apks.main)
+
+            self.assertEqual((Path(dest_dir) / "versionCode").read_text().strip(), "777")
+            self.assertEqual((Path(dest_dir) / "PENDING").read_text().strip(), "777")
+
+
 if __name__ == "__main__":
     unittest.main()
