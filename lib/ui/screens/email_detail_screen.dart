@@ -1283,18 +1283,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             'From: (unknown)',
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
+        // Capped so a mail to dozens of people does not push the body off
+        // screen; the full lists are in "Show Mail Headers".
         Text(
           email.to.isNotEmpty
               ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
               : 'To: (no recipients)',
           style: Theme.of(ctx).textTheme.bodySmall,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
-        // Without this line the people in Cc were only discoverable through
-        // Reply All or the raw headers.
         if (email.cc.isNotEmpty)
           Text(
             'Cc: ${email.cc.map((a) => a.toString()).join(', ')}',
             style: Theme.of(ctx).textTheme.bodySmall,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
           ),
         if (email.sentAt != null)
           Row(
