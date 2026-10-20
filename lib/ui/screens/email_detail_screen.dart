@@ -1289,6 +1289,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               : 'To: (no recipients)',
           style: Theme.of(ctx).textTheme.bodySmall,
         ),
+        // Without this line the people in Cc were only discoverable through
+        // Reply All or the raw headers.
+        if (email.cc.isNotEmpty)
+          Text(
+            'Cc: ${email.cc.map((a) => a.toString()).join(', ')}',
+            style: Theme.of(ctx).textTheme.bodySmall,
+          ),
         if (email.sentAt != null)
           Row(
             children: [
