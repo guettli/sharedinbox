@@ -7618,9 +7618,9 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Converts a user query string into an FTS5 match expression.
   ///
   /// The query is first split on whitespace into the chunks the user actually
-  /// typed. A plain chunk (`foo`) becomes a prefix term (`foo*`) so partial
-  /// words still match while typing. A punctuated chunk (`foo.com`) is turned
-  /// into an adjacent phrase (`"foo com" *`): the default `unicode61`
+  /// typed. Each chunk becomes a quoted prefix phrase: `foo` → `"foo" *`, so
+  /// partial words still match while typing. A punctuated chunk (`foo.com`)
+  /// becomes the adjacent phrase `"foo com" *`: the default `unicode61`
   /// tokenizer splits on the punctuation on the index side too, so requiring
   /// the tokens to stay adjacent is the closest FTS5 can get to an exact
   /// "foo.com" match — and, unlike the old `foo* com*`, it no longer matches
@@ -7629,18 +7629,21 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Separate chunks are still combined with FTS5's implicit AND, so
   /// `foo com` finds mails containing both words anywhere.
   ///
-  /// A word character is any Unicode letter, mark or digit, as for the
-  /// tokenizer: Dart's `\w` is ASCII-only, so `Müller` used to become the
-  /// phrase `"M ller"` and `Привет` an empty query, and neither found anything.
+  /// The quotes keep a typed `AND`, `OR` or `NOT` a plain word: unquoted, FTS5
+  /// reads it as an operator and the search fails with a syntax error.
+  ///
+  /// Every Unicode letter, mark and digit counts as part of a word. Dart's
+  /// `\w` is ASCII-only, so `Müller` used to become the phrase `"M ller"` and
+  /// `Привет` an empty query, and neither found anything. unicode61 does not
+  /// split CJK text into words, so there only a prefix of the whole run
+  /// matches (`東京` finds `東京駅`, `駅` does not).
   static String _toFtsQuery(String query) {
     final terms = <String>[];
     for (final chunk in query.trim().split(RegExp(r'\s+'))) {
       final tokens =
           chunk.split(_nonWordChars).where((t) => t.isNotEmpty).toList();
       if (tokens.isEmpty) continue;
-      terms.add(
-        tokens.length == 1 ? '${tokens.single}*' : '"${tokens.join(' ')}" *',
-      );
+      terms.add('"${tokens.join(' ')}" *');
     }
     return terms.join(' ');
   }

@@ -1797,7 +1797,11 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      final subjects = ['Grüße von Jürgen Müller', 'Привет из Москвы'];
+      final subjects = [
+        'Grüße von Jürgen Müller',
+        'Привет из Москвы',
+        'Write to info@bäcker.de',
+      ];
       for (final (i, subject) in subjects.indexed) {
         await r.db.into(r.db.emails).insert(
               EmailsCompanion.insert(
@@ -1819,9 +1823,37 @@ void main() {
         ('Jürgen Mül', 'acc-1:0'),
         ('Привет', 'acc-1:1'),
         ('москв', 'acc-1:1'),
+        ('Mu\u0308ller', 'acc-1:0'), // decomposed ü, as some keyboards send
+        ('bäcker.de', 'acc-1:2'),
       ]) {
         final results = await r.emails.searchEmailsGlobal(null, query);
         expect(results.map((e) => e.id), [id], reason: query);
+      }
+    });
+
+    test('searchEmailsGlobal treats AND, OR and NOT as words', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('NOT urgent: lunch OR dinner'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Unquoted, FTS5 read these as operators and threw a syntax error.
+      for (final query in ['NOT urgent', 'lunch OR', 'AND']) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(
+          results.map((e) => e.id),
+          query == 'AND' ? isEmpty : ['acc-1:1'],
+          reason: query,
+        );
       }
     });
 
