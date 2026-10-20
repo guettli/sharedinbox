@@ -5401,9 +5401,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // LocalSieveApplied is keyed on the Message-ID, which survives moves, so
     // the automatic run can only remember mail that has one and skips the
-    // rest. The preview and the explicit "apply now" remember nothing and
-    // take every inbox mail, so the preview no longer reports "no matching
-    // messages" for mail without a Message-ID header.
+    // rest. The preview and the explicit "apply now" remember nothing, so
+    // they take every inbox mail, with or without a Message-ID.
     final inboxEmails = await (_db.select(_db.emails)
           ..where(
             (t) {
