@@ -35,7 +35,7 @@ Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup() async {
 Future<String> _insertInboxEmail(
   AppDatabase db, {
   required String id,
-  required String messageId,
+  required String? messageId,
   String subject = 'Test',
   String from = 'sender@example.com',
   String mailboxPath = 'INBOX',
@@ -176,6 +176,20 @@ void main() {
       );
     });
 
+    test('counts mail without a Message-ID header', () async {
+      final (db, repo) = await _makeSetup();
+      await _insertInboxEmail(
+        db,
+        id: 'sieve-preview-acc:1',
+        messageId: null,
+        subject: 'SPAM without id',
+      );
+      expect(
+        await repo.previewSieveRuleMatches(_account.id, _spamFileintoScript),
+        1,
+      );
+    });
+
     test('throws SieveParseException on malformed script', () async {
       final (_, repo) = await _makeSetup();
       expect(
@@ -191,6 +205,23 @@ void main() {
   });
 
   group('applySieveScriptToInbox', () {
+    test('moves mail without a Message-ID header too', () async {
+      final (db, repo) = await _makeSetup();
+      await _insertInboxEmail(
+        db,
+        id: 'sieve-preview-acc:1',
+        messageId: null,
+        subject: 'SPAM without id',
+      );
+      expect(
+        await repo.applySieveScriptToInbox(_account.id, _spamFileintoScript),
+        1,
+      );
+      expect(await db.select(db.pendingChanges).get(), hasLength(1));
+      // Nothing to remember it by: LocalSieveApplied is keyed on Message-ID.
+      expect(await db.select(db.localSieveApplied).get(), isEmpty);
+    });
+
     test('enqueues a move for a fileinto match', () async {
       final (db, repo) = await _makeSetup();
       await _insertInboxEmail(
