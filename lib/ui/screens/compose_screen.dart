@@ -450,18 +450,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final threading = await _replyThreading();
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
-        to: _to.text
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .map((e) => EmailAddress(email: e))
-            .toList(),
-        cc: _cc.text
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .map((e) => EmailAddress(email: e))
-            .toList(),
+        // Parsed into name and address here: the JMAP send path uses the
+        // address as given, so a raw "Bob <bob@x>" chunk was rejected there.
+        to: recipientAddresses(_to.text),
+        cc: recipientAddresses(_cc.text),
         subject: _subject.text,
         body: _body.text,
         attachmentFilePaths: List.unmodifiable(

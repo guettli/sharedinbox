@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
@@ -568,25 +569,15 @@ class DraftRepositoryImpl implements DraftRepository {
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  List<imap.MailAddress> _parseAddresses(String text) {
-    if (text.trim().isEmpty) return [];
-    return text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .map((s) => imap.MailAddress('', s))
-        .toList();
-  }
+  List<imap.MailAddress> _parseAddresses(String text) => [
+        for (final a in recipientAddresses(text))
+          imap.MailAddress(a.name ?? '', a.email),
+      ];
 
-  List<Map<String, dynamic>> _parseAddressesJmap(String text) {
-    if (text.trim().isEmpty) return [];
-    return text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .map((s) => {'email': s})
-        .toList();
-  }
+  List<Map<String, dynamic>> _parseAddressesJmap(String text) => [
+        for (final a in recipientAddresses(text))
+          {if (a.name != null) 'name': a.name, 'email': a.email},
+      ];
 
   String _addressListToText(List<imap.MailAddress>? addresses) {
     if (addresses == null || addresses.isEmpty) return '';
