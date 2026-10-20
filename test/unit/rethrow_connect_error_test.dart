@@ -5,19 +5,21 @@
 
 import 'dart:io';
 
-import 'package:sharedinbox/data/imap/imap_client_factory.dart'
-    show rethrowConnectError;
 import 'package:sharedinbox/data/imap/tls_error.dart';
 import 'package:test/test.dart';
 
 void main() {
-  Object caught(Object error) {
+  final stack = StackTrace.current;
+
+  (Object, StackTrace) caughtWithStack(Object error) {
     try {
-      rethrowConnectError(error, StackTrace.current, 'localhost', 1026);
-    } catch (e) {
-      return e;
+      rethrowConnectError(error, stack, 'localhost', 1026);
+    } catch (e, st) {
+      return (e, st);
     }
   }
+
+  Object caught(Object error) => caughtWithStack(error).$1;
 
   test('a socket error names the server and its port', () {
     final e = caught(
@@ -31,15 +33,34 @@ void main() {
     // Still a SocketException, so retries and offline handling see it.
     expect(e, isA<SocketException>());
     final s = e as SocketException;
-    expect(s.port, 1026);
     expect(s.osError?.errorCode, 111);
     expect(
       s.toString(),
-      allOf(
-        contains('Could not connect to localhost:1026: Connection refused'),
-        isNot(contains('38920')),
+      'SocketException: Could not connect to localhost:1026 '
+      '(OS Error: Connection refused, errno = 111)',
+    );
+  });
+
+  test('a DNS failure keeps its own message', () {
+    final e = caught(
+      const SocketException(
+        "Failed host lookup: 'mail.example.org'",
+        osError: OSError('No address associated with hostname', 7),
       ),
     );
+    expect(
+      e.toString(),
+      contains(
+        'Could not connect to localhost:1026: Failed host lookup: '
+        "'mail.example.org'",
+      ),
+    );
+  });
+
+  test('keeps the original stack trace', () {
+    final (_, st) =
+        caughtWithStack(const SocketException('Connection refused'));
+    expect(st, same(stack));
   });
 
   test('TLS failures still get their hint', () {
