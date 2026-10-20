@@ -38,8 +38,9 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
     POST /restart         [wipe=1] — restart the app; wipe=1 also removes its
                           data and the keyring, like a fresh install
 
-A lookup waits up to `timeout` seconds (default 20) for its node; the server
-handles one request at a time, so a long wait blocks every other call. Driver
+A lookup waits up to `timeout` seconds (default 20) for its node. Only one
+request at a time talks to the accessibility bus, so a long wait blocks the
+other GUI calls; /health, /log, /shot and /restart always answer. Driver
 errors come back as HTTP 409 with the message, which for "not found" includes
 the accessibility tree (truncated at 400 nodes); anything unexpected is a 500
 with the traceback.
@@ -51,8 +52,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -270,6 +272,15 @@ def restart(params: dict) -> str:
     return "restarted\n" + health(params)
 
 
+# Requests are served on their own threads, but only one at a time may talk to
+# the accessibility bus. A stuck lookup (a busy app answers each AT-SPI call
+# only at its D-Bus timeout, and one tree walk makes hundreds of calls) then
+# still blocks the other GUI routes, but not the ones below: /health, /log and
+# /shot show what the app is doing, and /restart kills it, which also ends the
+# stuck walk.
+_GUI_LOCK = threading.Lock()
+LOCK_FREE = {"/health", "/log", "/shot", "/restart"}
+
 ROUTES = {
     "/health": health, "/tree": tree, "/texts": texts, "/log": log,
     "/click": click, "/click-unnamed": click_unnamed, "/focus": focus,
@@ -313,7 +324,12 @@ class Handler(BaseHTTPRequestHandler):
             if route is None:
                 self._send(404, (__doc__ or "").encode())
                 return
-            self._send(200, route(params).encode())
+            if path in LOCK_FREE:
+                body = route(params)
+            else:
+                with _GUI_LOCK:
+                    body = route(params)
+            self._send(200, body.encode())
         except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
         except Exception:  # noqa: BLE001 — e.g. GLib.GError when a node vanishes mid-walk
@@ -330,7 +346,7 @@ def main() -> None:
     start_keyring()
     start_app()
     print(f"explore server on :{PORT}, app {APP}", flush=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

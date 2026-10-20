@@ -106,9 +106,14 @@ How to read the output:
   toggling 'SSL/TLS' off", and clicking that fails with "not enabled".
 - Repeated labels, such as the two `Host` fields (IMAP and SMTP), are told
   apart with `index`, in tree order, which matches visual order.
-- A lookup waits up to 20 seconds for its node (`timeout=` changes that). The
-  server handles one request at a time, so while it waits every other call
-  blocks. When you only want to know whether something is there, read `texts`.
+- A lookup waits up to 20 seconds for its node (`timeout=` changes that). Only
+  one call at a time talks to the accessibility bus, so while it waits the
+  other GUI calls block. When you only want to know whether something is
+  there, read `texts`.
+- When the app is busy, each accessibility call waits for its D-Bus timeout,
+  so a lookup can hang for minutes. `/health`, `/log` and `/shot` still answer
+  then, so look at the screenshot and the log, and `c restart` if it stays
+  stuck.
 - A failed lookup returns HTTP 409 with the message and the tree, truncated at
   400 nodes. Anything unexpected returns 500 with the traceback.
 - `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
