@@ -254,8 +254,12 @@ def key(params: dict) -> str:
 
 
 def tap(params: dict) -> str:
-    subprocess.run(["xdotool", "mousemove", params["x"], params["y"], "click", "1"],
-                   check=True)
+    # Whole non-negative pixels only: anything else is a caller mistake, and a
+    # value starting with "-" would be read by xdotool as an option.
+    x, y = params["x"], params["y"]
+    if not (x.isdigit() and y.isdigit()):
+        raise ValueError(f"x and y must be non-negative integers, got {x!r}, {y!r}")
+    subprocess.run(["xdotool", "mousemove", x, y, "click", "1"], check=True)
     return "tapped\n"
 
 

@@ -223,7 +223,10 @@ def fill(name: str, text: str, role: str | None = "text", index: int = 0,
     """Focus a field and replace its contents."""
     focus(name, role, index=index, contains=contains, timeout=timeout)
     press("ctrl+a")
-    type_text(text)
+    if text:
+        type_text(text)
+    else:
+        press("BackSpace")  # typing nothing would leave the selection as is
 
 
 def type_text(text: str) -> None:
@@ -239,7 +242,7 @@ def type_text(text: str) -> None:
 
 
 def press(key: str) -> None:
-    subprocess.run(["xdotool", "key", key], check=True)
+    subprocess.run(["xdotool", "key", "--", key], check=True)
 
 
 def screenshot(path: str) -> None:
