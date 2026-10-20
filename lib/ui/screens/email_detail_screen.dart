@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -28,6 +27,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -1078,7 +1078,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final path = await ref
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
-      await OpenFilex.open(path);
+      final problem = await openFile(path);
+      if (problem != null && mounted) {
+        context.showAppSnackBar(
+          problem,
+          level: AppLogLevel.warn,
+          event: 'email.attachment.open_failed',
+          emailId: widget.emailId,
+          data: {'filename': att.filename},
+        );
+      }
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(
@@ -1881,6 +1890,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final filename = _rawEmailFilename(header?.subject);
       final saved = await saveRawEmail(filename: filename, content: raw);
       if (!context.mounted) return;
+      // The snack bar outlives this context, so capture the messenger now.
+      final messenger = context.appMessenger();
       // On platforms that wrote to a public, system-indexed location
       // (Android Downloads), offer "Open" — opening the file is what makes
       // it appear in the system file picker's "Recently used" list.
@@ -1889,7 +1900,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final action = saved.isPublic
           ? SnackBarAction(
               label: 'Open',
-              onPressed: () => OpenFilex.open(saved.path),
+              onPressed: () async {
+                final problem = await openFile(saved.path);
+                if (problem != null) messenger.show(problem);
+              },
             )
           : SnackBarAction(
               label: 'Share',
