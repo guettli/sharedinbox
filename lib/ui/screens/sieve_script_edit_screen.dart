@@ -260,6 +260,45 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
           .read(sieveRepositoryProvider)
           .activateScript(widget.accountId, script.id);
 
+  /// Activates [script] and says whether it worked. Like the filter list, it
+  /// re-reads the scripts afterwards: some servers accept the request and
+  /// silently leave the script inactive.
+  Future<void> _activateAndReport(
+    SieveScript script,
+    AppMessenger messenger,
+  ) async {
+    try {
+      await _activate(script);
+      final scripts = widget.isLocal
+          ? await ref
+              .read(localSieveRepositoryProvider)
+              .listScripts(widget.accountId)
+          : await ref
+              .read(sieveRepositoryProvider)
+              .listScripts(widget.accountId);
+      final took =
+          scripts.where((s) => s.id == script.id).firstOrNull?.isActive ??
+              false;
+      messenger.show(
+        took
+            ? 'Filter activated.'
+            : 'Activation may not have taken effect — please refresh.',
+      );
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.activate_failed',
+              'Failed to activate sieve script',
+              accountId: widget.accountId,
+              data: {'scriptId': script.id, 'isLocal': widget.isLocal},
+              error: e,
+              stack: stack,
+            ),
+      );
+      messenger.show('Failed to activate: $e', level: AppLogLevel.error);
+    }
+  }
+
   Future<void> _offerApplyToInbox({
     required SieveScript savedScript,
     required bool wasActive,
@@ -292,10 +331,13 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
 
     if (!mounted) return;
 
+    // A new filter is saved inactive. Both dialogs below therefore offer to
+    // activate it: with only "OK" (no match) or "Cancel" (matches), a filter
+    // written for mail that has not arrived yet, which is the usual case,
+    // stayed inactive and never ran.
+    const turnsOffOthers = 'Activating it turns off any other active filter.';
+
     if (count == 0) {
-      // A new filter is saved inactive. With only "OK" here, a filter written
-      // for mail that has not arrived yet, which is the usual case, stayed
-      // inactive and never ran.
       final activate = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -306,8 +348,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
                     'your inbox.'
                 : 'This filter does not match any messages currently in '
                     'your inbox. It is not active yet, so it will not '
-                    'filter new mail either. Only one filter can be active '
-                    'at a time.',
+                    'filter new mail either. $turnsOffOthers',
           ),
           actions: wasActive
               ? [
@@ -328,23 +369,13 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
                 ],
         ),
       );
-      if (activate != true || !mounted) return;
-      try {
-        await _activate(savedScript);
-        if (mounted) messenger.show('Filter activated.');
-      } catch (e) {
-        if (mounted) {
-          messenger.show(
-            'Failed to activate filter: $e',
-            level: AppLogLevel.error,
-            error: e,
-          );
-        }
+      if (activate == true && mounted) {
+        await _activateAndReport(savedScript, messenger);
       }
       return;
     }
 
-    final shouldApply = await showDialog<bool>(
+    final choice = await showDialog<_ApplyChoice>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Apply filter now?'),
@@ -353,22 +384,32 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
               ? 'This filter matches $count message(s) in your inbox. '
                   'Apply it to them now?'
               : 'This filter matches $count message(s) in your inbox. '
-                  'The filter will be activated first. Apply it now?',
+                  'It is not active yet. $turnsOffOthers Apply it to these '
+                  'messages too, or only activate it for new mail?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
+            onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.cancel),
             child: const Text('Cancel'),
           ),
+          if (!wasActive)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.activate),
+              child: const Text('Only activate'),
+            ),
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
+            onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.apply),
             child: const Text('Apply'),
           ),
         ],
       ),
     );
 
-    if (shouldApply != true || !mounted) return;
+    if (choice == null || choice == _ApplyChoice.cancel || !mounted) return;
+    if (choice == _ApplyChoice.activate) {
+      await _activateAndReport(savedScript, messenger);
+      return;
+    }
 
     try {
       if (!wasActive) await _activate(savedScript);
@@ -679,3 +720,5 @@ class _FolderField extends ConsumerWidget {
     );
   }
 }
+
+enum _ApplyChoice { cancel, activate, apply }
