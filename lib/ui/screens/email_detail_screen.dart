@@ -833,17 +833,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<EmailDetailNavItem?> _getNextEmailIfNeeded(Email? header) async {
     if (header == null) return null;
-    // Read the stored preference, not userPreferencesProvider: that provider
-    // is autoDispose, and when the mail was opened from the combined inbox or
-    // search nothing keeps it alive, so its value was still null here and
-    // "Return to mailbox" was ignored for the default "Next message".
-    final prefs = await ref
-        .read(userPreferencesRepositoryProvider)
-        .observePreferences()
-        .first;
-    if (prefs.afterMailViewAction != AfterMailViewAction.nextMessage) {
-      return null;
-    }
+    final action = await storedAfterMailViewAction(
+      ref.read(userPreferencesRepositoryProvider),
+    );
+    if (!mounted || action != AfterMailViewAction.nextMessage) return null;
 
     // Prefer the caller-supplied nav so "next" respects the source list
     // (search results, address filter, …) and steps through individual mails
