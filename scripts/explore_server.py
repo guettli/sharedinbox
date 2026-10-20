@@ -40,7 +40,8 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
 
 A lookup waits up to `timeout` seconds (default 20) for its node. Only one
 request at a time talks to the accessibility bus, so a long wait blocks the
-other GUI calls; /health, /log, /shot and /restart always answer. Driver
+other GUI calls (refused as "busy" after 30 s); /health, /log and /shot always
+answer, and /restart does not wait for the bus. Driver
 errors come back as HTTP 409 with the message, which for "not found" includes
 the accessibility tree (truncated at 400 nodes); anything unexpected is a 500
 with the traceback.
@@ -273,13 +274,17 @@ def restart(params: dict) -> str:
 
 
 # Requests are served on their own threads, but only one at a time may talk to
-# the accessibility bus. A stuck lookup (a busy app answers each AT-SPI call
-# only at its D-Bus timeout, and one tree walk makes hundreds of calls) then
-# still blocks the other GUI routes, but not the ones below: /health, /log and
-# /shot show what the app is doing, and /restart kills it, which also ends the
-# stuck walk.
+# the accessibility bus. A slow lookup then blocks the other GUI routes, but not
+# the ones below: /health, /log and /shot show what the app is doing, and
+# /restart (which does not touch the bus) kills it, which also ends a stuck
+# walk. A lookup itself is bounded by its timeout, checked per node.
 _GUI_LOCK = threading.Lock()
-LOCK_FREE = {"/health", "/log", "/shot", "/restart"}
+# Restarts must not overlap either: two would start two apps, one orphaned.
+_RESTART_LOCK = threading.Lock()
+LOCK_FREE = {"/health", "/log", "/shot"}
+# A GUI call that cannot get the bus within this long is refused rather than
+# queued: run later, it would act on whatever screen is up by then.
+GUI_LOCK_WAIT = 30.0
 
 ROUTES = {
     "/health": health, "/tree": tree, "/texts": texts, "/log": log,
@@ -326,9 +331,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path in LOCK_FREE:
                 body = route(params)
-            else:
-                with _GUI_LOCK:
+            elif path == "/restart":
+                with _RESTART_LOCK:
                     body = route(params)
+            else:
+                if not _GUI_LOCK.acquire(timeout=GUI_LOCK_WAIT):
+                    raise g.GuiError(
+                        f"busy: another call has held the accessibility bus for "
+                        f"over {GUI_LOCK_WAIT:.0f}s; check /shot and /log, or /restart"
+                    )
+                try:
+                    body = route(params)
+                finally:
+                    _GUI_LOCK.release()
             self._send(200, body.encode())
         except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
