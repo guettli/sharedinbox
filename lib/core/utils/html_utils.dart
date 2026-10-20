@@ -28,15 +28,36 @@ String htmlToPlain(String html) => _decodeEntities(html)
       ),
       '',
     )
+    .replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '')
     .replaceAll(RegExp(r'<br\s*/?>'), '\n')
     .replaceAll(RegExp(r'<p\s*/?>', caseSensitive: false), '\n')
     .replaceAll(RegExp(r'</p>', caseSensitive: false), '')
-    .replaceAll(RegExp(r'<[^>]+>'), '')
+    // Block ends start a new line and table cells are set apart, so a
+    // layout table does not run together ("ItemPriceMug5 €").
+    .replaceAll(
+      RegExp(
+        r'</(?:div|tr|li|h[1-6]|table|ul|ol|blockquote)\s*>',
+        caseSensitive: false,
+      ),
+      '\n',
+    )
+    .replaceAll(RegExp(r'</t[dh]\s*>', caseSensitive: false), ' ')
+    .replaceAll(_tag, '')
     // A truncated snippet can end inside a tag — an email whose first
     // kilobytes are one long inline-styled <div> would otherwise show its
     // markup as the preview.
-    .replaceAll(RegExp(r'<[^>]*$'), '')
+    .replaceAll(RegExp(r'</?[a-zA-Z][^>]*$'), '')
+    .replaceAll(RegExp(r'\n[ \t]*\n(?:[ \t]*\n)+'), '\n\n')
     .trim();
+
+/// An HTML tag: `<`, an optional `/`, a name starting with a letter, then
+/// attributes or the end. Text that merely sits in angle brackets is not a
+/// tag and survives: since entities are decoded first, the stricter `<[^>]+>`
+/// used to delete "Prices &lt;50%&gt; off" down to "Prices  off" and the
+/// "&lt;john@example.com&gt;" of a quoted "From:" line.
+final RegExp _tag = RegExp(
+  r'<!?/?[a-zA-Z][a-zA-Z0-9:-]*(?:\s[^>]*)?/?>',
+);
 
 /// Named HTML entities [_decodeEntities] handles. `&amp;` is deliberately not
 /// here — it is applied last so an already-escaped entity (`&amp;lt;`) is not

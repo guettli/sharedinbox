@@ -69,6 +69,36 @@ void main() {
       expect(htmlToPlain('&lt;tr&gt; &lt;td&gt;cell'), 'cell');
     });
 
+    test('keeps escaped text that is not a tag', () {
+      expect(htmlToPlain('Prices &lt;50%&gt; off'), 'Prices <50%> off');
+      expect(
+        htmlToPlain('From: John &lt;john@example.com&gt;<br>Sent: Monday'),
+        'From: John <john@example.com>\nSent: Monday',
+      );
+      expect(
+        htmlToPlain('if a &lt; b &amp;&amp; c &gt; d'),
+        'if a < b && c > d',
+      );
+    });
+
+    test('sets table cells and blocks apart', () {
+      expect(
+        htmlToPlain(
+          '<table><tr><td>Item</td><td>Price</td></tr>'
+          '<tr><td>Mug</td><td>5 &euro;</td></tr></table>',
+        ),
+        'Item Price \nMug 5 €',
+      );
+      expect(htmlToPlain('<div>one</div><div>two</div>'), 'one\ntwo');
+    });
+
+    test('drops comments and doctype', () {
+      expect(
+        htmlToPlain('<!DOCTYPE html><!-- [if mso]> x <![endif] -->Hi'),
+        'Hi',
+      );
+    });
+
     test('decodes &quot;', () {
       expect(htmlToPlain('say &quot;hi&quot;'), 'say "hi"');
     });
