@@ -176,6 +176,30 @@ void main() {
       },
     );
 
+    testWidgets('refuses to send to something that is not an address', (
+      tester,
+    ) async {
+      final email = FakeEmailRepository();
+      await _pumpComposeAndSend(
+        tester,
+        email: email,
+        beforeSend: () => tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com, not-an-address',
+        ),
+      );
+
+      // Sending used to drop the bad entry and mail only Bob.
+      expect(find.text('Not an email address: not-an-address'), findsOneWidget);
+      expect(email.sentEmailAccountId, isNull);
+      expect(email.sendNowRowIds, isEmpty);
+      expect(find.byType(ComposeScreen), findsOneWidget);
+
+      // Let the SnackBar auto-dismiss so no timer leaks into teardown.
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets(
       'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {

@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart'
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -421,6 +422,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (_accountId == null) {
       context.showAppSnackBar(
         'Select an account first',
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
+    final invalid = [
+      ...invalidRecipients(_to.text),
+      ...invalidRecipients(_cc.text),
+    ];
+    if (invalid.isNotEmpty) {
+      context.showAppSnackBar(
+        invalid.length == 1
+            ? 'Not an email address: ${invalid.single}'
+            : 'Not email addresses: ${invalid.join(', ')}',
         duration: const Duration(seconds: 5),
       );
       return;
