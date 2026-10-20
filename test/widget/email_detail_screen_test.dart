@@ -619,6 +619,71 @@ void main() {
       );
     });
 
+    group('a mail without a Date header', () {
+      // No Date header means no sentAt. The header then showed no date (and
+      // no folder), and a reply quoted it as "— On , Bob wrote:".
+      final email = Email(
+        id: 'acc-1:42',
+        accountId: 'acc-1',
+        mailboxPath: 'INBOX',
+        uid: 42,
+        subject: 'Test Subject',
+        receivedAt: DateTime(2024, 6, 3, 9, 15),
+        from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+        to: const [EmailAddress(email: 'alice@example.com')],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      Future<void> open(WidgetTester tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                // A text part keeps _quotedBody off the compute() isolate.
+                body: const EmailBody(
+                  emailId: 'acc-1:42',
+                  textBody: 'Hi',
+                  attachments: [],
+                ),
+                email: email,
+              ),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('shows when it arrived', (tester) async {
+        await open(tester);
+        expect(find.text('Mon, Jun 3 2024, 09:15'), findsOneWidget);
+      });
+
+      testWidgets('is quoted with when it arrived', (tester) async {
+        await open(tester);
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is EditableText &&
+                w.controller.text.contains(
+                  '— On Mon, Jun 3 2024, 09:15, Bob <bob@example.com> wrote:',
+                ),
+          ),
+          findsOneWidget,
+        );
+      });
+    });
+
     group('with two accounts, compose sends from the mail\'s account', () {
       // Compose only picks an account by itself when there is exactly one;
       // with two, Reply and Forward came up with an empty From field.

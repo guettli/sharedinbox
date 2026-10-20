@@ -1204,10 +1204,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final sender = from == null
         ? ''
         : ' from ${name != null && name.isNotEmpty ? name : from.email}';
-    final sent = mail.sentAt == null
-        ? ''
-        : ', ${DateFormat('MMM d, HH:mm').format(mail.sentAt!)}';
-    return 'on mail$sender$sent';
+    final sent = DateFormat('MMM d, HH:mm').format(mail.date);
+    return 'on mail$sender, $sent';
   }
 
   Future<void> _addNoteDialog(BuildContext context, Email header) async {
@@ -1289,35 +1287,34 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               : 'To: (no recipients)',
           style: Theme.of(ctx).textTheme.bodySmall,
         ),
-        if (email.sentAt != null)
-          Row(
-            children: [
-              // Flexible: the date led this row unconstrained, taking its
-              // intrinsic width. Measured at text scale 2.0 on a 320dp screen
-              // it renders 270.6px wide inside a 288px row, leaving ~9px for
-              // the folder label after the gap — the label is already starved,
-              // and a slightly narrower screen or larger scale overflows.
+        Row(
+          children: [
+            // Flexible: the date led this row unconstrained, taking its
+            // intrinsic width. Measured at text scale 2.0 on a 320dp screen
+            // it renders 270.6px wide inside a 288px row, leaving ~9px for
+            // the folder label after the gap — the label is already starved,
+            // and a slightly narrower screen or larger scale overflows.
+            Flexible(
+              child: Text(
+                _dateFmt.format(email.date),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ),
+            if (folderLabel.isNotEmpty) ...[
+              const SizedBox(width: AppSpacing.sm),
               Flexible(
                 child: Text(
-                  _dateFmt.format(email.sentAt!),
-                  style: Theme.of(ctx).textTheme.bodySmall,
+                  folderLabel,
+                  style: Theme.of(ctx)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Theme.of(ctx).hintColor),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (folderLabel.isNotEmpty) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Flexible(
-                  child: Text(
-                    folderLabel,
-                    style: Theme.of(ctx)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Theme.of(ctx).hintColor),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
             ],
-          ),
+          ],
+        ),
         ConversationTree(email: email, onTapEmail: _goToNeighbour),
         // Gate on the parsed result, not just header presence, so the detail
         // view and the chip agree — otherwise a header we can't turn into a URI
@@ -1332,7 +1329,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<String> _quotedBody(Email header, EmailBody? body) async {
-    final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
+    final date = _dateFmt.format(header.date);
     final from =
         header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
     final rawText = body?.textBody;
