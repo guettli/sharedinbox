@@ -549,10 +549,13 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
     // trigger from #232 is fixed upstream in Enough-Software/enough_mail#283;
     // once released we still keep this guard for network/DB failures.
     try {
-      final prefs = ref.read(userPreferencesProvider).value;
-      final action =
-          prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
-      if (action != AfterMailViewAction.nextMessage) return;
+      // The stored preference, as in EmailDetailScreen: the autoDispose
+      // userPreferencesProvider may have no listener and no value yet.
+      final prefs = await ref
+          .read(userPreferencesRepositoryProvider)
+          .observePreferences()
+          .first;
+      if (prefs.afterMailViewAction != AfterMailViewAction.nextMessage) return;
 
       // Restrict to threads in the current mailbox so a stray thread from
       // another folder (e.g. Junk) does not cause us to prefetch — and later
