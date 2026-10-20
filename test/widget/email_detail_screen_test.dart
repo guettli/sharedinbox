@@ -659,9 +659,17 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      testWidgets('shows when it arrived', (tester) async {
+      testWidgets('shows when it arrived, next to its folder', (tester) async {
         await open(tester);
-        expect(find.text('Mon, Jun 3 2024, 09:15'), findsOneWidget);
+        final date = find.text('Mon, Jun 3 2024, 09:15');
+        expect(date, findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.ancestor(of: date, matching: find.byType(Row)).first,
+            matching: find.text('INBOX'),
+          ),
+          findsOneWidget,
+        );
       });
 
       testWidgets('is quoted with when it arrived', (tester) async {
