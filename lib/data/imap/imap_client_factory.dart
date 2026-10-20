@@ -51,6 +51,36 @@ Future<void> connectWithRetry(Future<void> Function() connect) async {
   }
 }
 
+/// Rethrows a failed `connectToServer` so the message names the server.
+///
+/// A refused connection surfaces from dart:io as `SocketException: Connection
+/// refused …, address = localhost, port = 38920`, where the port is this
+/// device's own source port, not the server's. Shown as is in the Outbox, it
+/// pointed the user at a port they never configured. A [SocketException] is
+/// rethrown as one again, so retry and offline handling still recognise it,
+/// but with "Could not connect to host:port" and the server's port. Anything
+/// else goes on to [rethrowAsTlsHint].
+@visibleForTesting
+Never rethrowConnectError(
+  Object error,
+  StackTrace stack,
+  String host,
+  int port,
+) {
+  if (error is SocketException) {
+    Error.throwWithStackTrace(
+      SocketException(
+        'Could not connect to $host:$port: ${error.message}',
+        osError: error.osError,
+        address: error.address,
+        port: port,
+      ),
+      stack,
+    );
+  }
+  rethrowAsTlsHint(error, stack, host, port);
+}
+
 /// Zone value key signalling that a [StringSink] for protocol logging is
 /// active. When this key is non-null in the current zone, [connectImap]
 /// enables IMAP trace logging so the output is captured by the zone's
@@ -133,7 +163,7 @@ Future<ImapClient> connectImap(
       ),
     );
   } catch (e, st) {
-    rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
+    rethrowConnectError(e, st, account.imapHost, account.imapPort);
   }
   if (imapNeedsStartTls(account)) {
     await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
@@ -224,7 +254,7 @@ Future<SmtpClient> connectSmtp(
       ),
     );
   } catch (e, st) {
-    rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
+    rethrowConnectError(e, st, account.smtpHost, account.smtpPort);
   }
   await client.ehlo();
   if (smtpNeedsStartTls(account)) {
