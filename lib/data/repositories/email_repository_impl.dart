@@ -7628,11 +7628,15 @@ class EmailRepositoryImpl implements EmailRepository {
   /// `*` keeps prefix matching on the last token (`foo.co` → `"foo co" *`).
   /// Separate chunks are still combined with FTS5's implicit AND, so
   /// `foo com` finds mails containing both words anywhere.
+  ///
+  /// A word character is any Unicode letter, mark or digit, as for the
+  /// tokenizer: Dart's `\w` is ASCII-only, so `Müller` used to become the
+  /// phrase `"M ller"` and `Привет` an empty query, and neither found anything.
   static String _toFtsQuery(String query) {
     final terms = <String>[];
     for (final chunk in query.trim().split(RegExp(r'\s+'))) {
       final tokens =
-          chunk.split(RegExp(r'[^\w]+')).where((t) => t.isNotEmpty).toList();
+          chunk.split(_nonWordChars).where((t) => t.isNotEmpty).toList();
       if (tokens.isEmpty) continue;
       terms.add(
         tokens.length == 1 ? '${tokens.single}*' : '"${tokens.join(' ')}" *',
@@ -7640,6 +7644,8 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     return terms.join(' ');
   }
+
+  static final _nonWordChars = RegExp(r'[^\p{L}\p{M}\p{N}_]+', unicode: true);
 
   @override
   Future<List<model.Email>> getEmailsByAddress(

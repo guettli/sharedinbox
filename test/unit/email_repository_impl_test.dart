@@ -1793,6 +1793,38 @@ void main() {
       expect(words, hasLength(2));
     });
 
+    test('searchEmailsGlobal finds words with non-ASCII letters', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      final subjects = ['Grüße von Jürgen Müller', 'Привет из Москвы'];
+      for (final (i, subject) in subjects.indexed) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                subject: Value(subject),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      // An ASCII-only word split used to turn 'Müller' into the phrase
+      // "M ller" and 'Привет' into an empty query.
+      for (final (query, id) in [
+        ('Müller', 'acc-1:0'),
+        ('grüße', 'acc-1:0'),
+        ('Jürgen Mül', 'acc-1:0'),
+        ('Привет', 'acc-1:1'),
+        ('москв', 'acc-1:1'),
+      ]) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(results.map((e) => e.id), [id], reason: query);
+      }
+    });
+
     test('searchEmailsGlobal matches a single word only in the body', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
