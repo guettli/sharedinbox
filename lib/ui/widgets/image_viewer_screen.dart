@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
@@ -35,7 +36,12 @@ class ImageViewerScreen extends StatelessWidget {
             onPressed: () async {
               final problem = await openFile(path);
               if (problem != null && context.mounted) {
-                context.showAppSnackBar(problem);
+                context.showAppSnackBar(
+                  problem.text,
+                  level: AppLogLevel.warn,
+                  event: 'image.open_failed',
+                  data: {'filename': filename, 'detail': problem.detail},
+                );
               }
             },
           ),

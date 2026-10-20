@@ -366,10 +366,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final problem = await openFile(path);
       if (problem != null && mounted) {
         context.showAppSnackBar(
-          problem,
+          problem.text,
           level: AppLogLevel.warn,
           event: 'compose.attachment.open_failed',
-          data: {'index': index},
+          data: {'index': index, 'detail': problem.detail},
         );
       }
     } catch (e, stack) {

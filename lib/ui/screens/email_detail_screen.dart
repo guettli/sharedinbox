@@ -1081,11 +1081,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final problem = await openFile(path);
       if (problem != null && mounted) {
         context.showAppSnackBar(
-          problem,
+          problem.text,
           level: AppLogLevel.warn,
           event: 'email.attachment.open_failed',
           emailId: widget.emailId,
-          data: {'filename': att.filename},
+          data: {'filename': att.filename, 'detail': problem.detail},
         );
       }
     } catch (e, stack) {
@@ -1902,7 +1902,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               label: 'Open',
               onPressed: () async {
                 final problem = await openFile(saved.path);
-                if (problem != null) messenger.show(problem);
+                if (problem != null) {
+                  messenger.show(
+                    problem.text,
+                    level: AppLogLevel.warn,
+                    event: 'email.raw.open_failed',
+                    accountId: header?.accountId,
+                    emailId: widget.emailId,
+                    data: {'detail': problem.detail},
+                  );
+                }
               },
             )
           : SnackBarAction(
