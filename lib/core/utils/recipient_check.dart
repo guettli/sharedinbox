@@ -54,13 +54,21 @@ TypedRecipient _parseEntry(String entry) {
   if (open >= 0 && entry.endsWith('>')) {
     final email = entry.substring(open + 1, entry.length - 1).trim();
     var name = entry.substring(0, open).trim();
-    if (name.length >= 2 && name.startsWith('"') && name.endsWith('"')) {
+    final quoted =
+        name.length >= 2 && name.startsWith('"') && name.endsWith('"');
+    // "<a@x> <b@y>" would otherwise send to b@y only, with a@x taken for
+    // the name.
+    final nameHasBracket =
+        !quoted && (name.contains('<') || name.contains('>'));
+    if (quoted) {
       name = name.substring(1, name.length - 1).replaceAll(r'\"', '"');
+    } else if (name.startsWith('"')) {
+      name = name.substring(1).trim(); // an unbalanced opening quote
     }
     return TypedRecipient(
       entry,
       EmailAddress(name: name.isEmpty ? null : name, email: email),
-      isValid: _address.hasMatch(email),
+      isValid: !nameHasBracket && _address.hasMatch(email),
     );
   }
   return TypedRecipient(

@@ -569,14 +569,19 @@ class DraftRepositoryImpl implements DraftRepository {
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
+  // A draft keeps what was typed, even an entry that is not an address yet
+  // ("bob" on the way to "bob@example.com"); only sending refuses those.
   List<imap.MailAddress> _parseAddresses(String text) => [
-        for (final a in recipientAddresses(text))
-          imap.MailAddress(a.name ?? '', a.email),
+        for (final r in parseRecipients(text))
+          imap.MailAddress(r.address.name ?? '', r.address.email),
       ];
 
   List<Map<String, dynamic>> _parseAddressesJmap(String text) => [
-        for (final a in recipientAddresses(text))
-          {if (a.name != null) 'name': a.name, 'email': a.email},
+        for (final r in parseRecipients(text))
+          {
+            if (r.address.name != null) 'name': r.address.name,
+            'email': r.address.email,
+          },
       ];
 
   String _addressListToText(List<imap.MailAddress>? addresses) {

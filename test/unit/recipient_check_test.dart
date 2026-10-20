@@ -25,6 +25,14 @@ void main() {
     );
   });
 
+  test(
+      'two bracketed addresses in one entry are not taken as name and '
+      'address', () {
+    expect(invalidRecipients('<a@b.c> <d@e.f>'), ['<a@b.c> <d@e.f>']);
+    // An address-looking name is common in pasted headers and stays valid.
+    expect(invalidRecipients('x@y.z <a@b.c>'), isEmpty);
+  });
+
   test('a quoted name may contain commas and semicolons', () {
     final addresses = recipientAddresses(
       '"Doe, John" <john@example.com>; "A; \\"B\\"" <ab@example.com>',
