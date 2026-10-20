@@ -252,6 +252,14 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _activate(SieveScript script) => widget.isLocal
+      ? ref
+          .read(localSieveRepositoryProvider)
+          .activateScript(widget.accountId, script.id)
+      : ref
+          .read(sieveRepositoryProvider)
+          .activateScript(widget.accountId, script.id);
+
   Future<void> _offerApplyToInbox({
     required SieveScript savedScript,
     required bool wasActive,
@@ -285,21 +293,54 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (!mounted) return;
 
     if (count == 0) {
-      await showDialog<void>(
+      // A new filter is saved inactive. With only "OK" here, a filter written
+      // for mail that has not arrived yet, which is the usual case, stayed
+      // inactive and never ran.
+      final activate = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('No matching messages'),
-          content: const Text(
-            'This filter does not match any messages currently in your inbox.',
+          content: Text(
+            wasActive
+                ? 'This filter does not match any messages currently in '
+                    'your inbox.'
+                : 'This filter does not match any messages currently in '
+                    'your inbox. It is not active yet, so it will not '
+                    'filter new mail either. Only one filter can be active '
+                    'at a time.',
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
+          actions: wasActive
+              ? [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('OK'),
+                  ),
+                ]
+              : [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('Leave inactive'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Activate'),
+                  ),
+                ],
         ),
       );
+      if (activate != true || !mounted) return;
+      try {
+        await _activate(savedScript);
+        if (mounted) messenger.show('Filter activated.');
+      } catch (e) {
+        if (mounted) {
+          messenger.show(
+            'Failed to activate filter: $e',
+            level: AppLogLevel.error,
+            error: e,
+          );
+        }
+      }
       return;
     }
 
@@ -330,17 +371,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (shouldApply != true || !mounted) return;
 
     try {
-      if (!wasActive) {
-        if (widget.isLocal) {
-          await ref
-              .read(localSieveRepositoryProvider)
-              .activateScript(widget.accountId, savedScript.id);
-        } else {
-          await ref
-              .read(sieveRepositoryProvider)
-              .activateScript(widget.accountId, savedScript.id);
-        }
-      }
+      if (!wasActive) await _activate(savedScript);
       final applied = await emails.applySieveScriptToInbox(
         widget.accountId,
         content,
