@@ -51,6 +51,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Timer? _debounce;
   List<Email>? _results;
   bool _loading = false;
+
+  /// Set when the last search threw, so the body says so instead of falling
+  /// back to the "Type 3+ characters" hint or keeping an older result list.
+  String? _error;
   bool _fieldFocused = false;
 
   /// Accounts the user has deactivated on the current result set. Purely a
@@ -168,6 +172,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() {
       _advancedMode = !_advancedMode;
       _results = null;
+      _error = null;
       _resetViewFilters();
     });
   }
@@ -191,6 +196,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     if (value.trim().length < 3) {
       setState(() {
         _results = null;
+        _error = null;
         _resetViewFilters();
       });
       return;
@@ -225,7 +231,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Future<void> _search(String query) async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final merged = await searchEmailsGlobalMerged(
         ref.read(emailRepositoryProvider),
@@ -252,13 +261,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               stack: stack,
             ),
       );
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(_failed);
     }
   }
 
   Future<void> _searchStructured() async {
     if (_filterGroup.isEmpty) return;
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final emails = await ref
           .read(emailRepositoryProvider)
@@ -282,7 +294,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               stack: stack,
             ),
       );
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(_failed);
     }
   }
 
@@ -316,6 +328,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       _ctrl.clear();
                       setState(() {
                         _results = null;
+                        _error = null;
                         _resetViewFilters();
                       });
                     },
@@ -391,9 +404,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
+  void _failed() {
+    _loading = false;
+    _results = null;
+    _resetViewFilters();
+    _error = 'Search failed. The app log has the details.';
+  }
+
   Widget _buildBody() {
     if (_advancedMode) return _buildAdvancedBody();
     if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return Center(child: Text(_error!));
     if (_results == null) {
       if (_fieldFocused && _ctrl.text.isEmpty) {
         return _buildHistoryPanel();
@@ -584,6 +605,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             onChanged: (g) => setState(() {
               _filterGroup = g;
               _results = null;
+              _error = null;
               _resetViewFilters();
             }),
           ),
@@ -611,6 +633,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       resultsRegion = const Padding(
         padding: EdgeInsets.only(top: AppSpacing.xl),
         child: Center(child: CircularProgressIndicator()),
+      );
+    } else if (_error != null) {
+      resultsRegion = Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Center(child: Text(_error!)),
       );
     } else if (_results == null) {
       resultsRegion = const SizedBox.shrink();

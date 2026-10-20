@@ -54,6 +54,19 @@ Future<FakeSearchHistoryRepository> pumpSearchWithFoobarResult(
   return history;
 }
 
+/// Fails every simple search the way an FTS5 syntax error used to.
+class _FailingSearchRepository extends FakeEmailRepository {
+  _FailingSearchRepository({super.searchResults});
+
+  bool fail = true;
+
+  @override
+  Future<List<Email>> searchEmailsGlobal(String? accountId, String query) {
+    if (fail) throw StateError('fts5: syntax error');
+    return super.searchEmailsGlobal(accountId, query);
+  }
+}
+
 void main() {
   group('SearchScreen', () {
     testWidgets('shows placeholder hint text when empty', (tester) async {
@@ -135,6 +148,41 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('No results'), findsOneWidget);
+    });
+
+    testWidgets('a failed search says so and drops the old results', (
+      tester,
+    ) async {
+      final emails = _FailingSearchRepository(
+        searchResults: [testEmail(subject: 'Foobar mail')],
+      )..fail = false;
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        emails: emails,
+      );
+
+      await tester.enterText(find.byType(TextField), 'foobar');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Foobar mail'), findsOneWidget);
+
+      emails.fail = true;
+      await tester.enterText(find.byType(TextField), 'foobar mai');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Search failed. The app log has the details.'),
+        findsOneWidget,
+      );
+      expect(find.text('Type 3+ characters to search'), findsNothing);
+      expect(find.textContaining('Foobar mail'), findsNothing);
+
+      // Going below three characters clears the error again.
+      await tester.enterText(find.byType(TextField), 'fo');
+      await tester.pump();
+      expect(find.text('Type 3+ characters to search'), findsOneWidget);
     });
 
     testWidgets('shows email results in the unified message list', (
