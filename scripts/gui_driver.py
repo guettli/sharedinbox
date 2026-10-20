@@ -231,9 +231,11 @@ def type_text(text: str) -> None:
 
     Flutter's text fields do not implement the EditableText interface, so
     synthetic key events are the only route. xdotool talks to the same X server,
-    and the app receives them exactly as it would a real keyboard.
+    and the app receives them exactly as it would a real keyboard. The "--"
+    ends xdotool's options, so text that starts with "-" (a "-- " signature
+    delimiter, a negative number) is typed instead of rejected as an option.
     """
-    subprocess.run(["xdotool", "type", "--delay", "40", text], check=True)
+    subprocess.run(["xdotool", "type", "--delay", "40", "--", text], check=True)
 
 
 def press(key: str) -> None:
