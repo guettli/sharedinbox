@@ -175,10 +175,17 @@ class NotificationsScreen extends ConsumerWidget {
       keyboardType: TextInputType.emailAddress,
     );
     if (address == null) return;
+    final sender = senderAddress(address);
+    if (sender == null) {
+      if (context.mounted) {
+        context.showAppSnackBar('Not an email address: $address');
+      }
+      return;
+    }
     final filter = FilterGroup.single(
       FilterField.from_,
       FilterComparison.is_,
-      address,
+      sender,
     );
     await ref.read(notificationRuleRepositoryProvider).addRule(
           accountId,
@@ -327,4 +334,17 @@ class _RuleEditorPageState extends State<_RuleEditorPage> {
       ),
     );
   }
+}
+
+/// The bare address in what was typed into "Add sender": `alice@example.com`,
+/// a pasted `Alice <alice@example.com>` or `mailto:alice@example.com`. Null
+/// when it is not an address. The rule compares it with the sender's bare
+/// address (`From is …`), so anything else could never match.
+@visibleForTesting
+String? senderAddress(String input) {
+  final bracketed = RegExp(r'<([^<>]*)>\s*$').firstMatch(input.trim());
+  final address = (bracketed?.group(1) ?? input)
+      .trim()
+      .replaceFirst(RegExp('^mailto:', caseSensitive: false), '');
+  return RegExp(r'^[^\s@<>]+@[^\s@<>]+$').hasMatch(address) ? address : null;
 }

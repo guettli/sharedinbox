@@ -21,7 +21,7 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
 
     final material = await ShareEncryptionService.generateKeyPair();
     final keyIdHex = _hex(material.keyId);
-    final expiresAt = DateTime.now().toUtc().add(const Duration(minutes: 20));
+    final expiresAt = DateTime.now().toUtc().add(ShareKeyMaterial.lifetime);
 
     await _db.into(_db.shareKeys).insert(
           ShareKeysCompanion.insert(
@@ -32,7 +32,12 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
           ),
         );
 
-    return material;
+    return ShareKeyMaterial(
+      keyId: material.keyId,
+      publicKeyBytes: material.publicKeyBytes,
+      privateKeyBytes: material.privateKeyBytes,
+      expiresAt: expiresAt,
+    );
   }
 
   @override
@@ -52,6 +57,7 @@ class ShareKeyRepositoryImpl implements ShareKeyRepository {
       keyId: keyId,
       publicKeyBytes: Uint8List.fromList(base64.decode(row.publicKey)),
       privateKeyBytes: Uint8List.fromList(base64.decode(row.privateKey)),
+      expiresAt: row.expiresAt,
     );
   }
 
