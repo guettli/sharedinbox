@@ -33,6 +33,7 @@ import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
@@ -631,7 +632,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 contentInfos
                     .map(
                       (a) => {
-                        'filename': a.fileName ?? '',
+                        'filename': mimePartFileName(
+                              a.contentDisposition,
+                              a.contentType,
+                            ) ??
+                            '',
                         'contentType': a.contentType?.mediaType.text ?? '',
                         // ContentInfo.fetchId is empty for parts that aren't
                         // addressable (e.g. a non-multipart message whose
@@ -7191,7 +7196,7 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     await dir.create(recursive: true);
 
-    final file = File(p.join(dir.path, attachment.filename));
+    final file = File(p.join(dir.path, safeFileName(attachment.filename)));
     if (await file.exists()) {
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
@@ -8242,7 +8247,7 @@ Map<String, dynamic> _mimePartToJson(imap.MimePart part) {
   final encoding = rawEncoding?.split(';').first.trim().toLowerCase();
   return {
     'contentType': ct?.mediaType.text ?? 'application/octet-stream',
-    'filename': disposition?.filename ?? ct?.parameters['name'],
+    'filename': mimePartFileName(disposition, ct),
     'size': disposition?.size,
     'encoding': encoding,
     'children': (part.parts ?? []).map(_mimePartToJson).toList(),
