@@ -527,7 +527,9 @@ func (m *Ci) Stalwart() *dagger.Service {
 // must be the name the client reaches the server by: "stalwart" for tests that
 // connect over the service binding, "localhost" for the explore service, where
 // the app goes through a localhost forward and refuses a non-localhost http
-// apiUrl.
+// apiUrl. stalwart-dev/config.toml already says "localhost", so that variant
+// runs the config unchanged. Each hostname is its own service instance, so the
+// explore service does not share a Stalwart with concurrent test runs.
 func (m *Ci) stalwart(hostname string) *dagger.Service {
 	stalwartSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"stalwart-dev/"},
