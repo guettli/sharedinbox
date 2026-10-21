@@ -833,10 +833,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<EmailDetailNavItem?> _getNextEmailIfNeeded(Email? header) async {
     if (header == null) return null;
-    final prefs = ref.read(userPreferencesProvider).value;
-    final action =
-        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
-    if (action != AfterMailViewAction.nextMessage) return null;
+    final action = await storedAfterMailViewAction(
+      ref.read(userPreferencesRepositoryProvider),
+    );
+    if (!mounted || action != AfterMailViewAction.nextMessage) return null;
 
     // Prefer the caller-supplied nav so "next" respects the source list
     // (search results, address filter, …) and steps through individual mails
