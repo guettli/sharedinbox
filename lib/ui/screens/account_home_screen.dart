@@ -22,6 +22,15 @@ class AccountHomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final accountAsync = ref.watch(accountByIdProvider(accountId));
+    // When the account goes away under this page (deleted here or elsewhere)
+    // it could only say "Account not found"; go to the account list. Listened
+    // to here, not in the body, because the body is unmounted the moment the
+    // account disappears.
+    ref.listen(accountByIdProvider(accountId), (previous, next) {
+      if (previous?.value != null && next.hasValue && next.value == null) {
+        context.go('/accounts');
+      }
+    });
     return Scaffold(
       appBar: AppBar(
         title: accountAsync.maybeWhen(
