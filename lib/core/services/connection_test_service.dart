@@ -175,7 +175,7 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     if (jmapUrl == null || jmapUrl.isEmpty) {
       throw Exception('No JMAP URL configured for this account');
     }
-    final sessionUri = Uri.parse(jmapUrl);
+    final sessionUri = JmapClient.sessionUrlFor(Uri.parse(jmapUrl));
     // This path sends Basic-auth credentials without going through
     // JmapClient.connect, so it enforces the same rule itself: no cleartext to
     // a remote host (#1018). The UI also blocks it at save via validateJmapUrl;
