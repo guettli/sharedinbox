@@ -75,6 +75,38 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient {
     return imap.GenericImapResult();
   }
 
+  final expunged = <imap.MessageSequence>[];
+  List<imap.Mailbox> listed = [];
+
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      listed;
+
+  @override
+  Future<imap.StoreImapResult> uidMarkDeleted(
+    imap.MessageSequence sequence, {
+    bool? silent,
+    int? unchangedSinceModSequence,
+  }) async =>
+      imap.StoreImapResult();
+
+  @override
+  Future<imap.Mailbox> uidExpunge(imap.MessageSequence sequence) async {
+    expunged.add(sequence);
+    return imap.Mailbox(
+      encodedName: 'x',
+      encodedPath: 'x',
+      pathSeparator: '/',
+      flags: [],
+    );
+  }
+
   @override
   Future<imap.SearchImapResult> uidSearchMessages({
     String searchCriteria = 'UNSEEN',
@@ -333,6 +365,122 @@ void main() {
       expect(client.created, isEmpty);
       expect(client.selected, ['[Gmail]/Drafts']);
       expect(client.appendedTo, ['[Gmail]/Drafts']);
+    });
+
+    test(
+        'a switch of drafts mailbox re-uploads drafts instead of expunging '
+        'their old UIDs there', () async {
+      final db = openTestDatabase();
+      // Synced by an older build into its own "Drafts" folder as UID 7, and a
+      // deleted draft that was UID 9 there.
+      await db.into(db.drafts).insert(
+            DraftsCompanion.insert(
+              accountId: const Value('acc-1'),
+              toText: const Value('alice@example.com'),
+              subjectText: const Value('Old draft'),
+              updatedAt: DateTime(2026),
+              imapServerId: const Value('7'),
+              dirty: const Value(false),
+            ),
+          );
+      await db.into(db.draftTombstones).insert(
+            DraftTombstonesCompanion.insert(
+              accountId: 'acc-1',
+              serverId: '9',
+              createdAt: DateTime(2026),
+            ),
+          );
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:[Gmail]/Drafts',
+              accountId: 'acc-1',
+              path: '[Gmail]/Drafts',
+              name: 'Drafts',
+              role: const Value('drafts'),
+            ),
+          );
+      final client = _DraftsSpyImapClient();
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      // UIDs 7 and 9 belong to the old folder: nothing is expunged in the
+      // new one, and the draft is uploaded there as a new message.
+      expect(client.expunged, isEmpty);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test(
+        'before the folder list has synced, the server names the drafts '
+        'mailbox', () async {
+      final client = _DraftsSpyImapClient()
+        ..listed = [
+          imap.Mailbox(
+            encodedName: 'Drafts',
+            encodedPath: '[Gmail]/Drafts',
+            pathSeparator: '/',
+            flags: [imap.MailboxFlag.drafts],
+          ),
+        ];
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+      await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      // Guessing "Drafts" would have created a stray folder.
+      expect(client.created, isEmpty);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
+    });
+
+    test('a non-ASCII drafts mailbox is addressed in modified UTF-7', () async {
+      final db = openTestDatabase();
+      for (final (path, role) in [
+        ('Drafts', 'drafts'), // made by an older build
+        ('Entwürfe', 'drafts'), // the server's own
+      ]) {
+        await db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:$path',
+                accountId: 'acc-1',
+                path: path,
+                name: path,
+                role: Value(role),
+              ),
+            );
+      }
+      final client = _DraftsSpyImapClient();
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+      await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      expect(client.selected, ['Entw&APw-rfe']);
+      expect(client.appendedTo, ['Entw&APw-rfe']);
     });
   });
 }
