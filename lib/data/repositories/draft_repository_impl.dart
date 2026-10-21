@@ -577,7 +577,7 @@ class DraftRepositoryImpl implements DraftRepository {
         .split(',')
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
-        .map((s) => imap.MailAddress('', s))
+        .map((s) => HeaderMailAddress(null, s))
         .toList();
   }
 

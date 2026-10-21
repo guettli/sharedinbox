@@ -16,12 +16,17 @@ String _header(MailAddress from, List<MailAddress> to) => (MessageBuilder()
 
 void main() {
   group('encodeDisplayName', () {
-    test('quotes ASCII and escapes quotes and backslashes', () {
+    test('quotes plain ASCII names', () {
       expect(encodeDisplayName('Bob'), '"Bob"');
-      expect(
-        encodeDisplayName(r'Bob "the" \ Builder'),
-        r'"Bob \"the\" \\ Builder"',
-      );
+      expect(encodeDisplayName('Smith, Bob'), '"Smith, Bob"');
+    });
+
+    test('encodes names with quotes or backslashes', () {
+      for (final name in [r'Bob "the" \ Builder', 'O"Brien']) {
+        final encoded = encodeDisplayName(name);
+        expect(encoded, startsWith('=?UTF-8?B?'));
+        expect(encoded, isNot(contains('"')));
+      }
     });
 
     test('encodes non-ASCII without quotes', () {
@@ -61,6 +66,48 @@ void main() {
           ('', 'carol@example.com'),
         ],
       );
+    });
+
+    test('quotes in names cannot change the SMTP recipients', () {
+      // enough_mail reads RCPT TO back from the header, ignoring \".
+      final message = (MessageBuilder()
+            ..from = [HeaderMailAddress('Alice', 'alice@example.com')]
+            ..to = [
+              HeaderMailAddress('O"Brien', 'obrien@example.com'),
+              HeaderMailAddress(
+                'x" <attacker@evil.test>, "',
+                'victim@example.com',
+              ),
+              HeaderMailAddress(r'Bob \ Builder', 'bob@example.com'),
+            ]
+            ..subject = 'x'
+            ..text = 'x')
+          .buildMimeMessage();
+      expect(message.recipientAddresses, [
+        'obrien@example.com',
+        'victim@example.com',
+        'bob@example.com',
+      ]);
+      final parsed = MimeMessage.parseFromText(message.renderMessage());
+      expect(parsed.to!.map((a) => a.personalName), [
+        'O"Brien',
+        'x" <attacker@evil.test>, "',
+        r'Bob \ Builder',
+      ]);
+    });
+
+    test('a long name without spaces folds and parses back', () {
+      final name = 'N' * 90;
+      final header = _header(
+        HeaderMailAddress('Alice', 'alice@example.com'),
+        [HeaderMailAddress(name, 'bob@example.com')],
+      );
+      for (final line in header.split('\r\n')) {
+        expect(line.length, lessThanOrEqualTo(76), reason: line);
+      }
+      final parsed = MimeMessage.parseFromText('$header\r\n\r\nx');
+      expect(parsed.to!.single.personalName, name);
+      expect(parsed.to!.single.email, 'bob@example.com');
     });
 
     test('a name or address with CR/LF adds no header', () {

@@ -37,16 +37,22 @@ String encodeUnstructuredHeader(String text) {
 
 /// Encodes a display name for an address header (an RFC 5322 phrase).
 ///
-/// ASCII becomes a quoted string with `"` and `\` escaped; anything else
-/// becomes encoded-words, which must not stand inside quotes (RFC 2047 §5).
-/// enough_mail writes `"=?utf8?Q?…?="` and leaves ASCII names unescaped.
-/// Control characters become a space, as in [encodeUnstructuredHeader].
-/// Returns '' for a blank name.
+/// A plain ASCII name becomes a quoted string. Anything else becomes
+/// encoded-words, which must not stand inside quotes (RFC 2047 §5);
+/// enough_mail writes `"=?utf8?Q?…?="`. That includes ASCII names with `"`
+/// or `\`: enough_mail reads the SMTP recipients back from the To/Cc header
+/// with a parser that ignores `\"`, so an escaped quote could merge two
+/// addresses or reveal a hidden one. It also includes names with a run the
+/// header renderer could only cut mid-quote. Control characters become a
+/// space, as in [encodeUnstructuredHeader]. Returns '' for a blank name.
 String encodeDisplayName(String name) {
   final clean = name.replaceAll(_controlChars, ' ').trim();
   if (clean.isEmpty) return '';
-  if (clean.codeUnits.every((c) => c < 0x80)) {
-    return '"${clean.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
+  if (clean.codeUnits.every((c) => c < 0x80) &&
+      !clean.contains('"') &&
+      !clean.contains(r'\') &&
+      !_unfoldableRun.hasMatch(clean)) {
+    return '"$clean"';
   }
   return _encodedWords(clean);
 }
