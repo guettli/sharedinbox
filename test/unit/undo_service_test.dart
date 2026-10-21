@@ -64,6 +64,37 @@ void main() {
     container.dispose();
   });
 
+  /// The `del1` delete-to-Trash action the undo-mark tests start from.
+  UndoAction trashedAction({
+    List<String> emailIds = const ['e1'],
+    DateTime? timestamp,
+  }) =>
+      UndoAction(
+        id: 'del1',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: emailIds,
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Trash',
+        timestamp: timestamp,
+      );
+
+  /// Stubs the email writes [UndoService.undo] performs, then returns an
+  /// initialised notifier with [actions] pushed in order.
+  Future<UndoService> pushForUndo(List<UndoAction> actions) async {
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    for (final action in actions) {
+      await notifier.pushAction(action);
+    }
+    return notifier;
+  }
+
   test('UndoService initial state is empty list', () {
     expect(container.read(undoServiceProvider), isEmpty);
   });
@@ -252,22 +283,7 @@ void main() {
   });
 
   test('undo marks the entry undone and persists the mark', () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
+    final notifier = await pushForUndo([trashedAction()]);
     expect(container.read(undoServiceProvider).single.undoneAt, isNull);
 
     await notifier.undo(actionId: 'del1');
@@ -280,32 +296,13 @@ void main() {
   });
 
   test('the undone entry takes the re-keyed email ids from the DB', () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['acc1:INBOX:7'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
+    final action = trashedAction(emailIds: ['acc1:INBOX:7']);
     // A flush re-keyed the stored copy after the move reached the server.
-    final rekeyed = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
+    final rekeyed = trashedAction(
       emailIds: ['acc1:Trash:3'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
       timestamp: action.timestamp,
     );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
+    final notifier = await pushForUndo([action]);
     when(
       mockUndoRepo.getHistory(limit: anyNamed('limit')),
     ).thenAnswer((_) async => [rekeyed]);
@@ -318,22 +315,7 @@ void main() {
   });
 
   test('marks alternate up a chain of inverses', () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
+    final notifier = await pushForUndo([trashedAction()]);
     await notifier.undo(actionId: 'del1'); // back in INBOX
     await notifier.undo(actionId: 'del1-inv'); // in Trash again
     await notifier.undo(actionId: 'del1-inv-inv'); // back in INBOX
@@ -352,29 +334,22 @@ void main() {
 
   test('undo without an id skips entries that are already undone', () async {
     // No destination → undo pushes no inverse, so the undone entry stays last.
-    final older = UndoAction(
-      id: 'mv0',
-      accountId: 'acc1',
-      type: UndoType.move,
-      emailIds: ['e0'],
-      sourceMailboxPath: 'INBOX',
-    );
-    final newer = UndoAction(
-      id: 'mv1',
-      accountId: 'acc1',
-      type: UndoType.move,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-    );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(older);
-    await notifier.pushAction(newer);
+    final notifier = await pushForUndo([
+      UndoAction(
+        id: 'mv0',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e0'],
+        sourceMailboxPath: 'INBOX',
+      ),
+      UndoAction(
+        id: 'mv1',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: ['e1'],
+        sourceMailboxPath: 'INBOX',
+      ),
+    ]);
 
     await notifier.undo();
     await notifier.undo();
@@ -385,22 +360,7 @@ void main() {
   });
 
   test('undoing an entry twice keeps one inverse entry', () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
+    final notifier = await pushForUndo([trashedAction()]);
     await notifier.undo(actionId: 'del1');
     await notifier.undo(actionId: 'del1');
 
@@ -411,22 +371,7 @@ void main() {
   });
 
   test('undoing the inverse clears the undone mark of the original', () async {
-    final action = UndoAction(
-      id: 'del1',
-      accountId: 'acc1',
-      type: UndoType.delete,
-      emailIds: ['e1'],
-      sourceMailboxPath: 'INBOX',
-      destinationMailboxPath: 'Trash',
-    );
-    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
-    when(
-      mockEmailRepo.cancelPendingChange(any, any),
-    ).thenAnswer((_) async => false);
-
-    final notifier = container.read(undoServiceProvider.notifier);
-    await notifier.init();
-    await notifier.pushAction(action);
+    final notifier = await pushForUndo([trashedAction()]);
     await notifier.undo(actionId: 'del1');
     await notifier.undo(actionId: 'del1-inv');
 
