@@ -100,7 +100,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
-    if (widget.prefillBody != null) _body.text = widget.prefillBody!;
+    if (widget.prefillBody != null) {
+      _body.text = normalizeNewlines(widget.prefillBody!);
+    }
     _accountId = widget.accountId;
     _replyToEmailId = widget.replyToEmailId;
     unawaited(_loadAccounts());
@@ -180,7 +182,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _to.text = draft.toText;
       _cc.text = draft.ccText;
       _subject.text = draft.subjectText;
-      _body.text = draft.bodyText;
+      // Drafts pulled from the server come back with CRLF.
+      _body.text = normalizeNewlines(draft.bodyText);
       if (draft.accountId != null) _accountId = draft.accountId;
       _sigAccountId = _accountId;
       _sigBlock = '';

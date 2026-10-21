@@ -1,3 +1,5 @@
+import 'package:sharedinbox/core/utils/format_utils.dart';
+
 /// The result of [splitTrailingQuote]: the [visible] reply text and, when a
 /// foldable trailing quote was found, the [quoted] region to hide by default.
 typedef QuoteSplit = ({String visible, String? quoted});
@@ -104,13 +106,7 @@ QuoteSplit splitTrailingQuote(String text, {int minQuotedLines = 6}) {
   return (visible: visible, quoted: quoted);
 }
 
-/// Prefixes every line of [text] with "> " for a reply or forward. Mail bodies
-/// keep the CRLF line breaks of the raw message; they become "\n" so the
-/// quote carries no stray carriage returns (a bare CR in the sent mail).
-String quoteText(String text) => text
-    .replaceAll('\r\n', '\n')
-    .replaceAll('\r', '\n')
-    .trim()
-    .split('\n')
-    .map((l) => '> $l')
-    .join('\n');
+/// Prefixes every line of [text] with "> " for a reply or forward, after
+/// [normalizeNewlines] so the quote carries no stray carriage returns.
+String quoteText(String text) =>
+    normalizeNewlines(text).trim().split('\n').map((l) => '> $l').join('\n');
