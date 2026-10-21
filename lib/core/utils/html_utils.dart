@@ -70,31 +70,153 @@ final RegExp _tag = RegExp(
   r'<!?/?[a-zA-Z][a-zA-Z0-9:-]*(?:[\s/][^<>]*)?>',
 );
 
-/// Named HTML entities [_decodeEntities] handles. `&amp;` is deliberately not
-/// here — it is applied last so an already-escaped entity (`&amp;lt;`) is not
-/// double-decoded.
-const Map<String, String> _namedEntities = {
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&apos;': "'",
-  '&nbsp;': ' ',
-  '&zwnj;': '\u200C',
-  '&zwj;': '\u200D',
-  '&zwsp;': '\u200B',
-  '&shy;': '\u00AD',
-  '&hellip;': '…',
-  '&mdash;': '—',
-  '&ndash;': '–',
-  '&lsquo;': '‘',
-  '&rsquo;': '’',
-  '&ldquo;': '“',
-  '&rdquo;': '”',
-  '&trade;': '™',
-  '&reg;': '®',
-  '&copy;': '©',
-  '&euro;': '€',
-  '&pound;': '£',
+/// Named HTML entities [_decodeEntities] decodes: all of Latin-1
+/// (`&auml;`, `&eacute;`, `&szlig;`, …), the Windows-1252 extras mail tools
+/// emit (`&bdquo;`, `&euro;`, `&bull;`, …) and the markup ones. Names are
+/// case-sensitive (`&Auml;` is not `&auml;`). `&nbsp;` becomes a plain
+/// space: the result is plain text, not layout.
+const Map<String, int> _namedEntities = {
+  'nbsp': 0x20,
+  'iexcl': 0xA1,
+  'cent': 0xA2,
+  'pound': 0xA3,
+  'curren': 0xA4,
+  'yen': 0xA5,
+  'brvbar': 0xA6,
+  'sect': 0xA7,
+  'uml': 0xA8,
+  'copy': 0xA9,
+  'ordf': 0xAA,
+  'laquo': 0xAB,
+  'not': 0xAC,
+  'shy': 0xAD,
+  'reg': 0xAE,
+  'macr': 0xAF,
+  'deg': 0xB0,
+  'plusmn': 0xB1,
+  'sup2': 0xB2,
+  'sup3': 0xB3,
+  'acute': 0xB4,
+  'micro': 0xB5,
+  'para': 0xB6,
+  'middot': 0xB7,
+  'cedil': 0xB8,
+  'sup1': 0xB9,
+  'ordm': 0xBA,
+  'raquo': 0xBB,
+  'frac14': 0xBC,
+  'frac12': 0xBD,
+  'frac34': 0xBE,
+  'iquest': 0xBF,
+  'Agrave': 0xC0,
+  'Aacute': 0xC1,
+  'Acirc': 0xC2,
+  'Atilde': 0xC3,
+  'Auml': 0xC4,
+  'Aring': 0xC5,
+  'AElig': 0xC6,
+  'Ccedil': 0xC7,
+  'Egrave': 0xC8,
+  'Eacute': 0xC9,
+  'Ecirc': 0xCA,
+  'Euml': 0xCB,
+  'Igrave': 0xCC,
+  'Iacute': 0xCD,
+  'Icirc': 0xCE,
+  'Iuml': 0xCF,
+  'ETH': 0xD0,
+  'Ntilde': 0xD1,
+  'Ograve': 0xD2,
+  'Oacute': 0xD3,
+  'Ocirc': 0xD4,
+  'Otilde': 0xD5,
+  'Ouml': 0xD6,
+  'times': 0xD7,
+  'Oslash': 0xD8,
+  'Ugrave': 0xD9,
+  'Uacute': 0xDA,
+  'Ucirc': 0xDB,
+  'Uuml': 0xDC,
+  'Yacute': 0xDD,
+  'THORN': 0xDE,
+  'szlig': 0xDF,
+  'agrave': 0xE0,
+  'aacute': 0xE1,
+  'acirc': 0xE2,
+  'atilde': 0xE3,
+  'auml': 0xE4,
+  'aring': 0xE5,
+  'aelig': 0xE6,
+  'ccedil': 0xE7,
+  'egrave': 0xE8,
+  'eacute': 0xE9,
+  'ecirc': 0xEA,
+  'euml': 0xEB,
+  'igrave': 0xEC,
+  'iacute': 0xED,
+  'icirc': 0xEE,
+  'iuml': 0xEF,
+  'eth': 0xF0,
+  'ntilde': 0xF1,
+  'ograve': 0xF2,
+  'oacute': 0xF3,
+  'ocirc': 0xF4,
+  'otilde': 0xF5,
+  'ouml': 0xF6,
+  'divide': 0xF7,
+  'oslash': 0xF8,
+  'ugrave': 0xF9,
+  'uacute': 0xFA,
+  'ucirc': 0xFB,
+  'uuml': 0xFC,
+  'yacute': 0xFD,
+  'thorn': 0xFE,
+  'yuml': 0xFF,
+  'lt': 0x3C,
+  'gt': 0x3E,
+  'amp': 0x26,
+  'quot': 0x22,
+  'apos': 0x27,
+  'OElig': 0x152,
+  'oelig': 0x153,
+  'Scaron': 0x160,
+  'scaron': 0x161,
+  'Yuml': 0x178,
+  'fnof': 0x192,
+  'circ': 0x2C6,
+  'tilde': 0x2DC,
+  'ensp': 0x2002,
+  'emsp': 0x2003,
+  'thinsp': 0x2009,
+  'zwnj': 0x200C,
+  'zwj': 0x200D,
+  'lrm': 0x200E,
+  'rlm': 0x200F,
+  'ndash': 0x2013,
+  'mdash': 0x2014,
+  'lsquo': 0x2018,
+  'rsquo': 0x2019,
+  'sbquo': 0x201A,
+  'ldquo': 0x201C,
+  'rdquo': 0x201D,
+  'bdquo': 0x201E,
+  'dagger': 0x2020,
+  'Dagger': 0x2021,
+  'bull': 0x2022,
+  'hellip': 0x2026,
+  'permil': 0x2030,
+  'prime': 0x2032,
+  'Prime': 0x2033,
+  'lsaquo': 0x2039,
+  'rsaquo': 0x203A,
+  'oline': 0x203E,
+  'euro': 0x20AC,
+  'trade': 0x2122,
+  'larr': 0x2190,
+  'uarr': 0x2191,
+  'rarr': 0x2192,
+  'darr': 0x2193,
+  'zwsp': 0x200B,
 };
 
 /// Zero-width / invisible code points marketing mail pads its preheader with;
@@ -104,22 +226,27 @@ const Map<String, String> _namedEntities = {
 /// hyphen (U+00AD).
 final RegExp _zeroWidth = RegExp('[\u200B-\u200D\uFEFF\u034F\u00AD]');
 
-/// Decodes numeric (`&#NNN;` / `&#xHH;`) and the common named entities, then
-/// strips zero-width padding. A malformed or out-of-range code point is left as
-/// written rather than throwing.
-String _decodeEntities(String s) {
-  var out = s.replaceAllMapped(
-    RegExp(r'&#(\d+);'),
-    (m) => _fromCodePoint(int.tryParse(m[1]!), m[0]!),
-  );
-  out = out.replaceAllMapped(
-    RegExp(r'&#[xX]([0-9a-fA-F]+);'),
-    (m) => _fromCodePoint(int.tryParse(m[1]!, radix: 16), m[0]!),
-  );
-  _namedEntities.forEach((k, v) => out = out.replaceAll(k, v));
-  out = out.replaceAll('&amp;', '&');
-  return out.replaceAll(_zeroWidth, '');
-}
+/// Decodes numeric (`&#NNN;` / `&#xHH;`) and named ([_namedEntities])
+/// references in one pass, so a decoded `&amp;` is never decoded again
+/// (`&amp;lt;` stays "&lt;"), then strips zero-width padding. A malformed,
+/// unknown or out-of-range reference is left as written.
+String _decodeEntities(String s) => s.replaceAllMapped(_entity, (m) {
+      final named = m[3];
+      if (named != null) {
+        final code = _namedEntities[named];
+        return code == null ? m[0]! : String.fromCharCode(code);
+      }
+      final decimal = m[1];
+      return _fromCodePoint(
+        decimal != null
+            ? int.tryParse(decimal)
+            : int.tryParse(m[2]!, radix: 16),
+        m[0]!,
+      );
+    }).replaceAll(_zeroWidth, '');
+
+final RegExp _entity =
+    RegExp(r'&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));');
 
 /// Renders a numeric character reference, or returns [original] when the code
 /// point is missing, negative, past U+10FFFF, or a lone surrogate half.

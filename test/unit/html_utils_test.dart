@@ -153,6 +153,25 @@ void main() {
       expect(htmlToPlain('a &amp;lt; b'), 'a &lt; b');
     });
 
+    test('decodes Latin-1 and Windows-1252 named entities', () {
+      expect(
+        htmlToPlain('Gr&uuml;&szlig;e aus K&ouml;ln, caf&eacute; &Auml;rger'),
+        'Grüße aus Köln, café Ärger',
+      );
+      expect(
+        htmlToPlain('&bdquo;Hallo&ldquo; &ndash; 5&nbsp;&euro; &bull;'),
+        '„Hallo“ – 5 € •',
+      );
+    });
+
+    test('leaves an unknown named entity as written', () {
+      expect(htmlToPlain('a &bogus; b &AUML; c'), 'a &bogus; b &AUML; c');
+    });
+
+    test('decodes &amp; once, also before a named entity', () {
+      expect(htmlToPlain('&amp;auml; &amp;#228;'), '&auml; &#228;');
+    });
+
     test('leaves a malformed numeric entity as written (#682)', () {
       expect(htmlToPlain('x&#;y'), 'x&#;y');
     });
