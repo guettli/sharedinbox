@@ -1889,7 +1889,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     String raw,
   ) async {
     try {
-      final filename = _rawEmailFilename(header?.subject);
+      final filename = rawEmailFilename(header?.subject);
       final saved = await saveRawEmail(filename: filename, content: raw);
       if (!context.mounted) return;
       // On platforms that wrote to a public, system-indexed location
@@ -1932,16 +1932,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         stack: stack,
       );
     }
-  }
-
-  static String _rawEmailFilename(String? subject) {
-    final sanitized = (subject ?? 'email')
-        .replaceAll(RegExp(r'[^\w\s-]'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .trim();
-    final base = sanitized.isEmpty ? 'email' : sanitized;
-    final clipped = base.length > 120 ? base.substring(0, 120) : base;
-    return '$clipped.eml';
   }
 
   /// Forces a fresh fetch of the body from the server, bypassing the local
