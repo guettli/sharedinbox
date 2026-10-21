@@ -3,18 +3,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 
-/// Builds a message with [subject] the way the outbox does, renders it and
-/// returns the raw Subject header lines.
+/// Builds a message with [subject] the way the outbox does and renders it.
+String _rendered(String subject) => (MessageBuilder()
+      ..from = [const MailAddress('A', 'a@example.com')]
+      ..to = [const MailAddress('B', 'b@example.com')]
+      ..subject = encodeUnstructuredHeader(subject)
+      ..subjectEncoding = HeaderEncoding.none
+      ..text = 'x')
+    .buildMimeMessage()
+    .renderMessage();
+
+/// The raw Subject header lines of [_rendered].
 List<String> _renderedSubjectLines(String subject) {
-  final raw = (MessageBuilder()
-        ..from = [const MailAddress('A', 'a@example.com')]
-        ..to = [const MailAddress('B', 'b@example.com')]
-        ..subject = encodeUnstructuredHeader(subject)
-        ..subjectEncoding = HeaderEncoding.none
-        ..text = 'x')
-      .buildMimeMessage()
-      .renderMessage();
-  final lines = raw.split('\r\n');
+  final lines = _rendered(subject).split('\r\n');
   final start = lines.indexWhere((l) => l.startsWith('Subject: '));
   return [
     lines[start],
@@ -45,12 +46,41 @@ void main() {
       expect(decodeMailHeader(encoded), text);
     });
 
+    test('CR and LF cannot end the header', () {
+      for (final subject in ['Hi\r\nBcc: x@evil.test', 'Grüße\r\nX-Evil: 1']) {
+        final header = _rendered(subject).split('\r\n\r\n').first;
+        final names = header
+            .split('\r\n')
+            .where((l) => !l.startsWith('\t') && !l.startsWith(' '))
+            .map((l) => l.split(':').first.toLowerCase());
+        expect(names, isNot(contains('bcc')), reason: header);
+        expect(names, isNot(contains('x-evil')), reason: header);
+      }
+      expect(encodeUnstructuredHeader('Hi\r\nthere'), 'Hi there');
+    });
+
+    test('keeps leading and trailing spaces', () {
+      expect(decodeMailHeader(encodeUnstructuredHeader(' ä ')), ' ä ');
+    });
+
+    test('a long ASCII token is encoded so it folds cleanly', () {
+      final token = 'x' * 120;
+      final lines = _renderedSubjectLines('see $token');
+      for (final line in lines) {
+        expect(line.length, lessThanOrEqualTo(76), reason: line);
+      }
+      final parsed =
+          MimeMessage.parseFromText('${lines.join('\r\n')}\r\n\r\nx');
+      expect(parsed.decodeSubject(), 'see $token');
+      expect(encodeUnstructuredHeader('short ascii'), 'short ascii');
+    });
+
     test('a long subject folds into valid lines and parses back', () {
       final subject = 'Rückfrage zur Größe der Übersetzung — ' * 4;
       final lines = _renderedSubjectLines(subject);
       expect(lines.length, greaterThan(1));
       for (final line in lines) {
-        expect(line.length, lessThanOrEqualTo(78), reason: line);
+        expect(line.length, lessThanOrEqualTo(76), reason: line);
       }
       final parsed =
           MimeMessage.parseFromText('${lines.join('\r\n')}\r\n\r\nx');
