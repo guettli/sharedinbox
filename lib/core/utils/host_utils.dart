@@ -46,7 +46,7 @@ String? validateJmapUrl(String? value) {
   if (value == null || value.trim().isEmpty) return 'Required';
   final uri = Uri.tryParse(value.trim());
   if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-    return 'Enter a full URL, e.g. https://mail.example.com/jmap';
+    return 'Enter a full URL, e.g. https://mail.example.com';
   }
   if (uri.scheme == 'https') return null;
   if (uri.scheme == 'http' && isLocalhost(uri.host)) return null;

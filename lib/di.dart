@@ -549,9 +549,9 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
     // trigger from #232 is fixed upstream in Enough-Software/enough_mail#283;
     // once released we still keep this guard for network/DB failures.
     try {
-      final prefs = ref.read(userPreferencesProvider).value;
-      final action =
-          prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
+      final action = await storedAfterMailViewAction(
+        ref.read(userPreferencesRepositoryProvider),
+      );
       if (action != AfterMailViewAction.nextMessage) return;
 
       // Restrict to threads in the current mailbox so a stray thread from
@@ -612,6 +612,15 @@ final userPreferencesRepositoryProvider = Provider<UserPreferencesRepository>((
 ) {
   return UserPreferencesRepositoryImpl(ref.watch(dbProvider));
 });
+
+/// The stored "after mail action" preference. Use this rather than
+/// `ref.read(userPreferencesProvider).value` outside a build: that provider is
+/// autoDispose, and when nothing watches it (opened from the combined inbox or
+/// search) the read finds no value yet and the default silently wins.
+Future<AfterMailViewAction> storedAfterMailViewAction(
+  UserPreferencesRepository repo,
+) async =>
+    (await repo.observePreferences().first).afterMailViewAction;
 
 final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
   ref,
