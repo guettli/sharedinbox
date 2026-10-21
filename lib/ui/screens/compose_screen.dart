@@ -439,16 +439,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       return;
     }
-    // Without one the server refuses the message only after compose has
-    // closed, leaving it in the Sent Queue where no recipient can be added.
-    if (recipientAddresses(_to.text).isEmpty &&
-        recipientAddresses(_cc.text).isEmpty) {
-      context.showAppSnackBar(
-        'Add a recipient first',
-        duration: const Duration(seconds: 5),
-      );
-      return;
-    }
     setState(() => _sending = true);
     final messenger = context.appMessenger();
     // Set once the message is in the outbox: from then on a failure must not

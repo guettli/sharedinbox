@@ -176,23 +176,6 @@ void main() {
       },
     );
 
-    testWidgets('refuses to send without a recipient', (tester) async {
-      final email = FakeEmailRepository();
-      await _pumpComposeAndSend(
-        tester,
-        email: email,
-        beforeSend: () =>
-            tester.enterText(find.widgetWithText(TextFormField, 'To'), ' , '),
-      );
-
-      // The server used to reject it after compose had closed.
-      expect(find.text('Add a recipient first'), findsOneWidget);
-      expect(email.sendNowRowIds, isEmpty);
-      expect(find.byType(ComposeScreen), findsOneWidget);
-      await tester.pump(const Duration(seconds: 6));
-      await tester.pumpAndSettle();
-    });
-
     testWidgets('refuses to send to something that is not an address', (
       tester,
     ) async {
