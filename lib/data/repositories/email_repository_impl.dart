@@ -31,9 +31,11 @@ import 'package:sharedinbox/core/utils/imap_date.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
@@ -6668,10 +6670,11 @@ class EmailRepositoryImpl implements EmailRepository {
     SendTiming timing,
   ) async {
     final builder = imap.MessageBuilder()
-      ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-      ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..subject = draft.subject
+      ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
+      ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..subject = encodeUnstructuredHeader(draft.subject)
+      ..subjectEncoding = imap.HeaderEncoding.none
       ..messageId = draft.messageId
       ..text = draft.body;
     addReplyHeaders(builder, draft);
