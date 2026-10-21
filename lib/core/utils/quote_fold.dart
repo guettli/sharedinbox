@@ -103,3 +103,14 @@ QuoteSplit splitTrailingQuote(String text, {int minQuotedLines = 6}) {
   final quoted = lines.sublist(regionStart).join('\n').trim();
   return (visible: visible, quoted: quoted);
 }
+
+/// Prefixes every line of [text] with "> " for a reply or forward. Mail bodies
+/// keep the CRLF line breaks of the raw message; they become "\n" so the
+/// quote carries no stray carriage returns (a bare CR in the sent mail).
+String quoteText(String text) => text
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '\n')
+    .trim()
+    .split('\n')
+    .map((l) => '> $l')
+    .join('\n');
