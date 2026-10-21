@@ -32,6 +32,28 @@ String encodeUnstructuredHeader(String text) {
   if (text.codeUnits.every((c) => c < 0x80) && !_unfoldableRun.hasMatch(text)) {
     return text;
   }
+  return _encodedWords(text);
+}
+
+/// Encodes a display name for an address header (an RFC 5322 phrase).
+///
+/// ASCII becomes a quoted string with `"` and `\` escaped; anything else
+/// becomes encoded-words, which must not stand inside quotes (RFC 2047 §5).
+/// enough_mail writes `"=?utf8?Q?…?="` and leaves ASCII names unescaped.
+/// Control characters become a space, as in [encodeUnstructuredHeader].
+/// Returns '' for a blank name.
+String encodeDisplayName(String name) {
+  final clean = name.replaceAll(_controlChars, ' ').trim();
+  if (clean.isEmpty) return '';
+  if (clean.codeUnits.every((c) => c < 0x80)) {
+    return '"${clean.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
+  }
+  return _encodedWords(clean);
+}
+
+/// [text] as space-separated `=?UTF-8?B?…?=` words that never split a
+/// character.
+String _encodedWords(String text) {
   final words = <String>[];
   var chunk = <int>[];
   void flush() {

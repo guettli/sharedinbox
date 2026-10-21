@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/reply_headers.dart';
 
 /// Backoff schedule (in seconds). Capped at the last entry — once `attempts`
@@ -249,9 +250,9 @@ OutboxMessage _rowToMessage(OutboxRow row) {
 
 imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
   final builder = imap.MessageBuilder()
-    ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-    ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
-    ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
+    ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
+    ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+    ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
     ..subject = encodeUnstructuredHeader(draft.subject)
     ..subjectEncoding = imap.HeaderEncoding.none
     ..messageId = draft.messageId
