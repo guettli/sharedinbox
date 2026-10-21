@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 import 'helpers.dart';
@@ -115,6 +116,89 @@ void main() {
         expect(find.text('Imported 1 account successfully.'), findsOneWidget);
       },
     );
+
+    testWidgets('New key replaces the shown key and clears the error', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('encryptedCodeField')),
+        'not-a-valid-qr-code',
+      );
+      await tester.tap(find.text('Import'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Import failed:'), findsWidgets);
+
+      await tester.tap(find.byKey(const Key('newKeyButton')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
+      // The snackbar may still show the old error; the page must not.
+      expect(
+        find.descendant(
+          of: find.byType(SingleChildScrollView),
+          matching: find.textContaining('Import failed:'),
+        ),
+        findsNothing,
+      );
+      expect(find.textContaining('expires in 19:5'), findsOneWidget);
+    });
+
+    testWidgets('an expired key refuses to import', (tester) async {
+      final material = await ShareEncryptionService.generateKeyPair();
+      final accountRepo = FakeAccountRepository();
+      final encryptedQr = await ShareEncryptionService.encryptAccounts(
+        recipientKeyId: material.keyId,
+        recipientPublicKeyBytes: material.publicKeyBytes,
+        accounts: [
+          AccountPayload(
+            accountJson: const Account(
+              id: 'src-1',
+              displayName: 'Alice',
+              email: 'alice@example.com',
+            ).toJson(),
+            password: 'secret',
+          ),
+        ],
+      );
+
+      AccountReceiveScreen.keyLifetime = Duration.zero;
+      addTearDown(
+        () => AccountReceiveScreen.keyLifetime = const Duration(minutes: 20),
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(
+            accountRepository: accountRepo,
+            shareKeyRepository: FakeShareKeyRepository(material: material),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('This key has expired'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('encryptedCodeField')),
+        encryptedQr,
+      );
+      await tester.tap(find.text('Import'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('This key has expired.'), findsOneWidget);
+      expect(accountRepo.accounts, isEmpty);
+    });
 
     testWidgets(
       'step 2 — invalid encrypted QR shows error and returns to pub-key step',
