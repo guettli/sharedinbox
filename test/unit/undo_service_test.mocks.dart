@@ -821,6 +821,23 @@ class MockUndoRepository extends _i1.Mock implements _i8.UndoRepository {
       ) as _i4.Future<void>);
 
   @override
+  _i4.Future<void> setUndoneAt(
+    String? id,
+    DateTime? undoneAt,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #setUndoneAt,
+          [
+            id,
+            undoneAt,
+          ],
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
+
+  @override
   _i4.Future<List<_i9.UndoAction>> getHistory({int? limit = 10}) =>
       (super.noSuchMethod(
         Invocation.method(

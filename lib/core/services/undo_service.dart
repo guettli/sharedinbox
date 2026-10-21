@@ -50,12 +50,30 @@ class UndoService extends Notifier<List<UndoAction>> {
     return history.where((a) => a.id == action.id).firstOrNull ?? action;
   }
 
-  /// Records in state and DB whether [action] is undone. [action] must be the
-  /// persisted copy (see [_reload]) so the save keeps re-keyed email ids.
-  Future<void> _setUndoneAt(UndoAction action, DateTime? undoneAt) async {
-    final updated = action.withUndoneAt(undoneAt);
-    state = [for (final a in state) a.id == action.id ? updated : a];
-    await ref.read(undoRepositoryProvider).saveAction(updated);
+  /// Marks [action] (the persisted copy, see [_reload]) undone, in state and
+  /// DB. Undoing an inverse (`<id>-inv`) re-applies the action it reverted,
+  /// whose own inverse it may be in turn, so the marks alternate up the
+  /// chain: the parent stands again, the grandparent is undone again, ...
+  Future<void> _markUndone(UndoAction action) async {
+    final repo = ref.read(undoRepositoryProvider);
+    final now = DateTime.now();
+    var id = action.id;
+    DateTime? mark = now;
+    while (true) {
+      await repo.setUndoneAt(id, mark);
+      final (current, m) = (id, mark);
+      state = [
+        for (final a in state)
+          if (a.id != current)
+            a
+          else
+            // Take the persisted copy's (possibly re-keyed) email ids.
+            (a.id == action.id ? action : a).withUndoneAt(m),
+      ];
+      if (!id.endsWith(UndoAction.inverseSuffix)) break;
+      id = id.substring(0, id.length - UndoAction.inverseSuffix.length);
+      mark = mark == null ? now : null;
+    }
   }
 
   Future<void> clear() async {
@@ -72,7 +90,11 @@ class UndoService extends Notifier<List<UndoAction>> {
 
     final UndoAction inMemory;
     if (actionId == null) {
-      inMemory = state.last;
+      // The most recent action whose effect still stands; an undone entry
+      // without an inverse would otherwise be undone over and over.
+      final standing = state.where((a) => a.undoneAt == null);
+      if (standing.isEmpty) return;
+      inMemory = standing.last;
     } else {
       try {
         inMemory = state.firstWhere((a) => a.id == actionId);
@@ -145,17 +167,7 @@ class UndoService extends Notifier<List<UndoAction>> {
       }
     }
 
-    await _setUndoneAt(action, DateTime.now());
-    // Undoing an inverse re-applies the action it reverted, so that one's
-    // effect stands again.
-    if (action.id.endsWith(UndoAction.inverseSuffix)) {
-      final revertedId = action.id
-          .substring(0, action.id.length - UndoAction.inverseSuffix.length);
-      final reverted = state.where((a) => a.id == revertedId).firstOrNull;
-      if (reverted != null) {
-        await _setUndoneAt(await _reload(reverted), null);
-      }
-    }
+    await _markUndone(action);
 
     // Add a reverse action so the undo log always retains a record and the
     // user can re-apply the original operation. sourceMailboxPath on the

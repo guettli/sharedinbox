@@ -23,6 +23,22 @@ class UndoRepositoryImpl implements UndoRepository {
   }
 
   @override
+  Future<void> setUndoneAt(String id, DateTime? undoneAt) async {
+    await _db.transaction(() async {
+      final row = await (_db.select(_db.undoActions)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return;
+      final action = UndoAction.fromJson(
+        jsonDecode(row.dataJson) as Map<String, dynamic>,
+      ).withUndoneAt(undoneAt);
+      await (_db.update(_db.undoActions)..where((t) => t.id.equals(id))).write(
+        UndoActionsCompanion(dataJson: Value(jsonEncode(action.toJson()))),
+      );
+    });
+  }
+
+  @override
   Future<void> deleteAction(String id) async {
     await (_db.delete(_db.undoActions)..where((t) => t.id.equals(id))).go();
   }
