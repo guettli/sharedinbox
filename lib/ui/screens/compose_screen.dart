@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -21,6 +20,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
 
@@ -100,7 +100,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
-    if (widget.prefillBody != null) _body.text = widget.prefillBody!;
+    if (widget.prefillBody != null) {
+      _body.text = normalizeNewlines(widget.prefillBody!);
+    }
     _accountId = widget.accountId;
     _replyToEmailId = widget.replyToEmailId;
     unawaited(_loadAccounts());
@@ -180,7 +182,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _to.text = draft.toText;
       _cc.text = draft.ccText;
       _subject.text = draft.subjectText;
-      _body.text = draft.bodyText;
+      // Drafts pulled from the server come back with CRLF.
+      _body.text = normalizeNewlines(draft.bodyText);
       if (draft.accountId != null) _accountId = draft.accountId;
       _sigAccountId = _accountId;
       _sigBlock = '';
@@ -363,7 +366,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _opening = true);
     try {
       final path = _attachments[index].path;
-      await OpenFilex.open(path);
+      final problem = await openFile(path);
+      if (problem != null && mounted) {
+        context.showAppSnackBar(
+          problem.text,
+          level: AppLogLevel.warn,
+          event: 'compose.attachment.open_failed',
+          data: {'index': index, 'detail': problem.detail},
+        );
+      }
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(

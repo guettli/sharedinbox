@@ -109,6 +109,7 @@ class JmapClient {
     required String username,
     required String password,
   }) async {
+    jmapUrl = sessionUrlFor(jmapUrl);
     // The session GET carries `Authorization: Basic`, so refuse to make it over
     // cleartext: https anywhere, http only to a localhost dev server. A
     // relative or scheme-less URL is rejected too — there is nothing for it to
@@ -367,6 +368,17 @@ class JmapClient {
     }
     return resolved;
   }
+
+  /// The JMAP session URL for what the user typed as "JMAP API URL".
+  ///
+  /// A bare server address ("https://mail.example.com") gets the standard
+  /// discovery path `/.well-known/jmap` (RFC 8620 §2.2). Used as is, it
+  /// fetched the server's home page and failed with "Not a JMAP server",
+  /// although the server was fine. Any other path is taken as the session
+  /// URL itself.
+  static Uri sessionUrlFor(Uri url) => url.path.isEmpty || url.path == '/'
+      ? url.replace(path: '/.well-known/jmap')
+      : url;
 
   /// Whether [url] may carry credentials: it must have a host, and be https to
   /// any host or http only to a localhost (or test-registered dev) host. The

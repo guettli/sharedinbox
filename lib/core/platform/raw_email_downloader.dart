@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -24,6 +25,33 @@ class RawEmailSaveResult {
   /// for desktop/fallback writes into a temp directory.
   final bool isPublic;
 }
+
+/// A file name for the raw mail with [subject]: letters, digits, `-` and
+/// single spaces stay, anything else becomes `_`, plus `.eml`.
+///
+/// Letters of any script count. An ASCII-only `\w` turned "Привет из
+/// Москвы" into `_ _ _.eml` and "Grüße" into `Gr_e.eml`. The name is cut to
+/// at most 200 UTF-8 bytes on a character boundary: Android and Linux file
+/// systems allow 255 bytes per name, and 120 CJK characters alone are 360.
+String rawEmailFilename(String? subject) {
+  final sanitized = (subject ?? 'email')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll(RegExp(r'[^\p{L}\p{M}\p{N} _-]', unicode: true), '_')
+      .replaceAll(RegExp(r'_+'), '_')
+      .trim();
+  final base = sanitized.isEmpty ? 'email' : sanitized;
+  final clipped = StringBuffer();
+  var bytes = 0;
+  for (final rune in base.runes) {
+    final char = String.fromCharCode(rune);
+    bytes += utf8.encode(char).length;
+    if (bytes > _maxFilenameBytes) break;
+    clipped.write(char);
+  }
+  return '${clipped.toString().trim()}.eml';
+}
+
+const _maxFilenameBytes = 200;
 
 /// Saves a raw .eml file to the platform's user-visible Downloads location
 /// when possible, so it shows up in the system file picker's "Recently used"

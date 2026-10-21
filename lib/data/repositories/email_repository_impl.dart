@@ -31,9 +31,11 @@ import 'package:sharedinbox/core/utils/imap_date.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
@@ -1406,18 +1408,36 @@ class EmailRepositoryImpl implements EmailRepository {
       changedSinceModSequence: sinceModSeq,
     );
     final inFlightSet = await _inFlightFlagResourceIds(account.id);
-    for (final msg in result.messages) {
-      final uid = msg.uid;
-      if (uid == null) continue;
-      final emailId = '${account.id}:$mailboxPath:$uid';
-      if (inFlightSet.contains(emailId)) continue;
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(
-          isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-          isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-        ),
-      );
-    }
+    // One transaction, and only rows whose flags really changed: a modseq
+    // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
+    // thousands of messages after a long time offline.
+    await _db.transaction(() async {
+      final affectedThreads = <String>{};
+      for (final msg in result.messages) {
+        final uid = msg.uid;
+        if (uid == null) continue;
+        final emailId = '${account.id}:$mailboxPath:$uid';
+        if (inFlightSet.contains(emailId)) continue;
+        final row = await (_db.select(_db.emails)
+              ..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+        if (row == null) continue;
+        final seen = msg.flags?.contains(r'\Seen') ?? false;
+        final flagged = msg.flags?.contains(r'\Flagged') ?? false;
+        if (row.isSeen == seen && row.isFlagged == flagged) continue;
+        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+            .write(
+          EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
+        );
+        affectedThreads.add(row.threadId ?? row.id);
+      }
+      // The message list reads unread/starred state from the thread row, so
+      // a mail read, unread, starred or unstarred on another device kept its
+      // old look here although its own row was already up to date.
+      for (final tid in affectedThreads) {
+        await _updateThread(account.id, mailboxPath, tid);
+      }
+    });
   }
 
   static const _imapFlagReconcileInterval = Duration(minutes: 15);
@@ -6668,10 +6688,11 @@ class EmailRepositoryImpl implements EmailRepository {
     SendTiming timing,
   ) async {
     final builder = imap.MessageBuilder()
-      ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-      ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..subject = draft.subject
+      ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
+      ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..subject = encodeUnstructuredHeader(draft.subject)
+      ..subjectEncoding = imap.HeaderEncoding.none
       ..messageId = draft.messageId
       ..text = draft.body;
     addReplyHeaders(builder, draft);

@@ -70,3 +70,9 @@ String? sniffImageFormat(Uint8List bytes) {
   }
   return null;
 }
+
+/// Turns CRLF and lone CR line breaks into "\n". Mail bodies keep the CRLF
+/// of the raw message (and mailto bodies use %0D%0A); text fields and quotes
+/// work with "\n" only.
+String normalizeNewlines(String text) =>
+    text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');

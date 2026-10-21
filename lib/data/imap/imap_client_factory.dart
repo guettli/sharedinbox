@@ -133,7 +133,7 @@ Future<ImapClient> connectImap(
       ),
     );
   } catch (e, st) {
-    rethrowAsTlsHint(e, st, account.imapHost, account.imapPort);
+    rethrowConnectError(e, st, account.imapHost, account.imapPort);
   }
   if (imapNeedsStartTls(account)) {
     await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
@@ -224,7 +224,7 @@ Future<SmtpClient> connectSmtp(
       ),
     );
   } catch (e, st) {
-    rethrowAsTlsHint(e, st, account.smtpHost, account.smtpPort);
+    rethrowConnectError(e, st, account.smtpHost, account.smtpPort);
   }
   await client.ehlo();
   if (smtpNeedsStartTls(account)) {

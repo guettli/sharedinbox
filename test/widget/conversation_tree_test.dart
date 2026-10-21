@@ -20,6 +20,7 @@ void main() {
     required String fromEmail,
     String? fromName,
     required DateTime sentAt,
+    bool hasDateHeader = true,
     String mailboxPath = 'INBOX',
     String? messageId,
     String? inReplyTo,
@@ -31,7 +32,7 @@ void main() {
         uid: 1,
         subject: 'Subject',
         receivedAt: sentAt,
-        sentAt: sentAt,
+        sentAt: hasDateHeader ? sentAt : null,
         from: [EmailAddress(name: fromName, email: fromEmail)],
         to: const [EmailAddress(email: 'alice@example.com')],
         cc: const [],
@@ -177,6 +178,22 @@ void main() {
     } finally {
       semantics.dispose();
     }
+  });
+
+  testWidgets('dates a mail without a Date header by when it arrived',
+      (tester) async {
+    final undated = mail(
+      id: 'acc-1:5',
+      fromEmail: 'erin@example.com',
+      sentAt: DateTime(2024, 6, 5, 8),
+      hasDateHeader: false,
+      messageId: 'msg-e',
+      inReplyTo: 'msg-a',
+    );
+    await pumpTree(tester, emails: [incoming, undated], open: incoming);
+
+    final line = tester.widget<Text>(textLine('From erin@example.com')).data!;
+    expect(line, contains('Jun 5'));
   });
 
   testWidgets('falls back to the address when the sender name is empty',

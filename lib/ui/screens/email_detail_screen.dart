@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -23,11 +22,13 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
+import 'package:sharedinbox/core/utils/quote_fold.dart';
 import 'package:sharedinbox/core/utils/reply_recipients.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -833,10 +834,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<EmailDetailNavItem?> _getNextEmailIfNeeded(Email? header) async {
     if (header == null) return null;
-    final prefs = ref.read(userPreferencesProvider).value;
-    final action =
-        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
-    if (action != AfterMailViewAction.nextMessage) return null;
+    final action = await storedAfterMailViewAction(
+      ref.read(userPreferencesRepositoryProvider),
+    );
+    if (!mounted || action != AfterMailViewAction.nextMessage) return null;
 
     // Prefer the caller-supplied nav so "next" respects the source list
     // (search results, address filter, …) and steps through individual mails
@@ -1078,7 +1079,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final path = await ref
           .read(emailRepositoryProvider)
           .downloadAttachment(widget.emailId, att);
-      await OpenFilex.open(path);
+      final problem = await openFile(path);
+      if (problem != null && mounted) {
+        context.showAppSnackBar(
+          problem.text,
+          level: AppLogLevel.warn,
+          event: 'email.attachment.open_failed',
+          emailId: widget.emailId,
+          data: {'filename': att.filename, 'detail': problem.detail},
+        );
+      }
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(
@@ -1204,10 +1214,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final sender = from == null
         ? ''
         : ' from ${name != null && name.isNotEmpty ? name : from.email}';
-    final sent = mail.sentAt == null
-        ? ''
-        : ', ${DateFormat('MMM d, HH:mm').format(mail.sentAt!)}';
-    return 'on mail$sender$sent';
+    final sent = DateFormat('MMM d, HH:mm').format(mail.date);
+    return 'on mail$sender, $sent';
   }
 
   Future<void> _addNoteDialog(BuildContext context, Email header) async {
@@ -1283,41 +1291,51 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             'From: (unknown)',
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
+        // Capped so a mail to dozens of people does not push the body off
+        // screen; the full lists are in "Show Mail Headers".
         Text(
           email.to.isNotEmpty
               ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
               : 'To: (no recipients)',
           style: Theme.of(ctx).textTheme.bodySmall,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
-        if (email.sentAt != null)
-          Row(
-            children: [
-              // Flexible: the date led this row unconstrained, taking its
-              // intrinsic width. Measured at text scale 2.0 on a 320dp screen
-              // it renders 270.6px wide inside a 288px row, leaving ~9px for
-              // the folder label after the gap — the label is already starved,
-              // and a slightly narrower screen or larger scale overflows.
+        if (email.cc.isNotEmpty)
+          Text(
+            'Cc: ${email.cc.map((a) => a.toString()).join(', ')}',
+            style: Theme.of(ctx).textTheme.bodySmall,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+        Row(
+          children: [
+            // Flexible: the date led this row unconstrained, taking its
+            // intrinsic width. Measured at text scale 2.0 on a 320dp screen
+            // it renders 270.6px wide inside a 288px row, leaving ~9px for
+            // the folder label after the gap — the label is already starved,
+            // and a slightly narrower screen or larger scale overflows.
+            Flexible(
+              child: Text(
+                _dateFmt.format(email.date),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ),
+            if (folderLabel.isNotEmpty) ...[
+              const SizedBox(width: AppSpacing.sm),
               Flexible(
                 child: Text(
-                  _dateFmt.format(email.sentAt!),
-                  style: Theme.of(ctx).textTheme.bodySmall,
+                  folderLabel,
+                  style: Theme.of(ctx)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Theme.of(ctx).hintColor),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (folderLabel.isNotEmpty) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Flexible(
-                  child: Text(
-                    folderLabel,
-                    style: Theme.of(ctx)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Theme.of(ctx).hintColor),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
             ],
-          ),
+          ],
+        ),
         ConversationTree(email: email, onTapEmail: _goToNeighbour),
         // Gate on the parsed result, not just header presence, so the detail
         // view and the chip agree — otherwise a header we can't turn into a URI
@@ -1332,14 +1350,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   Future<String> _quotedBody(Email header, EmailBody? body) async {
-    final date = header.sentAt != null ? _dateFmt.format(header.sentAt!) : '';
+    final date = _dateFmt.format(header.date);
     final from =
         header.from.isNotEmpty ? header.from.first.toString() : '(unknown)';
     final rawText = body?.textBody;
     final text = (rawText != null && rawText.isNotEmpty)
         ? rawText
         : await compute(htmlToPlain, body?.htmlBody ?? '');
-    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    final quoted = quoteText(text);
     return '\n\n— On $date, $from wrote:\n$quoted';
   }
 
@@ -1878,9 +1896,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     String raw,
   ) async {
     try {
-      final filename = _rawEmailFilename(header?.subject);
+      final filename = rawEmailFilename(header?.subject);
       final saved = await saveRawEmail(filename: filename, content: raw);
       if (!context.mounted) return;
+      // The snack bar outlives this context, so capture the messenger now.
+      final messenger = context.appMessenger();
       // On platforms that wrote to a public, system-indexed location
       // (Android Downloads), offer "Open" — opening the file is what makes
       // it appear in the system file picker's "Recently used" list.
@@ -1889,7 +1909,19 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       final action = saved.isPublic
           ? SnackBarAction(
               label: 'Open',
-              onPressed: () => OpenFilex.open(saved.path),
+              onPressed: () async {
+                final problem = await openFile(saved.path);
+                if (problem != null) {
+                  messenger.show(
+                    problem.text,
+                    level: AppLogLevel.warn,
+                    event: 'email.raw.open_failed',
+                    accountId: header?.accountId,
+                    emailId: widget.emailId,
+                    data: {'detail': problem.detail},
+                  );
+                }
+              },
             )
           : SnackBarAction(
               label: 'Share',
@@ -1921,16 +1953,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         stack: stack,
       );
     }
-  }
-
-  static String _rawEmailFilename(String? subject) {
-    final sanitized = (subject ?? 'email')
-        .replaceAll(RegExp(r'[^\w\s-]'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .trim();
-    final base = sanitized.isEmpty ? 'email' : sanitized;
-    final clipped = base.length > 120 ? base.substring(0, 120) : base;
-    return '$clipped.eml';
   }
 
   /// Forces a fresh fetch of the body from the server, bypassing the local

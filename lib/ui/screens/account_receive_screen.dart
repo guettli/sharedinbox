@@ -48,17 +48,20 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     try {
       final repo = ref.read(shareKeyRepositoryProvider);
       final material = await repo.createKeyPair();
+      if (!mounted) return;
       final qr = ShareEncryptionService.encodePublicKeyQr(
         material.keyId,
         material.publicKeyBytes,
       );
       setState(() {
         _keyMaterial = material;
-        _keyExpiresAt = DateTime.now().toUtc().add(const Duration(minutes: 20));
+        _keyExpiresAt = material.expiresAt ??
+            DateTime.now().toUtc().add(ShareKeyMaterial.lifetime);
         _pubKeyQr = qr;
         _step = _Step.showingPubKey;
       });
     } catch (e, stack) {
+      if (!mounted) return;
       unawaited(
         ref.read(appLoggerProvider).error(
               'account.receive.key_generation_failed',
@@ -75,7 +78,25 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     }
   }
 
+  /// Replaces the shown key with a fresh one, e.g. after it expired.
+  void _newKey() {
+    if (_step == _Step.generatingKey) return;
+    setState(() {
+      _errorMessage = null;
+      _step = _Step.generatingKey;
+    });
+    unawaited(_generateKey());
+  }
+
+  // Same boundary as [_ExpiryHint]: expired from the instant it is reached.
+  bool get _keyExpired =>
+      _keyExpiresAt != null && !DateTime.now().toUtc().isBefore(_keyExpiresAt!);
+
   void _startScanning() {
+    if (_keyExpired) {
+      setState(() => _errorMessage = _expiredKeyMessage);
+      return;
+    }
     setState(() => _step = _Step.scanning);
   }
 
@@ -83,6 +104,13 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   // transitions to the import result, and on failure it returns to the pubkey
   // step (both unmount the scanner).
   Future<bool> _onScanned(String rawValue) async {
+    if (_keyExpired) {
+      setState(() {
+        _errorMessage = _expiredKeyMessage;
+        _step = _Step.showingPubKey;
+      });
+      return true;
+    }
     setState(() => _step = _Step.importing);
 
     try {
@@ -144,13 +172,18 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     return true;
   }
 
+  static const _expiredKeyMessage =
+      'This key has expired. Tap the New key button and let the sender scan '
+      'the new QR code.';
+
   String _friendlyError(Object e) {
     final s = e.toString();
     if (s.contains('expired') || s.contains('older than')) {
       return 'The QR code has expired. Ask the sender to generate a new one.';
     }
     if (s.contains('Key ID mismatch') || s.contains('Unknown')) {
-      return 'QR code does not match this session. Regenerate the public key and try again.';
+      return 'This code was encrypted for a different key. Let the sender '
+          'scan the QR code shown here and try again.';
     }
     if (s.contains('authentication') ||
         s.contains('mac') ||
@@ -165,7 +198,18 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Receive accounts')),
+      appBar: AppBar(
+        title: const Text('Receive accounts'),
+        actions: [
+          if (_step == _Step.showingPubKey || _step == _Step.error)
+            IconButton(
+              key: const Key('newKeyButton'),
+              icon: const Icon(Icons.refresh),
+              tooltip: 'New key',
+              onPressed: _newKey,
+            ),
+        ],
+      ),
       body: switch (_step) {
         _Step.generatingKey => const Center(child: CircularProgressIndicator()),
         _Step.showingPubKey => _buildPubKeyView(context),
@@ -190,7 +234,10 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
         _Step.error => Center(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Text('Error: $_errorMessage'),
+              child: Text(
+                'Error: $_errorMessage\nTap the New key button to try again.',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
       },
@@ -372,26 +419,25 @@ class _ExpiryHintState extends State<_ExpiryHint> {
     super.dispose();
   }
 
-  String _formatRemaining() {
-    final remaining = widget.expiresAt.difference(DateTime.now().toUtc());
-    if (remaining.isNegative) return 'expired';
-    final minutes = remaining.inMinutes;
-    final seconds = remaining.inSeconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
+    final remaining = widget.expiresAt.difference(DateTime.now().toUtc());
+    final expired = remaining <= Duration.zero;
+    final color =
+        expired ? theme.colorScheme.error : theme.colorScheme.onSurfaceVariant;
+    final minutes = remaining.inMinutes.toString().padLeft(2, '0');
+    final seconds = (remaining.inSeconds % 60).toString().padLeft(2, '0');
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.timer_outlined, size: AppIconSize.sm, color: muted),
+        Icon(Icons.timer_outlined, size: AppIconSize.sm, color: color),
         const SizedBox(width: AppSpacing.xs),
         Text(
-          'This key expires in ${_formatRemaining()}',
-          style: theme.textTheme.bodySmall?.copyWith(color: muted),
+          expired
+              ? 'This key has expired'
+              : 'This key expires in $minutes:$seconds',
+          style: theme.textTheme.bodySmall?.copyWith(color: color),
         ),
       ],
     );

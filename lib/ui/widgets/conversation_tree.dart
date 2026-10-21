@@ -89,8 +89,7 @@ class ConversationTree extends ConsumerWidget {
         ? 'me'
         : (name != null && name.isNotEmpty ? name : sender?.email) ??
             '(unknown)';
-    final date = m.sentAt != null ? _lineFmt.format(m.sentAt!) : '';
-    final label = 'From $from · $date';
+    final label = 'From $from · ${_lineFmt.format(m.date)}';
     final theme = Theme.of(ctx);
     final style = theme.textTheme.bodySmall?.copyWith(
       fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,

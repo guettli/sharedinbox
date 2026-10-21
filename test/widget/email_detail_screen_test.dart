@@ -159,6 +159,52 @@ void main() {
       expect(find.textContaining('bob@example.com'), findsOneWidget);
     });
 
+    testWidgets('shows the Cc recipients in the header', (tester) async {
+      final email = testEmail().copyWith(
+        cc: const [
+          EmailAddress(name: 'Carol', email: 'carol@example.com'),
+          EmailAddress(email: 'dave@example.com'),
+        ],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+            email: email,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Cc: Carol <carol@example.com>, dave@example.com'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('shows no Cc line when there is no Cc', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cc:'), findsNothing);
+    });
+
     testWidgets('shows attachment section when email has attachments', (
       tester,
     ) async {
@@ -617,6 +663,79 @@ void main() {
         _editableWithText('bob@example.com'),
         findsNothing,
       );
+    });
+
+    group('a mail without a Date header', () {
+      // No Date header means no sentAt. The header then showed no date (and
+      // no folder), and a reply quoted it as "— On , Bob wrote:".
+      final email = Email(
+        id: 'acc-1:42',
+        accountId: 'acc-1',
+        mailboxPath: 'INBOX',
+        uid: 42,
+        subject: 'Test Subject',
+        receivedAt: DateTime(2024, 6, 3, 9, 15),
+        from: const [EmailAddress(name: 'Bob', email: 'bob@example.com')],
+        to: const [EmailAddress(email: 'alice@example.com')],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      Future<void> open(WidgetTester tester) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                // A text part keeps _quotedBody off the compute() isolate.
+                body: const EmailBody(
+                  emailId: 'acc-1:42',
+                  textBody: 'Hi',
+                  attachments: [],
+                ),
+                email: email,
+              ),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('shows when it arrived, next to its folder', (tester) async {
+        await open(tester);
+        final date = find.text('Mon, Jun 3 2024, 09:15');
+        expect(date, findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.ancestor(of: date, matching: find.byType(Row)).first,
+            matching: find.text('INBOX'),
+          ),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('is quoted with when it arrived', (tester) async {
+        await open(tester);
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Reply'),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is EditableText &&
+                w.controller.text.contains(
+                  '— On Mon, Jun 3 2024, 09:15, Bob <bob@example.com> wrote:',
+                ),
+          ),
+          findsOneWidget,
+        );
+      });
     });
 
     group('with two accounts, compose sends from the mail\'s account', () {
