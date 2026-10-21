@@ -7,6 +7,7 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/reply_headers.dart';
 
@@ -251,7 +252,8 @@ imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
     ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
     ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
     ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
-    ..subject = draft.subject
+    ..subject = encodeUnstructuredHeader(draft.subject)
+    ..subjectEncoding = imap.HeaderEncoding.none
     ..messageId = draft.messageId
     ..text = draft.body
     ..addHeader('User-Agent', 'sharedinbox/$appVersion');

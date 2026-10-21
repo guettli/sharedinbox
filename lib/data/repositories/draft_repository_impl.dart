@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
@@ -217,7 +218,8 @@ class DraftRepositoryImpl implements DraftRepository {
         ..from = [imap.MailAddress(account.displayName, account.email)]
         ..to = _parseAddresses(row.toText)
         ..cc = _parseAddresses(row.ccText)
-        ..subject = row.subjectText
+        ..subject = encodeUnstructuredHeader(row.subjectText)
+        ..subjectEncoding = imap.HeaderEncoding.none
         ..text = row.bodyText;
       final mime = builder.buildMimeMessage();
 
