@@ -27,7 +27,9 @@ class UndoService extends Notifier<List<UndoAction>> {
 
   Future<void> pushAction(UndoAction action) async {
     await _ready;
-    final newList = [...state, action];
+    // The DB replaces a row with the same id (undoing an action twice pushes
+    // its inverse again), so state must not keep the older copy either.
+    final newList = [...state.where((a) => a.id != action.id), action];
     while (newList.length > _maxHistory) {
       newList.removeAt(0);
     }
@@ -46,6 +48,14 @@ class UndoService extends Notifier<List<UndoAction>> {
     final history =
         await ref.read(undoRepositoryProvider).getHistory(limit: _maxHistory);
     return history.where((a) => a.id == action.id).firstOrNull ?? action;
+  }
+
+  /// Records in state and DB whether [action] is undone. [action] must be the
+  /// persisted copy (see [_reload]) so the save keeps re-keyed email ids.
+  Future<void> _setUndoneAt(UndoAction action, DateTime? undoneAt) async {
+    final updated = action.withUndoneAt(undoneAt);
+    state = [for (final a in state) a.id == action.id ? updated : a];
+    await ref.read(undoRepositoryProvider).saveAction(updated);
   }
 
   Future<void> clear() async {
@@ -135,6 +145,18 @@ class UndoService extends Notifier<List<UndoAction>> {
       }
     }
 
+    await _setUndoneAt(action, DateTime.now());
+    // Undoing an inverse re-applies the action it reverted, so that one's
+    // effect stands again.
+    if (action.id.endsWith(UndoAction.inverseSuffix)) {
+      final revertedId = action.id
+          .substring(0, action.id.length - UndoAction.inverseSuffix.length);
+      final reverted = state.where((a) => a.id == revertedId).firstOrNull;
+      if (reverted != null) {
+        await _setUndoneAt(await _reload(reverted), null);
+      }
+    }
+
     // Add a reverse action so the undo log always retains a record and the
     // user can re-apply the original operation. sourceMailboxPath on the
     // inverse is the original destination (e.g. Trash) so that undoing the
@@ -144,7 +166,7 @@ class UndoService extends Notifier<List<UndoAction>> {
     if (inverseDest != null) {
       await pushAction(
         UndoAction(
-          id: '${action.id}-inv',
+          id: '${action.id}${UndoAction.inverseSuffix}',
           accountId: action.accountId,
           type: UndoType.move,
           emailIds: action.emailIds,

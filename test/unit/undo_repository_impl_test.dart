@@ -49,6 +49,23 @@ void main() {
       await db.close();
     });
 
+    test('saveAction keeps undoneAt', () async {
+      final db = openTestDatabase();
+      final repo = UndoRepositoryImpl(db);
+
+      final undoneAt = DateTime.utc(2024, 1, 1, 12, 30);
+      await repo.saveAction(
+        _action('a', timestamp: DateTime.utc(2024)).withUndoneAt(undoneAt),
+      );
+      await repo.saveAction(_action('b', timestamp: DateTime.utc(2024, 2)));
+
+      final history = await repo.getHistory();
+      expect(history.first.undoneAt, undoneAt);
+      expect(history.last.undoneAt, isNull);
+
+      await db.close();
+    });
+
     test('getHistory returns oldest-first within the requested window',
         () async {
       final db = openTestDatabase();

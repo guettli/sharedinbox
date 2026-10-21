@@ -243,9 +243,100 @@ void main() {
 
     // action1 has no destinationMailboxPath → no inverse pushed, original stays.
     await notifier.undo(actionId: '1');
-    expect(container.read(undoServiceProvider), [action1, action2]);
+    final log = container.read(undoServiceProvider);
+    expect(log.map((a) => a.id), ['1', '2']);
+    expect(log[0].undoneAt, isNotNull);
+    expect(log[1], action2);
     verify(mockEmailRepo.moveEmail('e1', 'INBOX')).called(1);
     verifyNever(mockEmailRepo.moveEmail('e2', 'INBOX'));
+  });
+
+  test('undo marks the entry undone and persists the mark', () async {
+    final action = UndoAction(
+      id: 'del1',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Trash',
+    );
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+    expect(container.read(undoServiceProvider).single.undoneAt, isNull);
+
+    await notifier.undo(actionId: 'del1');
+
+    final log = container.read(undoServiceProvider);
+    expect(log.first.undoneAt, isNotNull);
+    expect(log.last.undoneAt, isNull, reason: 'the inverse still stands');
+    verify(
+      mockUndoRepo.saveAction(
+        argThat(
+          predicate<UndoAction>((a) => a.id == 'del1' && a.undoneAt != null),
+        ),
+      ),
+    ).called(1);
+  });
+
+  test('undoing an entry twice keeps one inverse entry', () async {
+    final action = UndoAction(
+      id: 'del1',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Trash',
+    );
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+    await notifier.undo(actionId: 'del1');
+    await notifier.undo(actionId: 'del1');
+
+    expect(
+      container.read(undoServiceProvider).map((a) => a.id),
+      ['del1', 'del1-inv'],
+    );
+  });
+
+  test('undoing the inverse clears the undone mark of the original', () async {
+    final action = UndoAction(
+      id: 'del1',
+      accountId: 'acc1',
+      type: UndoType.delete,
+      emailIds: ['e1'],
+      sourceMailboxPath: 'INBOX',
+      destinationMailboxPath: 'Trash',
+    );
+    when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    when(
+      mockEmailRepo.cancelPendingChange(any, any),
+    ).thenAnswer((_) async => false);
+
+    final notifier = container.read(undoServiceProvider.notifier);
+    await notifier.init();
+    await notifier.pushAction(action);
+    await notifier.undo(actionId: 'del1');
+    await notifier.undo(actionId: 'del1-inv');
+
+    final byId = {
+      for (final a in container.read(undoServiceProvider)) a.id: a,
+    };
+    expect(byId.keys, ['del1', 'del1-inv', 'del1-inv-inv']);
+    expect(byId['del1']!.undoneAt, isNull);
+    expect(byId['del1-inv']!.undoneAt, isNotNull);
+    expect(byId['del1-inv-inv']!.undoneAt, isNull);
   });
 
   test('undo performs cancelPendingChange optimization', () async {
