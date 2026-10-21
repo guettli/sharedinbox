@@ -23,6 +23,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
 import 'package:sharedinbox/core/utils/html_utils.dart';
 import 'package:sharedinbox/core/utils/list_unsubscribe.dart';
+import 'package:sharedinbox/core/utils/quote_fold.dart';
 import 'package:sharedinbox/core/utils/reply_recipients.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
@@ -1350,7 +1351,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final text = (rawText != null && rawText.isNotEmpty)
         ? rawText
         : await compute(htmlToPlain, body?.htmlBody ?? '');
-    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    final quoted = quoteText(text);
     return '\n\n— On $date, $from wrote:\n$quoted';
   }
 

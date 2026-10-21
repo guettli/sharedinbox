@@ -513,6 +513,37 @@ void main() {
       expect(_bodyText(tester), 'Draft body');
     });
 
+    testWidgets('prefilled and restored bodies lose their carriage returns', (
+      tester,
+    ) async {
+      // A mailto body (%0D%0A) or a reply quote of a CRLF mail.
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(prefillBody: 'one\r\ntwo\rthree'),
+          overrides: _composeOverrides(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'one\ntwo\nthree');
+
+      // A draft pulled from the server.
+      final drafts = FakeDraftRepository();
+      final saved = await drafts.saveDraft(
+        toText: '',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: 'Hi\r\n\r\n> quoted\r\n',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: drafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'Hi\n\n> quoted\n');
+    });
+
     testWidgets('typing before a slow restore is not overwritten (#1047)', (
       tester,
     ) async {
