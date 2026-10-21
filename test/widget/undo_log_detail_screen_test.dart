@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mockito/mockito.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -10,6 +11,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/undo_log_detail_screen.dart';
 
+import '../unit/undo_service_test.mocks.dart';
 import 'helpers.dart';
 
 // FakeEmailRepository subclass that returns a pre-configured email from
@@ -93,7 +95,14 @@ Widget _buildApp({
     Account(id: 'acc-1', displayName: 'Alice', email: 'alice@example.com'),
   ],
   ValueNotifier<String?>? lastEmailRoute,
+  List<UndoAction> history = const [],
 }) {
+  // The screen follows the live undo log, so give it one.
+  final undoRepo = MockUndoRepository();
+  when(undoRepo.getHistory(limit: anyNamed('limit')))
+      .thenAnswer((_) async => history);
+  when(undoRepo.trim(maxHistory: anyNamed('maxHistory')))
+      .thenAnswer((_) async {});
   final router = GoRouter(
     initialLocation: '/undo-detail',
     routes: [
@@ -113,6 +122,7 @@ Widget _buildApp({
 
   return ProviderScope(
     overrides: [
+      undoRepositoryProvider.overrideWithValue(undoRepo),
       emailRepositoryProvider.overrideWithValue(emailRepo),
       mailboxRepositoryProvider
           .overrideWithValue(FakeMailboxRepository(mailboxes)),
@@ -344,5 +354,42 @@ void main() {
         expect(find.textContaining('details not available'), findsOneWidget);
       },
     );
+  });
+
+  group('UndoLogDetailScreen undone state', () {
+    testWidgets('shows a standing action with a plain Undo', (tester) async {
+      final action = _action(originalEmails: [_emailWith()]);
+      await tester.pumpWidget(
+        _buildApp(
+          action: action,
+          emailRepo: FakeEmailRepository(),
+          history: [action],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Undo'), findsOneWidget);
+      expect(find.text('Undone'), findsNothing);
+    });
+
+    testWidgets('follows the log: an entry undone there reads as undone', (
+      tester,
+    ) async {
+      // The route still carries the snapshot from before the undo.
+      final snapshot = _action(originalEmails: [_emailWith()]);
+      final undone = snapshot.withUndoneAt(DateTime(2024, 6, 2, 9, 30));
+      await tester.pumpWidget(
+        _buildApp(
+          action: snapshot,
+          emailRepo: FakeEmailRepository(),
+          history: [undone],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Undo again'), findsOneWidget);
+      expect(find.text('Undone'), findsOneWidget);
+      expect(find.text('2024-06-02 09:30:00'), findsOneWidget);
+    });
   });
 }

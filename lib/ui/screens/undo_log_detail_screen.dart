@@ -21,6 +21,13 @@ class UndoLogDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    // The route's copy is a snapshot; follow the log so an undo done
+    // elsewhere shows up here.
+    final live = ref
+            .watch(undoServiceProvider)
+            .where((a) => a.id == action.id)
+            .firstOrNull ??
+        action;
     final account = ref.watch(accountByIdProvider(action.accountId)).value;
 
     return Scaffold(
@@ -40,7 +47,7 @@ class UndoLogDetailScreen extends ConsumerWidget {
                 );
               }
             },
-            child: const Text('Undo'),
+            child: Text(live.undoneAt == null ? 'Undo' : 'Undo again'),
           ),
         ],
       ),
@@ -79,6 +86,12 @@ class UndoLogDetailScreen extends ConsumerWidget {
                 title: const Text('Timestamp'),
                 subtitle: Text(_dateTimeFmt.format(action.timestamp.toLocal())),
               ),
+              if (live.undoneAt case final undoneAt?)
+                ListTile(
+                  leading: const Icon(Icons.undo),
+                  title: const Text('Undone'),
+                  subtitle: Text(_dateTimeFmt.format(undoneAt.toLocal())),
+                ),
               _SectionHeader(text: 'Folders', theme: theme),
               ListTile(
                 leading: const Icon(Icons.folder_open),
