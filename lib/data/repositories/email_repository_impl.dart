@@ -1406,17 +1406,29 @@ class EmailRepositoryImpl implements EmailRepository {
       changedSinceModSequence: sinceModSeq,
     );
     final inFlightSet = await _inFlightFlagResourceIds(account.id);
+    final affectedThreads = <String>{};
     for (final msg in result.messages) {
       final uid = msg.uid;
       if (uid == null) continue;
       final emailId = '${account.id}:$mailboxPath:$uid';
       if (inFlightSet.contains(emailId)) continue;
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      final updated = await (_db.update(_db.emails)
+            ..where((t) => t.id.equals(emailId)))
+          .writeReturning(
         EmailsCompanion(
           isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
           isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
         ),
       );
+      for (final row in updated) {
+        affectedThreads.add(row.threadId ?? row.id);
+      }
+    }
+    // The message list reads unread/starred state from the thread row, so a
+    // mail read or starred on another device stayed bold/unstarred here
+    // although its own row was already up to date.
+    for (final tid in affectedThreads) {
+      await _updateThread(account.id, mailboxPath, tid);
     }
   }
 
