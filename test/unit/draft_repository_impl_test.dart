@@ -267,6 +267,30 @@ void main() {
       expect(await db.select(db.draftTombstones).get(), isEmpty);
     });
 
+    test('deleteDraft of a deleted account works with foreign keys on',
+        () async {
+      // clearForResync switches foreign_keys on for the shared connection;
+      // a tombstone for a missing account then fails the insert.
+      final db = openTestDatabase();
+      await db.customStatement('PRAGMA foreign_keys = ON');
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draft = await repo.saveDraft(
+        accountId: 'gone',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(imapServerId: Value('9')),
+      );
+
+      await repo.deleteDraft(draft.id);
+
+      expect(await repo.getDraft(draft.id), isNull);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
     test('deleteDraft writes a tombstone when the row had a server id',
         () async {
       final db = openTestDatabase();

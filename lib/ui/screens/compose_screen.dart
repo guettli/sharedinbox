@@ -417,7 +417,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
+  /// [_accountId], unless it names an account that no longer exists (a draft
+  /// left behind by a deleted account): then the only account, or none.
+  String? get _fromAccountId {
+    final id = _accountId;
+    if (id != null && _accounts.any((a) => a.id == id)) return id;
+    return _accounts.length == 1 ? _accounts.first.id : null;
+  }
+
   Future<void> _send() async {
+    _accountId = _fromAccountId;
     if (_accountId == null) {
       context.showAppSnackBar(
         'Select an account first',
@@ -633,7 +642,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: DropdownButtonFormField<String>(
-                initialValue: _accountId,
+                initialValue: _fromAccountId,
                 decoration: const InputDecoration(
                   labelText: 'From',
                   border: OutlineInputBorder(),
@@ -675,6 +684,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 onChanged: (v) {
                   setState(() => _accountId = v);
                   unawaited(_applySignatureForAccount(v));
+                  // Save the new account like an edit, so a saved draft
+                  // moves even when nothing is typed afterwards.
+                  if (_draftId != null) _onTextChanged();
                 },
               ),
             )

@@ -88,6 +88,65 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    group('From account of a restored draft', () {
+      const second = Account(
+        id: 'acc-2',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+
+      Future<(FakeDraftRepository, int)> pumpDraftOf(
+        WidgetTester tester,
+        String accountId,
+      ) async {
+        final drafts = FakeDraftRepository();
+        final saved = await drafts.saveDraft(
+          accountId: accountId,
+          toText: 'carol@example.com',
+          ccText: '',
+          subjectText: 'Draft',
+          bodyText: 'Body',
+        );
+        await tester.pumpWidget(
+          _buildDirect(
+            screen: ComposeScreen(draftId: saved.id),
+            overrides: _composeOverrides(
+              accounts: const [kTestAccount, second],
+              drafts: drafts,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        return (drafts, saved.id);
+      }
+
+      testWidgets('a deleted account leaves From unselected', (tester) async {
+        // Before, the dropdown got a value missing from its items.
+        await pumpDraftOf(tester, 'deleted-account');
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Select an account'), findsOneWidget);
+      });
+
+      testWidgets('choosing another account saves the draft under it', (
+        tester,
+      ) async {
+        final (drafts, id) = await pumpDraftOf(tester, kTestAccount.id);
+
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(accountFromLabel(second)).last);
+        await tester.pumpAndSettle();
+        // Auto-save after 2 s, then the "saved" indicator's 2 s.
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(seconds: 3));
+
+        expect((await drafts.getDraft(id))?.accountId, 'acc-2');
+      });
+    });
+
     // Regression for the row-overflow class of #965, here via the dropdown.
     // DropdownButton sizes itself from the WIDEST ITEM, not the selected one,
     // so this overflowed by 426px on a real phone at font_scale 2.0 while the
