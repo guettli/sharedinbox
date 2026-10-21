@@ -22,6 +22,15 @@ class AccountHomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final accountAsync = ref.watch(accountByIdProvider(accountId));
+    // When the account goes away under this page (deleted here or elsewhere)
+    // it could only say "Account not found"; go to the account list. Listened
+    // to here, not in the body, because the body is unmounted the moment the
+    // account disappears.
+    ref.listen(accountByIdProvider(accountId), (previous, next) {
+      if (previous?.value != null && next.hasValue && next.value == null) {
+        context.go('/accounts');
+      }
+    });
     return Scaffold(
       appBar: AppBar(
         title: accountAsync.maybeWhen(
@@ -191,20 +200,8 @@ class _AccountHomeBody extends ConsumerWidget {
             'Delete account',
             style: TextStyle(color: Colors.red),
           ),
-          onTap: () async {
-            await runAccountAction(
-              context,
-              ref,
-              account,
-              AccountAction.delete,
-            );
-            // Once the account is gone this page could only say "Account not
-            // found"; go to the account list instead.
-            final stillThere = await ref
-                .read(accountRepositoryProvider)
-                .getAccount(account.id);
-            if (stillThere == null && context.mounted) context.go('/accounts');
-          },
+          onTap: () =>
+              runAccountAction(context, ref, account, AccountAction.delete),
         ),
       ],
     );
