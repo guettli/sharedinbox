@@ -22,18 +22,6 @@ class _StubAccounts implements AccountRepository {
   Future<String> getPassword(String accountId) async => '';
 }
 
-AccountsCompanion _accountRow(String id) => AccountsCompanion.insert(
-      id: id,
-      displayName: id,
-      email: '$id@example.com',
-      imapHost: '',
-      imapPort: 993,
-      imapSsl: true,
-      smtpHost: '',
-      smtpPort: 465,
-      smtpSsl: true,
-    );
-
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -197,12 +185,24 @@ void main() {
       expect(edited?.imapServerId, '42');
     });
 
+    AccountsCompanion accountRow(String id) => AccountsCompanion.insert(
+          id: id,
+          displayName: id,
+          email: '$id@example.com',
+          imapHost: '',
+          imapPort: 993,
+          imapSsl: true,
+          smtpHost: '',
+          smtpPort: 465,
+          smtpSsl: true,
+        );
+
     test(
         'switching the account of a synced draft forgets its server id '
         'and queues the old copy for removal', () async {
       final db = openTestDatabase();
       for (final id in ['acc-1', 'acc-2']) {
-        await db.into(db.accounts).insert(_accountRow(id));
+        await db.into(db.accounts).insert(accountRow(id));
       }
       final repo = DraftRepositoryImpl(db, _StubAccounts());
       final draft = await repo.saveDraft(
@@ -238,7 +238,7 @@ void main() {
 
     test('a draft of a deleted account can move to another account', () async {
       final db = openTestDatabase();
-      await db.into(db.accounts).insert(_accountRow('acc-2'));
+      await db.into(db.accounts).insert(accountRow('acc-2'));
       final repo = DraftRepositoryImpl(db, _StubAccounts());
       // acc-1 is gone; its draft stayed behind.
       final draft = await repo.saveDraft(
