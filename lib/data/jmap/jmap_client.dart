@@ -369,16 +369,6 @@ class JmapClient {
     return resolved;
   }
 
-  /// Whether [url] may carry credentials: it must have a host, and be https to
-  /// any host or http only to a localhost (or test-registered dev) host. The
-  /// host check uses [Uri.host], which correctly separates userinfo from host
-  /// — never string-scan an authority for this (`http://127.0.0.1:x@evil.com/`
-  /// has host `evil.com`, not `127.0.0.1`). A scheme-less/host-less URL is not
-  /// secure on its own. The plaintext carve-out ([isPlaintextAllowedHost]) is
-  /// shared with ManageSieveClient and inert in release builds.
-  ///
-  /// Public so the other credential-bearing JMAP path (ConnectionTestService,
-  /// which does not go through [connect]) enforces the identical rule.
   /// The JMAP session URL for what the user typed as "JMAP API URL".
   ///
   /// A bare server address ("https://mail.example.com") gets the standard
@@ -390,6 +380,16 @@ class JmapClient {
       ? url.replace(path: '/.well-known/jmap')
       : url;
 
+  /// Whether [url] may carry credentials: it must have a host, and be https to
+  /// any host or http only to a localhost (or test-registered dev) host. The
+  /// host check uses [Uri.host], which correctly separates userinfo from host
+  /// — never string-scan an authority for this (`http://127.0.0.1:x@evil.com/`
+  /// has host `evil.com`, not `127.0.0.1`). A scheme-less/host-less URL is not
+  /// secure on its own. The plaintext carve-out ([isPlaintextAllowedHost]) is
+  /// shared with ManageSieveClient and inert in release builds.
+  ///
+  /// Public so the other credential-bearing JMAP path (ConnectionTestService,
+  /// which does not go through [connect]) enforces the identical rule.
   static bool isSecureUrl(Uri url) {
     if (url.host.isEmpty) return false;
     if (url.scheme == 'https') return true;

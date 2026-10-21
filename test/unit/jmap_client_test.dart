@@ -100,7 +100,7 @@ void main() {
       expect(asked.first, Uri.parse(_sessionUrl));
     });
 
-    test('sessionUrlFor keeps an explicit session path', () {
+    test('sessionUrlFor adds the discovery path only to a bare URL', () {
       expect(
         JmapClient.sessionUrlFor(Uri.parse('https://x.example/')),
         Uri.parse('https://x.example/.well-known/jmap'),

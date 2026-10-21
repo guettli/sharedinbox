@@ -211,13 +211,13 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
           session = jsonDecode(resp.body) as Map<String, dynamic>;
         } on FormatException {
           throw Exception(
-            'Not a JMAP server — unexpected response from $jmapUrl',
+            'Not a JMAP server — unexpected response from $sessionUri',
           );
         }
         final caps = session['capabilities'];
         if (caps is! Map || !caps.containsKey('urn:ietf:params:jmap:core')) {
           throw Exception(
-            'Not a JMAP server — missing core capability at $jmapUrl',
+            'Not a JMAP server — missing core capability at $sessionUri',
           );
         }
         final identityWarning = await _checkJmapIdentity(
