@@ -1,3 +1,5 @@
+import 'dart:io' show SocketException;
+
 /// Wraps a low-level TLS handshake failure (typically from `dart:io`) into a
 /// message that points the user at the most likely fix: a TLS-mode mismatch
 /// between the client (implicit TLS or plaintext) and the server's listener
@@ -90,6 +92,38 @@ class TlsHandshakeAbortedException implements Exception {
 /// sync loop is allowed to keep retrying instead of giving up.
 bool isTlsConfigError(Object error) =>
     error is TlsModeMismatchException || error is TlsCertificateException;
+
+/// Rethrows a failed connect so the message names the server.
+///
+/// A refused connection surfaces from dart:io as `SocketException: Connection
+/// refused …, address = localhost, port = 38920`, where the port is this
+/// device's own source port, not the server's. Shown as is in the Outbox, it
+/// pointed the user at a port they never configured. A [SocketException] is
+/// rethrown as one again, so retry and offline handling still recognise it,
+/// but as "Could not connect to host:port" plus the OS error. Anything else
+/// goes on to [rethrowAsTlsHint].
+///
+/// Call it after any connect retries: the retry decision looks at the
+/// original exception.
+Never rethrowConnectError(
+  Object error,
+  StackTrace stack,
+  String host,
+  int port,
+) {
+  if (error is SocketException) {
+    final os = error.osError;
+    // "Connection refused" is both the message and the OS error's message;
+    // say it once. A DNS failure ("Failed host lookup: 'x'") keeps its own.
+    final detail =
+        os != null && os.message == error.message ? '' : ': ${error.message}';
+    Error.throwWithStackTrace(
+      SocketException('Could not connect to $host:$port$detail', osError: os),
+      stack,
+    );
+  }
+  rethrowAsTlsHint(error, stack, host, port);
+}
 
 /// If [error] is a recognisable TLS handshake failure, wraps it in a typed
 /// exception and throws it.  Otherwise rethrows [error] unchanged.
