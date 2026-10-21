@@ -14,6 +14,7 @@ void main() {
       senderAddress('"Doe, John" <john@example.com> '),
       'john@example.com',
     );
+    expect(senderAddress('mailto:alice@example.com'), 'alice@example.com');
   });
 
   test('refuses what is not an address', () {
