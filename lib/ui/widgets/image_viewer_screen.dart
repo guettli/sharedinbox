@@ -1,7 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
+
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/ui/utils/open_file.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 /// Full-screen, pinch-to-zoom viewer for a locally cached image attachment.
 ///
@@ -30,7 +33,17 @@ class ImageViewerScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.open_in_new),
             tooltip: 'Open externally',
-            onPressed: () => OpenFilex.open(path),
+            onPressed: () async {
+              final problem = await openFile(path);
+              if (problem != null && context.mounted) {
+                context.showAppSnackBar(
+                  problem.text,
+                  level: AppLogLevel.warn,
+                  event: 'image.open_failed',
+                  data: {'filename': filename, 'detail': problem.detail},
+                );
+              }
+            },
           ),
         ],
       ),
