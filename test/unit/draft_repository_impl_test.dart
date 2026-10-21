@@ -24,6 +24,13 @@ class _StubAccounts implements AccountRepository {
   Future<String> getPassword(String accountId) async => '';
 }
 
+final _gmailDrafts = imap.Mailbox(
+  encodedName: 'Drafts',
+  encodedPath: '[Gmail]/Drafts',
+  pathSeparator: '/',
+  flags: [imap.MailboxFlag.drafts],
+);
+
 /// Accounts stub with one IMAP account.
 class _ImapAccounts extends _StubAccounts {
   @override
@@ -337,16 +344,7 @@ void main() {
     test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
         () async {
       final db = openTestDatabase();
-      await db.into(db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: 'acc-1:[Gmail]/Drafts',
-              accountId: 'acc-1',
-              path: '[Gmail]/Drafts',
-              name: 'Drafts',
-              role: const Value('drafts'),
-            ),
-          );
-      final client = _DraftsSpyImapClient();
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
       final repo = DraftRepositoryImpl(
         db,
         _ImapAccounts(),
@@ -390,16 +388,7 @@ void main() {
               createdAt: DateTime(2026),
             ),
           );
-      await db.into(db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: 'acc-1:[Gmail]/Drafts',
-              accountId: 'acc-1',
-              path: '[Gmail]/Drafts',
-              name: 'Drafts',
-              role: const Value('drafts'),
-            ),
-          );
-      final client = _DraftsSpyImapClient();
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
       final repo = DraftRepositoryImpl(
         db,
         _ImapAccounts(),
@@ -415,20 +404,11 @@ void main() {
       expect(await db.select(db.draftTombstones).get(), isEmpty);
     });
 
-    test(
-        'before the folder list has synced, the server names the drafts '
-        'mailbox', () async {
-      final client = _DraftsSpyImapClient()
-        ..listed = [
-          imap.Mailbox(
-            encodedName: 'Drafts',
-            encodedPath: '[Gmail]/Drafts',
-            pathSeparator: '/',
-            flags: [imap.MailboxFlag.drafts],
-          ),
-        ];
+    test('a second sync stays with the same mailbox', () async {
+      final db = openTestDatabase();
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
       final repo = DraftRepositoryImpl(
-        openTestDatabase(),
+        db,
         _ImapAccounts(),
         imapConnect: (_, __, ___) async => client,
       );
@@ -441,29 +421,37 @@ void main() {
       );
 
       await repo.syncDrafts('acc-1');
+      await repo.syncDrafts('acc-1');
 
-      // Guessing "Drafts" would have created a stray folder.
+      // The draft went up once, and the mailbox in use is remembered, so the
+      // next sync sees no switch to undo.
       expect(client.created, isEmpty);
       expect(client.appendedTo, ['[Gmail]/Drafts']);
+      final state = await (db.select(db.syncStates)
+            ..where((t) => t.resourceType.equals('IMAP:DraftsMailbox')))
+          .getSingle();
+      expect(state.state, '[Gmail]/Drafts');
     });
 
     test('a non-ASCII drafts mailbox is addressed in modified UTF-7', () async {
       final db = openTestDatabase();
-      for (final (path, role) in [
-        ('Drafts', 'drafts'), // made by an older build
-        ('Entwürfe', 'drafts'), // the server's own
-      ]) {
-        await db.into(db.mailboxes).insert(
-              MailboxesCompanion.insert(
-                id: 'acc-1:$path',
-                accountId: 'acc-1',
-                path: path,
-                name: path,
-                role: Value(role),
-              ),
-            );
-      }
-      final client = _DraftsSpyImapClient();
+      final client = _DraftsSpyImapClient()
+        ..listed = [
+          // A user folder named "Drafts" is not the drafts mailbox: only the
+          // server's \Drafts flag counts.
+          imap.Mailbox(
+            encodedName: 'Drafts',
+            encodedPath: 'Projects/Drafts',
+            pathSeparator: '/',
+            flags: [],
+          ),
+          imap.Mailbox(
+            encodedName: 'Entw&APw-rfe',
+            encodedPath: 'Entw&APw-rfe',
+            pathSeparator: '/',
+            flags: [imap.MailboxFlag.drafts],
+          ),
+        ];
       final repo = DraftRepositoryImpl(
         db,
         _ImapAccounts(),

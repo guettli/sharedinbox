@@ -165,15 +165,11 @@ class DraftRepositoryImpl implements DraftRepository {
       password,
     );
     try {
-      // The server's own drafts mailbox (SPECIAL-USE \Drafts, or a folder
-      // recognised by name, as the mailbox sync records it): "[Gmail]/Drafts",
-      // "INBOX.Drafts", "Entwürfe". Only without one is "Drafts" used and
-      // created.
-      // Before the folder list has synced there is no local row yet; ask the
-      // server for its \Drafts mailbox then, rather than guess "Drafts" and
-      // create a stray folder on servers that call it something else.
-      final rolePath = await _draftsMailboxPath(account.id) ??
-          await _serverDraftsMailboxPath(client);
+      // The mailbox the server flags as SPECIAL-USE \Drafts: "[Gmail]/Drafts",
+      // "INBOX.Drafts", "Entwürfe". Only the server's flag counts, not a
+      // folder that merely has "Drafts" in its name ("Projects/Drafts"). A
+      // server that flags none keeps the "Drafts" folder used so far.
+      final rolePath = await _serverDraftsMailboxPath(client);
       final draftsPath = rolePath ?? _draftsFolder;
       if (rolePath == null) {
         try {
@@ -282,24 +278,6 @@ class DraftRepositoryImpl implements DraftRepository {
       // LIST failed; fall back to "Drafts".
     }
     return null;
-  }
-
-  /// The account's drafts mailbox. When both the server's own one and a
-  /// "Drafts" folder an older build created carry the role (the name
-  /// heuristic marks the latter too), the server's one wins.
-  Future<String?> _draftsMailboxPath(String accountId) async {
-    final rows = await (_db.select(_db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals(accountId) & t.role.equals('drafts'),
-          ))
-        .get();
-    if (rows.isEmpty) return null;
-    return rows
-        .firstWhere(
-          (r) => r.path != _draftsFolder,
-          orElse: () => rows.first,
-        )
-        .path;
   }
 
   Future<void> _pushDirtyImap(
