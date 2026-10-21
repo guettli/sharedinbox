@@ -7175,7 +7175,7 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     await dir.create(recursive: true);
 
-    final file = File(p.join(dir.path, attachment.filename));
+    final file = File(p.join(dir.path, safeFileName(attachment.filename)));
     if (await file.exists()) {
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;

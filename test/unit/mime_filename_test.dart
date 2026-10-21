@@ -96,4 +96,95 @@ void main() {
       );
     });
   });
+
+  group('mimePartFileName edge cases', () {
+    test('malformed RFC 2231 never throws and falls back', () {
+      expect(
+        _nameOf(
+          'Content-Type: application/pdf\r\n'
+          'Content-Disposition: attachment; '
+          'filename*99999999999999999999=x; filename="plain.pdf"',
+        ),
+        'plain.pdf',
+      );
+      expect(
+        _nameOf(
+          'Content-Type: application/pdf\r\n'
+          "Content-Disposition: attachment; filename*0*=UTF-8''a; "
+          'filename*1=日本.pdf',
+        ),
+        'a日本.pdf',
+      );
+    });
+
+    test('a missing first segment falls back to the plain name', () {
+      expect(
+        _nameOf(
+          'Content-Type: application/pdf; name="type.pdf"\r\n'
+          'Content-Disposition: attachment; filename*1=tail.pdf',
+        ),
+        'type.pdf',
+      );
+    });
+
+    test('segments out of order, quoted value, upper-case key', () {
+      expect(
+        _nameOf(
+          'Content-Type: application/pdf\r\n'
+          'Content-Disposition: attachment; FILENAME*1=b.pdf; '
+          '''filename*0*="UTF-8''%C3%9C"''',
+        ),
+        'Üb.pdf',
+      );
+    });
+
+    test('percent-decoding takes only two hex digits', () {
+      expect(
+        rfc2231Parameter({'f*': "UTF-8''a%-1b%+Fc%"}, 'f'),
+        'a%-1b%+Fc%',
+      );
+    });
+
+    test('an unknown charset still yields a name', () {
+      expect(rfc2231Parameter({'f*': "x-unknown''abc"}, 'f'), 'abc');
+    });
+
+    test('the disposition filename wins over Content-Type name*', () {
+      expect(
+        _nameOf(
+          "Content-Type: application/pdf; name*=UTF-8''type.pdf\r\n"
+          'Content-Disposition: attachment; filename="disp.pdf"',
+        ),
+        'disp.pdf',
+      );
+    });
+
+    test('works for parameters set from a BODYSTRUCTURE', () {
+      final disposition = ContentDispositionHeader('attachment')
+        ..setParameter('FILENAME*', "UTF-8''%C3%9C.pdf");
+      expect(mimePartFileName(disposition, null), 'Ü.pdf');
+    });
+  });
+
+  group('safeFileName', () {
+    test('strips directories and control characters', () {
+      expect(safeFileName('../../.config/autostart/x.desktop'), 'x.desktop');
+      expect(safeFileName('/etc/passwd'), 'passwd');
+      expect(safeFileName(r'..\..\evil.exe'), 'evil.exe');
+      expect(safeFileName('a\r\nb\u0000.pdf'), 'a__b_.pdf');
+      expect(safeFileName('Übersicht März.pdf'), 'Übersicht März.pdf');
+    });
+
+    test('never returns an empty or dot name', () {
+      for (final name in ['', '..', '.', '/', '   ']) {
+        expect(safeFileName(name), 'attachment');
+      }
+    });
+
+    test('an RFC 2231 name with %2F cannot climb out', () {
+      final name = rfc2231Parameter({'f*': "UTF-8''..%2F..%2Fx.sh"}, 'f')!;
+      expect(name, '../../x.sh');
+      expect(safeFileName(name), 'x.sh');
+    });
+  });
 }
