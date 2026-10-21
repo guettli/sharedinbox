@@ -85,6 +85,32 @@ void main() {
       expect(client.accountId, _accountId);
     });
 
+    test('a bare server URL asks /.well-known/jmap', () async {
+      final asked = <Uri>[];
+      final client = await JmapClient.connect(
+        httpClient: MockClient((req) async {
+          asked.add(req.url);
+          return http.Response(jsonEncode(_sessionBody()), 200);
+        }),
+        jmapUrl: Uri.parse('https://jmap.example.com'),
+        username: 'alice',
+        password: 'secret',
+      );
+      expect(client.accountId, _accountId);
+      expect(asked.first, Uri.parse(_sessionUrl));
+    });
+
+    test('sessionUrlFor adds the discovery path only to a bare URL', () {
+      expect(
+        JmapClient.sessionUrlFor(Uri.parse('https://x.example/')),
+        Uri.parse('https://x.example/.well-known/jmap'),
+      );
+      expect(
+        JmapClient.sessionUrlFor(Uri.parse('https://x.example/jmap/session')),
+        Uri.parse('https://x.example/jmap/session'),
+      );
+    });
+
     test('falls back to first account when primaryAccounts missing', () async {
       final body = _sessionBody()..remove('primaryAccounts');
       final client = await JmapClient.connect(

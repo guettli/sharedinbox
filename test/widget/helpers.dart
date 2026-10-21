@@ -113,13 +113,21 @@ class FakeAccountRepository implements AccountRepository {
 }
 
 class FakeShareKeyRepository implements ShareKeyRepository {
-  FakeShareKeyRepository({ShareKeyMaterial? material}) : _material = material;
+  /// Returns [material] (or one generated key) on every call, unless
+  /// [freshKeys] is set: then each call generates a new key.
+  FakeShareKeyRepository({ShareKeyMaterial? material, this.freshKeys = false})
+      : _material = material;
 
   ShareKeyMaterial? _material;
+  final bool freshKeys;
+  int createCount = 0;
 
   @override
   Future<ShareKeyMaterial> createKeyPair() async {
-    _material ??= await ShareEncryptionService.generateKeyPair();
+    createCount++;
+    if (freshKeys || _material == null) {
+      _material = await ShareEncryptionService.generateKeyPair();
+    }
     return _material!;
   }
 

@@ -833,10 +833,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   Future<EmailDetailNavItem?> _getNextEmailIfNeeded(Email? header) async {
     if (header == null) return null;
-    final prefs = ref.read(userPreferencesProvider).value;
-    final action =
-        prefs?.afterMailViewAction ?? AfterMailViewAction.nextMessage;
-    if (action != AfterMailViewAction.nextMessage) return null;
+    final action = await storedAfterMailViewAction(
+      ref.read(userPreferencesRepositoryProvider),
+    );
+    if (!mounted || action != AfterMailViewAction.nextMessage) return null;
 
     // Prefer the caller-supplied nav so "next" respects the source list
     // (search results, address filter, …) and steps through individual mails
@@ -1281,12 +1281,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             'From: (unknown)',
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
+        // Capped so a mail to dozens of people does not push the body off
+        // screen; the full lists are in "Show Mail Headers".
         Text(
           email.to.isNotEmpty
               ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
               : 'To: (no recipients)',
           style: Theme.of(ctx).textTheme.bodySmall,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
+        if (email.cc.isNotEmpty)
+          Text(
+            'Cc: ${email.cc.map((a) => a.toString()).join(', ')}',
+            style: Theme.of(ctx).textTheme.bodySmall,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
         Row(
           children: [
             // Flexible: the date led this row unconstrained, taking its

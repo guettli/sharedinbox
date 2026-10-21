@@ -175,7 +175,7 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     if (jmapUrl == null || jmapUrl.isEmpty) {
       throw Exception('No JMAP URL configured for this account');
     }
-    final sessionUri = Uri.parse(jmapUrl);
+    final sessionUri = JmapClient.sessionUrlFor(Uri.parse(jmapUrl));
     // This path sends Basic-auth credentials without going through
     // JmapClient.connect, so it enforces the same rule itself: no cleartext to
     // a remote host (#1018). The UI also blocks it at save via validateJmapUrl;
@@ -211,13 +211,13 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
           session = jsonDecode(resp.body) as Map<String, dynamic>;
         } on FormatException {
           throw Exception(
-            'Not a JMAP server — unexpected response from $jmapUrl',
+            'Not a JMAP server — unexpected response from $sessionUri',
           );
         }
         final caps = session['capabilities'];
         if (caps is! Map || !caps.containsKey('urn:ietf:params:jmap:core')) {
           throw Exception(
-            'Not a JMAP server — missing core capability at $jmapUrl',
+            'Not a JMAP server — missing core capability at $sessionUri',
           );
         }
         final identityWarning = await _checkJmapIdentity(

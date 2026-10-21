@@ -159,6 +159,52 @@ void main() {
       expect(find.textContaining('bob@example.com'), findsOneWidget);
     });
 
+    testWidgets('shows the Cc recipients in the header', (tester) async {
+      final email = testEmail().copyWith(
+        cc: const [
+          EmailAddress(name: 'Carol', email: 'carol@example.com'),
+          EmailAddress(email: 'dave@example.com'),
+        ],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+            email: email,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Cc: Carol <carol@example.com>, dave@example.com'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('shows no Cc line when there is no Cc', (tester) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cc:'), findsNothing);
+    });
+
     testWidgets('shows attachment section when email has attachments', (
       tester,
     ) async {
