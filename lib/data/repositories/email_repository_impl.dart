@@ -1350,7 +1350,9 @@ class EmailRepositoryImpl implements EmailRepository {
         // Advance only past what was searched for and fetched above. Mail
         // that arrived after that search already shows up in [serverUids];
         // taking their maximum skipped it for good, since the next search
-        // starts after the checkpoint.
+        // starts after the checkpoint. This relies on every UID in [newUids]
+        // having been fetched above; if that fetch is ever capped or
+        // chunked, advance only to the highest UID actually fetched.
         final maxUid = newUids.fold(lastUid, math.max);
         await _saveImapCheckpoint(
           account.id,

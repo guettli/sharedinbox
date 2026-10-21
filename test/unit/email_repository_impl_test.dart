@@ -9887,7 +9887,7 @@ class _LateArrivalImapClient extends _PreviewSyncImapClient {
       final from = int.parse(range.group(1)!);
       final visible = uids.where((u) => u != late).toList();
       final hits = visible.where((u) => u >= from).toList();
-      uids = hits.isNotEmpty ? hits : [visible.last];
+      uids = hits.isNotEmpty ? hits : [if (visible.isNotEmpty) visible.last];
     }
     return imap.SearchImapResult()
       ..matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
