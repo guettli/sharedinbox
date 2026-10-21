@@ -185,6 +185,61 @@ void main() {
     });
 
     testWidgets(
+      'step 2 — importing two accounts at once gives each its own id',
+      (tester) async {
+        final material = await ShareEncryptionService.generateKeyPair();
+        final accountRepo = FakeAccountRepository();
+
+        AccountPayload payload(String id, String email) => AccountPayload(
+              accountJson: Account(
+                id: id,
+                displayName: email,
+                email: email,
+                imapHost: 'imap.example.com',
+                smtpHost: 'smtp.example.com',
+              ).toJson(),
+              password: 'secret',
+            );
+
+        final encryptedQr = await ShareEncryptionService.encryptAccounts(
+          recipientKeyId: material.keyId,
+          recipientPublicKeyBytes: material.publicKeyBytes,
+          accounts: [
+            payload('src-1', 'alice@example.com'),
+            payload('src-2', 'bob@example.com'),
+          ],
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(
+              accountRepository: accountRepo,
+              shareKeyRepository: FakeShareKeyRepository(material: material),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('encryptedCodeField')),
+          encryptedQr,
+        );
+        await tester.tap(find.text('Import'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Imported 2 accounts successfully.'), findsOneWidget);
+        expect(
+          accountRepo.accounts.map((a) => a.email),
+          ['alice@example.com', 'bob@example.com'],
+        );
+        expect(accountRepo.accounts.map((a) => a.id).toSet(), hasLength(2));
+      },
+    );
+
+    testWidgets(
       'step 2 — invalid encrypted QR shows error and returns to pub-key step',
       (tester) async {
         await tester.pumpWidget(

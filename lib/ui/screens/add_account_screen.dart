@@ -132,7 +132,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   }
 
   Account _buildJmapAccount() => Account(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        id: Account.newId(),
         displayName: _displayNameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         username: _usernameCtrl.text.trim(),
@@ -144,7 +144,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     final imapHost = _imapHostCtrl.text.trim();
     final smtpHost = _smtpHostCtrl.text.trim();
     return Account(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: Account.newId(),
       displayName: _displayNameCtrl.text.trim(),
       email: _emailCtrl.text.trim(),
       username: _usernameCtrl.text.trim(),

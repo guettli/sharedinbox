@@ -126,7 +126,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
       for (final ap in accounts) {
         final account = Account.fromJson(ap.accountJson);
         final newAccount = Account(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          id: Account.newId(),
           displayName: account.displayName,
           email: account.email,
           username: account.username,
