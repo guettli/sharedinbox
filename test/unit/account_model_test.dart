@@ -5,7 +5,7 @@ import 'package:test/test.dart';
 
 void main() {
   group('Account', () {
-    test('newId returns distinct, increasing ids within one millisecond', () {
+    test('newId returns distinct, strictly increasing ids', () {
       final ids = [for (var i = 0; i < 50; i++) Account.newId()];
       expect(ids.toSet(), hasLength(50));
       final values = ids.map(int.parse).toList();

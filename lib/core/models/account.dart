@@ -1,6 +1,8 @@
 enum AccountType { imap, jmap }
 
 class Account {
+  static int _lastNewId = 0;
+
   /// Returns an id for a new account: the current time in milliseconds,
   /// bumped past the previous id so accounts created within the same
   /// millisecond (importing several shared accounts at once) don't collide.
@@ -9,8 +11,6 @@ class Account {
     _lastNewId = now > _lastNewId ? now : _lastNewId + 1;
     return _lastNewId.toString();
   }
-
-  static int _lastNewId = 0;
 
   final String id;
   final String displayName;
