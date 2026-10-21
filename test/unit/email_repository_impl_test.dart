@@ -8695,6 +8695,38 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('mail that arrives during a sync is fetched by the next one',
+        () async {
+      _PreviewTestMessage mail(int uid) => _PreviewTestMessage(
+            subject: 'Mail $uid',
+            from: 'alice@example.com',
+            text: 'Hi',
+            messageId: '<m$uid@example.com>',
+          );
+      final client = _LateArrivalImapClient(messages: {42: mail(42)});
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // 43 arrives after this sync's search for new mail, before its
+      // SEARCH ALL.
+      client
+        ..messages[43] = mail(43)
+        ..late = 43;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      client.late = null;
+      final next = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // The checkpoint used to jump to 43 from SEARCH ALL, so 43 was never
+      // fetched.
+      expect(next.fetched, 1);
+      final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id);
+      expect(ids, contains('acc-1:INBOX:43'));
+    });
+
     test('a sync with nothing new fetches nothing', () async {
       // Like a real server, the fake answers `UID 43:*` with the newest
       // message (RFC 3501 reads n:* as *:n when n is past the last UID).
@@ -9831,6 +9863,34 @@ class _PreviewSyncImapClient extends FakeImapClient {
                 wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] whose `UID n:*` search answers like a real
+/// server (only UIDs ≥ n, or the newest one when there are none), and which
+/// can hide [late] from that search while `SEARCH ALL` already lists it: mail
+/// that arrives between the two searches of one sync.
+class _LateArrivalImapClient extends _PreviewSyncImapClient {
+  _LateArrivalImapClient({required super.messages});
+
+  int? late;
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'ALL',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    var uids = messages.keys.toList()..sort();
+    final range = RegExp(r'^UID (\d+):\*$').firstMatch(searchCriteria);
+    if (range != null) {
+      final from = int.parse(range.group(1)!);
+      final visible = uids.where((u) => u != late).toList();
+      final hits = visible.where((u) => u >= from).toList();
+      uids = hits.isNotEmpty ? hits : [visible.last];
+    }
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
   }
 }
 

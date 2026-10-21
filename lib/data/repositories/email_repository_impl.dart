@@ -1347,8 +1347,11 @@ class EmailRepositoryImpl implements EmailRepository {
           serverUids,
           serverMessageCount: selectedMailbox.messagesExists,
         );
-        final maxUid =
-            serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+        // Advance only past what was searched for and fetched above. Mail
+        // that arrived after that search already shows up in [serverUids];
+        // taking their maximum skipped it for good, since the next search
+        // starts after the checkpoint.
+        final maxUid = newUids.fold(lastUid, math.max);
         await _saveImapCheckpoint(
           account.id,
           resourceType,
