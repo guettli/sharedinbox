@@ -20,6 +20,14 @@ void main() {
   test('falls back to "email" and clips long subjects', () {
     expect(rawEmailFilename(null), 'email.eml');
     expect(rawEmailFilename('???'), '_.eml');
-    expect(rawEmailFilename('ü' * 200), '${'ü' * 120}.eml');
+    // At most 200 UTF-8 bytes before ".eml": 'ü' is 2 bytes, '会' is 3.
+    expect(rawEmailFilename('ü' * 200), '${'ü' * 100}.eml');
+    expect(rawEmailFilename('会' * 200), '${'会' * 66}.eml');
+  });
+
+  test('turns tabs, line breaks and control characters into plain text', () {
+    expect(rawEmailFilename('a\tb\nc'), 'a b c.eml');
+    // A right-to-left override is not a letter.
+    expect(rawEmailFilename('fdp.\u202Eexe'), 'fdp_exe.eml');
   });
 }
