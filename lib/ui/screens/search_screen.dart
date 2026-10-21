@@ -230,53 +230,41 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     unawaited(_search(query));
   }
 
-  Future<void> _search(String query) async {
-    final seq = ++_searchSeq;
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    try {
-      final merged = await searchEmailsGlobalMerged(
-        ref.read(emailRepositoryProvider),
-        _effectiveAccountId,
-        query,
+  Future<void> _search(String query) => _runSearch(
+        fetch: () => searchEmailsGlobalMerged(
+          ref.read(emailRepositoryProvider),
+          _effectiveAccountId,
+          query,
+        ),
+        logLabel: 'Search failed',
+        warnMessage: 'Global search failed',
       );
-
-      if (mounted && seq == _searchSeq) {
-        setState(() {
-          _results = merged;
-          _resetViewFilters();
-          _loading = false;
-        });
-      }
-    } catch (e, stack) {
-      log('Search failed: $e');
-      unawaited(
-        ref.read(appLoggerProvider).warn(
-              'search.failed',
-              'Global search failed',
-              screen: 'SearchScreen',
-              accountId: widget.accountId,
-              error: e,
-              stack: stack,
-            ),
-      );
-      if (mounted && seq == _searchSeq) setState(_markFailed);
-    }
-  }
 
   Future<void> _searchStructured() async {
     if (_filterGroup.isEmpty) return;
+    await _runSearch(
+      fetch: () => ref
+          .read(emailRepositoryProvider)
+          .searchEmailsStructured(_effectiveAccountId, _filterGroup),
+      logLabel: 'Structured search failed',
+      warnMessage: 'Structured search failed',
+    );
+  }
+
+  /// Runs [fetch], shows its results, and marks the screen failed on error.
+  /// Results or failures from a search superseded by a newer one are dropped.
+  Future<void> _runSearch({
+    required Future<List<Email>> Function() fetch,
+    required String logLabel,
+    required String warnMessage,
+  }) async {
     final seq = ++_searchSeq;
     setState(() {
       _loading = true;
       _failed = false;
     });
     try {
-      final emails = await ref
-          .read(emailRepositoryProvider)
-          .searchEmailsStructured(_effectiveAccountId, _filterGroup);
+      final emails = await fetch();
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
@@ -285,11 +273,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         });
       }
     } catch (e, stack) {
-      log('Structured search failed: $e');
+      log('$logLabel: $e');
       unawaited(
         ref.read(appLoggerProvider).warn(
               'search.failed',
-              'Structured search failed',
+              warnMessage,
               screen: 'SearchScreen',
               accountId: widget.accountId,
               error: e,
